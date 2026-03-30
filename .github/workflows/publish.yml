@@ -13,7 +13,6 @@ permissions:
 env:
   AWS_REGION: eu-west-2
   AWS_ACCOUNT_ID: "094954420758"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -23,6 +22,8 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v3
+        with:
+          node-version: 24
       - name: Build and Publish
         uses: DEFRA/cdp-build-action/build@main
         with:
