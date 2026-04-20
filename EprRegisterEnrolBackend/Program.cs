@@ -1,5 +1,7 @@
 using EprRegisterEnrolBackend.Example.Endpoints;
 using EprRegisterEnrolBackend.Example.Services;
+using EprRegisterEnrolBackend.Organisation.Endpoints;
+using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Http;
 using EprRegisterEnrolBackend.Utils.Mongo;
@@ -66,10 +68,15 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
 
     // Add healthcheck, this is required for the platform to know your service is alive.
     builder.Services.AddHealthChecks();
+    // Swagger/OpenAPI
+    builder.Services.AddEndpointsApiExplorer();
+    builder.Services.AddSwaggerGen();
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 
     // Set up the endpoints and their dependencies
     builder.Services.AddSingleton<IExamplePersistence, ExamplePersistence>();
+    // Use the in-memory fake persistence for organisation during development
+    builder.Services.AddSingleton<IOrganisationPersistence, FakeOrganisationPersistence>();
 }
 
 [ExcludeFromCodeCoverage]
@@ -79,8 +86,14 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseRouting();
     app.MapHealthChecks("/health");
 
+    // Enable Swagger UI so the API can be explored in the browser
+    app.UseSwagger();
+    app.UseSwaggerUI();
+
     // Example module, remove before deploying!
     app.UseExampleEndpoints();
+    // Organisation endpoints
+    app.UseOrganisationEndpoints();
 
     return app;
 }
