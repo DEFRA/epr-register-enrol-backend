@@ -1,10 +1,8 @@
 using EprRegisterEnrolBackend.Auth.Models;
 using EprRegisterEnrolBackend.Auth.Services;
-using System.Diagnostics.CodeAnalysis;
 
 namespace EprRegisterEnrolBackend.Auth.Endpoints;
 
-[ExcludeFromCodeCoverage]
 public static class TokenEndpoints
 {
     public static void UseTokenEndpoints(this IEndpointRouteBuilder app)

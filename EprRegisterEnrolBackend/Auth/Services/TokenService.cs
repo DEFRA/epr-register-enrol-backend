@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.IdentityModel.Tokens;
@@ -13,7 +12,6 @@ public interface ITokenService
     bool ValidateClientCredentials(string clientId, string clientSecret);
 }
 
-[ExcludeFromCodeCoverage]
 public class TokenService : ITokenService
 {
     private readonly IConfiguration _configuration;
