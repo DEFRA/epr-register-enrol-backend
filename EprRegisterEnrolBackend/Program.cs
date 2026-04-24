@@ -173,7 +173,6 @@ static WebApplication SetupApplication(WebApplication app)
 {
     app.UseHeaderPropagation();
 
-    // Enable Swagger UI so the API can be explored in the browser (no auth)
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
@@ -194,13 +193,5 @@ static WebApplication SetupApplication(WebApplication app)
     // Organisation endpoints
     app.UseOrganisationEndpoints();
 
-    app.MapGet("/debug-auth", (HttpContext ctx) => {
-        var auth = ctx.Request.Headers["Authorization"].ToString();
-        return Results.Ok(new
-        {
-            receivedHeader = auth,
-            hasToken = auth.StartsWith("Bearer ")
-        });
-    });
     return app;
 }
