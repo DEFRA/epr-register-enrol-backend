@@ -11,7 +11,7 @@ public static class OrganisationEndpoints
     {
         app.MapPost("organisation", Create);
 
-        app.MapGet("organisation", GetAll);
+        app.MapGet("organisation", GetAll).RequireAuthorization();
 
         app.MapGet("organisation/{name}", GetByName);
 

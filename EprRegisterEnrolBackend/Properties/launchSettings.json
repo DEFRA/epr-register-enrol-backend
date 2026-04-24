@@ -1,4 +1,4 @@
-﻿{
+{
   "profiles": {
     "EprRegisterEnrolBackend": {
       "commandName": "Project",
@@ -6,7 +6,9 @@
       "launchBrowser": false,
       "applicationUrl": "http://localhost:5000",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "CLIENT_ID": "epr-register-enrol-frontend",
+        "CLIENT_SECRET": "2c6e43f5-9a3c-4559-863a-741d2fcda42b"
       }
     }
   }
