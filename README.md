@@ -37,6 +37,14 @@ See above.
 docker compose up -d mongodb
 ```
 
+#### Generate Test data in mongo docker container
+From the root folder, run the following script manually to generate the test data. The number of records of organisations
+and registration and accreditations per organisation can be altered by amending the parameters in generate-test-data.js 
+
+ ```bash
+node .\EprRegisterEnrolBackend\Utils\Mongo\Scripts\generate-test-data.js
+```
+
 #### MongoDB locally
 
 Alternatively install MongoDB locally:
