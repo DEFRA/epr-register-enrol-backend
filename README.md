@@ -47,6 +47,15 @@ Alternatively install MongoDB locally:
 sudo mongod --dbpath ~/mongodb-cdp
 ```
 
+#### Generate Test data in mongo db local install
+From the root folder, run the following script manually to generate the test data. The number of records of organisations
+and registration and accreditations per organisation can be altered by amending the parameters in generate-test-data.js 
+
+ ```bash
+node .\EprRegisterEnrolBackend\Utils\Mongo\Scripts\generate-test-data.js
+```
+
+
 #### MongoDB in CDP environments
 
 In CDP environments a MongoDB instance is already set up

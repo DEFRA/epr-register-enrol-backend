@@ -1,0 +1,16 @@
+# Node.js image for MongoDB initialization
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package.json and install dependencies
+COPY EprRegisterEnrolBackend/package.json /app/
+RUN npm install
+
+# Copy the scripts directory
+COPY EprRegisterEnrolBackend/Utils/Mongo/Scripts /app/scripts
+
+WORKDIR /app/scripts
+
+# Run the initialization script
+CMD ["node", "generate-test-data.js"]

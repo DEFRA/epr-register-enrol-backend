@@ -39,6 +39,7 @@ services:
       - '27017:27017'
     volumes:
       - mongodb-data:/data
+      - ./compose/init-mongodb.sh:/docker-entrypoint-initdb.d/init-mongodb.sh
     restart: always
 
   ################################################################################
@@ -66,6 +67,18 @@ services:
   #   networks:
   #     - cdp-tenant
 
+  mongodb-init:
+    build:
+      context: ./
+      dockerfile: Dockerfile.init
+    depends_on:
+      mongodb:
+        condition: service_started
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+    networks:
+      - cdp-tenant
+
   your-backend:
     build: ./
     ports:
@@ -78,6 +91,8 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_started
+      mongodb-init:
+        condition: service_completed_successfully
     env_file:
       - 'compose/aws.env'
     environment:
