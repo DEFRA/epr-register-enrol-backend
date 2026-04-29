@@ -18,6 +18,13 @@ export const RECYCLING_PROCESSES = ['glass_re_melt', 'glass_other']
 export const PERMIT_TYPES = ['wml', 'ppc', 'waste_exemption']
 export const PERMIT_WINDOWS = ['weekly', 'monthly', 'yearly']
 
+export const REGULATOR = Object.freeze({
+  EA: 'ea',
+  NRW: 'nrw',
+  SEPA: 'sepa',
+  NIEA: 'niea'
+})
+
 export function randomChoice(array) {
   return array[Math.floor(Math.random() * array.length)]
 }
@@ -386,11 +393,15 @@ export function generateOrganisation(orgId, registrationAccreditationCount) {
     wasteProcessingTypes,
     reprocessingNations: randomChoices(NATIONS, randomInt(1, 2)),
     businessType,
+    submittedToRegulator: randomChoice(Object.values(REGULATOR)),
+    submitterContactDetails: generateUser(),
+    companyDetails: generateCompanyDetails(),
     registrations,
     accreditations,
     contactDetails: generateUser(),
     formSubmissionRawDataId: randomUUID(),
     createdAt: randomDate(),
-    partnership: generatePartnership()
+    partnership: generatePartnership(),
+    users: Array.from({ length: randomInt(1, 5) }, () => generateUser())  
   }
 }
