@@ -115,6 +115,22 @@ export async function createOrganisationCollection(
                 title: { bsonType: 'string' }
               }
             },
+            
+            submittedToRegulator: { bsonType: 'string' },
+            users: {
+                    bsonType: 'array',
+                    items: {
+                      bsonType: 'object',
+                      properties: {
+                        fullName: { bsonType: 'string' },
+                        email: { bsonType: 'string' },
+                        phone: { bsonType: 'string' },
+                        title: { bsonType: 'string' },
+                        role: { bsonType: 'string' }
+                      }
+                    }
+                  }, 
+
             registrations: {
               bsonType: 'array',
               items: {
