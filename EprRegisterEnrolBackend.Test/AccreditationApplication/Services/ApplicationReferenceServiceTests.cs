@@ -1,6 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using FluentAssertions;
-using Xunit;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Services;
 

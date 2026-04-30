@@ -35,6 +35,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
+        // TODO: decide contract and what we wish to pre-populate, think we will need to pass siteId 
         var priorYearData = await reExAdapter.GetAccreditationAsync(organisationId, request.MaterialType, request.Year - 1);
 
         var application = new AccreditationApplicationModel
@@ -79,7 +80,9 @@ public static class AccreditationApplicationEndpoints
 
         var created = await persistence.CreateAsync(application);
         if (created is null)
+        {
             return Results.Problem("Failed to create accreditation application.");
+        }
 
         return Results.Created($"/api/v1/accreditation-applications/{organisationId}/{created.Id}", created);
     }
@@ -310,6 +313,7 @@ public static class AccreditationApplicationEndpoints
         // TODO: Write approved data to org document's accreditations array once
         // IOrganisationPersistence.UpsertAccreditationAsync is implemented (deferred from RA-101).
 
+        // TODO: define contract with ReEx and extend Dto as required. 
         var approvedDto = new ApprovedAccreditationDto
         {
             ApplicationId = applicationId,

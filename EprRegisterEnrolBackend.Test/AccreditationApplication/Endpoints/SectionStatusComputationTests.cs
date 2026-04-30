@@ -1,14 +1,11 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using FluentAssertions;
-using Xunit;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
 public class SectionStatusComputationTests
 {
-    // --- PRNs ---
-
     [Fact]
     public void Prns_NothingSet_IsNotStarted()
     {

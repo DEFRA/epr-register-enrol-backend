@@ -1,7 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Validators;
 using FluentValidation.TestHelper;
-using Xunit;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Validators;
 
