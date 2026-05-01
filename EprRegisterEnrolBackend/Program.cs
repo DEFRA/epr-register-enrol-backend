@@ -1,3 +1,6 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Example.Endpoints;
 using EprRegisterEnrolBackend.Example.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
@@ -62,7 +65,9 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
 
 
     // Set up the MongoDB client. Config and credentials are injected automatically at runtime.
-    MongoClientSettings.Extensions.AddAWSAuthentication();
+    // Guard against duplicate registration when the factory is instantiated multiple times in tests.
+    try { MongoClientSettings.Extensions.AddAWSAuthentication(); }
+    catch (ArgumentException) { /* already registered */ }
     builder.Services.Configure<MongoConfig>(builder.Configuration.GetSection("Mongo"));
     builder.Services.AddSingleton<IMongoDbClientFactory, MongoDbClientFactory>();
 
@@ -77,6 +82,22 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<IExamplePersistence, ExamplePersistence>();
     // Use the in-memory fake persistence for organisation during development
     builder.Services.AddSingleton<IOrganisationPersistence, FakeOrganisationPersistence>();
+
+    // Accreditation Application
+    builder.Services.AddSingleton<IAccreditationApplicationPersistence, AccreditationApplicationPersistence>();
+    builder.Services.AddSingleton<IApplicationReferenceService, ApplicationReferenceService>();
+
+    if (builder.Environment.IsDevelopment())
+    {
+        builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
+        builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+    }
+    else
+    {
+        // Real adapter implementations are required outside of Development (RA-xxx).
+        throw new InvalidOperationException(
+            "Real IReExApiAdapter and ICaseWorkingApiAdapter implementations must be registered for non-Development environments.");
+    }
 }
 
 [ExcludeFromCodeCoverage]
@@ -94,6 +115,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseExampleEndpoints();
     // Organisation endpoints
     app.UseOrganisationEndpoints();
+    // Accreditation application endpoints
+    app.UseAccreditationApplicationEndpoints();
 
     return app;
 }
