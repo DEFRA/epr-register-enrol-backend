@@ -86,8 +86,18 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // Accreditation Application
     builder.Services.AddSingleton<IAccreditationApplicationPersistence, AccreditationApplicationPersistence>();
     builder.Services.AddSingleton<IApplicationReferenceService, ApplicationReferenceService>();
-    builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
-    builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+
+    if (builder.Environment.IsDevelopment())
+    {
+        builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
+        builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+    }
+    else
+    {
+        // Real adapter implementations are required outside of Development (RA-xxx).
+        throw new InvalidOperationException(
+            "Real IReExApiAdapter and ICaseWorkingApiAdapter implementations must be registered for non-Development environments.");
+    }
 }
 
 [ExcludeFromCodeCoverage]

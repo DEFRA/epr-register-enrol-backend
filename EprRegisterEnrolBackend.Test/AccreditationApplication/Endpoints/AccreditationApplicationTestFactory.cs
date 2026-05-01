@@ -9,20 +9,17 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
 public class AccreditationApplicationTestFactory : WebApplicationFactory<Program>
 {
-    public IAccreditationApplicationPersistence MockPersistence { get; } =
-        Substitute.For<IAccreditationApplicationPersistence>();
+    public FakeAccreditationApplicationPersistence FakePersistence { get; } = new();
 
-    public IReExApiAdapter MockReExAdapter { get; } =
-        Substitute.For<IReExApiAdapter>();
-
-    public ICaseWorkingApiAdapter MockCaseWorkingAdapter { get; } =
-        Substitute.For<ICaseWorkingApiAdapter>();
+    public IReExApiAdapter MockReExAdapter { get; } = Substitute.For<IReExApiAdapter>();
+    public ICaseWorkingApiAdapter MockCaseWorkingAdapter { get; } = Substitute.For<ICaseWorkingApiAdapter>();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment("Development");
         builder.ConfigureServices(services =>
         {
-            services.AddSingleton(MockPersistence);
+            services.AddSingleton<IAccreditationApplicationPersistence>(FakePersistence);
             services.AddSingleton(MockReExAdapter);
             services.AddSingleton(MockCaseWorkingAdapter);
         });

@@ -4,5 +4,5 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
 public interface ICaseWorkingApiAdapter
 {
-    Task SubmitApplicationAsync(AccreditationApplicationModel application);
+    Task SubmitApplicationAsync(AccreditationApplicationModel application, CancellationToken cancellationToken = default);
 }

@@ -146,4 +146,70 @@ public class SectionStatusComputationTests
         };
         SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.InProgress);
     }
+
+    [Fact]
+    public void SamplingPlan_MixedCleanAndInfected_IsInProgress()
+    {
+        var sp = new AccreditationApplicationSamplingPlan
+        {
+            Files =
+            [
+                new AccreditationApplicationFile
+                {
+                    FileId = "f1", Filename = "good.pdf", ContentType = "application/pdf",
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                },
+                new AccreditationApplicationFile
+                {
+                    FileId = "f2", Filename = "bad.pdf", ContentType = "application/pdf",
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Infected
+                }
+            ]
+        };
+        SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void SamplingPlan_MixedCleanAndPending_IsInProgress()
+    {
+        var sp = new AccreditationApplicationSamplingPlan
+        {
+            Files =
+            [
+                new AccreditationApplicationFile
+                {
+                    FileId = "f1", Filename = "good.pdf", ContentType = "application/pdf",
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                },
+                new AccreditationApplicationFile
+                {
+                    FileId = "f2", Filename = "pending.pdf", ContentType = "application/pdf",
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Pending
+                }
+            ]
+        };
+        SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void SamplingPlan_AllClean_IsCompleted()
+    {
+        var sp = new AccreditationApplicationSamplingPlan
+        {
+            Files =
+            [
+                new AccreditationApplicationFile
+                {
+                    FileId = "f1", Filename = "doc1.pdf", ContentType = "application/pdf",
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                },
+                new AccreditationApplicationFile
+                {
+                    FileId = "f2", Filename = "doc2.pdf", ContentType = "application/pdf",
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                }
+            ]
+        };
+        SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.Completed);
+    }
 }

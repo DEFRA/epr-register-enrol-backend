@@ -162,7 +162,8 @@ export async function createAccreditationApplicationsCollection(
       collection.createIndex({ materialType: 1 }),
       collection.createIndex({ year: 1 }),
       collection.createIndex({ sourceReExAccreditationId: 1 }),
-      collection.createIndex({ organisationId: 1, materialType: 1, year: 1 })
+      collection.createIndex({ organisationId: 1, materialType: 1, year: 1 }),
+      collection.createIndex({ applicationReference: 1 }, { unique: true, sparse: true })
     ])
 
     console.log('All indexes created successfully')

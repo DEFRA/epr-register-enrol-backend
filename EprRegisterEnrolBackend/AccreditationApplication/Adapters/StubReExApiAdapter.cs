@@ -41,7 +41,7 @@ public class StubReExApiAdapter(ILogger<StubReExApiAdapter> logger) : IReExApiAd
         return Task.FromResult<ReExAccreditationDto?>(fixture);
     }
 
-    public Task WriteApprovedAccreditationAsync(ApprovedAccreditationDto accreditation)
+    public Task WriteApprovedAccreditationAsync(ApprovedAccreditationDto accreditation, CancellationToken cancellationToken = default)
     {
         logger.LogInformation(
             "StubReExApiAdapter.WriteApprovedAccreditationAsync called for org={OrganisationId} ref={ApplicationReference}",

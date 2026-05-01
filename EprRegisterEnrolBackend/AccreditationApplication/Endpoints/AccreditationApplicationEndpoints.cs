@@ -35,7 +35,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        // TODO: decide contract and what we wish to pre-populate, think we will need to pass siteId 
+        // TODO: decide contract and what we wish to pre-populate, think we will need to pass siteId
         var priorYearData = await reExAdapter.GetAccreditationAsync(organisationId, request.MaterialType, request.Year - 1);
 
         var application = new AccreditationApplicationModel
@@ -80,9 +80,7 @@ public static class AccreditationApplicationEndpoints
 
         var created = await persistence.CreateAsync(application);
         if (created is null)
-        {
             return Results.Problem("Failed to create accreditation application.");
-        }
 
         return Results.Created($"/api/v1/accreditation-applications/{organisationId}/{created.Id}", created);
     }
@@ -205,15 +203,22 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         ICaseWorkingApiAdapter caseWorkingAdapter,
         IApplicationReferenceService referenceService,
-        IValidator<SubmitRequest> validator)
+        IValidator<SubmitRequest> validator,
+        CancellationToken cancellationToken)
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        if (application.ApplicationStatus == ApplicationStatus.Sent)
+            return Results.Ok(application);
+
+        if (application.ApplicationStatus != ApplicationStatus.Started)
+            return Results.Conflict("Application must be in 'Started' status to submit.");
 
         if (application.Prns.SectionStatus != SectionStatus.Completed ||
             application.BusinessPlan.SectionStatus != SectionStatus.Completed ||
@@ -233,31 +238,37 @@ public static class AccreditationApplicationEndpoints
             Email = request.Email
         };
 
+        // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
+        await caseWorkingAdapter.SubmitApplicationAsync(application, cancellationToken);
+
         var updated = await persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to submit accreditation application.");
-
-        await caseWorkingAdapter.SubmitApplicationAsync(updated);
-
-        return Results.Ok(updated);
+        return updated is null ? Results.Problem("Failed to submit accreditation application.") : Results.Ok(updated);
     }
 
     private static async Task<IResult> AddFile(
         string organisationId,
         string applicationId,
         FileUploadRequest request,
-        IAccreditationApplicationPersistence persistence)
+        IAccreditationApplicationPersistence persistence,
+        IValidator<FileUploadRequest> validator)
     {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        if (application.SamplingPlan.Files.Count >= 10)
+            return Results.UnprocessableEntity("Maximum of 10 files permitted per application.");
 
         var file = new AccreditationApplicationFile
         {
             FileId = request.FileId,
             Filename = request.Filename,
             ContentType = request.ContentType,
-            UploadedByUserId = request.UploadedByUserId,
+            UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
             ScanStatus = FileScanStatus.Pending
         };
 
@@ -297,23 +308,20 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         IAccreditationApplicationPersistence persistence,
-        IReExApiAdapter reExAdapter)
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken)
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
 
-        application.ApplicationStatus = ApplicationStatus.Approved;
-        application.DateLastEdited = DateTime.UtcNow;
+        if (application.ApplicationStatus == ApplicationStatus.Approved)
+            return Results.Ok(application);
 
-        var updated = await persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to approve accreditation application.");
+        if (application.ApplicationStatus != ApplicationStatus.Sent)
+            return Results.Conflict("Only submitted applications can be approved.");
 
-        // TODO: Write approved data to org document's accreditations array once
-        // IOrganisationPersistence.UpsertAccreditationAsync is implemented (deferred from RA-101).
-
-        // TODO: define contract with ReEx and extend Dto as required. 
+        // TODO: define contract with ReEx and extend Dto as required.
         var approvedDto = new ApprovedAccreditationDto
         {
             ApplicationId = applicationId,
@@ -326,9 +334,17 @@ public static class AccreditationApplicationEndpoints
             BusinessPlan = application.BusinessPlan
         };
 
-        await reExAdapter.WriteApprovedAccreditationAsync(approvedDto);
+        // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
+        await reExAdapter.WriteApprovedAccreditationAsync(approvedDto, cancellationToken);
 
-        return Results.Ok(updated);
+        // TODO: Write approved data to org document's accreditations array once
+        // IOrganisationPersistence.UpsertAccreditationAsync is implemented (deferred from RA-101).
+
+        application.ApplicationStatus = ApplicationStatus.Approved;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null ? Results.Problem("Failed to approve accreditation application.") : Results.Ok(updated);
     }
 
     private static async Task<IResult> Reject(
@@ -340,11 +356,16 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
+        if (application.ApplicationStatus == ApplicationStatus.Rejected)
+            return Results.Ok(application);
+
+        if (application.ApplicationStatus != ApplicationStatus.Sent)
+            return Results.Conflict("Only submitted applications can be rejected.");
+
         application.ApplicationStatus = ApplicationStatus.Rejected;
         application.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null ? Results.Problem("Failed to reject accreditation application.") : Results.Ok(updated);
     }
-
 }

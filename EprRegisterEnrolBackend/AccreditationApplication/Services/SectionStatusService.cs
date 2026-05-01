@@ -51,8 +51,12 @@ public static class SectionStatusService
         if (samplingPlan.Files.Count == 0)
             return SectionStatus.NotStarted;
 
-        return samplingPlan.Files.Any(f => f.ScanStatus == FileScanStatus.Clean)
-            ? SectionStatus.Completed
-            : SectionStatus.InProgress;
+        if (samplingPlan.Files.Any(f => f.ScanStatus == FileScanStatus.Infected))
+            return SectionStatus.InProgress;
+
+        if (samplingPlan.Files.All(f => f.ScanStatus == FileScanStatus.Clean))
+            return SectionStatus.Completed;
+
+        return SectionStatus.InProgress;
     }
 }

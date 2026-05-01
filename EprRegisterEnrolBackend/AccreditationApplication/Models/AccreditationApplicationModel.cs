@@ -9,7 +9,10 @@ public class AccreditationApplicationModel
 {
     [BsonId(IdGenerator = typeof(ObjectIdGenerator))]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Always)]
-    public ObjectId? Id { get; init; }
+    public ObjectId? Id { get; set; }
+
+    [BsonIgnore]
+    public string? ApplicationId => Id?.ToString();
 
     public required string OrganisationId { get; set; }
 

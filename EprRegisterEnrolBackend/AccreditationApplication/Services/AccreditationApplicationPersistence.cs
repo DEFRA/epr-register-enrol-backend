@@ -68,7 +68,10 @@ public class AccreditationApplicationPersistence(
                 builder.Combine(
                     builder.Ascending(a => a.OrganisationId),
                     builder.Ascending(a => a.MaterialType),
-                    builder.Ascending(a => a.Year)))
+                    builder.Ascending(a => a.Year))),
+            new CreateIndexModel<AccreditationApplicationModel>(
+                builder.Ascending(a => a.ApplicationReference),
+                new CreateIndexOptions { Unique = true, Sparse = true })
         ];
     }
 }

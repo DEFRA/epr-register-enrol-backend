@@ -5,7 +5,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 public interface IReExApiAdapter
 {
     Task<ReExAccreditationDto?> GetAccreditationAsync(string organisationId, MaterialType materialType, int year);
-    Task WriteApprovedAccreditationAsync(ApprovedAccreditationDto accreditation);
+    Task WriteApprovedAccreditationAsync(ApprovedAccreditationDto accreditation, CancellationToken cancellationToken = default);
 }
 
 public class ReExAccreditationDto
