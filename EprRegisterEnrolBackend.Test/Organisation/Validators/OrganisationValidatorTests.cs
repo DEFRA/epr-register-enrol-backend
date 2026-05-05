@@ -1,7 +1,6 @@
 using EprRegisterEnrolBackend.Organisation.Models;
 using EprRegisterEnrolBackend.Organisation.Validators;
 using FluentValidation.TestHelper;
-using Xunit;
 
 namespace EprRegisterEnrolBackend.Test.Organisation.Validators;
 
