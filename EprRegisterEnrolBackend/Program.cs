@@ -76,7 +76,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // Set up the endpoints and their dependencies
     builder.Services.AddSingleton<IExamplePersistence, ExamplePersistence>();
     // Use the in-memory fake persistence for organisation during development
-    builder.Services.AddSingleton<IOrganisationPersistence, FakeOrganisationPersistence>();
+    builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
 }
 
 [ExcludeFromCodeCoverage]

@@ -13,11 +13,11 @@ public static class OrganisationEndpoints
 
         app.MapGet("organisation", GetAll);
 
-        app.MapGet("organisation/{name}", GetByName);
+        app.MapGet("organisation/{orgId:int}", GetByOrgId);
 
-        app.MapPut("organisation/{name}", Update);
+        app.MapPut("organisation/{orgId:int}", Update);
 
-        app.MapDelete("organisation/{name}", Delete);
+        app.MapDelete("organisation/{orgId:int}", Delete);
     }
 
     private static async Task<IResult> Create(
@@ -30,10 +30,10 @@ public static class OrganisationEndpoints
         if (!created)
             return Results.BadRequest(new List<ValidationFailure>
             {
-                new("Organisation", "An organisation record with this company name or registration number already exists")
+                new("Organisation", "An organisation record with this orgId already exists")
             });
 
-        return Results.Created($"/organisation/{organisation.CompanyName}", organisation);
+        return Results.Created($"/organisation/{organisation.OrgId}", organisation);
     }
 
     private static async Task<IResult> GetAll(IOrganisationPersistence organisationPersistence, string? searchTerm)
@@ -48,18 +48,18 @@ public static class OrganisationEndpoints
         return Results.Ok(matches);
     }
 
-    private static async Task<IResult> GetByName(
-        string name, IOrganisationPersistence organisationPersistence)
+    private static async Task<IResult> GetByOrgId(
+        int orgId, IOrganisationPersistence organisationPersistence)
     {
-        var organisation = await organisationPersistence.GetByOrganisationName(name);
+        var organisation = await organisationPersistence.GetByOrgIdAsync(orgId);
         return organisation is not null ? Results.Ok(organisation) : Results.NotFound();
     }
 
     private static async Task<IResult> Update(
-        string name, OrganisationModel organisation, IOrganisationPersistence organisationPersistence,
+        int orgId, OrganisationModel organisation, IOrganisationPersistence organisationPersistence,
         IValidator<OrganisationModel> validator)
     {
-        organisation.CompanyName = name;
+        organisation.OrgId = orgId;
         var validationResult = await validator.ValidateAsync(organisation);
         if (!validationResult.IsValid) return Results.BadRequest(validationResult.Errors);
 
@@ -68,9 +68,9 @@ public static class OrganisationEndpoints
     }
 
     private static async Task<IResult> Delete(
-        string name, IOrganisationPersistence organisationPersistence)
+        int orgId, IOrganisationPersistence organisationPersistence)
     {
-        var deleted = await organisationPersistence.DeleteAsync(name);
+        var deleted = await organisationPersistence.DeleteAsync(orgId);
         return deleted ? Results.Ok() : Results.NotFound();
     }
 }
