@@ -1,4 +1,4 @@
-﻿using MongoDB.Driver;
+using MongoDB.Driver;
 using System.Diagnostics.CodeAnalysis;
 
 namespace EprRegisterEnrolBackend.Utils.Mongo;
@@ -32,6 +32,6 @@ public abstract class MongoService<T>
             "Ensuring index is created if it does not exist for collection {CollectionNamespaceCollectionName} in DB {DatabaseDatabaseNamespace}",
             Collection.CollectionNamespace.CollectionName,
             Collection.Database.DatabaseNamespace);
-        Collection.Indexes.CreateMany(indexes);
+        //Collection.Indexes.CreateMany(indexes);
     }
 }

@@ -98,6 +98,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         throw new InvalidOperationException(
             "Real IReExApiAdapter and ICaseWorkingApiAdapter implementations must be registered for non-Development environments.");
     }
+    builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
 }
 
 [ExcludeFromCodeCoverage]

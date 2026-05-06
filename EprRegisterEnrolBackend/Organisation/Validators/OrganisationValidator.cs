@@ -7,17 +7,23 @@ public class OrganisationValidator : AbstractValidator<OrganisationModel>
 {
     public OrganisationValidator()
     {
-        RuleFor(model => model.CompanyName)
-            .Matches(@"^[\w\s]+$")
-            .Length(3, 200)
-            .WithMessage("CompanyName was not valid. Must be between 3 and 200 characters and contain only letters, numbers and whitespace.");
+        RuleFor(model => model.OrgId)
+            .GreaterThan(0)
+            .WithMessage("OrgId must be a positive integer.");
 
-        RuleFor(model => model.CompaniesHouseNumber).NotEmpty();
+        RuleFor(model => model.SchemaVersion)
+            .GreaterThanOrEqualTo(1)
+            .WithMessage("SchemaVersion must be at least 1.");
 
-        RuleFor(model => model.SchemeRegistrationId).NotEmpty();
+        RuleFor(model => model.Version)
+            .GreaterThanOrEqualTo(1)
+            .WithMessage("Version must be at least 1.");
 
-        RuleFor(model => model.RegisteredAddress).NotEmpty();
-
-        RuleFor(model => model.ApprovedPerson).NotEmpty();
+        When(model => model.CompanyDetails?.Name is not null, () =>
+        {
+            RuleFor(model => model.CompanyDetails!.Name)
+                .Length(1, 200)
+                .WithMessage("CompanyDetails.Name must be between 1 and 200 characters.");
+        });
     }
 }

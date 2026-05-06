@@ -9,126 +9,176 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
 
     public FakeOrganisationPersistence()
     {
-        // Seed with some fake data similar to OperatorOrgDetailsViewModel
         _store.Add(new OrganisationModel
         {
-            CompanyName = "Operator Export Company",
-            CompaniesHouseNumber = "11044891",
-            SchemeRegistrationId = "BN2712300000001",
-            RegisteredAddress = "29 Acacia Road",
-            ApprovedPerson = "General Blight",
-            Directors = new List<DirectorModel>
+            OrgId = 1,
+            SchemaVersion = 1,
+            Version = 1,
+            BusinessType = "unincorporated",
+            WasteProcessingTypes = ["reprocessor", "exporter"],
+            ReprocessingNations = ["england", "wales"],
+            CompanyDetails = new CompanyDetailsModel
             {
-                new() { Name = "Eric Twinge" },
-                new() { Name = "Crow" },
-                new() { Name = "Doctor Gloom" }
-            }
+                Name = "Operator Export Company",
+                TradingName = "Op Export Co",
+                RegistrationNumber = "11044891",
+                RegisteredAddress = new RegisteredAddressModel
+                {
+                    Line1 = "29 Acacia Road",
+                    Town = "London",
+                    Postcode = "SW1A 1AA",
+                    Country = "England"
+                }
+            },
+            ContactDetails = new ContactDetailsModel
+            {
+                FullName = "General Blight",
+                Email = "general.blight@opexport.co.uk",
+                Phone = "01234567890",
+                Role = "Manager"
+            },
+            Users =
+            [
+                new PersonModel { FullName = "Eric Twinge", Role = "Director" },
+                new PersonModel { FullName = "Crow", Role = "Director" },
+                new PersonModel { FullName = "Doctor Gloom", Role = "Director" }
+            ]
         });
 
         _store.Add(new OrganisationModel
         {
-            CompanyName = "Another Company",
-            CompaniesHouseNumber = "99999999",
-            SchemeRegistrationId = "BN0000000000000",
-            RegisteredAddress = "1 Example Street",
-            ApprovedPerson = "Jane Example",
-            Directors = new List<DirectorModel>
+            OrgId = 2,
+            SchemaVersion = 1,
+            Version = 1,
+            BusinessType = "partnership",
+            WasteProcessingTypes = ["reprocessor"],
+            ReprocessingNations = ["scotland"],
+            CompanyDetails = new CompanyDetailsModel
             {
-                new() { Name = "Alice" }
-            }
+                Name = "Another Company",
+                RegistrationNumber = "99999999",
+                RegisteredAddress = new RegisteredAddressModel
+                {
+                    Line1 = "1 Example Street",
+                    Town = "Edinburgh",
+                    Postcode = "EH1 1AA",
+                    Country = "Scotland"
+                }
+            },
+            ContactDetails = new ContactDetailsModel
+            {
+                FullName = "Jane Example",
+                Email = "jane@anothercompany.co.uk"
+            },
+            Users = [new PersonModel { FullName = "Alice", Role = "Director" }]
         });
 
         _store.Add(new OrganisationModel
         {
-            CompanyName = "Third Company",
-            CompaniesHouseNumber = "11111111",
-            SchemeRegistrationId = "BN0000000000000",
-            RegisteredAddress = "1 Example Street",
-            ApprovedPerson = "Aysha Shaikh",
-            Directors = new List<DirectorModel>
+            OrgId = 3,
+            SchemaVersion = 1,
+            Version = 1,
+            BusinessType = "individual",
+            WasteProcessingTypes = ["exporter"],
+            ReprocessingNations = ["northern_ireland"],
+            CompanyDetails = new CompanyDetailsModel
             {
-                new() { Name = "Aysha" }
-            }
+                Name = "Third Company",
+                RegistrationNumber = "11111111",
+                RegisteredAddress = new RegisteredAddressModel
+                {
+                    Line1 = "1 Example Street",
+                    Town = "Belfast",
+                    Postcode = "BT1 1AA",
+                    Country = "Northern Ireland"
+                }
+            },
+            ContactDetails = new ContactDetailsModel
+            {
+                FullName = "Aysha Shaikh",
+                Email = "aysha@thirdcompany.co.uk"
+            },
+            Users = [new PersonModel { FullName = "Aysha", Role = "Director" }]
         });
-
     }
 
     public Task<bool> CreateAsync(OrganisationModel organisation)
     {
         lock (_lock)
         {
-            var exists = _store.Any(o =>
-                string.Equals(o.CompanyName, organisation.CompanyName, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(o.CompaniesHouseNumber, organisation.CompaniesHouseNumber, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(o.SchemeRegistrationId, organisation.SchemeRegistrationId, StringComparison.OrdinalIgnoreCase));
-
-            if (exists) return Task.FromResult(false);
+            if (_store.Any(o => o.OrgId == organisation.OrgId))
+                return Task.FromResult(false);
 
             _store.Add(organisation);
             return Task.FromResult(true);
         }
     }
 
-    public Task<OrganisationModel?> GetByOrganisationName(string name)
+    public Task<OrganisationModel?> GetByOrgIdAsync(int orgId)
     {
         lock (_lock)
         {
-            var org = _store.FirstOrDefault(o => string.Equals(o.CompanyName, name, StringComparison.OrdinalIgnoreCase));
-            return Task.FromResult(org);
+            return Task.FromResult(_store.FirstOrDefault(o => o.OrgId == orgId));
         }
     }
 
-    public Task<IEnumerable<OrganisationModel>> GetAllAsync()
+    public Task<IEnumerable<OrganisationSummaryModel>> GetAllAsync()
     {
         lock (_lock)
         {
-            return Task.FromResult<IEnumerable<OrganisationModel>>(_store.ToList());
+            return Task.FromResult<IEnumerable<OrganisationSummaryModel>>(_store.Select(ToSummary).ToList());
         }
     }
 
-    public Task<IEnumerable<OrganisationModel>> SearchByValueAsync(string searchTerm)
+    public Task<IEnumerable<OrganisationSummaryModel>> SearchByValueAsync(string searchTerm)
     {
         lock (_lock)
         {
             if (string.IsNullOrWhiteSpace(searchTerm))
-                return Task.FromResult<IEnumerable<OrganisationModel>>(_store.ToList());
+                return Task.FromResult<IEnumerable<OrganisationSummaryModel>>(_store.Select(ToSummary).ToList());
 
             var term = searchTerm.Trim();
             var matches = _store.Where(o =>
-                (o.CompanyName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (o.CompaniesHouseNumber?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (o.SchemeRegistrationId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (o.RegisteredAddress?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (o.ApprovedPerson?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (o.Directors != null && o.Directors.Any(d => d.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false))
-            ).ToList();
+                (o.CompanyDetails?.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (o.CompanyDetails?.TradingName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (o.CompanyDetails?.RegistrationNumber?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (o.ContactDetails?.FullName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (o.ContactDetails?.Email?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+            ).Select(ToSummary).ToList();
 
-            return Task.FromResult<IEnumerable<OrganisationModel>>(matches);
+            return Task.FromResult<IEnumerable<OrganisationSummaryModel>>(matches);
         }
     }
+
+    private static OrganisationSummaryModel ToSummary(OrganisationModel o) => new()
+    {
+        OrgId = o.OrgId,
+        WasteProcessingTypes = o.WasteProcessingTypes,
+        ReprocessingNations = o.ReprocessingNations,
+        BusinessType = o.BusinessType,
+        CompanyDetails = o.CompanyDetails,
+        Partnership = o.Partnership,
+        ContactDetails = o.ContactDetails,
+        SubmittedToRegulator = o.SubmittedToRegulator,
+    };
 
     public Task<bool> UpdateAsync(OrganisationModel organisation)
     {
         lock (_lock)
         {
-            var existing = _store.FirstOrDefault(o => string.Equals(o.CompanyName, organisation.CompanyName, StringComparison.OrdinalIgnoreCase));
-            if (existing is null) return Task.FromResult(false);
+            var index = _store.FindIndex(o => o.OrgId == organisation.OrgId);
+            if (index < 0) return Task.FromResult(false);
 
-            existing.CompaniesHouseNumber = organisation.CompaniesHouseNumber;
-            existing.SchemeRegistrationId = organisation.SchemeRegistrationId;
-            existing.RegisteredAddress = organisation.RegisteredAddress;
-            existing.ApprovedPerson = organisation.ApprovedPerson;
-            existing.Directors = organisation.Directors;
-
+            _store[index] = organisation;
             return Task.FromResult(true);
         }
     }
 
-    public Task<bool> DeleteAsync(string name)
+    public Task<bool> DeleteAsync(int orgId)
     {
         lock (_lock)
         {
-            var existing = _store.FirstOrDefault(o => string.Equals(o.CompanyName, name, StringComparison.OrdinalIgnoreCase));
+            var existing = _store.FirstOrDefault(o => o.OrgId == orgId);
             if (existing is null) return Task.FromResult(false);
 
             _store.Remove(existing);
