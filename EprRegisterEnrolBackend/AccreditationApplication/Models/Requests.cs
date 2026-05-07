@@ -2,9 +2,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 public class SeedRequest
 {
-    public required MaterialType MaterialType { get; set; }
     public required int Year { get; set; }
-    public string? SiteId { get; set; }
 }
 
 public class PatchPrnsRequest

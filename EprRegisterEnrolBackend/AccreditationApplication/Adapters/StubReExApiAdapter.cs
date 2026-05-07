@@ -6,19 +6,19 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 // Stub implementation — swapped for a real HTTP adapter once the ReEx API contract is defined.
 public class StubReExApiAdapter(ILogger<StubReExApiAdapter> logger) : IReExApiAdapter
 {
-    public Task<ReExAccreditationDto?> GetAccreditationAsync(string organisationId, MaterialType materialType, int year)
+    public Task<ReExAccreditationDto?> GetAccreditationAsync(string organisationId, string siteId, MaterialType materialType, int year)
     {
         logger.LogInformation(
-            "StubReExApiAdapter.GetAccreditationAsync called for org={OrganisationId} material={MaterialType} year={Year}",
-            organisationId, materialType, year);
+            "StubReExApiAdapter.GetAccreditationAsync called for org={OrganisationId} site={SiteId} material={MaterialType} year={Year}",
+            organisationId, siteId, materialType, year);
 
         var fixture = new ReExAccreditationDto
         {
-            AccreditationId = $"reex-acc-{organisationId}-{materialType}-{year}",
+            AccreditationId = $"reex-acc-{organisationId}-{siteId}-{materialType}-{year}",
             OrganisationId = organisationId,
             MaterialType = materialType,
             Year = year,
-            SiteId = null,
+            SiteId = siteId,
             Prns = new ReExPrnsDto
             {
                 PlannedTonnageBand = PlannedTonnageBand.UpTo1000,

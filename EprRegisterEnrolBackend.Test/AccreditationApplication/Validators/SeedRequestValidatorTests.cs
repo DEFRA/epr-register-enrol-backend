@@ -11,7 +11,7 @@ public class SeedRequestValidatorTests
     [Fact]
     public void ValidRequest_PassesValidation()
     {
-        var request = new SeedRequest { MaterialType = MaterialType.Steel, Year = 2026 };
+        var request = new SeedRequest { Year = 2026 };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveAnyValidationErrors();
     }
@@ -21,7 +21,7 @@ public class SeedRequestValidatorTests
     [InlineData(2000)]
     public void YearBefore2024_FailsValidation(int year)
     {
-        var request = new SeedRequest { MaterialType = MaterialType.Steel, Year = year };
+        var request = new SeedRequest { Year = year };
         var result = _validator.TestValidate(request);
         result.ShouldHaveValidationErrorFor(r => r.Year);
     }
@@ -29,7 +29,7 @@ public class SeedRequestValidatorTests
     [Fact]
     public void Year2024_PassesValidation()
     {
-        var request = new SeedRequest { MaterialType = MaterialType.Wood, Year = 2024 };
+        var request = new SeedRequest { Year = 2024 };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor(r => r.Year);
     }

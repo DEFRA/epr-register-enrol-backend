@@ -10,9 +10,5 @@ public class SeedRequestValidator : AbstractValidator<SeedRequest>
         RuleFor(r => r.Year)
             .GreaterThanOrEqualTo(2024)
             .WithMessage("Year must be 2024 or later.");
-
-        RuleFor(r => r.MaterialType)
-            .IsInEnum()
-            .WithMessage("MaterialType must be a valid material.");
     }
 }
