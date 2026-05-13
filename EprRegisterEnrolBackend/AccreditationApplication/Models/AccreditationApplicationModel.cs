@@ -54,17 +54,6 @@ public class SubmittedByModel
     public required string Email { get; set; }
 }
 
-public enum MaterialType
-{
-    Steel,
-    Wood,
-    Aluminium,
-    Fibre,
-    Glass,
-    Paper,
-    Plastic
-}
-
 public enum ApplicationStatus
 {
     Saved,
