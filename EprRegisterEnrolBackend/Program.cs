@@ -5,6 +5,8 @@ using EprRegisterEnrolBackend.FileUpload.Endpoints;
 using EprRegisterEnrolBackend.FileUpload.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.StubPersistence.Endpoints;
+using EprRegisterEnrolBackend.StubPersistence.Services;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Http;
 using EprRegisterEnrolBackend.Utils.Mongo;
@@ -97,6 +99,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
         builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+        builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
     }
     else
     {
@@ -124,6 +127,11 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseAccreditationApplicationEndpoints();
     // File upload endpoints
     app.UseFileUploadEndpoints();
+
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseStubApplicationEndpoints();
+    }
 
     return app;
 }
