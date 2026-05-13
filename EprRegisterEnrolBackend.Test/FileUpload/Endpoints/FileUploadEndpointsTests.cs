@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.FileUpload.Models;
 using FluentAssertions;
@@ -9,6 +11,11 @@ namespace EprRegisterEnrolBackend.Test.FileUpload.Endpoints;
 
 public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
+
     private readonly FileUploadTestFactory _factory;
     private readonly HttpClient _client;
 
@@ -68,7 +75,7 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<FileUploadModel>(
+        var body = await response.Content.ReadFromJsonAsync<FileUploadModel>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.OrganisationId.Should().Be("org-123");
         body.Material.Should().Be(MaterialType.Steel);
@@ -131,7 +138,7 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
             TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(
+        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.Should().HaveCount(1);
         body[0].OrganisationId.Should().Be("org-list-test");
@@ -163,7 +170,7 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         Console.WriteLine(response.Content.Headers.ContentType);
         var json = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(
+        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.Should().HaveCount(1);
         body[0].Material.Should().Be(MaterialType.Steel);
@@ -179,7 +186,7 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
             TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(
+        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.Should().BeEmpty();
     }
@@ -197,7 +204,7 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
             TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<FileUploadModel>(
+        var body = await response.Content.ReadFromJsonAsync<FileUploadModel>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.Filename.Should().Be("test.pdf");
     }
