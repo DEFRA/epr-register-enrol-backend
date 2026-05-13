@@ -14,9 +14,6 @@ public class CreateFileUploadRequestValidator : AbstractValidator<CreateFileUplo
         "image/png"
     ];
 
-    private static readonly int MinYear = DateTime.UtcNow.Year - 2;
-    private static readonly int MaxYear = DateTime.UtcNow.Year;
-
     public CreateFileUploadRequestValidator()
     {
         RuleFor(r => r.OrganisationId).NotEmpty().MaximumLength(100);
@@ -37,7 +34,15 @@ public class CreateFileUploadRequestValidator : AbstractValidator<CreateFileUplo
         RuleFor(r => r.S3Key).NotEmpty().MaximumLength(1024);
 
         RuleFor(r => r.YearOfAccreditation)
-            .InclusiveBetween(MinYear, MaxYear)
-            .WithMessage($"Year of accreditation must be between {MinYear} and {MaxYear}.");
+            .Must(y =>
+            {
+                var current = DateTime.UtcNow.Year;
+                return y >= current - 2 && y <= current;
+            })
+            .WithMessage(_ =>
+            {
+                var current = DateTime.UtcNow.Year;
+                return $"Year of accreditation must be between {current - 2} and {current}.";
+            });
     }
 }

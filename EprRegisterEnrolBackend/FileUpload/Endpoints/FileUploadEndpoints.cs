@@ -55,12 +55,17 @@ public static class FileUploadEndpoints
         if (string.IsNullOrWhiteSpace(organisationId))
             return Results.BadRequest("organisationId query parameter is required.");
 
-        if (!string.IsNullOrWhiteSpace(material) && year.HasValue
-            && Enum.TryParse<MaterialType>(material, out var materialType))
+        if (!string.IsNullOrWhiteSpace(material))
         {
-            var filtered = await persistence.GetByOrganisationMaterialAndYearAsync(
-                organisationId, materialType, year.Value);
-            return Results.Ok(filtered);
+            if (!Enum.TryParse<MaterialType>(material, out var materialType))
+                return Results.BadRequest($"Invalid material value: '{material}'.");
+
+            if (year.HasValue)
+            {
+                var filtered = await persistence.GetByOrganisationMaterialAndYearAsync(
+                    organisationId, materialType, year.Value);
+                return Results.Ok(filtered);
+            }
         }
 
         var files = await persistence.GetByOrganisationAsync(organisationId);
