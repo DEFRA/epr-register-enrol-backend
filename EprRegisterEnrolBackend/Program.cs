@@ -72,6 +72,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     catch (ArgumentException) { /* already registered */ }
     builder.Services.Configure<MongoConfig>(builder.Configuration.GetSection("Mongo"));
     builder.Services.AddSingleton<IMongoDbClientFactory, MongoDbClientFactory>();
+    
 
     // Add healthcheck, this is required for the platform to know your service is alive.
     builder.Services.AddHealthChecks();
@@ -83,6 +84,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+    builder.Services.ConfigureHttpJsonOptions(options =>
+        options.SerializerOptions.PropertyNamingPolicy = null);
 
     // Set up the endpoints and their dependencies
     // Use the in-memory fake persistence for organisation during development

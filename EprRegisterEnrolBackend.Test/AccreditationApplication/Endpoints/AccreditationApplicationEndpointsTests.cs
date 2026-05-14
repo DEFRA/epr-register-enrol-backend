@@ -137,10 +137,10 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
         var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        json.RootElement.GetProperty("materialType").ValueKind.Should().Be(JsonValueKind.String);
-        json.RootElement.GetProperty("applicationStatus").ValueKind.Should().Be(JsonValueKind.String);
-        json.RootElement.GetProperty("materialType").GetString().Should().Be("Steel");
-        json.RootElement.GetProperty("applicationStatus").GetString().Should().Be("Saved");
+        json.RootElement.GetProperty("MaterialType").ValueKind.Should().Be(JsonValueKind.String);
+        json.RootElement.GetProperty("ApplicationStatus").ValueKind.Should().Be(JsonValueKind.String);
+        json.RootElement.GetProperty("MaterialType").GetString().Should().Be("Steel");
+        json.RootElement.GetProperty("ApplicationStatus").GetString().Should().Be("Saved");
     }
 
     [Fact]
