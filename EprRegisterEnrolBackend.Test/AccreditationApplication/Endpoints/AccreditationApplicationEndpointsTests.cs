@@ -62,8 +62,8 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
             .Returns(Task.FromResult<ReExAccreditationDto?>(null));
 
-        var request = new SeedRequest { MaterialType = MaterialType.Steel, Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/seed", request,
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
@@ -90,8 +90,8 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
                 BusinessPlan = new ReExBusinessPlanDto { NewInfrastructurePercent = 20 }
             }));
 
-        var request = new SeedRequest { MaterialType = MaterialType.Steel, Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/seed", request,
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
@@ -106,8 +106,18 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Seed_InvalidYear_Returns400()
     {
         Reset();
-        var request = new SeedRequest { MaterialType = MaterialType.Steel, Year = 2020 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/seed", request,
+        var request = new SeedRequest { Year = 2020 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
+            cancellationToken: TestContext.Current.CancellationToken);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Seed_InvalidMaterialType_Returns400()
+    {
+        Reset();
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Unknown/seed", request,
             cancellationToken: TestContext.Current.CancellationToken);
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }

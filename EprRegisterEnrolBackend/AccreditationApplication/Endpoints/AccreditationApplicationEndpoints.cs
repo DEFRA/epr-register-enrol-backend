@@ -11,7 +11,7 @@ public static class AccreditationApplicationEndpoints
     {
         var group = app.MapGroup("api/v1/accreditation-applications");
 
-        group.MapPost("{organisationId}/seed", Seed);
+        group.MapPost("{organisationId}/{siteId}/{materialType}/seed", Seed);
         group.MapGet("{organisationId}", GetList);
         group.MapGet("{organisationId}/{applicationId}", GetById);
         group.MapPatch("{organisationId}/{applicationId}/prns", PatchPrns);
@@ -26,24 +26,28 @@ public static class AccreditationApplicationEndpoints
 
     private static async Task<IResult> Seed(
         string organisationId,
+        string siteId,
+        string materialType,
         SeedRequest request,
         IAccreditationApplicationPersistence persistence,
         IReExApiAdapter reExAdapter,
         IValidator<SeedRequest> validator)
     {
+        if (!Enum.TryParse<MaterialType>(materialType, out var materialTypeEnum))
+            return Results.BadRequest("Invalid material type.");
+
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        // TODO: decide contract and what we wish to pre-populate, think we will need to pass siteId
-        var priorYearData = await reExAdapter.GetAccreditationAsync(organisationId, request.MaterialType, request.Year - 1);
+        var priorYearData = await reExAdapter.GetAccreditationAsync(organisationId, materialTypeEnum, request.Year - 1);
 
         var application = new AccreditationApplicationModel
         {
             OrganisationId = organisationId,
             Year = request.Year,
-            SiteId = request.SiteId ?? priorYearData?.SiteId,
-            MaterialType = request.MaterialType,
+            SiteId = siteId,
+            MaterialType = materialTypeEnum,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData?.AccreditationId,
             SourceYear = priorYearData != null ? request.Year - 1 : null
