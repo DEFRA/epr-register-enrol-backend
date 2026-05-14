@@ -42,6 +42,14 @@ export async function createAccreditationApplicationsCollection(
                         siteId: {
                             bsonType: ["string", "null"],
                         },
+                        organisationName: {
+                            bsonType: ["string", "null"],
+                            description: "Denormalised organisation display name",
+                        },
+                        siteAddress: {
+                            bsonType: ["string", "null"],
+                            description: "Denormalised site address string for display",
+                        },
                         materialType: {
                             bsonType: "string",
                             enum: [

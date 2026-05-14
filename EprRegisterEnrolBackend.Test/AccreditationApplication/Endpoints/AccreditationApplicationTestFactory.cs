@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Organisation.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +14,7 @@ public class AccreditationApplicationTestFactory : WebApplicationFactory<Program
 
     public IReExApiAdapter MockReExAdapter { get; } = Substitute.For<IReExApiAdapter>();
     public ICaseWorkingApiAdapter MockCaseWorkingAdapter { get; } = Substitute.For<ICaseWorkingApiAdapter>();
+    public IOrganisationPersistence MockOrganisationPersistence { get; } = Substitute.For<IOrganisationPersistence>();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -22,6 +24,7 @@ public class AccreditationApplicationTestFactory : WebApplicationFactory<Program
             services.AddSingleton<IAccreditationApplicationPersistence>(FakePersistence);
             services.AddSingleton(MockReExAdapter);
             services.AddSingleton(MockCaseWorkingAdapter);
+            services.AddSingleton(MockOrganisationPersistence);
         });
     }
 }

@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Organisation.Services;
 using FluentValidation;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
@@ -31,6 +32,7 @@ public static class AccreditationApplicationEndpoints
         SeedRequest request,
         IAccreditationApplicationPersistence persistence,
         IReExApiAdapter reExAdapter,
+        IOrganisationPersistence organisationPersistence,
         IValidator<SeedRequest> validator)
     {
         if (!Enum.TryParse<MaterialType>(materialType, out var materialTypeEnum))
@@ -42,11 +44,27 @@ public static class AccreditationApplicationEndpoints
 
         var priorYearData = await reExAdapter.GetAccreditationAsync(organisationId, materialTypeEnum, request.Year - 1);
 
+        string? organisationName = null;
+        string? siteAddress = null;
+        if (int.TryParse(organisationId, out var orgIdInt))
+        {
+            var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
+            organisationName = org?.CompanyDetails?.Name;
+            siteAddress = org?.Registrations?
+                .Where(r => r.SiteAddress != null)
+                .Select(r => r.SiteAddress)
+                .FirstOrDefault() is { } addr
+                    ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
+                    : null;
+        }
+
         var application = new AccreditationApplicationModel
         {
             OrganisationId = organisationId,
+            OrganisationName = organisationName,
             Year = request.Year,
             SiteId = siteId,
+            SiteAddress = siteAddress,
             MaterialType = materialTypeEnum,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData?.AccreditationId,
