@@ -100,6 +100,50 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
             },
             Users = [new PersonModel { FullName = "Aysha", Role = "Director" }]
         });
+
+        _store.Add(new OrganisationModel
+        {
+            OrgId = 50001,
+            SchemaVersion = 1,
+            Version = 1,
+            BusinessType = "limited company",
+            WasteProcessingTypes = ["reprocessor"],
+            ReprocessingNations = ["england"],
+            CompanyDetails = new CompanyDetailsModel
+            {
+                Name = "Glass Recycling Ltd",
+                RegistrationNumber = "55001234",
+                RegisteredAddress = new RegisteredAddressModel
+                {
+                    Line1 = "10 Glass Lane",
+                    Town = "Manchester",
+                    Postcode = "M1 1AA",
+                    Country = "England"
+                }
+            },
+            ContactDetails = new ContactDetailsModel
+            {
+                FullName = "Sam Glass",
+                Email = "sam@glassrecycling.co.uk"
+            },
+            Users = [new PersonModel { FullName = "Sam Glass", Role = "Director" }],
+            Registrations =
+            [
+                new RegistrationModel
+                {
+                    Status = "active",
+                    Material = "Glass",
+                    WasteProcessingType = "reprocessor",
+                    SiteAddress = new SiteAddressModel
+                    {
+                        Line1 = "10 Glass Lane",
+                        Town = "Manchester",
+                        Postcode = "M1 1AA",
+                        Country = "England"
+                    }
+                }
+            ]
+        });
     }
 
     public Task<bool> CreateAsync(OrganisationModel organisation)

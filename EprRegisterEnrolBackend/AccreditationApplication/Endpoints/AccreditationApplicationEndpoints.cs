@@ -98,6 +98,11 @@ public static class AccreditationApplicationEndpoints
             }
         }
 
+        var existing = (await persistence.GetByOrganisationAsync(organisationId))
+            .FirstOrDefault(a => a.SiteId == siteId && a.MaterialType == materialTypeEnum && a.Year == request.Year);
+        if (existing is not null)
+            return Results.Ok(existing);
+
         application.DateLastEdited = application.CreatedAt;
 
         var created = await persistence.CreateAsync(application);
