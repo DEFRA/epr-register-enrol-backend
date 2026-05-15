@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using FluentAssertions;
@@ -11,6 +13,11 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
 public class AccreditationApplicationEndpointsTests : IClassFixture<AccreditationApplicationTestFactory>
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
+
     private readonly AccreditationApplicationTestFactory _factory;
     private readonly HttpClient _client;
 
@@ -60,7 +67,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.OrganisationId.Should().Be("org-123");
         body.MaterialType.Should().Be(MaterialType.Steel);
@@ -88,7 +95,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.SourceReExAccreditationId.Should().Be("reex-abc");
         body.SourceYear.Should().Be(2025);
@@ -117,7 +124,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<List<AccreditationApplicationModel>>(
+        var body = await response.Content.ReadFromJsonAsync<List<AccreditationApplicationModel>>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body.Should().HaveCount(1);
     }
@@ -159,7 +166,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
     }
@@ -211,7 +218,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Sent);
         body.ApplicationReference.Should().MatchRegex(@"^EPR-ACC-2026-[A-Z0-9]{7}$");
@@ -323,7 +330,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
         await _factory.MockReExAdapter
@@ -392,7 +399,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Rejected);
     }

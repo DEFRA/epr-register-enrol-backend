@@ -1,8 +1,8 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
-using EprRegisterEnrolBackend.Example.Endpoints;
-using EprRegisterEnrolBackend.Example.Services;
+using EprRegisterEnrolBackend.FileUpload.Endpoints;
+using EprRegisterEnrolBackend.FileUpload.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.Utils;
@@ -76,16 +76,22 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // Swagger/OpenAPI
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
+
+    // Allow enum values to be serialised/deserialised by name (e.g. "Wood") rather than index.
+    builder.Services.ConfigureHttpJsonOptions(options =>
+        options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 
     // Set up the endpoints and their dependencies
-    builder.Services.AddSingleton<IExamplePersistence, ExamplePersistence>();
     // Use the in-memory fake persistence for organisation during development
     builder.Services.AddSingleton<IOrganisationPersistence, FakeOrganisationPersistence>();
 
     // Accreditation Application
     builder.Services.AddSingleton<IAccreditationApplicationPersistence, AccreditationApplicationPersistence>();
     builder.Services.AddSingleton<IApplicationReferenceService, ApplicationReferenceService>();
+
+    // File Uploads
+    builder.Services.AddSingleton<IFileUploadPersistence, FileUploadPersistence>();
 
     if (builder.Environment.IsDevelopment())
     {
@@ -112,12 +118,12 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseSwagger();
     app.UseSwaggerUI();
 
-    // Example module, remove before deploying!
-    app.UseExampleEndpoints();
     // Organisation endpoints
     app.UseOrganisationEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
+    // File upload endpoints
+    app.UseFileUploadEndpoints();
 
     return app;
 }
