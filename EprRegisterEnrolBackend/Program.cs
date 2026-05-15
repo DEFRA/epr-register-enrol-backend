@@ -85,7 +85,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
     builder.Services.ConfigureHttpJsonOptions(options =>
-        options.SerializerOptions.PropertyNamingPolicy = null);
+        options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 
     // Set up the endpoints and their dependencies
     // Use the in-memory fake persistence for organisation during development
