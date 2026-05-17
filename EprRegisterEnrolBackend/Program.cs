@@ -88,8 +88,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 
     // Set up the endpoints and their dependencies
-    // Use the in-memory fake persistence for organisation during development
-    builder.Services.AddSingleton<IOrganisationPersistence, FakeOrganisationPersistence>();
+    builder.Services.AddSingleton<IExamplePersistence, ExamplePersistence>();
 
     // Accreditation Application
     builder.Services.AddSingleton<IAccreditationApplicationPersistence, AccreditationApplicationPersistence>();
@@ -103,6 +102,10 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
         builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
+
+        builder.Services.AddSingleton<OrganisationPersistence>();
+        builder.Services.AddSingleton<FakeOrganisationPersistence>();
+        builder.Services.AddSingleton<IOrganisationPersistence, FallbackOrganisationPersistence>();
     }
     else
     {
@@ -110,7 +113,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         throw new InvalidOperationException(
             "Real IReExApiAdapter and ICaseWorkingApiAdapter implementations must be registered for non-Development environments.");
     }
-    builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
 }
 
 [ExcludeFromCodeCoverage]

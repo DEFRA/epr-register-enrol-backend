@@ -51,9 +51,7 @@ public static class AccreditationApplicationEndpoints
             var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
             organisationName = org?.CompanyDetails?.Name;
             siteAddress = org?.Registrations?
-                .Where(r => r.SiteAddress != null)
-                .Select(r => r.SiteAddress)
-                .FirstOrDefault() is { } addr
+                .FirstOrDefault(r => r.SiteId == siteId && r.SiteAddress != null)?.SiteAddress is { } addr
                     ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
                     : null;
         }

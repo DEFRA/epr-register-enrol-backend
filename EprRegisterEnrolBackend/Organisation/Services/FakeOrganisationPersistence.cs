@@ -134,6 +134,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                     Status = "active",
                     Material = "Glass",
                     WasteProcessingType = "reprocessor",
+                    SiteId = "site001",
                     SiteAddress = new SiteAddressModel
                     {
                         Line1 = "10 Glass Lane",
