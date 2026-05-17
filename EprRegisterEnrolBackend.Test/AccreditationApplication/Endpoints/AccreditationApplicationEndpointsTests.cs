@@ -163,6 +163,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
                         Status = "Active",
                         Material = "Plastic",
                         WasteProcessingType = "Reprocessor",
+                        SiteId = "site-1",
                         SiteAddress = new SiteAddressModel { Line1 = "1 Factory Lane", Town = "Manchester", Postcode = "M1 1AA" }
                     }
                 ]
