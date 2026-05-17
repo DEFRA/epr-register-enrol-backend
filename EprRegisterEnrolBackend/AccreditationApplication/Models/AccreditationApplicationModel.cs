@@ -82,6 +82,7 @@ public enum ApplicationStatus
     Rejected
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum SectionStatus
 {
     NotStarted,
