@@ -101,50 +101,6 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
             Users = [new PersonModel { FullName = "Aysha", Role = "Director" }]
         });
 
-        _store.Add(new OrganisationModel
-        {
-            OrgId = 50001,
-            SchemaVersion = 1,
-            Version = 1,
-            BusinessType = "limited company",
-            WasteProcessingTypes = ["reprocessor"],
-            ReprocessingNations = ["england"],
-            CompanyDetails = new CompanyDetailsModel
-            {
-                Name = "Glass Recycling Ltd",
-                RegistrationNumber = "55001234",
-                RegisteredAddress = new RegisteredAddressModel
-                {
-                    Line1 = "10 Glass Lane",
-                    Town = "Manchester",
-                    Postcode = "M1 1AA",
-                    Country = "England"
-                }
-            },
-            ContactDetails = new ContactDetailsModel
-            {
-                FullName = "Sam Glass",
-                Email = "sam@glassrecycling.co.uk"
-            },
-            Users = [new PersonModel { FullName = "Sam Glass", Role = "Director" }],
-            Registrations =
-            [
-                new RegistrationModel
-                {
-                    Status = "active",
-                    Material = "Glass",
-                    WasteProcessingType = "reprocessor",
-                    SiteId = "site001",
-                    SiteAddress = new SiteAddressModel
-                    {
-                        Line1 = "10 Glass Lane",
-                        Town = "Manchester",
-                        Postcode = "M1 1AA",
-                        Country = "England"
-                    }
-                }
-            ]
-        });
     }
 
     public Task<bool> CreateAsync(OrganisationModel organisation)
@@ -227,6 +183,17 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
             if (existing is null) return Task.FromResult(false);
 
             _store.Remove(existing);
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> UpsertAsync(OrganisationModel organisation)
+    {
+        lock (_lock)
+        {
+            var idx = _store.FindIndex(o => o.OrgId == organisation.OrgId);
+            if (idx >= 0) _store[idx] = organisation;
+            else _store.Add(organisation);
             return Task.FromResult(true);
         }
     }

@@ -24,4 +24,5 @@ public class FallbackOrganisationPersistence(
     public Task<IEnumerable<OrganisationSummaryModel>> SearchByValueAsync(string searchTerm) => mongo.SearchByValueAsync(searchTerm);
     public Task<bool> UpdateAsync(OrganisationModel organisation) => mongo.UpdateAsync(organisation);
     public Task<bool> DeleteAsync(int orgId) => mongo.DeleteAsync(orgId);
+    public Task<bool> UpsertAsync(OrganisationModel organisation) => mongo.UpsertAsync(organisation);
 }
