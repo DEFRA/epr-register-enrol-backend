@@ -87,9 +87,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 
-    // Set up the endpoints and their dependencies
-    builder.Services.AddSingleton<IExamplePersistence, ExamplePersistence>();
-
     // Accreditation Application
     builder.Services.AddSingleton<IAccreditationApplicationPersistence, AccreditationApplicationPersistence>();
     builder.Services.AddSingleton<IApplicationReferenceService, ApplicationReferenceService>();
