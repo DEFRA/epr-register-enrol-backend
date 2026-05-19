@@ -1,5 +1,8 @@
+using System.Text.Json.Serialization;
+
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum MaterialType
 {
     Steel,

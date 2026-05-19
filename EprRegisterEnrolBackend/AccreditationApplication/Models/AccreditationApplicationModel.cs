@@ -61,18 +61,6 @@ public class SubmittedByModel
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum MaterialType
-{
-    Steel,
-    Wood,
-    Aluminium,
-    Fibre,
-    Glass,
-    Paper,
-    Plastic
-}
-
-[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ApplicationStatus
 {
     Saved,
