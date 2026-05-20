@@ -17,6 +17,8 @@ public static class OrganisationEndpoints
 
         app.MapPut("organisation/{orgId:int}", Update);
 
+        app.MapPut("organisation/{orgId:int}/upsert", Upsert);
+
         app.MapDelete("organisation/{orgId:int}", Delete);
     }
 
@@ -65,6 +67,18 @@ public static class OrganisationEndpoints
 
         var updated = await organisationPersistence.UpdateAsync(organisation);
         return updated ? Results.Ok(organisation) : Results.NotFound();
+    }
+
+    private static async Task<IResult> Upsert(
+        int orgId, OrganisationModel organisation, IOrganisationPersistence organisationPersistence,
+        IValidator<OrganisationModel> validator)
+    {
+        organisation.OrgId = orgId;
+        var validationResult = await validator.ValidateAsync(organisation);
+        if (!validationResult.IsValid) return Results.BadRequest(validationResult.Errors);
+
+        var upserted = await organisationPersistence.UpsertAsync(organisation);
+        return upserted ? Results.Ok(organisation) : Results.Problem("Failed to upsert organisation.");
     }
 
     private static async Task<IResult> Delete(

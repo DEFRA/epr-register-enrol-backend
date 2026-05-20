@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Organisation.Models;
 using FluentAssertions;
 using MongoDB.Bson;
 using NSubstitute;
@@ -32,6 +33,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         _factory.FakePersistence.Clear();
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
+        _factory.MockOrganisationPersistence.ClearSubstitute(ClearOptions.All);
     }
 
     private AccreditationApplicationModel SeedApplication(
@@ -62,8 +64,8 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
             .Returns(Task.FromResult<ReExAccreditationDto?>(null));
 
-        var request = new SeedRequest { MaterialType = MaterialType.Steel, Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/seed", request,
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
@@ -90,8 +92,8 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
                 BusinessPlan = new ReExBusinessPlanDto { NewInfrastructurePercent = 20 }
             }));
 
-        var request = new SeedRequest { MaterialType = MaterialType.Steel, Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/seed", request,
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
@@ -106,10 +108,96 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Seed_InvalidYear_Returns400()
     {
         Reset();
-        var request = new SeedRequest { MaterialType = MaterialType.Steel, Year = 2020 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/seed", request,
+        var request = new SeedRequest { Year = 2020 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
             cancellationToken: TestContext.Current.CancellationToken);
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Seed_InvalidMaterialType_Returns400()
+    {
+        Reset();
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Unknown/seed", request,
+            cancellationToken: TestContext.Current.CancellationToken);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Seed_ValidRequest_MaterialTypeAndStatusSerializedAsStrings()
+    {
+        Reset();
+        _factory.MockReExAdapter
+            .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
+            .Returns(Task.FromResult<ReExAccreditationDto?>(null));
+
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        json.RootElement.GetProperty("materialType").ValueKind.Should().Be(JsonValueKind.String);
+        json.RootElement.GetProperty("applicationStatus").ValueKind.Should().Be(JsonValueKind.String);
+        json.RootElement.GetProperty("materialType").GetString().Should().Be("Steel");
+        json.RootElement.GetProperty("applicationStatus").GetString().Should().Be("Saved");
+    }
+
+    [Fact]
+    public async Task Seed_WithNumericOrganisationId_PopulatesOrganisationNameAndSiteAddress()
+    {
+        Reset();
+        _factory.MockReExAdapter
+            .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
+            .Returns(Task.FromResult<ReExAccreditationDto?>(null));
+        _factory.MockOrganisationPersistence
+            .GetByOrgIdAsync(42)
+            .Returns(Task.FromResult<OrganisationModel?>(new OrganisationModel
+            {
+                OrgId = 42,
+                CompanyDetails = new CompanyDetailsModel { Name = "Acme Reprocessing Ltd" },
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Status = "Active",
+                        Material = "Plastic",
+                        WasteProcessingType = "Reprocessor",
+                        SiteId = "site-1",
+                        SiteAddress = new SiteAddressModel { Line1 = "1 Factory Lane", Town = "Manchester", Postcode = "M1 1AA" }
+                    }
+                ]
+            }));
+
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/42/site-1/Plastic/seed", request,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        body!.OrganisationName.Should().Be("Acme Reprocessing Ltd");
+        body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
+    }
+
+    [Fact]
+    public async Task Seed_WithNonNumericOrganisationId_LeavesOrganisationNameAndSiteAddressNull()
+    {
+        Reset();
+        _factory.MockReExAdapter
+            .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
+            .Returns(Task.FromResult<ReExAccreditationDto?>(null));
+
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        body!.OrganisationName.Should().BeNull();
+        body.SiteAddress.Should().BeNull();
     }
 
     // --- GetList ---

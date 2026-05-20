@@ -17,6 +17,8 @@ public interface IOrganisationPersistence
     public Task<bool> UpdateAsync(OrganisationModel organisation);
 
     public Task<bool> DeleteAsync(int orgId);
+
+    public Task<bool> UpsertAsync(OrganisationModel organisation);
 }
 
 public class OrganisationPersistence(IMongoDbClientFactory connectionFactory, ILoggerFactory loggerFactory)
@@ -78,6 +80,14 @@ public class OrganisationPersistence(IMongoDbClientFactory connectionFactory, IL
     {
         var result = await Collection.DeleteOneAsync(o => o.OrgId == orgId);
         return result.DeletedCount > 0;
+    }
+
+    public async Task<bool> UpsertAsync(OrganisationModel organisation)
+    {
+        var filter = Builders<OrganisationModel>.Filter.Eq(o => o.OrgId, organisation.OrgId);
+        var result = await Collection.ReplaceOneAsync(filter, organisation,
+            new ReplaceOptions { IsUpsert = true });
+        return result.IsAcknowledged;
     }
 
     protected override List<CreateIndexModel<OrganisationModel>> DefineIndexes(

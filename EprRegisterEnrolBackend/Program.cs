@@ -5,6 +5,8 @@ using EprRegisterEnrolBackend.FileUpload.Endpoints;
 using EprRegisterEnrolBackend.FileUpload.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.StubPersistence.Endpoints;
+using EprRegisterEnrolBackend.StubPersistence.Services;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Http;
 using EprRegisterEnrolBackend.Utils.Mongo;
@@ -70,6 +72,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     catch (ArgumentException) { /* already registered */ }
     builder.Services.Configure<MongoConfig>(builder.Configuration.GetSection("Mongo"));
     builder.Services.AddSingleton<IMongoDbClientFactory, MongoDbClientFactory>();
+    
 
     // Add healthcheck, this is required for the platform to know your service is alive.
     builder.Services.AddHealthChecks();
@@ -81,10 +84,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
-
-    // Set up the endpoints and their dependencies
-    // Use the in-memory fake persistence for organisation during development
-    builder.Services.AddSingleton<IOrganisationPersistence, FakeOrganisationPersistence>();
+    builder.Services.ConfigureHttpJsonOptions(options =>
+        options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 
     // Accreditation Application
     builder.Services.AddSingleton<IAccreditationApplicationPersistence, AccreditationApplicationPersistence>();
@@ -97,6 +98,11 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
         builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+        builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
+
+        builder.Services.AddSingleton<OrganisationPersistence>();
+        builder.Services.AddSingleton<FakeOrganisationPersistence>();
+        builder.Services.AddSingleton<IOrganisationPersistence, FallbackOrganisationPersistence>();
     }
     else
     {
@@ -104,7 +110,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         throw new InvalidOperationException(
             "Real IReExApiAdapter and ICaseWorkingApiAdapter implementations must be registered for non-Development environments.");
     }
-    builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
 }
 
 [ExcludeFromCodeCoverage]
@@ -124,6 +129,11 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseAccreditationApplicationEndpoints();
     // File upload endpoints
     app.UseFileUploadEndpoints();
+
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseStubApplicationEndpoints();
+    }
 
     return app;
 }

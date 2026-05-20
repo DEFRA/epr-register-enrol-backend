@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 public class AccreditationApplicationPrns
@@ -15,6 +17,7 @@ public class PrnsAuthoriser
     public required string Email { get; set; }
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PlannedTonnageBand
 {
     UpTo500,

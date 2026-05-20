@@ -16,12 +16,18 @@ public class AccreditationApplicationModel
 
     public required string OrganisationId { get; set; }
 
+    public string? OrganisationName { get; set; }
+
     public required int Year { get; set; }
 
     public string? SiteId { get; set; }
 
+    public string? SiteAddress { get; set; }
+
+    [BsonRepresentation(BsonType.String)]
     public required MaterialType MaterialType { get; set; }
 
+    [BsonRepresentation(BsonType.String)]
     public ApplicationStatus ApplicationStatus { get; set; } = ApplicationStatus.Saved;
 
     public string? SourceReExAccreditationId { get; set; }
@@ -54,6 +60,7 @@ public class SubmittedByModel
     public required string Email { get; set; }
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ApplicationStatus
 {
     Saved,
@@ -63,6 +70,7 @@ public enum ApplicationStatus
     Rejected
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum SectionStatus
 {
     NotStarted,

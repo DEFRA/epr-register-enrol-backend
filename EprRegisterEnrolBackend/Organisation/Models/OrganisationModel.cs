@@ -111,6 +111,7 @@ public class RegistrationModel
 {
     [BsonElement("id")]
     public ObjectId Id { get; set; }
+    public string? SiteId { get; set; }
     public string? FormSubmissionTime { get; set; }
     public required string Status { get; set; }
     public required string Material { get; set; }

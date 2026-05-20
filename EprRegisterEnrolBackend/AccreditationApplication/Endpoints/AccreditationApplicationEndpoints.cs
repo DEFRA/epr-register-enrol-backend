@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Organisation.Services;
 using FluentValidation;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
@@ -11,7 +12,7 @@ public static class AccreditationApplicationEndpoints
     {
         var group = app.MapGroup("api/v1/accreditation-applications");
 
-        group.MapPost("{organisationId}/seed", Seed);
+        group.MapPost("{organisationId}/{siteId}/{materialType}/seed", Seed);
         group.MapGet("{organisationId}", GetList);
         group.MapGet("{organisationId}/{applicationId}", GetById);
         group.MapPatch("{organisationId}/{applicationId}/prns", PatchPrns);
@@ -26,24 +27,43 @@ public static class AccreditationApplicationEndpoints
 
     private static async Task<IResult> Seed(
         string organisationId,
+        string siteId,
+        string materialType,
         SeedRequest request,
         IAccreditationApplicationPersistence persistence,
         IReExApiAdapter reExAdapter,
+        IOrganisationPersistence organisationPersistence,
         IValidator<SeedRequest> validator)
     {
+        if (!Enum.TryParse<MaterialType>(materialType, out var materialTypeEnum))
+            return Results.BadRequest("Invalid material type.");
+
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        // TODO: decide contract and what we wish to pre-populate, think we will need to pass siteId
-        var priorYearData = await reExAdapter.GetAccreditationAsync(organisationId, request.MaterialType, request.Year - 1);
+        var priorYearData = await reExAdapter.GetAccreditationAsync(organisationId, materialTypeEnum, request.Year - 1);
+
+        string? organisationName = null;
+        string? siteAddress = null;
+        if (int.TryParse(organisationId, out var orgIdInt))
+        {
+            var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
+            organisationName = org?.CompanyDetails?.Name;
+            siteAddress = org?.Registrations?
+                .FirstOrDefault(r => r.SiteId == siteId && r.SiteAddress != null)?.SiteAddress is { } addr
+                    ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
+                    : null;
+        }
 
         var application = new AccreditationApplicationModel
         {
             OrganisationId = organisationId,
+            OrganisationName = organisationName,
             Year = request.Year,
-            SiteId = request.SiteId ?? priorYearData?.SiteId,
-            MaterialType = request.MaterialType,
+            SiteId = siteId,
+            SiteAddress = siteAddress,
+            MaterialType = materialTypeEnum,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData?.AccreditationId,
             SourceYear = priorYearData != null ? request.Year - 1 : null
@@ -75,6 +95,11 @@ public static class AccreditationApplicationEndpoints
                 };
             }
         }
+
+        var existing = (await persistence.GetByOrganisationAsync(organisationId))
+            .FirstOrDefault(a => a.SiteId == siteId && a.MaterialType == materialTypeEnum && a.Year == request.Year);
+        if (existing is not null)
+            return Results.Ok(existing);
 
         application.DateLastEdited = application.CreatedAt;
 
