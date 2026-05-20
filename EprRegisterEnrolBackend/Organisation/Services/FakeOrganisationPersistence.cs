@@ -101,60 +101,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
             Users = [new PersonModel { FullName = "Aysha", Role = "Director" }]
         });
 
-        _store.Add(new OrganisationModel
-        {
-            OrgId = 50001,
-            SchemaVersion = 1,
-            Version = 1,
-            CompanyDetails = new CompanyDetailsModel
-            {
-                Name = "Stub Organisation Ltd"
-            },
-            Registrations =
-            [
-                new RegistrationModel
-                {
-                    SiteId = "site001",
-                    Status = "Active",
-                    Material = "Plastic",
-                    WasteProcessingType = "reprocessor",
-                    SiteAddress = new SiteAddressModel
-                    {
-                        Line1 = "Stub Organisation House, Site Lane 001",
-                        Town = "Siteville",
-                        Postcode = "SIT3 OO1"
-                    }
-                }
-            ]
-        });
-
-        _store.Add(new OrganisationModel
-        {
-            OrgId = 50002,
-            SchemaVersion = 1,
-            Version = 1,
-            CompanyDetails = new CompanyDetailsModel
-            {
-                Name = "Beta Recycling Co"
-            },
-            Registrations =
-            [
-                new RegistrationModel
-                {
-                    SiteId = "site002",
-                    Status = "Active",
-                    Material = "Glass",
-                    WasteProcessingType = "reprocessor",
-                    SiteAddress = new SiteAddressModel
-                    {
-                        Line1 = "Site Lane 002",
-                        Town = "Siteville",
-                        Postcode = "SIT3 OO2"
-                    }
-                }
-            ]
-        });
-
+       
     }
 
     public Task<bool> CreateAsync(OrganisationModel organisation)
