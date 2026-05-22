@@ -134,7 +134,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                 new RegistrationModel
                 {
                     Id = ObjectId.GenerateNewId(),
-                    SiteId = "site002",
+                    SiteId = "site001",
                     Status = "created",
                     Material = "plastic",
                     WasteProcessingType = "reprocessor",

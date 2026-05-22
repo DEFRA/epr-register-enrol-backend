@@ -46,10 +46,12 @@ public static class AccreditationApplicationEndpoints
 
         string? organisationName = null;
         string? siteAddress = null;
+        string? registrationReference = null;
         if (int.TryParse(organisationId, out var orgIdInt))
         {
             var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
             organisationName = org?.CompanyDetails?.Name;
+            registrationReference = org?.CompanyDetails?.RegistrationNumber;
             siteAddress = org?.Registrations?
                 .FirstOrDefault(r => r.SiteId == siteId && r.SiteAddress != null)?.SiteAddress is { } addr
                     ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
@@ -63,6 +65,7 @@ public static class AccreditationApplicationEndpoints
             Year = request.Year,
             SiteId = siteId,
             SiteAddress = siteAddress,
+            RegistrationReference = registrationReference,
             MaterialType = materialTypeEnum,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData?.AccreditationId,

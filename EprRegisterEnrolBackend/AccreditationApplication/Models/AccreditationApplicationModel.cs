@@ -36,6 +36,8 @@ public class AccreditationApplicationModel
 
     public string? ApplicationReference { get; set; }
 
+    public string? RegistrationReference { get; set; }
+
     public SubmittedByModel? SubmittedBy { get; set; }
 
     public DateTime? DateSent { get; set; }
