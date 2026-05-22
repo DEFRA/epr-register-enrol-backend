@@ -107,6 +107,7 @@ public class PersonModel
     public string? Role { get; set; }
 }
 
+[BsonNoId]
 public class RegistrationModel
 {
     [BsonElement("id")]
@@ -194,6 +195,7 @@ public class MetricsOutputModel
     public int? ProcessLoss { get; set; }
 }
 
+[BsonNoId]
 public class AccreditationModel
 {
     [BsonElement("id")]

@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.Organisation.Models;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Organisation.Services;
 
@@ -106,17 +107,36 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
             OrgId = 50001,
             SchemaVersion = 1,
             Version = 1,
+            BusinessType = "unincorporated",
+            WasteProcessingTypes = ["reprocessor"],
+            ReprocessingNations = ["england"],
             CompanyDetails = new CompanyDetailsModel
             {
-                Name = "NEWDEV RECYCLING LIMITED"
+                Name = "NEWDEV RECYCLING LIMITED",
+                TradingName = "NEWDEV RECYCLING LIMITED",
+                RegistrationNumber = "R26ER5000390068PL",
+                RegisteredAddress = new RegisteredAddressModel
+                {
+                    Line1 = "UNIT 5",
+                    Town = "Bolton",
+                    Postcode = "BL4 7AQ"
+                }
             },
+            ContactDetails = new ContactDetailsModel
+            {
+                FullName = "Site Manager",
+                Email = "info@newdevrecycling.co.uk"
+            },
+            Users = [],
+            Accreditations = [],
             Registrations =
             [
                 new RegistrationModel
                 {
-                    SiteId = "site001",
-                    Status = "Active",
-                    Material = "Plastic",
+                    Id = ObjectId.GenerateNewId(),
+                    SiteId = "site002",
+                    Status = "created",
+                    Material = "plastic",
                     WasteProcessingType = "reprocessor",
                     SiteAddress = new SiteAddressModel
                     {
@@ -133,17 +153,36 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
             OrgId = 50002,
             SchemaVersion = 1,
             Version = 1,
+            BusinessType = "unincorporated",
+            WasteProcessingTypes = ["reprocessor"],
+            ReprocessingNations = ["england"],
             CompanyDetails = new CompanyDetailsModel
             {
-                Name = "Beta Recycling Co"
+                Name = "Beta Recycling Co",
+                TradingName = "Beta Recycling Co",
+                RegistrationNumber = "R26ER5000390068PL",
+                RegisteredAddress = new RegisteredAddressModel
+                {
+                    Line1 = "Site Lane 002",
+                    Town = "Siteville",
+                    Postcode = "SIT3 OO2"
+                }
             },
+            ContactDetails = new ContactDetailsModel
+            {
+                FullName = "Site Manager",
+                Email = "info@betarecycling.co.uk"
+            },
+            Users = [],
+            Accreditations = [],
             Registrations =
             [
                 new RegistrationModel
                 {
+                    Id = ObjectId.GenerateNewId(),
                     SiteId = "site002",
-                    Status = "Active",
-                    Material = "Glass",
+                    Status = "created",
+                    Material = "glass",
                     WasteProcessingType = "reprocessor",
                     SiteAddress = new SiteAddressModel
                     {
