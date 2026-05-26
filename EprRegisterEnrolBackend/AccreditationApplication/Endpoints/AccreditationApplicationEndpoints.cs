@@ -16,6 +16,7 @@ public static class AccreditationApplicationEndpoints
         group.MapGet("{organisationId}", GetList);
         group.MapGet("{organisationId}/{applicationId}", GetById);
         group.MapPatch("{organisationId}/{applicationId}/prns", PatchPrns);
+        group.MapPatch("{organisationId}/{applicationId}/tonnage", PatchTonnage);
         group.MapPatch("{organisationId}/{applicationId}/business-plan", PatchBusinessPlan);
         group.MapPatch("{organisationId}/{applicationId}/sampling-plan", PatchSamplingPlan);
         group.MapPost("{organisationId}/{applicationId}/submit", Submit);
@@ -159,6 +160,32 @@ public static class AccreditationApplicationEndpoints
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null ? Results.Problem("Failed to update PRNs section.") : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> PatchTonnage(
+        string organisationId,
+        string applicationId,
+        PatchTonnageRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchTonnageRequest> validator)
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
+        application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
+        application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null ? Results.Problem("Failed to update tonnage.") : Results.Ok(updated);
     }
 
     private static async Task<IResult> PatchBusinessPlan(

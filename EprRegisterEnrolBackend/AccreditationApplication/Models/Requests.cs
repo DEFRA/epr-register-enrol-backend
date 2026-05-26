@@ -11,6 +11,11 @@ public class PatchPrnsRequest
     public List<PrnsAuthoriser>? Authorisers { get; set; }
 }
 
+public class PatchTonnageRequest
+{
+    public PlannedTonnageBand? PlannedTonnageBand { get; set; }
+}
+
 public class PatchBusinessPlanRequest
 {
     public int? NewInfrastructurePercent { get; set; }
