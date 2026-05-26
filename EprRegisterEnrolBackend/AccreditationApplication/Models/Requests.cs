@@ -14,6 +14,7 @@ public class PatchPrnsRequest
 public class PatchTonnageRequest
 {
     public PlannedTonnageBand? PlannedTonnageBand { get; set; }
+    public List<PrnsAuthoriser>? Authorisers { get; set; }
 }
 
 public class PatchBusinessPlanRequest

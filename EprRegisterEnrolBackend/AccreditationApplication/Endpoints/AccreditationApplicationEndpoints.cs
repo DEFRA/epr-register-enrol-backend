@@ -177,7 +177,12 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
-        application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
+        if (request.PlannedTonnageBand.HasValue)
+            application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
+
+        if (request.Authorisers != null)
+            application.Prns.Authorisers = request.Authorisers;
+
         application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
         application.DateLastEdited = DateTime.UtcNow;
 
