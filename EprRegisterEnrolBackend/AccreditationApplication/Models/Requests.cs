@@ -54,4 +54,5 @@ public class FileUploadRequest
     public required string FileId { get; set; }
     public required string Filename { get; set; }
     public required string ContentType { get; set; }
+    public FileScanStatus? ScanStatus { get; set; }
 }

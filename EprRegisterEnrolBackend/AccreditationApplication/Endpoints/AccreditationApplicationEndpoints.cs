@@ -329,7 +329,7 @@ public static class AccreditationApplicationEndpoints
             Filename = request.Filename,
             ContentType = request.ContentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus = FileScanStatus.Pending
+            ScanStatus = request.ScanStatus ?? FileScanStatus.Pending
         };
 
         application.SamplingPlan.Files.Add(file);
