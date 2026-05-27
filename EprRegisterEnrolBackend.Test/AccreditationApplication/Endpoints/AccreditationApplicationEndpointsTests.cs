@@ -350,11 +350,9 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
+        var body = await response.Content.ReadFromJsonAsync<SubmitResponse>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
-        body!.ApplicationStatus.Should().Be(ApplicationStatus.Sent);
-        body.ApplicationReference.Should().MatchRegex(@"^EPR-ACC-2026-[A-Z0-9]{7}$");
-        body.DateSent.Should().NotBeNull();
+        body!.AccreditationReference.Should().MatchRegex(@"^EPR-ACC-2026-[A-Z0-9]{7}$");
         await _factory.MockCaseWorkingAdapter
             .Received(1)
             .SubmitApplicationAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<CancellationToken>());
@@ -387,6 +385,9 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<SubmitResponse>(JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken);
+        body!.AccreditationReference.Should().Be("EPR-ACC-2026-ABC1234");
         await _factory.MockCaseWorkingAdapter
             .DidNotReceive()
             .SubmitApplicationAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<CancellationToken>());

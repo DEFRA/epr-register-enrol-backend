@@ -275,7 +275,7 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
 
         if (application.ApplicationStatus == ApplicationStatus.Sent)
-            return Results.Ok(application);
+            return Results.Ok(new SubmitResponse { AccreditationReference = application.ApplicationReference });
 
         if (application.ApplicationStatus != ApplicationStatus.Started)
             return Results.Conflict("Application must be in 'Started' status to submit.");
@@ -302,7 +302,9 @@ public static class AccreditationApplicationEndpoints
         await caseWorkingAdapter.SubmitApplicationAsync(application, cancellationToken);
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null ? Results.Problem("Failed to submit accreditation application.") : Results.Ok(updated);
+        return updated is null
+            ? Results.Problem("Failed to submit accreditation application.")
+            : Results.Ok(new SubmitResponse { AccreditationReference = updated.ApplicationReference });
     }
 
     private static async Task<IResult> AddFile(

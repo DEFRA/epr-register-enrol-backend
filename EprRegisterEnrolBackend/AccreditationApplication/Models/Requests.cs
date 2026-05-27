@@ -49,6 +49,11 @@ public class SubmitRequest
     public string? Email { get; set; }
 }
 
+public record SubmitResponse
+{
+    public string? AccreditationReference { get; init; }
+}
+
 public class FileUploadRequest
 {
     public required string FileId { get; set; }
