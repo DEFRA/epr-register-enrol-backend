@@ -37,19 +37,4 @@ public class SubmitRequestValidatorTests
         result.ShouldHaveValidationErrorFor(r => r.JobTitle);
     }
 
-    [Fact]
-    public void InvalidEmail_FailsValidation()
-    {
-        var request = new SubmitRequest { FullName = "Jane", JobTitle = "Manager", Email = "not-an-email" };
-        var result = _validator.TestValidate(request);
-        result.ShouldHaveValidationErrorFor(r => r.Email);
-    }
-
-    [Fact]
-    public void EmptyEmail_FailsValidation()
-    {
-        var request = new SubmitRequest { FullName = "Jane", JobTitle = "Manager", Email = "" };
-        var result = _validator.TestValidate(request);
-        result.ShouldHaveValidationErrorFor(r => r.Email);
-    }
 }

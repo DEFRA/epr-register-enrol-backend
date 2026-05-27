@@ -59,7 +59,7 @@ public class SubmittedByModel
 {
     public required string FullName { get; set; }
     public required string JobTitle { get; set; }
-    public required string Email { get; set; }
+    public string? Email { get; set; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
