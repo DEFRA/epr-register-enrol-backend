@@ -85,14 +85,31 @@ public class CreateFileUploadRequestValidatorTests
     [InlineData("application/pdf")]
     [InlineData("application/msword")]
     [InlineData("application/vnd.openxmlformats-officedocument.wordprocessingml.document")]
+    [InlineData("application/vnd.ms-excel")]
+    [InlineData("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
+    [InlineData("text/csv")]
     [InlineData("image/jpeg")]
     [InlineData("image/png")]
+    [InlineData("image/tiff")]
+    [InlineData("application/vnd.ms-outlook")]
     public void AllPermittedContentTypes_PassValidation(string contentType)
     {
         var request = ValidRequest();
         request.ContentType = contentType;
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor(r => r.ContentType);
+    }
+
+    [Theory]
+    [InlineData("application/zip")]
+    [InlineData("application/x-executable")]
+    [InlineData("text/html")]
+    public void DisallowedContentTypes_FailValidation(string contentType)
+    {
+        var request = ValidRequest();
+        request.ContentType = contentType;
+        var result = _validator.TestValidate(request);
+        result.ShouldHaveValidationErrorFor(r => r.ContentType);
     }
 
     [Fact]

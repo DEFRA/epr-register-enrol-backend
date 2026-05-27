@@ -36,7 +36,8 @@ public class MongoDbClientFactory : IMongoDbClientFactory
         var camelCaseConvention = new ConventionPack
         {
             new CamelCaseElementNameConvention(),
-            new IgnoreExtraElementsConvention(true)
+            new IgnoreExtraElementsConvention(true),
+            new IgnoreIfNullConvention(true)
         };
         // convention must be registered before initialising collection
         ConventionRegistry.Register("CamelCase", camelCaseConvention, _ => true);

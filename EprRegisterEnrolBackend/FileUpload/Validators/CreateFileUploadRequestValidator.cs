@@ -10,8 +10,13 @@ public class CreateFileUploadRequestValidator : AbstractValidator<CreateFileUplo
         "application/pdf",
         "application/msword",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv",
         "image/jpeg",
-        "image/png"
+        "image/png",
+        "image/tiff",
+        "application/vnd.ms-outlook"
     ];
 
     public CreateFileUploadRequestValidator()

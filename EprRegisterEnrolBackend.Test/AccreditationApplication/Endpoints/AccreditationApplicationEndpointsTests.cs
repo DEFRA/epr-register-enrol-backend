@@ -259,6 +259,50 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
     }
 
+    // --- PatchTonnage ---
+
+    [Fact]
+    public async Task PatchTonnage_WithAuthorisersOnly_UpdatesAuthorisersLeavesTonnageBandUnchanged()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Saved, configure: a =>
+            a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000);
+
+        var request = new PatchTonnageRequest
+        {
+            Authorisers = [new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" }]
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage", request,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken);
+        body!.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo1000);
+        body.Prns.Authorisers.Should().ContainSingle(a => a.FullName == "Jane Smith");
+    }
+
+    [Fact]
+    public async Task PatchTonnage_WithPlannedTonnageBandOnly_UpdatesTonnageBandLeavesAuthorisersUnchanged()
+    {
+        Reset();
+        var existingAuthoriser = new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" };
+        var app = SeedApplication(status: ApplicationStatus.Saved, configure: a =>
+            a.Prns.Authorisers = [existingAuthoriser]);
+
+        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage", request,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken);
+        body!.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo500);
+        body.Prns.Authorisers.Should().ContainSingle(a => a.FullName == "Jane Smith");
+    }
+
     // --- PatchBusinessPlan ---
 
     [Fact]
@@ -306,11 +350,9 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
+        var body = await response.Content.ReadFromJsonAsync<SubmitResponse>(JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken);
-        body!.ApplicationStatus.Should().Be(ApplicationStatus.Sent);
-        body.ApplicationReference.Should().MatchRegex(@"^EPR-ACC-2026-[A-Z0-9]{7}$");
-        body.DateSent.Should().NotBeNull();
+        body!.AccreditationReference.Should().MatchRegex(@"^EPR-ACC-2026-[A-Z0-9]{7}$");
         await _factory.MockCaseWorkingAdapter
             .Received(1)
             .SubmitApplicationAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<CancellationToken>());
@@ -343,6 +385,9 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             cancellationToken: TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<SubmitResponse>(JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken);
+        body!.AccreditationReference.Should().Be("EPR-ACC-2026-ABC1234");
         await _factory.MockCaseWorkingAdapter
             .DidNotReceive()
             .SubmitApplicationAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<CancellationToken>());

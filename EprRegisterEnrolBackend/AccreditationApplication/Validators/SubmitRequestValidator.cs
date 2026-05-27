@@ -9,6 +9,5 @@ public class SubmitRequestValidator : AbstractValidator<SubmitRequest>
     {
         RuleFor(r => r.FullName).NotEmpty().WithMessage("Full name is required.");
         RuleFor(r => r.JobTitle).NotEmpty().WithMessage("Job title is required.");
-        RuleFor(r => r.Email).NotEmpty().EmailAddress().WithMessage("A valid email address is required.");
     }
 }

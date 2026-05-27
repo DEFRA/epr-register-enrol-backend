@@ -16,6 +16,7 @@ public static class AccreditationApplicationEndpoints
         group.MapGet("{organisationId}", GetList);
         group.MapGet("{organisationId}/{applicationId}", GetById);
         group.MapPatch("{organisationId}/{applicationId}/prns", PatchPrns);
+        group.MapPatch("{organisationId}/{applicationId}/tonnage", PatchTonnage);
         group.MapPatch("{organisationId}/{applicationId}/business-plan", PatchBusinessPlan);
         group.MapPatch("{organisationId}/{applicationId}/sampling-plan", PatchSamplingPlan);
         group.MapPost("{organisationId}/{applicationId}/submit", Submit);
@@ -46,10 +47,12 @@ public static class AccreditationApplicationEndpoints
 
         string? organisationName = null;
         string? siteAddress = null;
+        string? registrationReference = null;
         if (int.TryParse(organisationId, out var orgIdInt))
         {
             var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
             organisationName = org?.CompanyDetails?.Name;
+            registrationReference = org?.CompanyDetails?.RegistrationNumber;
             siteAddress = org?.Registrations?
                 .FirstOrDefault(r => r.SiteId == siteId && r.SiteAddress != null)?.SiteAddress is { } addr
                     ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
@@ -63,6 +66,7 @@ public static class AccreditationApplicationEndpoints
             Year = request.Year,
             SiteId = siteId,
             SiteAddress = siteAddress,
+            RegistrationReference = registrationReference,
             MaterialType = materialTypeEnum,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData?.AccreditationId,
@@ -158,6 +162,37 @@ public static class AccreditationApplicationEndpoints
         return updated is null ? Results.Problem("Failed to update PRNs section.") : Results.Ok(updated);
     }
 
+    private static async Task<IResult> PatchTonnage(
+        string organisationId,
+        string applicationId,
+        PatchTonnageRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchTonnageRequest> validator)
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (request.PlannedTonnageBand.HasValue)
+            application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
+
+        if (request.Authorisers != null)
+            application.Prns.Authorisers = request.Authorisers;
+
+        application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
+        application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null ? Results.Problem("Failed to update tonnage.") : Results.Ok(updated);
+    }
+
     private static async Task<IResult> PatchBusinessPlan(
         string organisationId,
         string applicationId,
@@ -240,7 +275,7 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
 
         if (application.ApplicationStatus == ApplicationStatus.Sent)
-            return Results.Ok(application);
+            return Results.Ok(new SubmitResponse { AccreditationReference = application.ApplicationReference });
 
         if (application.ApplicationStatus != ApplicationStatus.Started)
             return Results.Conflict("Application must be in 'Started' status to submit.");
@@ -267,7 +302,9 @@ public static class AccreditationApplicationEndpoints
         await caseWorkingAdapter.SubmitApplicationAsync(application, cancellationToken);
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null ? Results.Problem("Failed to submit accreditation application.") : Results.Ok(updated);
+        return updated is null
+            ? Results.Problem("Failed to submit accreditation application.")
+            : Results.Ok(new SubmitResponse { AccreditationReference = updated.ApplicationReference });
     }
 
     private static async Task<IResult> AddFile(
@@ -294,7 +331,7 @@ public static class AccreditationApplicationEndpoints
             Filename = request.Filename,
             ContentType = request.ContentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus = FileScanStatus.Pending
+            ScanStatus = request.ScanStatus ?? FileScanStatus.Pending
         };
 
         application.SamplingPlan.Files.Add(file);

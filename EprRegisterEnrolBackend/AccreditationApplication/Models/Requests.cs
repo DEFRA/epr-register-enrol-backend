@@ -11,6 +11,12 @@ public class PatchPrnsRequest
     public List<PrnsAuthoriser>? Authorisers { get; set; }
 }
 
+public class PatchTonnageRequest
+{
+    public PlannedTonnageBand? PlannedTonnageBand { get; set; }
+    public List<PrnsAuthoriser>? Authorisers { get; set; }
+}
+
 public class PatchBusinessPlanRequest
 {
     public int? NewInfrastructurePercent { get; set; }
@@ -40,7 +46,12 @@ public class SubmitRequest
 {
     public required string FullName { get; set; }
     public required string JobTitle { get; set; }
-    public required string Email { get; set; }
+    public string? Email { get; set; }
+}
+
+public record SubmitResponse
+{
+    public string? AccreditationReference { get; init; }
 }
 
 public class FileUploadRequest
@@ -48,4 +59,5 @@ public class FileUploadRequest
     public required string FileId { get; set; }
     public required string Filename { get; set; }
     public required string ContentType { get; set; }
+    public FileScanStatus? ScanStatus { get; set; }
 }

@@ -36,6 +36,8 @@ public class AccreditationApplicationModel
 
     public string? ApplicationReference { get; set; }
 
+    public string? RegistrationReference { get; set; }
+
     public SubmittedByModel? SubmittedBy { get; set; }
 
     public DateTime? DateSent { get; set; }
@@ -57,7 +59,7 @@ public class SubmittedByModel
 {
     public required string FullName { get; set; }
     public required string JobTitle { get; set; }
-    public required string Email { get; set; }
+    public string? Email { get; set; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
