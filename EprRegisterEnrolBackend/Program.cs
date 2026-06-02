@@ -1,6 +1,8 @@
+using System.Diagnostics.CodeAnalysis;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.FileUpload.Endpoints;
 using EprRegisterEnrolBackend.FileUpload.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
@@ -9,11 +11,9 @@ using EprRegisterEnrolBackend.StubPersistence.Endpoints;
 using EprRegisterEnrolBackend.StubPersistence.Services;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Http;
+using EprRegisterEnrolBackend.Utils.Logging;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentValidation;
-using System.Diagnostics.CodeAnalysis;
-using EprRegisterEnrolBackend.Config;
-using EprRegisterEnrolBackend.Utils.Logging;
 using MongoDB.Driver;
 using MongoDB.Driver.Authentication.AWS;
 using Serilog;
@@ -45,14 +45,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Host.UseSerilog(CdpLogging.Configuration);
 
     // Default HTTP Client
-    builder.Services
-        .AddHttpClient("DefaultClient")
-        .AddHeaderPropagation();
+    builder.Services.AddHttpClient("DefaultClient").AddHeaderPropagation();
 
     // Proxy HTTP Client
     builder.Services.AddTransient<ProxyHttpMessageHandler>();
-    builder.Services
-        .AddHttpClient("proxy")
+    builder
+        .Services.AddHttpClient("proxy")
         .ConfigurePrimaryHttpMessageHandler<ProxyHttpMessageHandler>();
 
     // Propagate trace header.
@@ -65,14 +63,20 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         }
     });
 
-
     // Set up the MongoDB client. Config and credentials are injected automatically at runtime.
     // Guard against duplicate registration when the factory is instantiated multiple times in tests.
-    try { MongoClientSettings.Extensions.AddAWSAuthentication(); }
-    catch (ArgumentException) { /* already registered */ }
+    try
+    {
+        MongoClientSettings.Extensions.AddAWSAuthentication();
+    }
+    catch (ArgumentException)
+    { /* already registered */
+    }
     builder.Services.Configure<MongoConfig>(builder.Configuration.GetSection("Mongo"));
     builder.Services.AddSingleton<IMongoDbClientFactory, MongoDbClientFactory>();
-    
+
+    builder.Services.AddExceptionHandler<ExceptionLoggingHandler>();
+    builder.Services.AddProblemDetails();
 
     // Add healthcheck, this is required for the platform to know your service is alive.
     builder.Services.AddHealthChecks();
@@ -82,13 +86,20 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
 
     // Allow enum values to be serialised/deserialised by name (e.g. "Wood") rather than index.
     builder.Services.ConfigureHttpJsonOptions(options =>
-        options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
+        options.SerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter()
+        )
+    );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
     builder.Services.ConfigureHttpJsonOptions(options =>
-        options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
+        options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+    );
 
     // Accreditation Application
-    builder.Services.AddSingleton<IAccreditationApplicationPersistence, AccreditationApplicationPersistence>();
+    builder.Services.AddSingleton<
+        IAccreditationApplicationPersistence,
+        AccreditationApplicationPersistence
+    >();
     builder.Services.AddSingleton<IApplicationReferenceService, ApplicationReferenceService>();
 
     // File Uploads
@@ -108,13 +119,15 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     {
         // Real adapter implementations are required outside of Development (RA-xxx).
         throw new InvalidOperationException(
-            "Real IReExApiAdapter and ICaseWorkingApiAdapter implementations must be registered for non-Development environments.");
+            "Real IReExApiAdapter and ICaseWorkingApiAdapter implementations must be registered for non-Development environments."
+        );
     }
 }
 
 [ExcludeFromCodeCoverage]
 static WebApplication SetupApplication(WebApplication app)
 {
+    app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
     app.MapHealthChecks("/health");
