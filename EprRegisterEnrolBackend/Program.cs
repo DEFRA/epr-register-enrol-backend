@@ -105,10 +105,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // File Uploads
     builder.Services.AddSingleton<IFileUploadPersistence, FileUploadPersistence>();
 
+    // TODO: replace stubs with real HTTP adapters once the ReEx and CaseWorking API contracts are defined.
+    builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
+    builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+
     if (builder.Environment.IsDevelopment())
     {
-        builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
-        builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
         builder.Services.AddSingleton<OrganisationPersistence>();
@@ -117,10 +119,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     }
     else
     {
-        // Real adapter implementations are required outside of Development (RA-xxx).
-        throw new InvalidOperationException(
-            "Real IReExApiAdapter and ICaseWorkingApiAdapter implementations must be registered for non-Development environments."
-        );
+        builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
     }
 }
 

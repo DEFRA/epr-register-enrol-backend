@@ -17,7 +17,6 @@ public class FileUploadTestFactory : WebApplicationFactory<Program>
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IFileUploadPersistence>(FakePersistence);
-            // Stub out adapters required by Development environment guard
             services.AddSingleton(Substitute.For<IReExApiAdapter>());
             services.AddSingleton(Substitute.For<ICaseWorkingApiAdapter>());
         });
