@@ -4,8 +4,8 @@ public class ApplicationReferenceService : IApplicationReferenceService
 {
     public string Generate(int year)
     {
-        //ToDo: find out how these references are generated, this is not correct
-        var suffix = Guid.NewGuid().ToString("N")[..7].ToUpper();
-        return $"EPR-ACC-{year}-{suffix}";
+        // RA-196: references follow the format RA-######### (9 digits).
+        var digits = Random.Shared.Next(100_000_000, 1_000_000_000);
+        return $"RA-{digits}";
     }
 }
