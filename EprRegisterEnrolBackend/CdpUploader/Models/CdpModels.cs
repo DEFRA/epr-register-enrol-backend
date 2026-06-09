@@ -45,6 +45,14 @@ public class CdpCallbackFile
     public string? ErrorMessage { get; set; }
 }
 
+/// <summary>Lifecycle states of a file upload through the backend state machine.</summary>
+public enum FileProcessingStatus
+{
+    Preprocessing,
+    Validated,
+    Rejected,
+}
+
 /// <summary>
 /// CDP-compatible status shape returned by the backend status endpoint.
 /// Frontend controllers read this format unchanged.
@@ -53,6 +61,9 @@ public class CdpStatusResponse
 {
     /// <summary>ready | pending</summary>
     public required string UploadStatus { get; set; }
+
+    /// <summary>preprocessing | validated | rejected</summary>
+    public string ProcessingStatus { get; set; } = "preprocessing";
 
     public CdpCallbackForm? Form { get; set; }
     public Dictionary<string, string>? Metadata { get; set; }
