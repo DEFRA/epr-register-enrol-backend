@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.FileUpload.Config;
 using EprRegisterEnrolBackend.FileUpload.Models;
 using EprRegisterEnrolBackend.FileUpload.Services;
 using FluentValidation;
@@ -95,7 +96,10 @@ public static class FileUploadEndpoints
 
     private static async Task<IResult> Download(
         string fileUploadId,
-        IFileUploadPersistence persistence
+        IFileUploadPersistence persistence,
+        IS3Service s3Service,
+        IOptions<CdpUploaderConfig> cdpConfig,
+        CancellationToken cancellationToken
     )
     {
         var fileUpload = await persistence.GetByIdAsync(fileUploadId);
@@ -107,18 +111,14 @@ public static class FileUploadEndpoints
                 "File is not available for download: scan status is not clean."
             );
 
-        // TODO: Generate a presigned S3 URL using AWSSDK.S3 and return a redirect.
-        // For now, return the file metadata so the caller can construct a download URL.
-        return Results.Ok(
-            new
-            {
-                fileUpload.FileUploadId,
-                fileUpload.Filename,
-                fileUpload.ContentType,
-                fileUpload.S3Key,
-                Message = "Presigned URL generation not yet implemented. Use S3Key to retrieve from S3.",
-            }
+        var presignedUrl = await s3Service.GeneratePresignedDownloadUrlAsync(
+            cdpConfig.Value.GenericFilesBucket,
+            fileUpload.S3Key,
+            fileUpload.Filename,
+            cancellationToken
         );
+
+        return Results.Ok(new { presignedUrl });
     }
 
     private static async Task<IResult> InitiateFileUpload(

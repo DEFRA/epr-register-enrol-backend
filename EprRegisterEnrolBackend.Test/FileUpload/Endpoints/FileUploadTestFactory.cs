@@ -10,6 +10,7 @@ namespace EprRegisterEnrolBackend.Test.FileUpload.Endpoints;
 public class FileUploadTestFactory : WebApplicationFactory<Program>
 {
     public FakeFileUploadPersistence FakePersistence { get; } = new();
+    public IS3Service MockS3Service { get; } = Substitute.For<IS3Service>();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -17,6 +18,7 @@ public class FileUploadTestFactory : WebApplicationFactory<Program>
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IFileUploadPersistence>(FakePersistence);
+            services.AddSingleton(MockS3Service);
             services.AddSingleton(Substitute.For<IReExApiAdapter>());
             services.AddSingleton(Substitute.For<ICaseWorkingApiAdapter>());
         });

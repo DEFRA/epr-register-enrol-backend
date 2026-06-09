@@ -5,6 +5,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
+using EprRegisterEnrolBackend.FileUpload.Config;
 using EprRegisterEnrolBackend.FileUpload.Endpoints;
 using EprRegisterEnrolBackend.FileUpload.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
@@ -106,6 +107,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
 
     // File Uploads
     builder.Services.AddSingleton<IFileUploadPersistence, FileUploadPersistence>();
+    builder.Services.Configure<S3Config>(builder.Configuration.GetSection("S3"));
+    builder.Services.AddSingleton<IS3Service, S3Service>();
 
     // CDP Uploader
     builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
@@ -141,6 +144,9 @@ static WebApplication SetupApplication(WebApplication app)
     var appCfg = app
         .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<AppConfig>>()
         .Value;
+    var s3Cfg = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<S3Config>>()
+        .Value;
 
     if (string.IsNullOrWhiteSpace(cdpConfig.Url))
         startupLogger.LogWarning(
@@ -149,6 +155,10 @@ static WebApplication SetupApplication(WebApplication app)
     if (string.IsNullOrWhiteSpace(appCfg.BaseUrl))
         startupLogger.LogWarning(
             "APP_BASE_URL (App:BaseUrl) is not configured — CDP callback and status URLs will be incorrect."
+        );
+    if (string.IsNullOrWhiteSpace(s3Cfg.Region))
+        startupLogger.LogWarning(
+            "S3_REGION (S3:Region) is not configured — file downloads may fail at runtime."
         );
 
     app.UseExceptionHandler();
