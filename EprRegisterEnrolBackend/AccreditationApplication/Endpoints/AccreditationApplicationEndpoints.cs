@@ -1,8 +1,12 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.CdpUploader.Config;
+using EprRegisterEnrolBackend.CdpUploader.Models;
+using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Organisation.Services;
 using FluentValidation;
+using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 
@@ -24,6 +28,12 @@ public static class AccreditationApplicationEndpoints
         group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile);
         group.MapPost("{organisationId}/{applicationId}/approve", Approve);
         group.MapPost("{organisationId}/{applicationId}/reject", Reject);
+        group.MapPost("{organisationId}/{applicationId}/files/initiate", InitiateUpload);
+        group.MapPost("files/upload-completed", UploadCompleted);
+        group.MapGet(
+            "{organisationId}/{applicationId}/files/{fileUploadId}/status",
+            GetUploadStatus
+        );
     }
 
     private static async Task<IResult> Seed(
@@ -34,7 +44,8 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         IReExApiAdapter reExAdapter,
         IOrganisationPersistence organisationPersistence,
-        IValidator<SeedRequest> validator)
+        IValidator<SeedRequest> validator
+    )
     {
         if (!Enum.TryParse<MaterialType>(materialType, out var materialTypeEnum))
             return Results.BadRequest("Invalid material type.");
@@ -43,7 +54,11 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var priorYearData = await reExAdapter.GetAccreditationAsync(organisationId, materialTypeEnum, request.Year - 1);
+        var priorYearData = await reExAdapter.GetAccreditationAsync(
+            organisationId,
+            materialTypeEnum,
+            request.Year - 1
+        );
 
         string? organisationName = null;
         string? siteAddress = null;
@@ -53,10 +68,12 @@ public static class AccreditationApplicationEndpoints
             var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
-            siteAddress = org?.Registrations?
-                .FirstOrDefault(r => r.SiteId == siteId && r.SiteAddress != null)?.SiteAddress is { } addr
-                    ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
-                    : null;
+            siteAddress = org
+                ?.Registrations?.FirstOrDefault(r => r.SiteId == siteId && r.SiteAddress != null)
+                ?.SiteAddress
+                is { } addr
+                ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
+                : null;
         }
 
         var application = new AccreditationApplicationModel
@@ -70,7 +87,7 @@ public static class AccreditationApplicationEndpoints
             MaterialType = materialTypeEnum,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData?.AccreditationId,
-            SourceYear = priorYearData != null ? request.Year - 1 : null
+            SourceYear = priorYearData != null ? request.Year - 1 : null,
         };
 
         if (priorYearData != null)
@@ -81,7 +98,7 @@ public static class AccreditationApplicationEndpoints
                 {
                     PlannedTonnageBand = priorYearData.Prns.PlannedTonnageBand,
                     Authorisers = priorYearData.Prns.Authorisers,
-                    SectionStatus = SectionStatus.NotStarted
+                    SectionStatus = SectionStatus.NotStarted,
                 };
             }
 
@@ -91,17 +108,20 @@ public static class AccreditationApplicationEndpoints
                 {
                     NewInfrastructurePercent = priorYearData.BusinessPlan.NewInfrastructurePercent,
                     PriceSupportPercent = priorYearData.BusinessPlan.PriceSupportPercent,
-                    BusinessCollectionsPercent = priorYearData.BusinessPlan.BusinessCollectionsPercent,
+                    BusinessCollectionsPercent = priorYearData
+                        .BusinessPlan
+                        .BusinessCollectionsPercent,
                     CommunicationsPercent = priorYearData.BusinessPlan.CommunicationsPercent,
                     NewMarketsPercent = priorYearData.BusinessPlan.NewMarketsPercent,
                     NewUsesPercent = priorYearData.BusinessPlan.NewUsesPercent,
-                    SectionStatus = SectionStatus.NotStarted
+                    SectionStatus = SectionStatus.NotStarted,
                 };
             }
         }
 
-        var existing = (await persistence.GetByOrganisationAsync(organisationId))
-            .FirstOrDefault(a => a.SiteId == siteId && a.MaterialType == materialTypeEnum && a.Year == request.Year);
+        var existing = (await persistence.GetByOrganisationAsync(organisationId)).FirstOrDefault(
+            a => a.SiteId == siteId && a.MaterialType == materialTypeEnum && a.Year == request.Year
+        );
         if (existing is not null)
             return Results.Ok(existing);
 
@@ -111,12 +131,16 @@ public static class AccreditationApplicationEndpoints
         if (created is null)
             return Results.Problem("Failed to create accreditation application.");
 
-        return Results.Created($"/api/v1/accreditation-applications/{organisationId}/{created.Id}", created);
+        return Results.Created(
+            $"/api/v1/accreditation-applications/{organisationId}/{created.Id}",
+            created
+        );
     }
 
     private static async Task<IResult> GetList(
         string organisationId,
-        IAccreditationApplicationPersistence persistence)
+        IAccreditationApplicationPersistence persistence
+    )
     {
         var applications = await persistence.GetByOrganisationAsync(organisationId);
         return Results.Ok(applications);
@@ -125,7 +149,8 @@ public static class AccreditationApplicationEndpoints
     private static async Task<IResult> GetById(
         string organisationId,
         string applicationId,
-        IAccreditationApplicationPersistence persistence)
+        IAccreditationApplicationPersistence persistence
+    )
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         return application is null ? Results.NotFound() : Results.Ok(application);
@@ -136,7 +161,8 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         PatchPrnsRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchPrnsRequest> validator)
+        IValidator<PatchPrnsRequest> validator
+    )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
@@ -159,7 +185,9 @@ public static class AccreditationApplicationEndpoints
             application.ApplicationStatus = ApplicationStatus.Started;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null ? Results.Problem("Failed to update PRNs section.") : Results.Ok(updated);
+        return updated is null
+            ? Results.Problem("Failed to update PRNs section.")
+            : Results.Ok(updated);
     }
 
     private static async Task<IResult> PatchTonnage(
@@ -167,7 +195,8 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         PatchTonnageRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchTonnageRequest> validator)
+        IValidator<PatchTonnageRequest> validator
+    )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
@@ -198,7 +227,8 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         PatchBusinessPlanRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchBusinessPlanRequest> validator)
+        IValidator<PatchBusinessPlanRequest> validator
+    )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
@@ -209,19 +239,31 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
 
         var bp = application.BusinessPlan;
-        if (request.NewInfrastructurePercent.HasValue) bp.NewInfrastructurePercent = request.NewInfrastructurePercent;
-        if (request.PriceSupportPercent.HasValue) bp.PriceSupportPercent = request.PriceSupportPercent;
-        if (request.BusinessCollectionsPercent.HasValue) bp.BusinessCollectionsPercent = request.BusinessCollectionsPercent;
-        if (request.CommunicationsPercent.HasValue) bp.CommunicationsPercent = request.CommunicationsPercent;
-        if (request.NewMarketsPercent.HasValue) bp.NewMarketsPercent = request.NewMarketsPercent;
-        if (request.NewUsesPercent.HasValue) bp.NewUsesPercent = request.NewUsesPercent;
+        if (request.NewInfrastructurePercent.HasValue)
+            bp.NewInfrastructurePercent = request.NewInfrastructurePercent;
+        if (request.PriceSupportPercent.HasValue)
+            bp.PriceSupportPercent = request.PriceSupportPercent;
+        if (request.BusinessCollectionsPercent.HasValue)
+            bp.BusinessCollectionsPercent = request.BusinessCollectionsPercent;
+        if (request.CommunicationsPercent.HasValue)
+            bp.CommunicationsPercent = request.CommunicationsPercent;
+        if (request.NewMarketsPercent.HasValue)
+            bp.NewMarketsPercent = request.NewMarketsPercent;
+        if (request.NewUsesPercent.HasValue)
+            bp.NewUsesPercent = request.NewUsesPercent;
 
-        if (request.NewInfrastructureDetail != null) bp.NewInfrastructureDetail = request.NewInfrastructureDetail;
-        if (request.PriceSupportDetail != null) bp.PriceSupportDetail = request.PriceSupportDetail;
-        if (request.BusinessCollectionsDetail != null) bp.BusinessCollectionsDetail = request.BusinessCollectionsDetail;
-        if (request.CommunicationsDetail != null) bp.CommunicationsDetail = request.CommunicationsDetail;
-        if (request.NewMarketsDetail != null) bp.NewMarketsDetail = request.NewMarketsDetail;
-        if (request.NewUsesDetail != null) bp.NewUsesDetail = request.NewUsesDetail;
+        if (request.NewInfrastructureDetail != null)
+            bp.NewInfrastructureDetail = request.NewInfrastructureDetail;
+        if (request.PriceSupportDetail != null)
+            bp.PriceSupportDetail = request.PriceSupportDetail;
+        if (request.BusinessCollectionsDetail != null)
+            bp.BusinessCollectionsDetail = request.BusinessCollectionsDetail;
+        if (request.CommunicationsDetail != null)
+            bp.CommunicationsDetail = request.CommunicationsDetail;
+        if (request.NewMarketsDetail != null)
+            bp.NewMarketsDetail = request.NewMarketsDetail;
+        if (request.NewUsesDetail != null)
+            bp.NewUsesDetail = request.NewUsesDetail;
 
         bp.SectionStatus = SectionStatusService.ComputeBusinessPlan(bp);
         application.DateLastEdited = DateTime.UtcNow;
@@ -230,14 +272,17 @@ public static class AccreditationApplicationEndpoints
             application.ApplicationStatus = ApplicationStatus.Started;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null ? Results.Problem("Failed to update business plan section.") : Results.Ok(updated);
+        return updated is null
+            ? Results.Problem("Failed to update business plan section.")
+            : Results.Ok(updated);
     }
 
     private static async Task<IResult> PatchSamplingPlan(
         string organisationId,
         string applicationId,
         PatchSamplingPlanRequest request,
-        IAccreditationApplicationPersistence persistence)
+        IAccreditationApplicationPersistence persistence
+    )
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -246,14 +291,18 @@ public static class AccreditationApplicationEndpoints
         if (request.Files != null)
             application.SamplingPlan.Files = request.Files;
 
-        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(application.SamplingPlan);
+        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
+            application.SamplingPlan
+        );
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null ? Results.Problem("Failed to update sampling plan section.") : Results.Ok(updated);
+        return updated is null
+            ? Results.Problem("Failed to update sampling plan section.")
+            : Results.Ok(updated);
     }
 
     private static async Task<IResult> Submit(
@@ -264,7 +313,8 @@ public static class AccreditationApplicationEndpoints
         ICaseWorkingApiAdapter caseWorkingAdapter,
         IApplicationReferenceService referenceService,
         IValidator<SubmitRequest> validator,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
@@ -275,14 +325,18 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
 
         if (application.ApplicationStatus == ApplicationStatus.Sent)
-            return Results.Ok(new SubmitResponse { AccreditationReference = application.ApplicationReference });
+            return Results.Ok(
+                new SubmitResponse { AccreditationReference = application.ApplicationReference }
+            );
 
         if (application.ApplicationStatus != ApplicationStatus.Started)
             return Results.Conflict("Application must be in 'Started' status to submit.");
 
-        if (application.Prns.SectionStatus != SectionStatus.Completed ||
-            application.BusinessPlan.SectionStatus != SectionStatus.Completed ||
-            application.SamplingPlan.SectionStatus != SectionStatus.Completed)
+        if (
+            application.Prns.SectionStatus != SectionStatus.Completed
+            || application.BusinessPlan.SectionStatus != SectionStatus.Completed
+            || application.SamplingPlan.SectionStatus != SectionStatus.Completed
+        )
         {
             return Results.BadRequest("All sections must be completed before submission.");
         }
@@ -295,7 +349,7 @@ public static class AccreditationApplicationEndpoints
         {
             FullName = request.FullName,
             JobTitle = request.JobTitle,
-            Email = request.Email
+            Email = request.Email,
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
@@ -304,7 +358,9 @@ public static class AccreditationApplicationEndpoints
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to submit accreditation application.")
-            : Results.Ok(new SubmitResponse { AccreditationReference = updated.ApplicationReference });
+            : Results.Ok(
+                new SubmitResponse { AccreditationReference = updated.ApplicationReference }
+            );
     }
 
     private static async Task<IResult> AddFile(
@@ -312,7 +368,8 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         FileUploadRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<FileUploadRequest> validator)
+        IValidator<FileUploadRequest> validator
+    )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
@@ -331,25 +388,30 @@ public static class AccreditationApplicationEndpoints
             Filename = request.Filename,
             ContentType = request.ContentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus = request.ScanStatus ?? FileScanStatus.Pending
+            ScanStatus = request.ScanStatus ?? FileScanStatus.Pending,
         };
 
         application.SamplingPlan.Files.Add(file);
-        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(application.SamplingPlan);
+        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
+            application.SamplingPlan
+        );
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null ? Results.Problem("Failed to add file.") : Results.Created(string.Empty, file);
+        return updated is null
+            ? Results.Problem("Failed to add file.")
+            : Results.Created(string.Empty, file);
     }
 
     private static async Task<IResult> DeleteFile(
         string organisationId,
         string applicationId,
         string fileId,
-        IAccreditationApplicationPersistence persistence)
+        IAccreditationApplicationPersistence persistence
+    )
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -359,7 +421,9 @@ public static class AccreditationApplicationEndpoints
         if (removed == 0)
             return Results.NotFound();
 
-        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(application.SamplingPlan);
+        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
+            application.SamplingPlan
+        );
         application.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application);
@@ -371,7 +435,8 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         IAccreditationApplicationPersistence persistence,
         IReExApiAdapter reExAdapter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -393,7 +458,7 @@ public static class AccreditationApplicationEndpoints
             SiteId = application.SiteId,
             ApplicationReference = application.ApplicationReference ?? string.Empty,
             Prns = application.Prns,
-            BusinessPlan = application.BusinessPlan
+            BusinessPlan = application.BusinessPlan,
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
@@ -406,13 +471,16 @@ public static class AccreditationApplicationEndpoints
         application.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null ? Results.Problem("Failed to approve accreditation application.") : Results.Ok(updated);
+        return updated is null
+            ? Results.Problem("Failed to approve accreditation application.")
+            : Results.Ok(updated);
     }
 
     private static async Task<IResult> Reject(
         string organisationId,
         string applicationId,
-        IAccreditationApplicationPersistence persistence)
+        IAccreditationApplicationPersistence persistence
+    )
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -428,6 +496,80 @@ public static class AccreditationApplicationEndpoints
         application.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null ? Results.Problem("Failed to reject accreditation application.") : Results.Ok(updated);
+        return updated is null
+            ? Results.Problem("Failed to reject accreditation application.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> InitiateUpload(
+        string organisationId,
+        string applicationId,
+        InitiateUploadRequest request,
+        ICdpUploaderService cdpUploaderService,
+        IPendingUploadService pendingUploadService,
+        IOptions<CdpUploaderConfig> cdpConfig,
+        IOptions<AppConfig> appConfig,
+        CancellationToken cancellationToken
+    )
+    {
+        var fileUploadId = Guid.NewGuid().ToString();
+        var baseUrl = appConfig.Value.BaseUrl.TrimEnd('/');
+        var callbackUrl = $"{baseUrl}/api/v1/accreditation-applications/files/upload-completed";
+        var statusUrl =
+            $"{baseUrl}/api/v1/accreditation-applications/{organisationId}/{applicationId}/files/{fileUploadId}/status";
+
+        var metadata = new Dictionary<string, string>(request.Metadata ?? [])
+        {
+            ["fileUploadId"] = fileUploadId,
+        };
+
+        var cdpRequest = new CdpInitiateRequest
+        {
+            Redirect = request.RedirectUrl,
+            Callback = callbackUrl,
+            S3Bucket = cdpConfig.Value.SamplingPlanBucket,
+            S3Path = request.S3Path,
+            MimeTypes = request.MimeTypes,
+            MaxFileSize = request.MaxFileSize,
+            Metadata = metadata,
+        };
+
+        var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
+        pendingUploadService.Create(fileUploadId, cdpResponse.StatusUrl);
+
+        return Results.Ok(
+            new InitiateUploadResponse
+            {
+                FileUploadId = fileUploadId,
+                UploadUrl = cdpResponse.UploadUrl,
+                StatusUrl = statusUrl,
+            }
+        );
+    }
+
+    private static IResult UploadCompleted(
+        CdpCallbackPayload payload,
+        IPendingUploadService pendingUploadService
+    )
+    {
+        var fileUploadId = payload.Metadata?.GetValueOrDefault("fileUploadId");
+        if (string.IsNullOrWhiteSpace(fileUploadId))
+            return Results.BadRequest("Missing fileUploadId in callback metadata.");
+
+        var file = payload.Form?.File;
+        if (file is null)
+            return Results.BadRequest("Missing file in callback payload.");
+
+        pendingUploadService.Complete(fileUploadId, file);
+        return Results.Ok();
+    }
+
+    private static IResult GetUploadStatus(
+        string fileUploadId,
+        IPendingUploadService pendingUploadService
+    )
+    {
+        var status = pendingUploadService.GetStatus(fileUploadId);
+        return Results.Ok(status);
     }
 }
