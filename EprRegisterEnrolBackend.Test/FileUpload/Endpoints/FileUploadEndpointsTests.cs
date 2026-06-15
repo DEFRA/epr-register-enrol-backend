@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.FileUpload.Models;
 using FluentAssertions;
 using MongoDB.Bson;
+using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.FileUpload.Endpoints;
 
@@ -13,7 +14,7 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter() },
     };
 
     private readonly FileUploadTestFactory _factory;
@@ -32,7 +33,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         MaterialType material = MaterialType.Steel,
         int year = 2025,
         FileScanStatus scanStatus = FileScanStatus.Clean,
-        Action<FileUploadModel>? configure = null)
+        Action<FileUploadModel>? configure = null
+    )
     {
         var model = new FileUploadModel
         {
@@ -44,23 +46,24 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
             Filename = "test.pdf",
             ContentType = "application/pdf",
             S3Key = $"file-uploads/{material}/{year}/test.pdf",
-            ScanStatus = scanStatus
+            ScanStatus = scanStatus,
         };
         configure?.Invoke(model);
         _factory.FakePersistence.Seed(model);
         return model;
     }
 
-    private static CreateFileUploadRequest ValidRequest(int? yearOverride = null) => new()
-    {
-        OrganisationId = "org-123",
-        Material = MaterialType.Steel,
-        YearOfAccreditation = yearOverride ?? DateTime.UtcNow.Year,
-        FileId = "cdp-upload-id",
-        Filename = "report.pdf",
-        ContentType = "application/pdf",
-        S3Key = "file-uploads/Steel/2025/report.pdf"
-    };
+    private static CreateFileUploadRequest ValidRequest(int? yearOverride = null) =>
+        new()
+        {
+            OrganisationId = "org-123",
+            Material = MaterialType.Steel,
+            YearOfAccreditation = yearOverride ?? DateTime.UtcNow.Year,
+            FileId = "cdp-upload-id",
+            Filename = "report.pdf",
+            ContentType = "application/pdf",
+            S3Key = "file-uploads/Steel/2025/report.pdf",
+        };
 
     // --- POST /api/v1/file-uploads ---
 
@@ -72,11 +75,14 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         var response = await _client.PostAsJsonAsync(
             "/api/v1/file-uploads",
             ValidRequest(),
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<FileUploadModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<FileUploadModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.OrganisationId.Should().Be("org-123");
         body.Material.Should().Be(MaterialType.Steel);
         body.Filename.Should().Be("report.pdf");
@@ -92,7 +98,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         var response = await _client.PostAsJsonAsync(
             "/api/v1/file-uploads",
             request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
@@ -107,7 +114,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         var response = await _client.PostAsJsonAsync(
             "/api/v1/file-uploads",
             request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
@@ -120,7 +128,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         var response = await _client.PostAsJsonAsync(
             "/api/v1/file-uploads",
             ValidRequest(yearOverride: DateTime.UtcNow.Year - 5),
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
@@ -135,11 +144,14 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             "/api/v1/file-uploads?organisationId=org-list-test",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.Should().HaveCount(1);
         body[0].OrganisationId.Should().Be("org-list-test");
     }
@@ -151,7 +163,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             "/api/v1/file-uploads",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
@@ -165,13 +178,16 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             $"/api/v1/file-uploads?organisationId=org-filter&material=Steel&year={DateTime.UtcNow.Year}",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         Console.WriteLine(response.Content.Headers.ContentType);
         var json = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.Should().HaveCount(1);
         body[0].Material.Should().Be(MaterialType.Steel);
     }
@@ -183,11 +199,14 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             "/api/v1/file-uploads?organisationId=org-nobody",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.Should().BeEmpty();
     }
 
@@ -201,11 +220,14 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             $"/api/v1/file-uploads/{seeded.FileUploadId}",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<FileUploadModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<FileUploadModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.Filename.Should().Be("test.pdf");
     }
 
@@ -216,7 +238,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             $"/api/v1/file-uploads/{ObjectId.GenerateNewId()}",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -224,19 +247,29 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
     // --- GET /api/v1/file-uploads/{fileUploadId}/download ---
 
     [Fact]
-    public async Task Download_CleanFile_Returns200WithS3Key()
+    public async Task Download_CleanFile_Returns200WithPresignedUrl()
     {
         Reset();
         var seeded = SeedFileUpload(scanStatus: FileScanStatus.Clean);
+        const string expectedUrl = "https://s3.example.com/presigned?sig=abc";
+        _factory
+            .MockS3Service.GeneratePresignedDownloadUrlAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(expectedUrl));
 
         var response = await _client.GetAsync(
             $"/api/v1/file-uploads/{seeded.FileUploadId}/download",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadAsStringAsync(
-            TestContext.Current.CancellationToken);
-        body.Should().Contain("S3Key");
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().Contain("presignedUrl");
+        body.Should().Contain(expectedUrl);
     }
 
     [Fact]
@@ -247,7 +280,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             $"/api/v1/file-uploads/{seeded.FileUploadId}/download",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
@@ -260,7 +294,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             $"/api/v1/file-uploads/{seeded.FileUploadId}/download",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
@@ -272,7 +307,8 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
 
         var response = await _client.GetAsync(
             $"/api/v1/file-uploads/{ObjectId.GenerateNewId()}/download",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }

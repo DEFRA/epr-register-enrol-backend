@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.Organisation.Models;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -35,6 +36,7 @@ public class AccreditationApplicationEndpointsTests
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockOrganisationPersistence.ClearSubstitute(ClearOptions.All);
+        _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
     }
 
     private AccreditationApplicationModel SeedApplication(
@@ -884,5 +886,152 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // --- CDP Upload ---
+
+    [Fact]
+    public async Task InitiateUpload_Returns200WithUploadDetails()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        _factory
+            .MockCdpUploaderService.InitiateAsync(
+                Arg.Any<CdpInitiateRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new CdpInitiateResponse
+                {
+                    UploadId = "cdp-upload-id",
+                    UploadUrl = "http://localhost:7337/upload/cdp-upload-id",
+                    StatusUrl = "http://localhost:7337/status/cdp-upload-id",
+                }
+            );
+
+        var request = new { redirectUrl = "http://frontend/redirect", s3Path = "uploads/test.csv" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/initiate",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<InitiateUploadResponse>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.UploadUrl.Should().Be("http://localhost:7337/upload/cdp-upload-id");
+        body.StatusUrl.Should().Contain("/files/").And.Contain("/status");
+        body.FileUploadId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task UploadCompleted_ValidPayload_Returns200()
+    {
+        Reset();
+
+        var payload = new
+        {
+            form = new
+            {
+                file = new
+                {
+                    fileId = "file-xyz",
+                    filename = "plan.csv",
+                    fileStatus = "complete",
+                },
+            },
+            metadata = new Dictionary<string, string> { ["fileUploadId"] = "upload-abc" },
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/files/upload-completed",
+            payload,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task UploadCompleted_MissingFileUploadId_Returns400()
+    {
+        Reset();
+
+        var payload = new
+        {
+            form = new { file = new { fileId = "file-xyz" } },
+            metadata = new Dictionary<string, string>(),
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/files/upload-completed",
+            payload,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task GetUploadStatus_AfterComplete_ReturnsReady()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        // First complete a callback to store the result
+        var fileUploadId = "test-upload-id";
+        var callbackPayload = new
+        {
+            form = new
+            {
+                file = new
+                {
+                    fileId = "file-123",
+                    filename = "test.csv",
+                    fileStatus = "complete",
+                },
+            },
+            metadata = new Dictionary<string, string> { ["fileUploadId"] = fileUploadId },
+        };
+        await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/files/upload-completed",
+            callbackPayload,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/{fileUploadId}/status",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<CdpStatusResponse>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.UploadStatus.Should().Be("ready");
+        body.Form!.File!.FileId.Should().Be("file-123");
+    }
+
+    [Fact]
+    public async Task GetUploadStatus_BeforeComplete_ReturnsPending()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/unknown-upload-id/status",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<CdpStatusResponse>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.UploadStatus.Should().Be("pending");
     }
 }

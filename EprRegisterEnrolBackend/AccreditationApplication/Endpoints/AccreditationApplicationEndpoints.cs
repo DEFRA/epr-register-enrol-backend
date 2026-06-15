@@ -1,8 +1,12 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.CdpUploader.Config;
+using EprRegisterEnrolBackend.CdpUploader.Models;
+using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Organisation.Services;
 using FluentValidation;
+using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 
@@ -24,6 +28,12 @@ public static class AccreditationApplicationEndpoints
         group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile);
         group.MapPost("{organisationId}/{applicationId}/approve", Approve);
         group.MapPost("{organisationId}/{applicationId}/reject", Reject);
+        group.MapPost("{organisationId}/{applicationId}/files/initiate", InitiateUpload);
+        group.MapPost("files/upload-completed", UploadCompleted);
+        group.MapGet(
+            "{organisationId}/{applicationId}/files/{fileUploadId}/status",
+            GetUploadStatus
+        );
     }
 
     private static async Task<IResult> Seed(
@@ -494,5 +504,77 @@ public static class AccreditationApplicationEndpoints
         return updated is null
             ? Results.Problem("Failed to reject accreditation application.")
             : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> InitiateUpload(
+        string organisationId,
+        string applicationId,
+        InitiateUploadRequest request,
+        ICdpUploaderService cdpUploaderService,
+        IPendingUploadService pendingUploadService,
+        IOptions<CdpUploaderConfig> cdpConfig,
+        IOptions<AppConfig> appConfig,
+        CancellationToken cancellationToken
+    )
+    {
+        var fileUploadId = Guid.NewGuid().ToString();
+        var baseUrl = appConfig.Value.BaseUrl.TrimEnd('/');
+        var callbackUrl = $"{baseUrl}/api/v1/accreditation-applications/files/upload-completed";
+        var statusUrl =
+            $"{baseUrl}/api/v1/accreditation-applications/{organisationId}/{applicationId}/files/{fileUploadId}/status";
+
+        var metadata = new Dictionary<string, string>(request.Metadata ?? [])
+        {
+            ["fileUploadId"] = fileUploadId,
+        };
+
+        var cdpRequest = new CdpInitiateRequest
+        {
+            Redirect = request.RedirectUrl,
+            Callback = callbackUrl,
+            S3Bucket = cdpConfig.Value.SamplingPlanBucket,
+            S3Path = request.S3Path,
+            MimeTypes = request.MimeTypes,
+            MaxFileSize = request.MaxFileSize,
+            Metadata = metadata,
+        };
+
+        var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
+        pendingUploadService.Create(fileUploadId, cdpResponse.StatusUrl);
+
+        return Results.Ok(
+            new InitiateUploadResponse
+            {
+                FileUploadId = fileUploadId,
+                UploadUrl = cdpResponse.UploadUrl,
+                StatusUrl = statusUrl,
+            }
+        );
+    }
+
+    private static IResult UploadCompleted(
+        CdpCallbackPayload payload,
+        IPendingUploadService pendingUploadService
+    )
+    {
+        var fileUploadId = payload.Metadata?.GetValueOrDefault("fileUploadId");
+        if (string.IsNullOrWhiteSpace(fileUploadId))
+            return Results.BadRequest("Missing fileUploadId in callback metadata.");
+
+        var file = payload.Form?.File;
+        if (file is null)
+            return Results.BadRequest("Missing file in callback payload.");
+
+        pendingUploadService.Complete(fileUploadId, file);
+        return Results.Ok();
+    }
+
+    private static IResult GetUploadStatus(
+        string fileUploadId,
+        IPendingUploadService pendingUploadService
+    )
+    {
+        var status = pendingUploadService.GetStatus(fileUploadId);
+        return Results.Ok(status);
     }
 }

@@ -2,7 +2,10 @@ using System.Diagnostics.CodeAnalysis;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.CdpUploader.Config;
+using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
+using EprRegisterEnrolBackend.FileUpload.Config;
 using EprRegisterEnrolBackend.FileUpload.Endpoints;
 using EprRegisterEnrolBackend.FileUpload.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
@@ -104,6 +107,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
 
     // File Uploads
     builder.Services.AddSingleton<IFileUploadPersistence, FileUploadPersistence>();
+    builder.Services.Configure<S3Config>(builder.Configuration.GetSection("S3"));
+    builder.Services.AddSingleton<IS3Service, S3Service>();
+
+    // CDP Uploader
+    builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
+    builder.Services.Configure<AppConfig>(builder.Configuration.GetSection("App"));
+    builder.Services.AddSingleton<ICdpUploaderService, CdpUploaderService>();
+    builder.Services.AddSingleton<IPendingUploadService, PendingUploadService>();
 
     // TODO: replace stubs with real HTTP adapters once the ReEx and CaseWorking API contracts are defined.
     builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
@@ -126,6 +137,30 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
 [ExcludeFromCodeCoverage]
 static WebApplication SetupApplication(WebApplication app)
 {
+    var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+    var cdpConfig = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<CdpUploaderConfig>>()
+        .Value;
+    var appCfg = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<AppConfig>>()
+        .Value;
+    var s3Cfg = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<S3Config>>()
+        .Value;
+
+    if (string.IsNullOrWhiteSpace(cdpConfig.Url))
+        startupLogger.LogWarning(
+            "CDP_UPLOADER_URL (CdpUploader:Url) is not configured — file uploads will fail at runtime."
+        );
+    if (string.IsNullOrWhiteSpace(appCfg.BaseUrl))
+        startupLogger.LogWarning(
+            "APP_BASE_URL (App:BaseUrl) is not configured — CDP callback and status URLs will be incorrect."
+        );
+    if (string.IsNullOrWhiteSpace(s3Cfg.Region))
+        startupLogger.LogWarning(
+            "S3_REGION (S3:Region) is not configured — file downloads may fail at runtime."
+        );
+
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
