@@ -194,6 +194,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<int>()
             )
             .Returns(Task.FromResult<ReExAccreditationDto?>(null));
+        var registrationObjectId = ObjectId.Parse("aaaaaaaaaaaaaaaaaaaaaaaa");
         _factory
             .MockOrganisationPersistence.GetByOrgIdAsync(42)
             .Returns(
@@ -206,10 +207,10 @@ public class AccreditationApplicationEndpointsTests
                         [
                             new RegistrationModel
                             {
+                                Id = registrationObjectId,
                                 Status = "Active",
                                 Material = "Plastic",
                                 WasteProcessingType = "Reprocessor",
-                                SiteId = "reg-1",
                                 SiteAddress = new SiteAddressModel
                                 {
                                     Line1 = "1 Factory Lane",
@@ -224,7 +225,7 @@ public class AccreditationApplicationEndpointsTests
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/42/reg-1/Plastic/seed",
+            $"/api/v1/accreditation-applications/42/{registrationObjectId}/Plastic/seed",
             request,
             cancellationToken: TestContext.Current.CancellationToken
         );
