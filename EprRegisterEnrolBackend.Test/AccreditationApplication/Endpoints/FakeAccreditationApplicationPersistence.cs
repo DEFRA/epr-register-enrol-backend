@@ -46,7 +46,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         Id = src.Id,
         OrganisationId = src.OrganisationId,
         Year = src.Year,
-        SiteId = src.SiteId,
+        RegistrationId = src.RegistrationId,
         MaterialType = src.MaterialType,
         ApplicationStatus = src.ApplicationStatus,
         SourceReExAccreditationId = src.SourceReExAccreditationId,

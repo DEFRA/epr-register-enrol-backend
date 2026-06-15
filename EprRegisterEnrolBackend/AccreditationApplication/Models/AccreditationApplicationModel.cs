@@ -20,7 +20,7 @@ public class AccreditationApplicationModel
 
     public required int Year { get; set; }
 
-    public string? SiteId { get; set; }
+    public string? RegistrationId { get; set; }
 
     public string? SiteAddress { get; set; }
 

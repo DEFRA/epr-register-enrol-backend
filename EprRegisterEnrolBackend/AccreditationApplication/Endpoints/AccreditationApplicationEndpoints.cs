@@ -70,7 +70,7 @@ public static class AccreditationApplicationEndpoints
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
             siteAddress = org
                 ?.Registrations?.FirstOrDefault(r =>
-                    r.SiteId == registrationId && r.SiteAddress != null
+                    r.Id.ToString() == registrationId && r.SiteAddress != null
                 )
                 ?.SiteAddress
                 is { } addr
@@ -83,7 +83,7 @@ public static class AccreditationApplicationEndpoints
             OrganisationId = organisationId,
             OrganisationName = organisationName,
             Year = request.Year,
-            SiteId = registrationId,
+            RegistrationId = registrationId,
             SiteAddress = siteAddress,
             RegistrationReference = registrationReference,
             MaterialType = materialTypeEnum,
@@ -123,7 +123,7 @@ public static class AccreditationApplicationEndpoints
 
         var existing = (await persistence.GetByOrganisationAsync(organisationId)).FirstOrDefault(
             a =>
-                a.SiteId == registrationId
+                a.RegistrationId == registrationId
                 && a.MaterialType == materialTypeEnum
                 && a.Year == request.Year
         );
@@ -460,7 +460,7 @@ public static class AccreditationApplicationEndpoints
             OrganisationId = organisationId,
             MaterialType = application.MaterialType,
             Year = application.Year,
-            SiteId = application.SiteId,
+            SiteId = application.RegistrationId,
             ApplicationReference = application.ApplicationReference ?? string.Empty,
             Prns = application.Prns,
             BusinessPlan = application.BusinessPlan,
