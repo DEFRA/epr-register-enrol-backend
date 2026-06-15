@@ -12,11 +12,12 @@ using NSubstitute.ClearExtensions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
-public class AccreditationApplicationEndpointsTests : IClassFixture<AccreditationApplicationTestFactory>
+public class AccreditationApplicationEndpointsTests
+    : IClassFixture<AccreditationApplicationTestFactory>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter() },
     };
 
     private readonly AccreditationApplicationTestFactory _factory;
@@ -39,7 +40,8 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     private AccreditationApplicationModel SeedApplication(
         string orgId = "org-123",
         ApplicationStatus status = ApplicationStatus.Saved,
-        Action<AccreditationApplicationModel>? configure = null)
+        Action<AccreditationApplicationModel>? configure = null
+    )
     {
         var app = new AccreditationApplicationModel
         {
@@ -47,7 +49,7 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             OrganisationId = orgId,
             Year = 2026,
             MaterialType = MaterialType.Steel,
-            ApplicationStatus = status
+            ApplicationStatus = status,
         };
         configure?.Invoke(app);
         _factory.FakePersistence.Seed(app);
@@ -60,17 +62,26 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Seed_ValidRequest_Returns201WithApplication()
     {
         Reset();
-        _factory.MockReExAdapter
-            .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
             .Returns(Task.FromResult<ReExAccreditationDto?>(null));
 
         var request = new SeedRequest { Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.OrganisationId.Should().Be("org-123");
         body.MaterialType.Should().Be(MaterialType.Steel);
         body.ApplicationStatus.Should().Be(ApplicationStatus.Saved);
@@ -80,25 +91,34 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Seed_WithPriorYearData_PrePopulatesFields()
     {
         Reset();
-        _factory.MockReExAdapter
-            .GetAccreditationAsync("org-123", MaterialType.Steel, 2025)
-            .Returns(Task.FromResult<ReExAccreditationDto?>(new ReExAccreditationDto
-            {
-                AccreditationId = "reex-abc",
-                OrganisationId = "org-123",
-                MaterialType = MaterialType.Steel,
-                Year = 2025,
-                Prns = new ReExPrnsDto { PlannedTonnageBand = PlannedTonnageBand.UpTo1000 },
-                BusinessPlan = new ReExBusinessPlanDto { NewInfrastructurePercent = 20 }
-            }));
+        _factory
+            .MockReExAdapter.GetAccreditationAsync("org-123", MaterialType.Steel, 2025)
+            .Returns(
+                Task.FromResult<ReExAccreditationDto?>(
+                    new ReExAccreditationDto
+                    {
+                        AccreditationId = "reex-abc",
+                        OrganisationId = "org-123",
+                        MaterialType = MaterialType.Steel,
+                        Year = 2025,
+                        Prns = new ReExPrnsDto { PlannedTonnageBand = PlannedTonnageBand.UpTo1000 },
+                        BusinessPlan = new ReExBusinessPlanDto { NewInfrastructurePercent = 20 },
+                    }
+                )
+            );
 
         var request = new SeedRequest { Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.SourceReExAccreditationId.Should().Be("reex-abc");
         body.SourceYear.Should().Be(2025);
         body.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo1000);
@@ -109,8 +129,11 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     {
         Reset();
         var request = new SeedRequest { Year = 2020 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
@@ -119,8 +142,11 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     {
         Reset();
         var request = new SeedRequest { Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Unknown/seed", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Unknown/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
@@ -128,18 +154,29 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Seed_ValidRequest_MaterialTypeAndStatusSerializedAsStrings()
     {
         Reset();
-        _factory.MockReExAdapter
-            .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
             .Returns(Task.FromResult<ReExAccreditationDto?>(null));
 
         var request = new SeedRequest { Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var json = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
         json.RootElement.GetProperty("materialType").ValueKind.Should().Be(JsonValueKind.String);
-        json.RootElement.GetProperty("applicationStatus").ValueKind.Should().Be(JsonValueKind.String);
+        json.RootElement.GetProperty("applicationStatus")
+            .ValueKind.Should()
+            .Be(JsonValueKind.String);
         json.RootElement.GetProperty("materialType").GetString().Should().Be("Steel");
         json.RootElement.GetProperty("applicationStatus").GetString().Should().Be("Saved");
     }
@@ -148,35 +185,52 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Seed_WithNumericOrganisationId_PopulatesOrganisationNameAndSiteAddress()
     {
         Reset();
-        _factory.MockReExAdapter
-            .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
             .Returns(Task.FromResult<ReExAccreditationDto?>(null));
-        _factory.MockOrganisationPersistence
-            .GetByOrgIdAsync(42)
-            .Returns(Task.FromResult<OrganisationModel?>(new OrganisationModel
-            {
-                OrgId = 42,
-                CompanyDetails = new CompanyDetailsModel { Name = "Acme Reprocessing Ltd" },
-                Registrations =
-                [
-                    new RegistrationModel
+        _factory
+            .MockOrganisationPersistence.GetByOrgIdAsync(42)
+            .Returns(
+                Task.FromResult<OrganisationModel?>(
+                    new OrganisationModel
                     {
-                        Status = "Active",
-                        Material = "Plastic",
-                        WasteProcessingType = "Reprocessor",
-                        SiteId = "site-1",
-                        SiteAddress = new SiteAddressModel { Line1 = "1 Factory Lane", Town = "Manchester", Postcode = "M1 1AA" }
+                        OrgId = 42,
+                        CompanyDetails = new CompanyDetailsModel { Name = "Acme Reprocessing Ltd" },
+                        Registrations =
+                        [
+                            new RegistrationModel
+                            {
+                                Status = "Active",
+                                Material = "Plastic",
+                                WasteProcessingType = "Reprocessor",
+                                SiteId = "reg-1",
+                                SiteAddress = new SiteAddressModel
+                                {
+                                    Line1 = "1 Factory Lane",
+                                    Town = "Manchester",
+                                    Postcode = "M1 1AA",
+                                },
+                            },
+                        ],
                     }
-                ]
-            }));
+                )
+            );
 
         var request = new SeedRequest { Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/42/site-1/Plastic/seed", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/42/reg-1/Plastic/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.OrganisationName.Should().Be("Acme Reprocessing Ltd");
         body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
     }
@@ -185,17 +239,25 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Seed_WithNonNumericOrganisationId_LeavesOrganisationNameAndSiteAddressNull()
     {
         Reset();
-        _factory.MockReExAdapter
-            .GetAccreditationAsync(Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>())
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
             .Returns(Task.FromResult<ReExAccreditationDto?>(null));
 
         var request = new SeedRequest { Year = 2026 };
-        var response = await _client.PostAsJsonAsync("/api/v1/accreditation-applications/org-123/site-1/Steel/seed", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.OrganisationName.Should().BeNull();
         body.SiteAddress.Should().BeNull();
     }
@@ -208,12 +270,16 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         Reset();
         SeedApplication();
 
-        var response = await _client.GetAsync("/api/v1/accreditation-applications/org-123",
-            cancellationToken: TestContext.Current.CancellationToken);
+        var response = await _client.GetAsync(
+            "/api/v1/accreditation-applications/org-123",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<List<AccreditationApplicationModel>>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<List<AccreditationApplicationModel>>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body.Should().HaveCount(1);
     }
 
@@ -226,7 +292,8 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         var app = SeedApplication();
         var response = await _client.GetAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
@@ -236,7 +303,8 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         Reset();
         var response = await _client.GetAsync(
             "/api/v1/accreditation-applications/org-123/000000000000000000000000",
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
@@ -250,12 +318,16 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
 
         var request = new PatchPrnsRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
         var response = await _client.PatchAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/prns", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/prns",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
     }
 
@@ -265,20 +337,29 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task PatchTonnage_WithAuthorisersOnly_UpdatesAuthorisersLeavesTonnageBandUnchanged()
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Saved, configure: a =>
-            a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000);
+        var app = SeedApplication(
+            status: ApplicationStatus.Saved,
+            configure: a => a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000
+        );
 
         var request = new PatchTonnageRequest
         {
-            Authorisers = [new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" }]
+            Authorisers =
+            [
+                new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" },
+            ],
         };
         var response = await _client.PatchAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo1000);
         body.Prns.Authorisers.Should().ContainSingle(a => a.FullName == "Jane Smith");
     }
@@ -287,18 +368,28 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task PatchTonnage_WithPlannedTonnageBandOnly_UpdatesTonnageBandLeavesAuthorisersUnchanged()
     {
         Reset();
-        var existingAuthoriser = new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" };
-        var app = SeedApplication(status: ApplicationStatus.Saved, configure: a =>
-            a.Prns.Authorisers = [existingAuthoriser]);
+        var existingAuthoriser = new PrnsAuthoriser
+        {
+            FullName = "Jane Smith",
+            Email = "jane@example.com",
+        };
+        var app = SeedApplication(
+            status: ApplicationStatus.Saved,
+            configure: a => a.Prns.Authorisers = [existingAuthoriser]
+        );
 
         var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
         var response = await _client.PatchAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo500);
         body.Prns.Authorisers.Should().ContainSingle(a => a.FullName == "Jane Smith");
     }
@@ -318,12 +409,14 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
             BusinessCollectionsPercent = 10,
             CommunicationsPercent = 10,
             NewMarketsPercent = 10,
-            NewUsesPercent = 10 // sum = 60
+            NewUsesPercent = 10, // sum = 60
         };
 
         var response = await _client.PatchAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/business-plan", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/business-plan",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
@@ -334,28 +427,46 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Submit_AllSectionsCompleted_Returns200WithReference()
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Started, configure: a =>
-        {
-            a.Prns.SectionStatus = SectionStatus.Completed;
-            a.BusinessPlan.SectionStatus = SectionStatus.Completed;
-            a.SamplingPlan.SectionStatus = SectionStatus.Completed;
-        });
-        _factory.MockCaseWorkingAdapter
-            .SubmitApplicationAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<CancellationToken>())
+        var app = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Completed;
+                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
+                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(Task.CompletedTask);
 
-        var request = new SubmitRequest { FullName = "John Operator", JobTitle = "Operations Manager", Email = "john@example.com" };
+        var request = new SubmitRequest
+        {
+            FullName = "John Operator",
+            JobTitle = "Operations Manager",
+            Email = "john@example.com",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<SubmitResponse>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<SubmitResponse>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.AccreditationReference.Should().MatchRegex(@"^EPR-ACC-2026-[A-Z0-9]{7}$");
-        await _factory.MockCaseWorkingAdapter
-            .Received(1)
-            .SubmitApplicationAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<CancellationToken>());
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -364,10 +475,17 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         Reset();
         var app = SeedApplication(status: ApplicationStatus.Started);
 
-        var request = new SubmitRequest { FullName = "John", JobTitle = "Manager", Email = "j@x.com" };
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
@@ -376,21 +494,35 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Submit_WhenAlreadySent_ReturnsIdempotentOk()
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Sent, configure: a =>
-            a.ApplicationReference = "EPR-ACC-2026-ABC1234");
+        var app = SeedApplication(
+            status: ApplicationStatus.Sent,
+            configure: a => a.ApplicationReference = "EPR-ACC-2026-ABC1234"
+        );
 
-        var request = new SubmitRequest { FullName = "John", JobTitle = "Manager", Email = "j@x.com" };
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<SubmitResponse>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<SubmitResponse>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.AccreditationReference.Should().Be("EPR-ACC-2026-ABC1234");
-        await _factory.MockCaseWorkingAdapter
-            .DidNotReceive()
-            .SubmitApplicationAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<CancellationToken>());
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -399,10 +531,17 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         Reset();
         var app = SeedApplication(status: ApplicationStatus.Saved);
 
-        var request = new SubmitRequest { FullName = "John", JobTitle = "Manager", Email = "j@x.com" };
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
@@ -413,10 +552,17 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         Reset();
         var app = SeedApplication(status: ApplicationStatus.Approved);
 
-        var request = new SubmitRequest { FullName = "John", JobTitle = "Manager", Email = "j@x.com" };
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
@@ -425,23 +571,39 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Submit_WhenAdapterThrows_ApplicationRemainsStarted()
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Started, configure: a =>
-        {
-            a.Prns.SectionStatus = SectionStatus.Completed;
-            a.BusinessPlan.SectionStatus = SectionStatus.Completed;
-            a.SamplingPlan.SectionStatus = SectionStatus.Completed;
-        });
-        _factory.MockCaseWorkingAdapter
-            .SubmitApplicationAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<CancellationToken>())
+        var app = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Completed;
+                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
+                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(Task.FromException(new HttpRequestException("adapter unavailable")));
 
-        var request = new SubmitRequest { FullName = "John", JobTitle = "Manager", Email = "j@x.com" };
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
-        var stored = await _factory.FakePersistence.GetByIdAsync("org-123", app.Id!.Value.ToString());
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
         stored!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
         stored.ApplicationReference.Should().BeNull();
     }
@@ -452,23 +614,35 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Approve_SetsApprovedStatusAndCallsReExAdapter()
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Sent, configure: a =>
-            a.ApplicationReference = "EPR-ACC-2026-ABC1234");
-        _factory.MockReExAdapter
-            .WriteApprovedAccreditationAsync(Arg.Any<ApprovedAccreditationDto>(), Arg.Any<CancellationToken>())
+        var app = SeedApplication(
+            status: ApplicationStatus.Sent,
+            configure: a => a.ApplicationReference = "EPR-ACC-2026-ABC1234"
+        );
+        _factory
+            .MockReExAdapter.WriteApprovedAccreditationAsync(
+                Arg.Any<ApprovedAccreditationDto>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(Task.CompletedTask);
 
         var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve", null,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
-        await _factory.MockReExAdapter
-            .Received(1)
-            .WriteApprovedAccreditationAsync(Arg.Any<ApprovedAccreditationDto>(), Arg.Any<CancellationToken>());
+        await _factory
+            .MockReExAdapter.Received(1)
+            .WriteApprovedAccreditationAsync(
+                Arg.Any<ApprovedAccreditationDto>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -478,13 +652,18 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         var app = SeedApplication(status: ApplicationStatus.Approved);
 
         var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve", null,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        await _factory.MockReExAdapter
-            .DidNotReceive()
-            .WriteApprovedAccreditationAsync(Arg.Any<ApprovedAccreditationDto>(), Arg.Any<CancellationToken>());
+        await _factory
+            .MockReExAdapter.DidNotReceive()
+            .WriteApprovedAccreditationAsync(
+                Arg.Any<ApprovedAccreditationDto>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -494,8 +673,10 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         var app = SeedApplication(status: ApplicationStatus.Started);
 
         var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve", null,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
@@ -504,18 +685,28 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     public async Task Approve_WhenAdapterThrows_ApplicationRemainsSent()
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Sent, configure: a =>
-            a.ApplicationReference = "EPR-ACC-2026-ABC1234");
-        _factory.MockReExAdapter
-            .WriteApprovedAccreditationAsync(Arg.Any<ApprovedAccreditationDto>(), Arg.Any<CancellationToken>())
+        var app = SeedApplication(
+            status: ApplicationStatus.Sent,
+            configure: a => a.ApplicationReference = "EPR-ACC-2026-ABC1234"
+        );
+        _factory
+            .MockReExAdapter.WriteApprovedAccreditationAsync(
+                Arg.Any<ApprovedAccreditationDto>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(Task.FromException(new HttpRequestException("adapter unavailable")));
 
         var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve", null,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
-        var stored = await _factory.FakePersistence.GetByIdAsync("org-123", app.Id!.Value.ToString());
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
         stored!.ApplicationStatus.Should().Be(ApplicationStatus.Sent);
     }
 
@@ -528,12 +719,16 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         var app = SeedApplication(status: ApplicationStatus.Sent);
 
         var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject", null,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Rejected);
     }
 
@@ -544,8 +739,10 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         var app = SeedApplication(status: ApplicationStatus.Rejected);
 
         var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject", null,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -557,8 +754,10 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         var app = SeedApplication(status: ApplicationStatus.Saved);
 
         var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject", null,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
@@ -571,10 +770,17 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         Reset();
         var app = SeedApplication();
 
-        var request = new FileUploadRequest { FileId = "file-001", Filename = "plan.pdf", ContentType = "application/pdf" };
+        var request = new FileUploadRequest
+        {
+            FileId = "file-001",
+            Filename = "plan.pdf",
+            ContentType = "application/pdf",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
     }
@@ -585,10 +791,17 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         Reset();
         var app = SeedApplication();
 
-        var request = new FileUploadRequest { FileId = "file-002", Filename = "../../etc/passwd", ContentType = "application/pdf" };
+        var request = new FileUploadRequest
+        {
+            FileId = "file-002",
+            Filename = "../../etc/passwd",
+            ContentType = "application/pdf",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
@@ -599,10 +812,17 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         Reset();
         var app = SeedApplication();
 
-        var request = new FileUploadRequest { FileId = "file-003", Filename = "script.js", ContentType = "text/javascript" };
+        var request = new FileUploadRequest
+        {
+            FileId = "file-003",
+            Filename = "script.js",
+            ContentType = "text/javascript",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
@@ -614,17 +834,28 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
         var app = SeedApplication(configure: a =>
         {
             for (var i = 0; i < 10; i++)
-                a.SamplingPlan.Files.Add(new AccreditationApplicationFile
-                {
-                    FileId = $"existing-{i}", Filename = $"file{i}.pdf",
-                    ContentType = "application/pdf", UploadedByUserId = string.Empty
-                });
+                a.SamplingPlan.Files.Add(
+                    new AccreditationApplicationFile
+                    {
+                        FileId = $"existing-{i}",
+                        Filename = $"file{i}.pdf",
+                        ContentType = "application/pdf",
+                        UploadedByUserId = string.Empty,
+                    }
+                );
         });
 
-        var request = new FileUploadRequest { FileId = "file-new", Filename = "new.pdf", ContentType = "application/pdf" };
+        var request = new FileUploadRequest
+        {
+            FileId = "file-new",
+            Filename = "new.pdf",
+            ContentType = "application/pdf",
+        };
         var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files", request,
-            cancellationToken: TestContext.Current.CancellationToken);
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
@@ -636,15 +867,21 @@ public class AccreditationApplicationEndpointsTests : IClassFixture<Accreditatio
     {
         Reset();
         var app = SeedApplication(configure: a =>
-            a.SamplingPlan.Files.Add(new AccreditationApplicationFile
-            {
-                FileId = "file-001", Filename = "plan.pdf", ContentType = "application/pdf",
-                UploadedByUserId = string.Empty
-            }));
+            a.SamplingPlan.Files.Add(
+                new AccreditationApplicationFile
+                {
+                    FileId = "file-001",
+                    Filename = "plan.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = string.Empty,
+                }
+            )
+        );
 
         var response = await _client.DeleteAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/file-001",
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
