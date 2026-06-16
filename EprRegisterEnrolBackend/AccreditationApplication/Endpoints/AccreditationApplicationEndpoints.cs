@@ -16,7 +16,7 @@ public static class AccreditationApplicationEndpoints
     {
         var group = app.MapGroup("api/v1/accreditation-applications");
 
-        group.MapPost("{organisationId}/{siteId}/{materialType}/seed", Seed);
+        group.MapPost("{organisationId}/{registrationId}/{materialType}/seed", Seed);
         group.MapGet("{organisationId}", GetList);
         group.MapGet("{organisationId}/{applicationId}", GetById);
         group.MapPatch("{organisationId}/{applicationId}/prns", PatchPrns);
@@ -38,7 +38,7 @@ public static class AccreditationApplicationEndpoints
 
     private static async Task<IResult> Seed(
         string organisationId,
-        string siteId,
+        string registrationId,
         string materialType,
         SeedRequest request,
         IAccreditationApplicationPersistence persistence,
@@ -69,7 +69,9 @@ public static class AccreditationApplicationEndpoints
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
             siteAddress = org
-                ?.Registrations?.FirstOrDefault(r => r.SiteId == siteId && r.SiteAddress != null)
+                ?.Registrations?.FirstOrDefault(r =>
+                    r.Id.ToString() == registrationId && r.SiteAddress != null
+                )
                 ?.SiteAddress
                 is { } addr
                 ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
@@ -81,7 +83,7 @@ public static class AccreditationApplicationEndpoints
             OrganisationId = organisationId,
             OrganisationName = organisationName,
             Year = request.Year,
-            SiteId = siteId,
+            RegistrationId = registrationId,
             SiteAddress = siteAddress,
             RegistrationReference = registrationReference,
             MaterialType = materialTypeEnum,
@@ -120,7 +122,10 @@ public static class AccreditationApplicationEndpoints
         }
 
         var existing = (await persistence.GetByOrganisationAsync(organisationId)).FirstOrDefault(
-            a => a.SiteId == siteId && a.MaterialType == materialTypeEnum && a.Year == request.Year
+            a =>
+                a.RegistrationId == registrationId
+                && a.MaterialType == materialTypeEnum
+                && a.Year == request.Year
         );
         if (existing is not null)
             return Results.Ok(existing);
@@ -455,7 +460,7 @@ public static class AccreditationApplicationEndpoints
             OrganisationId = organisationId,
             MaterialType = application.MaterialType,
             Year = application.Year,
-            SiteId = application.SiteId,
+            SiteId = application.RegistrationId,
             ApplicationReference = application.ApplicationReference ?? string.Empty,
             Prns = application.Prns,
             BusinessPlan = application.BusinessPlan,

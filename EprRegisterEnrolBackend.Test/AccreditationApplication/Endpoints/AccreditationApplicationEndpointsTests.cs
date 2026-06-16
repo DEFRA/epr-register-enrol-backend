@@ -74,7 +74,7 @@ public class AccreditationApplicationEndpointsTests
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/org-123/site-1/Steel/seed",
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
             request,
             cancellationToken: TestContext.Current.CancellationToken
         );
@@ -111,7 +111,7 @@ public class AccreditationApplicationEndpointsTests
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/org-123/site-1/Steel/seed",
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
             request,
             cancellationToken: TestContext.Current.CancellationToken
         );
@@ -132,7 +132,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var request = new SeedRequest { Year = 2020 };
         var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/org-123/site-1/Steel/seed",
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
             request,
             cancellationToken: TestContext.Current.CancellationToken
         );
@@ -145,7 +145,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/org-123/site-1/Unknown/seed",
+            "/api/v1/accreditation-applications/org-123/reg-1/Unknown/seed",
             request,
             cancellationToken: TestContext.Current.CancellationToken
         );
@@ -166,7 +166,7 @@ public class AccreditationApplicationEndpointsTests
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/org-123/site-1/Steel/seed",
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
             request,
             cancellationToken: TestContext.Current.CancellationToken
         );
@@ -194,6 +194,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<int>()
             )
             .Returns(Task.FromResult<ReExAccreditationDto?>(null));
+        var registrationObjectId = ObjectId.Parse("aaaaaaaaaaaaaaaaaaaaaaaa");
         _factory
             .MockOrganisationPersistence.GetByOrgIdAsync(42)
             .Returns(
@@ -206,10 +207,10 @@ public class AccreditationApplicationEndpointsTests
                         [
                             new RegistrationModel
                             {
+                                Id = registrationObjectId,
                                 Status = "Active",
                                 Material = "Plastic",
                                 WasteProcessingType = "Reprocessor",
-                                SiteId = "site-1",
                                 SiteAddress = new SiteAddressModel
                                 {
                                     Line1 = "1 Factory Lane",
@@ -224,7 +225,7 @@ public class AccreditationApplicationEndpointsTests
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/42/site-1/Plastic/seed",
+            $"/api/v1/accreditation-applications/42/{registrationObjectId}/Plastic/seed",
             request,
             cancellationToken: TestContext.Current.CancellationToken
         );
@@ -251,7 +252,7 @@ public class AccreditationApplicationEndpointsTests
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/org-123/site-1/Steel/seed",
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
             request,
             cancellationToken: TestContext.Current.CancellationToken
         );
