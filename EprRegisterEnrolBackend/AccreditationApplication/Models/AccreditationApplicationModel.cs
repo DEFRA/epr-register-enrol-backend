@@ -22,6 +22,8 @@ public class AccreditationApplicationModel
 
     public string? RegistrationId { get; set; }
 
+    public bool IsExporter { get; set; }
+
     public string? SiteAddress { get; set; }
 
     [BsonRepresentation(BsonType.String)]

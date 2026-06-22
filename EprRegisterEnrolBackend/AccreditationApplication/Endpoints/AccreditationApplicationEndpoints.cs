@@ -63,17 +63,21 @@ public static class AccreditationApplicationEndpoints
         string? organisationName = null;
         string? siteAddress = null;
         string? registrationReference = null;
+        var isExporter = false;
         if (int.TryParse(organisationId, out var orgIdInt))
         {
             var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
-            siteAddress = org
-                ?.Registrations?.FirstOrDefault(r =>
-                    r.Id.ToString() == registrationId && r.SiteAddress != null
-                )
-                ?.SiteAddress
-                is { } addr
+            var registration = org?.Registrations?.FirstOrDefault(r =>
+                r.Id.ToString() == registrationId
+            );
+            isExporter =
+                registration?.WasteProcessingType?.Equals(
+                    "exporter",
+                    StringComparison.OrdinalIgnoreCase
+                ) == true;
+            siteAddress = registration?.SiteAddress is { } addr
                 ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
                 : null;
         }
@@ -84,6 +88,7 @@ public static class AccreditationApplicationEndpoints
             OrganisationName = organisationName,
             Year = request.Year,
             RegistrationId = registrationId,
+            IsExporter = isExporter,
             SiteAddress = siteAddress,
             RegistrationReference = registrationReference,
             MaterialType = materialTypeEnum,
@@ -316,7 +321,6 @@ public static class AccreditationApplicationEndpoints
         SubmitRequest request,
         IAccreditationApplicationPersistence persistence,
         ICaseWorkingApiAdapter caseWorkingAdapter,
-        IApplicationReferenceService referenceService,
         IValidator<SubmitRequest> validator,
         CancellationToken cancellationToken
     )
@@ -346,7 +350,6 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest("All sections must be completed before submission.");
         }
 
-        application.ApplicationReference = referenceService.Generate(application.Year);
         application.ApplicationStatus = ApplicationStatus.Sent;
         application.DateSent = DateTime.UtcNow;
         application.DateLastEdited = DateTime.UtcNow;
@@ -358,7 +361,10 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        await caseWorkingAdapter.SubmitApplicationAsync(application, cancellationToken);
+        application.ApplicationReference = await caseWorkingAdapter.SubmitApplicationAsync(
+            application,
+            cancellationToken
+        );
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
