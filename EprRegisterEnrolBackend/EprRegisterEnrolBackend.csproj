@@ -33,5 +33,9 @@
     <Folder Include="Utils\Mongo\Scripts\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="EprRegisterEnrolBackend.Test" />
+  </ItemGroup>
+
 
 </Project>

@@ -105,8 +105,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IAccreditationApplicationPersistence,
         AccreditationApplicationPersistence
     >();
-    builder.Services.AddSingleton<IApplicationReferenceService, ApplicationReferenceService>();
-
     // File Uploads
     builder.Services.AddSingleton<IFileUploadPersistence, FileUploadPersistence>();
     builder.Services.Configure<S3Config>(builder.Configuration.GetSection("S3"));
@@ -118,15 +116,27 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<ICdpUploaderService, CdpUploaderService>();
     builder.Services.AddSingleton<IPendingUploadService, PendingUploadService>();
 
-    // TODO: replace stubs with real HTTP adapters once the ReEx and CaseWorking API contracts are defined.
+    // TODO: replace stub with real HTTP adapter once the ReEx API contract is defined.
     builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
-    builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+
+    // CaseWorking: config-driven stub/real switch (default: stub).
+    builder.Services.Configure<CaseWorkingApiConfig>(
+        builder.Configuration.GetSection("CaseWorking")
+    );
+    var caseWorkingConfig =
+        builder.Configuration.GetSection("CaseWorking").Get<CaseWorkingApiConfig>()
+        ?? new CaseWorkingApiConfig();
+    if (caseWorkingConfig.UseStub)
+        builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+    else
+        builder.Services.AddSingleton<ICaseWorkingApiAdapter, HttpCaseWorkingApiAdapter>();
 
     // ReEx API client (org + overseas-sites)
     builder.Services.AddReExClients(builder.Configuration);
 
     if (builder.Environment.IsDevelopment())
     {
+        builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
         builder.Services.AddSingleton<OrganisationPersistence>();

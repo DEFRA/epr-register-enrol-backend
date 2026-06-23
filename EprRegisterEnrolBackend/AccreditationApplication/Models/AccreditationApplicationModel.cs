@@ -22,6 +22,8 @@ public class AccreditationApplicationModel
 
     public string? RegistrationId { get; set; }
 
+    public bool IsExporter { get; set; }
+
     public string? SiteAddress { get; set; }
 
     [BsonRepresentation(BsonType.String)]
@@ -53,6 +55,10 @@ public class AccreditationApplicationModel
     public AccreditationApplicationBusinessPlan BusinessPlan { get; set; } = new();
 
     public AccreditationApplicationSamplingPlan SamplingPlan { get; set; } = new();
+
+    public AccreditationApplicationOverseasSites? OverseasSites { get; set; }
+
+    public AccreditationApplicationBesEvidence? BesEvidence { get; set; }
 }
 
 public class SubmittedByModel
@@ -69,7 +75,7 @@ public enum ApplicationStatus
     Started,
     Sent,
     Approved,
-    Rejected
+    Rejected,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -77,5 +83,5 @@ public enum SectionStatus
 {
     NotStarted,
     InProgress,
-    Completed
+    Completed,
 }

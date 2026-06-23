@@ -444,7 +444,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult("RA-123456789"));
 
         var request = new SubmitRequest
         {
@@ -463,7 +463,7 @@ public class AccreditationApplicationEndpointsTests
             JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.AccreditationReference.Should().MatchRegex(@"^EPR-ACC-2026-[A-Z0-9]{7}$");
+        body!.AccreditationReference.Should().Be("RA-123456789");
         await _factory
             .MockCaseWorkingAdapter.Received(1)
             .SubmitApplicationAsync(
@@ -499,7 +499,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication(
             status: ApplicationStatus.Sent,
-            configure: a => a.ApplicationReference = "EPR-ACC-2026-ABC1234"
+            configure: a => a.ApplicationReference = "RA-123456789"
         );
 
         var request = new SubmitRequest
@@ -519,7 +519,7 @@ public class AccreditationApplicationEndpointsTests
             JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.AccreditationReference.Should().Be("EPR-ACC-2026-ABC1234");
+        body!.AccreditationReference.Should().Be("RA-123456789");
         await _factory
             .MockCaseWorkingAdapter.DidNotReceive()
             .SubmitApplicationAsync(
@@ -588,7 +588,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromException(new HttpRequestException("adapter unavailable")));
+            .Returns(Task.FromException<string>(new HttpRequestException("adapter unavailable")));
 
         var request = new SubmitRequest
         {
@@ -619,7 +619,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication(
             status: ApplicationStatus.Sent,
-            configure: a => a.ApplicationReference = "EPR-ACC-2026-ABC1234"
+            configure: a => a.ApplicationReference = "RA-123456789"
         );
         _factory
             .MockReExAdapter.WriteApprovedAccreditationAsync(
@@ -690,14 +690,14 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication(
             status: ApplicationStatus.Sent,
-            configure: a => a.ApplicationReference = "EPR-ACC-2026-ABC1234"
+            configure: a => a.ApplicationReference = "RA-123456789"
         );
         _factory
             .MockReExAdapter.WriteApprovedAccreditationAsync(
                 Arg.Any<ApprovedAccreditationDto>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromException(new HttpRequestException("adapter unavailable")));
+            .Returns(Task.FromException<string>(new HttpRequestException("adapter unavailable")));
 
         var response = await _client.PostAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",

@@ -49,6 +49,14 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
         );
     }
 
+    public IReadOnlyList<string> GetPendingUploadIds()
+    {
+        return _uploads
+            .Where(kvp => kvp.Value.Status == FileProcessingStatus.Preprocessing)
+            .Select(kvp => kvp.Key)
+            .ToList();
+    }
+
     public CdpStatusResponse GetStatus(string fileUploadId)
     {
         if (!_uploads.TryGetValue(fileUploadId, out var upload))
