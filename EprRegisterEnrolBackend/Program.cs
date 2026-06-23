@@ -131,6 +131,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
 
     if (builder.Environment.IsDevelopment())
     {
+        builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
         builder.Services.AddSingleton<OrganisationPersistence>();
