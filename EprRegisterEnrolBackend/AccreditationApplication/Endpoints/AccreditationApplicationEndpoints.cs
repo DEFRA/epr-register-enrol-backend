@@ -23,6 +23,7 @@ public static class AccreditationApplicationEndpoints
         group.MapPatch("{organisationId}/{applicationId}/tonnage", PatchTonnage);
         group.MapPatch("{organisationId}/{applicationId}/business-plan", PatchBusinessPlan);
         group.MapPatch("{organisationId}/{applicationId}/sampling-plan", PatchSamplingPlan);
+        group.MapPatch("{organisationId}/{applicationId}/overseas-sites", PatchOverseasSites);
         group.MapPost("{organisationId}/{applicationId}/submit", Submit);
         group.MapPost("{organisationId}/{applicationId}/files", AddFile);
         group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile);
@@ -63,6 +64,7 @@ public static class AccreditationApplicationEndpoints
         string? organisationName = null;
         string? siteAddress = null;
         string? registrationReference = null;
+        List<string>? overseasSiteIds = null;
         var isExporter = false;
         if (int.TryParse(organisationId, out var orgIdInt))
         {
@@ -72,6 +74,7 @@ public static class AccreditationApplicationEndpoints
             var registration = org?.Registrations?.FirstOrDefault(r =>
                 r.Id.ToString() == registrationId
             );
+            overseasSiteIds = registration?.OverseasSites;
             isExporter =
                 registration?.WasteProcessingType?.Equals(
                     "exporter",
@@ -95,6 +98,12 @@ public static class AccreditationApplicationEndpoints
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData?.AccreditationId,
             SourceYear = priorYearData != null ? request.Year - 1 : null,
+            OverseasSites = isExporter
+                ? new AccreditationApplicationOverseasSites
+                {
+                    Sites = BuildStubOverseasSites(overseasSiteIds),
+                }
+                : null,
         };
 
         if (priorYearData != null)
@@ -312,6 +321,40 @@ public static class AccreditationApplicationEndpoints
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to update sampling plan section.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> PatchOverseasSites(
+        string organisationId,
+        string applicationId,
+        PatchOverseasSitesRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (application.OverseasSites is null)
+            application.OverseasSites = new AccreditationApplicationOverseasSites();
+
+        if (request.Sites != null)
+            application.OverseasSites.Sites = request.Sites;
+
+        application.OverseasSites.SectionStatus = application.OverseasSites.Sites.Any(s =>
+            s.Selected
+        )
+            ? SectionStatus.Completed
+            : SectionStatus.NotStarted;
+
+        application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update overseas sites.")
             : Results.Ok(updated);
     }
 
@@ -582,5 +625,32 @@ public static class AccreditationApplicationEndpoints
     {
         var status = pendingUploadService.GetStatus(fileUploadId);
         return Results.Ok(status);
+    }
+
+    // TODO: replace with real overseas site lookup from ReEx once contract is defined.
+    private static List<OverseasSiteModel> BuildStubOverseasSites(List<string>? registrationSiteIds)
+    {
+        if (registrationSiteIds is null || registrationSiteIds.Count == 0)
+            return [];
+
+        return registrationSiteIds
+            .Select(
+                (id, i) =>
+                    new OverseasSiteModel
+                    {
+                        SiteId = int.TryParse(id, out var parsed) ? parsed : 900001 + i,
+                        SiteName = $"Overseas Site {i + 1}",
+                        SiteAddress = $"Address {id}",
+                        Country = i switch
+                        {
+                            0 => "Germany",
+                            1 => "France",
+                            _ => "Netherlands",
+                        },
+                        IsEu = true,
+                        IsOecd = true,
+                    }
+            )
+            .ToList();
     }
 }

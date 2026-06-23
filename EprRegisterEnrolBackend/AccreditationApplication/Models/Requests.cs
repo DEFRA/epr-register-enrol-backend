@@ -42,6 +42,11 @@ public class PatchSamplingPlanRequest
     public List<AccreditationApplicationFile>? Files { get; set; }
 }
 
+public class PatchOverseasSitesRequest
+{
+    public List<OverseasSiteModel>? Sites { get; set; }
+}
+
 public class SubmitRequest
 {
     public required string FullName { get; set; }
