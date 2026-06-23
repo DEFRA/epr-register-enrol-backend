@@ -1,0 +1,211 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace EprRegisterEnrolBackend.ReEx.Dtos;
+
+public class OrganisationDto
+{
+    public string? Id { get; init; }
+    public int SchemaVersion { get; init; }
+    public string? OrgId { get; init; }
+    public JsonElement? FormSubmission { get; init; }
+    public List<string> WasteProcessingTypes { get; init; } = [];
+    public List<string> ReprocessingNations { get; init; } = [];
+    public string? BusinessType { get; init; }
+    public CompanyDetailsDto? CompanyDetails { get; init; }
+    public ContactDetailsDto? SubmitterContactDetails { get; init; }
+    public ContactDetailsDto? ManagementContactDetails { get; init; }
+    public bool? SubmittedToRegulator { get; init; }
+    public List<RegistrationBaseDto> Registrations { get; init; } = [];
+    public List<AccreditationDto> Accreditations { get; init; } = [];
+}
+
+public class CompanyDetailsDto
+{
+    public string? Name { get; init; }
+    public string? TradingName { get; init; }
+    public string? RegistrationNumber { get; init; }
+    public RegisteredAddressDto? RegisteredAddress { get; init; }
+}
+
+public class RegisteredAddressDto
+{
+    public string? Line1 { get; init; }
+    public string? Line2 { get; init; }
+    public string? Town { get; init; }
+    public string? County { get; init; }
+    public string? Country { get; init; }
+    public string? Postcode { get; init; }
+}
+
+public class ContactDetailsDto
+{
+    public string? FullName { get; init; }
+    public string? Email { get; init; }
+    public string? Phone { get; init; }
+    public string? Role { get; init; }
+    public string? Title { get; init; }
+}
+
+/// <summary>
+/// Base registration DTO. Polymorphic on wasteProcessingType: "reprocessor" → ReprocessorRegistrationDto,
+/// "exporter" → ExporterRegistrationDto. Unknown values fall back to this base class.
+/// </summary>
+[JsonPolymorphic(
+    TypeDiscriminatorPropertyName = "wasteProcessingType",
+    IgnoreUnrecognizedTypeDiscriminators = true,
+    UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FallBackToNearestAncestor
+)]
+[JsonDerivedType(typeof(ReprocessorRegistrationDto), "reprocessor")]
+[JsonDerivedType(typeof(ExporterRegistrationDto), "exporter")]
+public class RegistrationBaseDto
+{
+    public string? Id { get; init; }
+    public string? AccreditationId { get; init; }
+    public NoticeAddressDto? NoticeAddress { get; init; }
+    public List<WasteManagementPermitDto> WasteManagementPermits { get; init; } = [];
+    // Present only when wasteProcessingType is glass (values: "glass_re_melt", "glass_other")
+    public List<string> GlassRecyclingProcess { get; init; } = [];
+}
+
+public class ReprocessorRegistrationDto : RegistrationBaseDto
+{
+    public SiteDto? Site { get; init; }
+    public List<YearlyMetricDto> YearlyMetrics { get; init; } = [];
+    public JsonElement? PlantEquipmentDetails { get; init; }
+    public string? ReprocessingType { get; init; }
+}
+
+public class ExporterRegistrationDto : RegistrationBaseDto
+{
+    public List<string> ExportPorts { get; init; } = [];
+    public List<FileUploadReferenceDto> OrsFileUploads { get; init; } = [];
+    // Keyed by a numeric-string site key matching the overseas-sites endpoint
+    public Dictionary<string, OverseasSiteRefDto> OverseasSites { get; init; } = [];
+}
+
+// ── Site (reprocessor) ───────────────────────────────────────────────────────
+
+public class SiteDto
+{
+    public SiteAddressDto? Address { get; init; }
+    public string? GridReference { get; init; }
+    public string? WasteRegistrationNumber { get; init; }
+}
+
+public class SiteAddressDto
+{
+    public string? Line1 { get; init; }
+    public string? Line2 { get; init; }
+    public string? Town { get; init; }
+    public string? County { get; init; }
+    public string? Country { get; init; }
+    public string? Postcode { get; init; }
+}
+
+public class YearlyMetricDto
+{
+    public string? Year { get; init; }
+    public string? Metric { get; init; }
+    public MetricInputDto? Input { get; init; }
+    public MetricOutputDto? Output { get; init; }
+}
+
+public class MetricInputDto
+{
+    public string? Type { get; init; }
+    public int? UkPackagingWaste { get; init; }
+    public int? NonUkPackagingWaste { get; init; }
+    public int? NonPackagingWaste { get; init; }
+}
+
+public class MetricOutputDto
+{
+    public string? Type { get; init; }
+    public int? SentToAnotherSite { get; init; }
+    public int? Contaminants { get; init; }
+    public int? ProcessLoss { get; init; }
+}
+
+// ── Shared address / permit types ────────────────────────────────────────────
+
+/// <summary>
+/// Polymorphic notice address. Reprocessor shape: Line1/Postcode/Town/Country.
+/// Exporter shape: FullAddress/Country. All fields nullable; only the relevant set is populated.
+/// </summary>
+public class NoticeAddressDto
+{
+    public string? Line1 { get; init; }
+    public string? Postcode { get; init; }
+    public string? Town { get; init; }
+    public string? FullAddress { get; init; }
+    public string? Country { get; init; }
+}
+
+/// <summary>
+/// Polymorphic permit. Standard permit: Type/PermitNumber/AuthorisedMaterials.
+/// Exemption: Type/Exemptions. Exporter: Type only.
+/// </summary>
+public class WasteManagementPermitDto
+{
+    public string? Type { get; init; }
+    public string? PermitNumber { get; init; }
+    public List<string> AuthorisedMaterials { get; init; } = [];
+    public List<ExemptionDto> Exemptions { get; init; } = [];
+}
+
+public class ExemptionDto
+{
+    public string? Reference { get; init; }
+    public string? ExemptionCode { get; init; }
+}
+
+// ── File uploads (exporter) ──────────────────────────────────────────────────
+
+public class FileUploadReferenceDto
+{
+    public string? FileId { get; init; }
+    public string? FileName { get; init; }
+    public string? ContentType { get; init; }
+}
+
+/// <summary>Registration-level overseas-site reference (key → overseasSiteId).</summary>
+public class OverseasSiteRefDto
+{
+    public string? OverseasSiteId { get; init; }
+}
+
+// ── Accreditation ────────────────────────────────────────────────────────────
+
+public class AccreditationDto
+{
+    public string? Id { get; init; }
+    public string? AccreditationNumber { get; init; }
+    public string? Status { get; init; }
+    public PrnIssuanceDto? PrnIssuance { get; init; }
+    // Shape varies; retained as raw JSON to avoid data loss
+    public JsonElement? Dates { get; init; }
+}
+
+public class PrnIssuanceDto
+{
+    public string? TonnageBand { get; init; }
+    public List<SignatoryDto> Signatories { get; init; } = [];
+    public List<IncomeBusinessPlanItemDto> IncomeBusinessPlan { get; init; } = [];
+}
+
+public class SignatoryDto
+{
+    public string? FullName { get; init; }
+    public string? Email { get; init; }
+}
+
+public class IncomeBusinessPlanItemDto
+{
+    public string? Description { get; init; }
+    public string? DetailedDescription { get; init; }
+    public int? PercentSpent { get; init; }
+    public int? PercentIncomeSpent { get; init; }
+    public string? UsageDescription { get; init; }
+    public string? DetailedExplanation { get; init; }
+}
