@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.ReEx;
+using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.CdpUploader.Config;
@@ -120,6 +122,9 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
     builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
 
+    // ReEx API client (org + overseas-sites)
+    builder.Services.AddReExClients(builder.Configuration);
+
     if (builder.Environment.IsDevelopment())
     {
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
@@ -159,6 +164,14 @@ static WebApplication SetupApplication(WebApplication app)
     if (string.IsNullOrWhiteSpace(s3Cfg.Region))
         startupLogger.LogWarning(
             "S3_REGION (S3:Region) is not configured — file downloads may fail at runtime."
+        );
+
+    var reExConfig = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ReExConfig>>()
+        .Value;
+    if (string.IsNullOrWhiteSpace(reExConfig.BaseUrl))
+        startupLogger.LogWarning(
+            "REEX_API_BASE_URL (ReExApi:BaseUrl) is not configured — ReEx API calls will fail at runtime."
         );
 
     app.UseExceptionHandler();
