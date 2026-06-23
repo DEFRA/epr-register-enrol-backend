@@ -24,6 +24,19 @@ public static class AccreditationApplicationEndpoints
         group.MapPatch("{organisationId}/{applicationId}/business-plan", PatchBusinessPlan);
         group.MapPatch("{organisationId}/{applicationId}/sampling-plan", PatchSamplingPlan);
         group.MapPatch("{organisationId}/{applicationId}/overseas-sites", PatchOverseasSites);
+        group.MapPost(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files",
+            AddBesEvidenceFile
+        );
+        group.MapPatch(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence",
+            PatchBesEvidence
+        );
+        group.MapDelete(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files/{fileId}",
+            DeleteBesEvidenceFile
+        );
+        group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection);
         group.MapPost("{organisationId}/{applicationId}/submit", Submit);
         group.MapPost("{organisationId}/{applicationId}/files", AddFile);
         group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile);
@@ -355,6 +368,120 @@ public static class AccreditationApplicationEndpoints
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to update overseas sites.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> AddBesEvidenceFile(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        AddBesEvidenceFileRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        site.BesEvidence ??= new BesEvidenceModel();
+        site.BesEvidence.BesEvidenceUploads.Add(
+            new BesEvidenceFileModel
+            {
+                FileId = request.FileId,
+                Filename = request.Filename,
+                ContentType = request.ContentType,
+                ScanStatus = request.ScanStatus,
+                BesEvidenceValidFromDate = request.BesEvidenceValidFromDate,
+                BesEvidenceExpiryDate = request.BesEvidenceExpiryDate,
+            }
+        );
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to add BES evidence file.")
+            : Results.Created(string.Empty, site.BesEvidence);
+    }
+
+    private static async Task<IResult> PatchBesEvidence(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PatchBesEvidenceRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        site.BesEvidence ??= new BesEvidenceModel();
+        if (request.DoYouWantToUploadMoreEvidence.HasValue)
+            site.BesEvidence.DoYouWantToUploadMoreEvidence = request
+                .DoYouWantToUploadMoreEvidence
+                .Value;
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update BES evidence.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> DeleteBesEvidenceFile(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        string fileId,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site?.BesEvidence is null)
+            return Results.NotFound();
+
+        var removed = site.BesEvidence.BesEvidenceUploads.RemoveAll(f => f.FileId == fileId);
+        if (removed == 0)
+            return Results.NotFound();
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to delete BES evidence file.")
+            : Results.Ok();
+    }
+
+    private static async Task<IResult> PatchBesEvidenceSection(
+        string organisationId,
+        string applicationId,
+        PatchBesEvidenceSectionRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        application.BesEvidence ??= new AccreditationApplicationBesEvidence();
+        if (request.SectionStatus.HasValue)
+            application.BesEvidence.SectionStatus = request.SectionStatus.Value;
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update BES evidence section.")
             : Results.Ok(updated);
     }
 

@@ -57,6 +57,8 @@ public class AccreditationApplicationModel
     public AccreditationApplicationSamplingPlan SamplingPlan { get; set; } = new();
 
     public AccreditationApplicationOverseasSites? OverseasSites { get; set; }
+
+    public AccreditationApplicationBesEvidence? BesEvidence { get; set; }
 }
 
 public class SubmittedByModel

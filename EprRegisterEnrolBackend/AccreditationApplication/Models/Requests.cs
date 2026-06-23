@@ -47,6 +47,26 @@ public class PatchOverseasSitesRequest
     public List<OverseasSiteModel>? Sites { get; set; }
 }
 
+public class AddBesEvidenceFileRequest
+{
+    public required string FileId { get; set; }
+    public required string Filename { get; set; }
+    public string? ContentType { get; set; }
+    public string? ScanStatus { get; set; }
+    public string? BesEvidenceValidFromDate { get; set; }
+    public string? BesEvidenceExpiryDate { get; set; }
+}
+
+public class PatchBesEvidenceRequest
+{
+    public bool? DoYouWantToUploadMoreEvidence { get; set; }
+}
+
+public class PatchBesEvidenceSectionRequest
+{
+    public SectionStatus? SectionStatus { get; set; }
+}
+
 public class SubmitRequest
 {
     public required string FullName { get; set; }
