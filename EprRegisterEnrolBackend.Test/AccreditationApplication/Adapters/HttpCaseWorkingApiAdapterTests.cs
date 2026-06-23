@@ -123,16 +123,16 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_SetsClientIdHeader()
+    public async Task SubmitApplicationAsync_SetsAuthHeaders()
     {
         var (adapter, handler) = CreateAdapter();
         await adapter.SubmitApplicationAsync(CreateTestApplication());
 
         handler.CapturedRequest.Should().NotBeNull();
-        handler
-            .CapturedRequest!.Headers.GetValues("x-cdp-cognito-client-id")
-            .Should()
-            .ContainSingle(TestClientId);
+        var request = handler.CapturedRequest!;
+        request.Headers.GetValues("x-cdp-cognito-client-id").Should().ContainSingle(TestClientId);
+        request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("jane@example.com");
+        request.Headers.GetValues("x-cdp-user-name").Should().ContainSingle("Jane Smith");
     }
 
     [Fact]
@@ -168,8 +168,8 @@ public class HttpCaseWorkingApiAdapterTests
         var expectedSignature = HttpCaseWorkingApiAdapter.ComputeSignature(
             secret,
             TestClientId,
-            null,
-            null,
+            "jane@example.com",
+            "Jane Smith",
             null,
             timestamp,
             nonce

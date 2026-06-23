@@ -50,7 +50,9 @@ public class HttpCaseWorkingApiAdapter(
             application.OrganisationId
         );
 
-        using var request = BuildRequest(endpoint, body);
+        var userId = application.SubmittedBy?.Email ?? application.OrganisationId;
+        var userName = application.SubmittedBy?.FullName;
+        using var request = BuildRequest(endpoint, body, userId, userName);
         var client = httpClientFactory.CreateClient("DefaultClient");
 
         HttpResponseMessage response;
@@ -139,7 +141,12 @@ public class HttpCaseWorkingApiAdapter(
             : null;
     }
 
-    private HttpRequestMessage BuildRequest(string url, CreateWorkItemRequest body)
+    private HttpRequestMessage BuildRequest(
+        string url,
+        CreateWorkItemRequest body,
+        string? userId = null,
+        string? userName = null
+    )
     {
         var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
@@ -148,6 +155,11 @@ public class HttpCaseWorkingApiAdapter(
 
         request.Headers.Add("x-cdp-cognito-client-id", _config.CognitoClientId);
 
+        if (!string.IsNullOrEmpty(userId))
+            request.Headers.Add("x-cdp-user-id", userId);
+        if (!string.IsNullOrEmpty(userName))
+            request.Headers.Add("x-cdp-user-name", userName);
+
         if (!string.IsNullOrEmpty(_config.SharedSecret))
         {
             var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
@@ -155,8 +167,8 @@ public class HttpCaseWorkingApiAdapter(
             var signature = ComputeSignature(
                 _config.SharedSecret,
                 _config.CognitoClientId,
-                null,
-                null,
+                userId,
+                userName,
                 null,
                 timestamp,
                 nonce
