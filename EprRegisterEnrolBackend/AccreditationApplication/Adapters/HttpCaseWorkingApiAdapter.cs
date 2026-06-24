@@ -37,7 +37,7 @@ public class HttpCaseWorkingApiAdapter(
         var body = new CreateWorkItemRequest
         {
             TypeId = "re-accreditation",
-            Source = "epr-register-enrol-backend",
+            Source = "operator-fe",
             Payload = BuildPayload(application),
         };
 
