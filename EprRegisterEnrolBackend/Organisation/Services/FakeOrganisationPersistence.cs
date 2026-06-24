@@ -302,7 +302,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                             Town = "Bristol",
                             Postcode = "BS1 4DJ",
                         },
-                        OverseasSites = ["900001", "900002", "900003"],
+                        OverseasSites = ["900001", "900002", "900003", "900004"],
                     },
                 ],
             }

@@ -755,6 +755,14 @@ public static class AccreditationApplicationEndpoints
     }
 
     // TODO: replace with real overseas site lookup from ReEx once contract is defined.
+    private static readonly (string Country, bool IsEu, bool IsOecd)[] StubSiteData =
+    [
+        ("Germany", true, true),
+        ("France", true, true),
+        ("Japan", false, true),
+        ("Vietnam", false, false),
+    ];
+
     private static List<OverseasSiteModel> BuildStubOverseasSites(List<string>? registrationSiteIds)
     {
         if (registrationSiteIds is null || registrationSiteIds.Count == 0)
@@ -763,20 +771,21 @@ public static class AccreditationApplicationEndpoints
         return registrationSiteIds
             .Select(
                 (id, i) =>
-                    new OverseasSiteModel
+                {
+                    var data =
+                        i < StubSiteData.Length
+                            ? StubSiteData[i]
+                            : (Country: "Unknown", IsEu: false, IsOecd: false);
+                    return new OverseasSiteModel
                     {
                         SiteId = int.TryParse(id, out var parsed) ? parsed : 900001 + i,
-                        SiteName = $"Overseas Site {i + 1}",
+                        SiteName = $"Overseas Site {i + 1} ({data.Country})",
                         SiteAddress = $"Address {id}",
-                        Country = i switch
-                        {
-                            0 => "Germany",
-                            1 => "France",
-                            _ => "Netherlands",
-                        },
-                        IsEu = true,
-                        IsOecd = true,
-                    }
+                        Country = data.Country,
+                        IsEu = data.IsEu,
+                        IsOecd = data.IsOecd,
+                    };
+                }
             )
             .ToList();
     }
