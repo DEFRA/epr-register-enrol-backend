@@ -444,7 +444,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult<string?>(null));
 
         var request = new SubmitRequest
         {
@@ -588,7 +588,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromException(new HttpRequestException("adapter unavailable")));
+            .Returns(Task.FromException<string?>(new HttpRequestException("adapter unavailable")));
 
         var request = new SubmitRequest
         {
@@ -697,7 +697,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<ApprovedAccreditationDto>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromException(new HttpRequestException("adapter unavailable")));
+            .Returns(Task.FromException<string?>(new HttpRequestException("adapter unavailable")));
 
         var response = await _client.PostAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",

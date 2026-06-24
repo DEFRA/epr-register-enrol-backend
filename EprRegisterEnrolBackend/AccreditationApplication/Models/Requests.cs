@@ -52,6 +52,12 @@ public class SubmitRequest
 public record SubmitResponse
 {
     public string? AccreditationReference { get; init; }
+
+    /// <summary>
+    /// Reference assigned by the case management service (RA-XXXXXXXXX).
+    /// Null if the case management backend did not return a reference (e.g. stub mode).
+    /// </summary>
+    public string? CaseManagementReference { get; init; }
 }
 
 public class FileUploadRequest

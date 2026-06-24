@@ -116,9 +116,16 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<ICdpUploaderService, CdpUploaderService>();
     builder.Services.AddSingleton<IPendingUploadService, PendingUploadService>();
 
-    // TODO: replace stubs with real HTTP adapters once the ReEx and CaseWorking API contracts are defined.
+    // TODO: replace stub with real HTTP adapter once the ReEx API contract is defined.
     builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
-    builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+
+    builder.Services.Configure<CaseWorkingApiConfig>(builder.Configuration.GetSection("CaseWorkingApi"));
+    builder.Services.AddHttpClient<ICaseWorkingApiAdapter, HttpCaseWorkingApiAdapter>((_, client) =>
+    {
+        var baseUrl = builder.Configuration["CaseWorkingApi:BaseUrl"];
+        if (!string.IsNullOrWhiteSpace(baseUrl))
+            client.BaseAddress = new Uri(baseUrl);
+    });
 
     if (builder.Environment.IsDevelopment())
     {

@@ -330,9 +330,11 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
 
         if (application.ApplicationStatus == ApplicationStatus.Sent)
-            return Results.Ok(
-                new SubmitResponse { AccreditationReference = application.ApplicationReference }
-            );
+            return Results.Ok(new SubmitResponse
+            {
+                AccreditationReference = application.ApplicationReference,
+                CaseManagementReference = application.CaseManagementReference
+            });
 
         if (application.ApplicationStatus != ApplicationStatus.Started)
             return Results.Conflict("Application must be in 'Started' status to submit.");
@@ -358,14 +360,16 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        await caseWorkingAdapter.SubmitApplicationAsync(application, cancellationToken);
+        application.CaseManagementReference = await caseWorkingAdapter.SubmitApplicationAsync(application, cancellationToken);
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to submit accreditation application.")
-            : Results.Ok(
-                new SubmitResponse { AccreditationReference = updated.ApplicationReference }
-            );
+            : Results.Ok(new SubmitResponse
+            {
+                AccreditationReference = updated.ApplicationReference,
+                CaseManagementReference = updated.CaseManagementReference
+            });
     }
 
     private static async Task<IResult> AddFile(
