@@ -36,20 +36,6 @@ public class HttpCaseWorkingApiAdapterTests
         };
     }
 
-    private static JsonElement CreateSuccessPayload(string applicationReference = "RA-123456789")
-    {
-        var json = JsonSerializer.Serialize(
-            new
-            {
-                id = Guid.NewGuid(),
-                typeId = "re-accreditation",
-                stateId = "submitted",
-                payload = new { applicationReference },
-            }
-        );
-        return JsonDocument.Parse(json).RootElement;
-    }
-
     private static (
         HttpCaseWorkingApiAdapter adapter,
         CapturingHttpMessageHandler handler
@@ -75,7 +61,7 @@ public class HttpCaseWorkingApiAdapterTests
                 id = Guid.NewGuid(),
                 typeId = "re-accreditation",
                 stateId = "submitted",
-                payload = new { applicationReference = "RA-123456789" },
+                payload = new { },
             }
         );
 
@@ -96,7 +82,7 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var (adapter, _) = CreateAdapter();
         var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
-        result.Should().Be("RA-123456789");
+        result.Should().MatchRegex(@"^RA-\d{9}$");
     }
 
     [Fact]
@@ -214,33 +200,29 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_MissingApplicationReference_ThrowsInvalidOperationException()
+    public async Task SubmitApplicationAsync_IncludesApplicationReferenceInRequest()
     {
-        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
-        var handler = new CapturingHttpMessageHandler(
-            HttpStatusCode.Created,
-            new
-            {
-                id = Guid.NewGuid(),
-                typeId = "re-accreditation",
-                stateId = "submitted",
-                payload = new { someOtherField = "no-ref-here" },
-            }
-        );
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(CreateTestApplication());
 
-        var httpClientFactory = Substitute.For<IHttpClientFactory>();
-        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        doc.RootElement
+            .GetProperty("applicationReference")
+            .GetString()
+            .Should()
+            .MatchRegex(@"^RA-\d{9}$");
+    }
 
-        var adapter = new HttpCaseWorkingApiAdapter(
-            httpClientFactory,
-            config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
-        );
+    [Fact]
+    public async Task SubmitApplicationAsync_ReturnedReferenceMatchesSentToManagementBe()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
 
-        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
-        await act.Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("*applicationReference*");
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var sent = doc.RootElement.GetProperty("applicationReference").GetString();
+
+        result.Should().Be(sent);
     }
 
     [Fact]
