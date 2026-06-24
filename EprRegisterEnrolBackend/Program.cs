@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.ReEx;
+using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.CdpUploader.Config;
@@ -103,8 +105,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IAccreditationApplicationPersistence,
         AccreditationApplicationPersistence
     >();
-    builder.Services.AddSingleton<IApplicationReferenceService, ApplicationReferenceService>();
-
     // File Uploads
     builder.Services.AddSingleton<IFileUploadPersistence, FileUploadPersistence>();
     builder.Services.Configure<S3Config>(builder.Configuration.GetSection("S3"));
@@ -119,16 +119,24 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // TODO: replace stub with real HTTP adapter once the ReEx API contract is defined.
     builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
 
-    builder.Services.Configure<CaseWorkingApiConfig>(builder.Configuration.GetSection("CaseWorkingApi"));
-    builder.Services.AddHttpClient<ICaseWorkingApiAdapter, HttpCaseWorkingApiAdapter>((_, client) =>
-    {
-        var baseUrl = builder.Configuration["CaseWorkingApi:BaseUrl"];
-        if (!string.IsNullOrWhiteSpace(baseUrl))
-            client.BaseAddress = new Uri(baseUrl);
-    });
+    // CaseWorking: config-driven stub/real switch (default: stub).
+    builder.Services.Configure<CaseWorkingApiConfig>(
+        builder.Configuration.GetSection("CaseWorking")
+    );
+    var caseWorkingConfig =
+        builder.Configuration.GetSection("CaseWorking").Get<CaseWorkingApiConfig>()
+        ?? new CaseWorkingApiConfig();
+    if (caseWorkingConfig.UseStub)
+        builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
+    else
+        builder.Services.AddSingleton<ICaseWorkingApiAdapter, HttpCaseWorkingApiAdapter>();
+
+    // ReEx API client (org + overseas-sites)
+    builder.Services.AddReExClients(builder.Configuration);
 
     if (builder.Environment.IsDevelopment())
     {
+        builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
         builder.Services.AddSingleton<OrganisationPersistence>();
@@ -166,6 +174,14 @@ static WebApplication SetupApplication(WebApplication app)
     if (string.IsNullOrWhiteSpace(s3Cfg.Region))
         startupLogger.LogWarning(
             "S3_REGION (S3:Region) is not configured — file downloads may fail at runtime."
+        );
+
+    var reExConfig = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ReExConfig>>()
+        .Value;
+    if (string.IsNullOrWhiteSpace(reExConfig.BaseUrl))
+        startupLogger.LogWarning(
+            "REEX_API_BASE_URL (ReExApi:BaseUrl) is not configured — ReEx API calls will fail at runtime."
         );
 
     app.UseExceptionHandler();

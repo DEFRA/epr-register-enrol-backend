@@ -23,6 +23,20 @@ public static class AccreditationApplicationEndpoints
         group.MapPatch("{organisationId}/{applicationId}/tonnage", PatchTonnage);
         group.MapPatch("{organisationId}/{applicationId}/business-plan", PatchBusinessPlan);
         group.MapPatch("{organisationId}/{applicationId}/sampling-plan", PatchSamplingPlan);
+        group.MapPatch("{organisationId}/{applicationId}/overseas-sites", PatchOverseasSites);
+        group.MapPost(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files",
+            AddBesEvidenceFile
+        );
+        group.MapPatch(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence",
+            PatchBesEvidence
+        );
+        group.MapDelete(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files/{fileId}",
+            DeleteBesEvidenceFile
+        );
+        group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection);
         group.MapPost("{organisationId}/{applicationId}/submit", Submit);
         group.MapPost("{organisationId}/{applicationId}/files", AddFile);
         group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile);
@@ -63,17 +77,23 @@ public static class AccreditationApplicationEndpoints
         string? organisationName = null;
         string? siteAddress = null;
         string? registrationReference = null;
+        List<string>? overseasSiteIds = null;
+        var isExporter = false;
         if (int.TryParse(organisationId, out var orgIdInt))
         {
             var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
-            siteAddress = org
-                ?.Registrations?.FirstOrDefault(r =>
-                    r.Id.ToString() == registrationId && r.SiteAddress != null
-                )
-                ?.SiteAddress
-                is { } addr
+            var registration = org?.Registrations?.FirstOrDefault(r =>
+                r.Id.ToString() == registrationId
+            );
+            overseasSiteIds = registration?.OverseasSites;
+            isExporter =
+                registration?.WasteProcessingType?.Equals(
+                    "exporter",
+                    StringComparison.OrdinalIgnoreCase
+                ) == true;
+            siteAddress = registration?.SiteAddress is { } addr
                 ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
                 : null;
         }
@@ -84,12 +104,19 @@ public static class AccreditationApplicationEndpoints
             OrganisationName = organisationName,
             Year = request.Year,
             RegistrationId = registrationId,
+            IsExporter = isExporter,
             SiteAddress = siteAddress,
             RegistrationReference = registrationReference,
             MaterialType = materialTypeEnum,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData?.AccreditationId,
             SourceYear = priorYearData != null ? request.Year - 1 : null,
+            OverseasSites = isExporter
+                ? new AccreditationApplicationOverseasSites
+                {
+                    Sites = BuildStubOverseasSites(overseasSiteIds),
+                }
+                : null,
         };
 
         if (priorYearData != null)
@@ -310,13 +337,160 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(updated);
     }
 
+    private static async Task<IResult> PatchOverseasSites(
+        string organisationId,
+        string applicationId,
+        PatchOverseasSitesRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (application.OverseasSites is null)
+            application.OverseasSites = new AccreditationApplicationOverseasSites();
+
+        if (request.Sites != null)
+            application.OverseasSites.Sites = request.Sites;
+
+        application.OverseasSites.SectionStatus = application.OverseasSites.Sites.Any(s =>
+            s.Selected
+        )
+            ? SectionStatus.Completed
+            : SectionStatus.NotStarted;
+
+        application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update overseas sites.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> AddBesEvidenceFile(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        AddBesEvidenceFileRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        site.BesEvidence ??= new BesEvidenceModel();
+        site.BesEvidence.BesEvidenceUploads.Add(
+            new BesEvidenceFileModel
+            {
+                FileId = request.FileId,
+                Filename = request.Filename,
+                ContentType = request.ContentType,
+                ScanStatus = request.ScanStatus,
+                BesEvidenceValidFromDate = request.BesEvidenceValidFromDate,
+                BesEvidenceExpiryDate = request.BesEvidenceExpiryDate,
+            }
+        );
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to add BES evidence file.")
+            : Results.Created(string.Empty, site.BesEvidence);
+    }
+
+    private static async Task<IResult> PatchBesEvidence(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PatchBesEvidenceRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        site.BesEvidence ??= new BesEvidenceModel();
+        if (request.DoYouWantToUploadMoreEvidence.HasValue)
+            site.BesEvidence.DoYouWantToUploadMoreEvidence = request
+                .DoYouWantToUploadMoreEvidence
+                .Value;
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update BES evidence.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> DeleteBesEvidenceFile(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        string fileId,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site?.BesEvidence is null)
+            return Results.NotFound();
+
+        var removed = site.BesEvidence.BesEvidenceUploads.RemoveAll(f => f.FileId == fileId);
+        if (removed == 0)
+            return Results.NotFound();
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to delete BES evidence file.")
+            : Results.Ok();
+    }
+
+    private static async Task<IResult> PatchBesEvidenceSection(
+        string organisationId,
+        string applicationId,
+        PatchBesEvidenceSectionRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        application.BesEvidence ??= new AccreditationApplicationBesEvidence();
+        if (request.SectionStatus.HasValue)
+            application.BesEvidence.SectionStatus = request.SectionStatus.Value;
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update BES evidence section.")
+            : Results.Ok(updated);
+    }
+
     private static async Task<IResult> Submit(
         string organisationId,
         string applicationId,
         SubmitRequest request,
         IAccreditationApplicationPersistence persistence,
         ICaseWorkingApiAdapter caseWorkingAdapter,
-        IApplicationReferenceService referenceService,
         IValidator<SubmitRequest> validator,
         CancellationToken cancellationToken
     )
@@ -348,7 +522,6 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest("All sections must be completed before submission.");
         }
 
-        application.ApplicationReference = referenceService.Generate(application.Year);
         application.ApplicationStatus = ApplicationStatus.Sent;
         application.DateSent = DateTime.UtcNow;
         application.DateLastEdited = DateTime.UtcNow;
@@ -360,7 +533,10 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        application.CaseManagementReference = await caseWorkingAdapter.SubmitApplicationAsync(application, cancellationToken);
+        application.ApplicationReference = await caseWorkingAdapter.SubmitApplicationAsync(
+            application,
+            cancellationToken
+        );
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
@@ -580,5 +756,41 @@ public static class AccreditationApplicationEndpoints
     {
         var status = pendingUploadService.GetStatus(fileUploadId);
         return Results.Ok(status);
+    }
+
+    // TODO: replace with real overseas site lookup from ReEx once contract is defined.
+    private static readonly (string Country, bool IsEu, bool IsOecd)[] StubSiteData =
+    [
+        ("Germany", true, true),
+        ("France", true, true),
+        ("Japan", false, true),
+        ("Vietnam", false, false),
+    ];
+
+    private static List<OverseasSiteModel> BuildStubOverseasSites(List<string>? registrationSiteIds)
+    {
+        if (registrationSiteIds is null || registrationSiteIds.Count == 0)
+            return [];
+
+        return registrationSiteIds
+            .Select(
+                (id, i) =>
+                {
+                    var data =
+                        i < StubSiteData.Length
+                            ? StubSiteData[i]
+                            : (Country: "Unknown", IsEu: false, IsOecd: false);
+                    return new OverseasSiteModel
+                    {
+                        SiteId = int.TryParse(id, out var parsed) ? parsed : 900001 + i,
+                        SiteName = $"Overseas Site {i + 1} ({data.Country})",
+                        SiteAddress = $"Address {id}",
+                        Country = data.Country,
+                        IsEu = data.IsEu,
+                        IsOecd = data.IsOecd,
+                    };
+                }
+            )
+            .ToList();
     }
 }
