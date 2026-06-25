@@ -533,10 +533,12 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        application.ApplicationReference = await caseWorkingAdapter.SubmitApplicationAsync(
+        var caseRef = await caseWorkingAdapter.SubmitApplicationAsync(
             application,
             cancellationToken
         );
+        application.ApplicationReference = caseRef;
+        application.CaseManagementReference = caseRef;
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
