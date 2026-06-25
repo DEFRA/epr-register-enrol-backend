@@ -86,7 +86,7 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_MapsPayloadCorrectly()
+    public async Task SubmitApplicationAsync_MapsHookCompatibilityFields()
     {
         var (adapter, handler) = CreateAdapter();
         await adapter.SubmitApplicationAsync(CreateTestApplication());
@@ -106,6 +106,36 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("complianceIssuesReported").GetInt32().Should().Be(0);
         payload.GetProperty("operatorEmail").GetString().Should().Be("jane@example.com");
         payload.GetProperty("siteAddressPostcode").GetString().Should().Be("SW1A 1AA");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_IncludesFullApplicationDocument()
+    {
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var app = doc.RootElement.GetProperty("payload").GetProperty("application");
+
+        app.GetProperty("organisationId").GetString().Should().Be("12345");
+        app.GetProperty("organisationName").GetString().Should().Be("Acme Recycling Ltd");
+        app.GetProperty("year").GetInt32().Should().Be(2026);
+        app.GetProperty("materialType").GetString().Should().Be("Plastic");
+        app.GetProperty("siteAddress").GetString().Should().Be("123 High Street, London, SW1A 1AA");
+        app.GetProperty("isExporter").GetBoolean().Should().BeFalse();
+
+        var prns = app.GetProperty("prns");
+        prns.GetProperty("sectionStatus").GetString().Should().Be("NotStarted");
+
+        var bp = app.GetProperty("businessPlan");
+        bp.GetProperty("sectionStatus").GetString().Should().Be("NotStarted");
+
+        var sp = app.GetProperty("samplingPlan");
+        sp.GetProperty("sectionStatus").GetString().Should().Be("NotStarted");
+
+        var submittedBy = app.GetProperty("submittedBy");
+        submittedBy.GetProperty("fullName").GetString().Should().Be("Jane Smith");
+        submittedBy.GetProperty("email").GetString().Should().Be("jane@example.com");
     }
 
     [Fact]

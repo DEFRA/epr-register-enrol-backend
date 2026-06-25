@@ -37,13 +37,12 @@ public class HttpCaseWorkingApiAdapter(
         var suffix = RandomNumberGenerator.GetInt32(1_000_000_000);
         var applicationReference = $"RA-{suffix:D9}";
 
-        var payload = MapToPayload(application);
         var body = new CreateWorkItemRequest
         {
             TypeId = "re-accreditation",
-            Payload = payload,
             Source = "operator-fe",
             ApplicationReference = applicationReference,
+            Payload = BuildPayload(application),
         };
 
         var endpoint = $"{url.TrimEnd('/')}/work-items";
@@ -98,17 +97,21 @@ public class HttpCaseWorkingApiAdapter(
         return applicationReference;
     }
 
-    private static ReAccreditationPayloadDto MapToPayload(AccreditationApplicationModel application)
+    private static object BuildPayload(AccreditationApplicationModel application)
     {
-        return new ReAccreditationPayloadDto
+        return new
         {
-            OrganisationName = application.OrganisationName,
-            RegistrationNumber = application.RegistrationReference,
-            MaterialsHandled = [application.MaterialType.ToString().ToLowerInvariant()],
-            PreviousAccreditationYear = application.Year - 1,
-            ComplianceIssuesReported = 0,
-            OperatorEmail = application.SubmittedBy?.Email,
-            SiteAddressPostcode = ExtractPostcode(application.SiteAddress),
+            // Hook-compatibility fields (ManagementBe hooks read these specific keys)
+            organisationName = application.OrganisationName,
+            registrationNumber = application.RegistrationReference,
+            materialsHandled = new[] { application.MaterialType.ToString().ToLowerInvariant() },
+            previousAccreditationYear = application.Year - 1,
+            complianceIssuesReported = 0,
+            operatorEmail = application.SubmittedBy?.Email,
+            siteAddressPostcode = ExtractPostcode(application.SiteAddress),
+
+            // Full application document
+            application,
         };
     }
 
@@ -117,8 +120,13 @@ public class HttpCaseWorkingApiAdapter(
         if (string.IsNullOrWhiteSpace(siteAddress))
             return null;
 
-        var parts = siteAddress.Split(',');
-        return parts[^1].Trim();
+        var match = System.Text.RegularExpressions.Regex.Match(
+            siteAddress,
+            @"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.RightToLeft
+        );
+        return match.Success ? match.Value.ToUpperInvariant() : null;
     }
 
     private HttpRequestMessage BuildRequest(
@@ -198,17 +206,6 @@ public class HttpCaseWorkingApiAdapter(
         public required object Payload { get; init; }
         public string? Source { get; init; }
         public string? ApplicationReference { get; init; }
-    }
-
-    internal sealed class ReAccreditationPayloadDto
-    {
-        public string? OrganisationName { get; init; }
-        public string? RegistrationNumber { get; init; }
-        public List<string>? MaterialsHandled { get; init; }
-        public int? PreviousAccreditationYear { get; init; }
-        public int ComplianceIssuesReported { get; init; }
-        public string? OperatorEmail { get; init; }
-        public string? SiteAddressPostcode { get; init; }
     }
 
     internal sealed class WorkItemResponseDto
