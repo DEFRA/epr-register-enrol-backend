@@ -34,10 +34,14 @@ public class HttpCaseWorkingApiAdapter(
             throw new InvalidOperationException("CaseWorking API URL is not configured.");
         }
 
+        var suffix = RandomNumberGenerator.GetInt32(1_000_000_000);
+        var applicationReference = $"RA-{suffix:D9}";
+
         var body = new CreateWorkItemRequest
         {
             TypeId = "re-accreditation",
             Source = "operator-fe",
+            ApplicationReference = applicationReference,
             Payload = BuildPayload(application),
         };
 
@@ -84,21 +88,9 @@ public class HttpCaseWorkingApiAdapter(
             cancellationToken
         );
 
-        var applicationReference = ExtractApplicationReference(result);
-        if (string.IsNullOrWhiteSpace(applicationReference))
-        {
-            logger.LogError(
-                "ManagementBe did not return an applicationReference for work item {WorkItemId}",
-                result?.Id
-            );
-            throw new InvalidOperationException(
-                "ManagementBe did not return an applicationReference."
-            );
-        }
-
         logger.LogInformation(
             "Work item created: workItemId={WorkItemId} applicationReference={ApplicationReference}",
-            result!.Id,
+            result?.Id,
             applicationReference
         );
 
@@ -135,18 +127,6 @@ public class HttpCaseWorkingApiAdapter(
                 | System.Text.RegularExpressions.RegexOptions.RightToLeft
         );
         return match.Success ? match.Value.ToUpperInvariant() : null;
-    }
-
-    private static string? ExtractApplicationReference(WorkItemResponseDto? result)
-    {
-        if (result?.Payload.ValueKind != JsonValueKind.Object)
-            return null;
-
-        return
-            result.Payload.TryGetProperty("applicationReference", out var refElement)
-            && refElement.ValueKind == JsonValueKind.String
-            ? refElement.GetString()
-            : null;
     }
 
     private HttpRequestMessage BuildRequest(
@@ -225,6 +205,7 @@ public class HttpCaseWorkingApiAdapter(
         public required string TypeId { get; init; }
         public required object Payload { get; init; }
         public string? Source { get; init; }
+        public string? ApplicationReference { get; init; }
     }
 
     internal sealed class WorkItemResponseDto
