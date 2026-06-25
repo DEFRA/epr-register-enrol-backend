@@ -34,12 +34,11 @@ public class HttpCaseWorkingApiAdapter(
             throw new InvalidOperationException("CaseWorking API URL is not configured.");
         }
 
-        var payload = MapToPayload(application);
         var body = new CreateWorkItemRequest
         {
             TypeId = "re-accreditation",
-            Payload = payload,
             Source = "operator-fe",
+            Payload = BuildPayload(application),
         };
 
         var endpoint = $"{url.TrimEnd('/')}/work-items";
@@ -106,17 +105,59 @@ public class HttpCaseWorkingApiAdapter(
         return applicationReference;
     }
 
-    private static ReAccreditationPayloadDto MapToPayload(AccreditationApplicationModel application)
+    private static object BuildPayload(AccreditationApplicationModel application)
     {
-        return new ReAccreditationPayloadDto
+        return new
         {
-            OrganisationName = application.OrganisationName,
-            RegistrationNumber = application.RegistrationReference,
-            MaterialsHandled = [application.MaterialType.ToString().ToLowerInvariant()],
-            PreviousAccreditationYear = application.Year - 1,
-            ComplianceIssuesReported = 0,
-            OperatorEmail = application.SubmittedBy?.Email,
-            SiteAddressPostcode = ExtractPostcode(application.SiteAddress),
+            organisationName = application.OrganisationName,
+            registrationNumber = application.RegistrationReference,
+            materialsHandled = new[] { application.MaterialType.ToString().ToLowerInvariant() },
+            accreditationYear = application.Year,
+            previousAccreditationYear = application.Year - 1,
+            complianceIssuesReported = 0,
+            siteAddress = application.SiteAddress,
+            siteAddressPostcode = ExtractPostcode(application.SiteAddress),
+            operatorApplicationId = application.ApplicationId,
+            operatorEmail = application.SubmittedBy?.Email,
+            submittedBy = application.SubmittedBy is null ? null : new
+            {
+                fullName = application.SubmittedBy.FullName,
+                jobTitle = application.SubmittedBy.JobTitle,
+                email = application.SubmittedBy.Email,
+            },
+            prns = new
+            {
+                plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
+                authorisers = application.Prns.Authorisers.Select(a => new
+                {
+                    fullName = a.FullName,
+                    email = a.Email,
+                }).ToArray(),
+            },
+            businessPlan = new
+            {
+                newInfrastructurePercent = application.BusinessPlan.NewInfrastructurePercent,
+                priceSupportPercent = application.BusinessPlan.PriceSupportPercent,
+                businessCollectionsPercent = application.BusinessPlan.BusinessCollectionsPercent,
+                communicationsPercent = application.BusinessPlan.CommunicationsPercent,
+                newMarketsPercent = application.BusinessPlan.NewMarketsPercent,
+                newUsesPercent = application.BusinessPlan.NewUsesPercent,
+                newInfrastructureDetail = application.BusinessPlan.NewInfrastructureDetail,
+                priceSupportDetail = application.BusinessPlan.PriceSupportDetail,
+                businessCollectionsDetail = application.BusinessPlan.BusinessCollectionsDetail,
+                communicationsDetail = application.BusinessPlan.CommunicationsDetail,
+                newMarketsDetail = application.BusinessPlan.NewMarketsDetail,
+                newUsesDetail = application.BusinessPlan.NewUsesDetail,
+            },
+            samplingPlan = new
+            {
+                files = application.SamplingPlan.Files.Select(f => new
+                {
+                    filename = f.Filename,
+                    uploadedAt = f.UploadedAt,
+                    scanStatus = f.ScanStatus.ToString(),
+                }).ToArray(),
+            },
         };
     }
 
@@ -125,8 +166,13 @@ public class HttpCaseWorkingApiAdapter(
         if (string.IsNullOrWhiteSpace(siteAddress))
             return null;
 
-        var parts = siteAddress.Split(',');
-        return parts[^1].Trim();
+        var match = System.Text.RegularExpressions.Regex.Match(
+            siteAddress,
+            @"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+            System.Text.RegularExpressions.RegexOptions.RightToLeft
+        );
+        return match.Success ? match.Value.ToUpperInvariant() : null;
     }
 
     private static string? ExtractApplicationReference(WorkItemResponseDto? result)
@@ -217,17 +263,6 @@ public class HttpCaseWorkingApiAdapter(
         public required string TypeId { get; init; }
         public required object Payload { get; init; }
         public string? Source { get; init; }
-    }
-
-    internal sealed class ReAccreditationPayloadDto
-    {
-        public string? OrganisationName { get; init; }
-        public string? RegistrationNumber { get; init; }
-        public List<string>? MaterialsHandled { get; init; }
-        public int? PreviousAccreditationYear { get; init; }
-        public int ComplianceIssuesReported { get; init; }
-        public string? OperatorEmail { get; init; }
-        public string? SiteAddressPostcode { get; init; }
     }
 
     internal sealed class WorkItemResponseDto

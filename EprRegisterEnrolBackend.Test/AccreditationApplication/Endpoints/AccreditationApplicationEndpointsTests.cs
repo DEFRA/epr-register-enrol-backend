@@ -464,6 +464,7 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.AccreditationReference.Should().Be("RA-123456789");
+        body.CaseManagementReference.Should().Be("RA-123456789");
         await _factory
             .MockCaseWorkingAdapter.Received(1)
             .SubmitApplicationAsync(
