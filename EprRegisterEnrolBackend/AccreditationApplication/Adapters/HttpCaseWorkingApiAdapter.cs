@@ -101,17 +101,55 @@ public class HttpCaseWorkingApiAdapter(
     {
         return new
         {
-            // Hook-compatibility fields (ManagementBe hooks read these specific keys)
             organisationName = application.OrganisationName,
             registrationNumber = application.RegistrationReference,
             materialsHandled = new[] { application.MaterialType.ToString().ToLowerInvariant() },
+            accreditationYear = application.Year,
             previousAccreditationYear = application.Year - 1,
             complianceIssuesReported = 0,
-            operatorEmail = application.SubmittedBy?.Email,
+            siteAddress = application.SiteAddress,
             siteAddressPostcode = ExtractPostcode(application.SiteAddress),
-
-            // Full application document
-            application,
+            operatorApplicationId = application.ApplicationId,
+            operatorEmail = application.SubmittedBy?.Email,
+            submittedBy = application.SubmittedBy is null ? null : new
+            {
+                fullName = application.SubmittedBy.FullName,
+                jobTitle = application.SubmittedBy.JobTitle,
+                email = application.SubmittedBy.Email,
+            },
+            prns = new
+            {
+                plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
+                authorisers = application.Prns.Authorisers.Select(a => new
+                {
+                    fullName = a.FullName,
+                    email = a.Email,
+                }).ToArray(),
+            },
+            businessPlan = new
+            {
+                newInfrastructurePercent = application.BusinessPlan.NewInfrastructurePercent,
+                priceSupportPercent = application.BusinessPlan.PriceSupportPercent,
+                businessCollectionsPercent = application.BusinessPlan.BusinessCollectionsPercent,
+                communicationsPercent = application.BusinessPlan.CommunicationsPercent,
+                newMarketsPercent = application.BusinessPlan.NewMarketsPercent,
+                newUsesPercent = application.BusinessPlan.NewUsesPercent,
+                newInfrastructureDetail = application.BusinessPlan.NewInfrastructureDetail,
+                priceSupportDetail = application.BusinessPlan.PriceSupportDetail,
+                businessCollectionsDetail = application.BusinessPlan.BusinessCollectionsDetail,
+                communicationsDetail = application.BusinessPlan.CommunicationsDetail,
+                newMarketsDetail = application.BusinessPlan.NewMarketsDetail,
+                newUsesDetail = application.BusinessPlan.NewUsesDetail,
+            },
+            samplingPlan = new
+            {
+                files = application.SamplingPlan.Files.Select(f => new
+                {
+                    filename = f.Filename,
+                    uploadedAt = f.UploadedAt,
+                    scanStatus = f.ScanStatus.ToString(),
+                }).ToArray(),
+            },
         };
     }
 
@@ -123,8 +161,8 @@ public class HttpCaseWorkingApiAdapter(
         var match = System.Text.RegularExpressions.Regex.Match(
             siteAddress,
             @"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                | System.Text.RegularExpressions.RegexOptions.RightToLeft
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+            System.Text.RegularExpressions.RegexOptions.RightToLeft
         );
         return match.Success ? match.Value.ToUpperInvariant() : null;
     }
