@@ -181,7 +181,19 @@ static WebApplication SetupApplication(WebApplication app)
         .Value;
     if (string.IsNullOrWhiteSpace(reExConfig.BaseUrl))
         startupLogger.LogWarning(
-            "REEX_API_BASE_URL (ReExApi:BaseUrl) is not configured — ReEx API calls will fail at runtime."
+            "ReExApi__BaseUrl is not configured — ReEx API calls will fail at runtime."
+        );
+
+    var reExCreds = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ReExCredentials>>()
+        .Value;
+    if (string.IsNullOrWhiteSpace(reExCreds.Username))
+        startupLogger.LogWarning(
+            "REEX_API_BASIC_AUTH_USERNAME is not configured — ReEx API calls will be unauthenticated."
+        );
+    if (string.IsNullOrWhiteSpace(reExCreds.Password))
+        startupLogger.LogWarning(
+            "REEX_API_BASIC_AUTH_PASSWORD is not configured — ReEx API calls will be unauthenticated."
         );
 
     app.UseExceptionHandler();

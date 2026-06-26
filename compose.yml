@@ -99,6 +99,9 @@ services:
       PORT: 8080
       LOCALSTACK_ENDPOINT: http://localstack:4566
       MONGO_URI: mongodb://mongodb:27017/
+      ReExApi__BaseUrl: ""
+      REEX_API_BASIC_AUTH_USERNAME: ""
+      REEX_API_BASIC_AUTH_PASSWORD: ""
     networks:
       - cdp-tenant
 
