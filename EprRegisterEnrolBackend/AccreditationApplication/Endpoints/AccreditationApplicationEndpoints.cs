@@ -4,7 +4,6 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
-using EprRegisterEnrolBackend.Organisation.Services;
 using FluentValidation;
 using Microsoft.Extensions.Options;
 
@@ -57,7 +56,6 @@ public static class AccreditationApplicationEndpoints
         SeedRequest request,
         IAccreditationApplicationPersistence persistence,
         IReExApiAdapter reExAdapter,
-        IOrganisationPersistence organisationPersistence,
         IValidator<SeedRequest> validator
     )
     {
@@ -68,86 +66,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var priorYearData = await reExAdapter.GetAccreditationAsync(
-            organisationId,
-            materialTypeEnum,
-            request.Year - 1
-        );
-
-        string? organisationName = null;
-        string? siteAddress = null;
-        string? registrationReference = null;
-        List<string>? overseasSiteIds = null;
-        var isExporter = false;
-        if (int.TryParse(organisationId, out var orgIdInt))
-        {
-            var org = await organisationPersistence.GetByOrgIdAsync(orgIdInt);
-            organisationName = org?.CompanyDetails?.Name;
-            registrationReference = org?.CompanyDetails?.RegistrationNumber;
-            var registration = org?.Registrations?.FirstOrDefault(r =>
-                r.Id.ToString() == registrationId
-            );
-            overseasSiteIds = registration?.OverseasSites;
-            isExporter =
-                registration?.WasteProcessingType?.Equals(
-                    "exporter",
-                    StringComparison.OrdinalIgnoreCase
-                ) == true;
-            siteAddress = registration?.SiteAddress is { } addr
-                ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
-                : null;
-        }
-
-        var application = new AccreditationApplicationModel
-        {
-            OrganisationId = organisationId,
-            OrganisationName = organisationName,
-            Year = request.Year,
-            RegistrationId = registrationId,
-            IsExporter = isExporter,
-            SiteAddress = siteAddress,
-            RegistrationReference = registrationReference,
-            MaterialType = materialTypeEnum,
-            ApplicationStatus = ApplicationStatus.Saved,
-            SourceReExAccreditationId = priorYearData?.AccreditationId,
-            SourceYear = priorYearData != null ? request.Year - 1 : null,
-            OverseasSites = isExporter
-                ? new AccreditationApplicationOverseasSites
-                {
-                    Sites = BuildStubOverseasSites(overseasSiteIds),
-                }
-                : null,
-        };
-
-        if (priorYearData != null)
-        {
-            if (priorYearData.Prns != null)
-            {
-                application.Prns = new AccreditationApplicationPrns
-                {
-                    PlannedTonnageBand = priorYearData.Prns.PlannedTonnageBand,
-                    Authorisers = priorYearData.Prns.Authorisers,
-                    SectionStatus = SectionStatus.NotStarted,
-                };
-            }
-
-            if (priorYearData.BusinessPlan != null)
-            {
-                application.BusinessPlan = new AccreditationApplicationBusinessPlan
-                {
-                    NewInfrastructurePercent = priorYearData.BusinessPlan.NewInfrastructurePercent,
-                    PriceSupportPercent = priorYearData.BusinessPlan.PriceSupportPercent,
-                    BusinessCollectionsPercent = priorYearData
-                        .BusinessPlan
-                        .BusinessCollectionsPercent,
-                    CommunicationsPercent = priorYearData.BusinessPlan.CommunicationsPercent,
-                    NewMarketsPercent = priorYearData.BusinessPlan.NewMarketsPercent,
-                    NewUsesPercent = priorYearData.BusinessPlan.NewUsesPercent,
-                    SectionStatus = SectionStatus.NotStarted,
-                };
-            }
-        }
-
+        // Idempotency check before the ReEx call — duplicate seeds return the existing document.
         var existing = (await persistence.GetByOrganisationAsync(organisationId)).FirstOrDefault(
             a =>
                 a.RegistrationId == registrationId
@@ -156,6 +75,65 @@ public static class AccreditationApplicationEndpoints
         );
         if (existing is not null)
             return Results.Ok(existing);
+
+        var adapterResult = await reExAdapter.GetAccreditationAsync(
+            organisationId,
+            registrationId,
+            materialTypeEnum,
+            request.Year - 1
+        );
+
+        if (!adapterResult.IsSuccess)
+            return adapterResult.IsNotFound
+                ? Results.NotFound()
+                : Results.Problem(statusCode: adapterResult.IsUpstreamFailure ? 502 : 503);
+
+        var priorYearData = adapterResult.Value!;
+
+        var application = new AccreditationApplicationModel
+        {
+            OrganisationId = organisationId,
+            OrganisationName = priorYearData.OrganisationName,
+            Year = request.Year,
+            RegistrationId = registrationId,
+            IsExporter = priorYearData.IsExporter,
+            SiteAddress = priorYearData.SiteAddress,
+            RegistrationReference = priorYearData.RegistrationReference,
+            MaterialType = materialTypeEnum,
+            ApplicationStatus = ApplicationStatus.Saved,
+            SourceReExAccreditationId = priorYearData.AccreditationId,
+            SourceYear = request.Year - 1,
+            OverseasSites = priorYearData.IsExporter
+                ? new AccreditationApplicationOverseasSites
+                {
+                    Sites = priorYearData.OverseasSites,
+                }
+                : null,
+        };
+
+        if (priorYearData.Prns != null)
+        {
+            application.Prns = new AccreditationApplicationPrns
+            {
+                PlannedTonnageBand = priorYearData.Prns.PlannedTonnageBand,
+                Authorisers = priorYearData.Prns.Authorisers,
+                SectionStatus = SectionStatus.NotStarted,
+            };
+        }
+
+        if (priorYearData.BusinessPlan != null)
+        {
+            application.BusinessPlan = new AccreditationApplicationBusinessPlan
+            {
+                NewInfrastructurePercent = priorYearData.BusinessPlan.NewInfrastructurePercent,
+                PriceSupportPercent = priorYearData.BusinessPlan.PriceSupportPercent,
+                BusinessCollectionsPercent = priorYearData.BusinessPlan.BusinessCollectionsPercent,
+                CommunicationsPercent = priorYearData.BusinessPlan.CommunicationsPercent,
+                NewMarketsPercent = priorYearData.BusinessPlan.NewMarketsPercent,
+                NewUsesPercent = priorYearData.BusinessPlan.NewUsesPercent,
+                SectionStatus = SectionStatus.NotStarted,
+            };
+        }
 
         application.DateLastEdited = application.CreatedAt;
 
@@ -635,7 +613,6 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus != ApplicationStatus.Sent)
             return Results.Conflict("Only submitted applications can be approved.");
 
-        // TODO: define contract with ReEx and extend Dto as required.
         var approvedDto = new ApprovedAccreditationDto
         {
             ApplicationId = applicationId,
@@ -649,7 +626,12 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        await reExAdapter.WriteApprovedAccreditationAsync(approvedDto, cancellationToken);
+        var writeResult = await reExAdapter.WriteApprovedAccreditationAsync(approvedDto, cancellationToken);
+        if (!writeResult.IsSuccess)
+            return Results.Problem(
+                statusCode: 502,
+                detail: "Failed to write approved accreditation to ReEx."
+            );
 
         // TODO: Write approved data to org document's accreditations array once
         // IOrganisationPersistence.UpsertAccreditationAsync is implemented (deferred from RA-101).
@@ -760,39 +742,4 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(status);
     }
 
-    // TODO: replace with real overseas site lookup from ReEx once contract is defined.
-    private static readonly (string Country, bool IsEu, bool IsOecd)[] StubSiteData =
-    [
-        ("Germany", true, true),
-        ("France", true, true),
-        ("Japan", false, true),
-        ("Vietnam", false, false),
-    ];
-
-    private static List<OverseasSiteModel> BuildStubOverseasSites(List<string>? registrationSiteIds)
-    {
-        if (registrationSiteIds is null || registrationSiteIds.Count == 0)
-            return [];
-
-        return registrationSiteIds
-            .Select(
-                (id, i) =>
-                {
-                    var data =
-                        i < StubSiteData.Length
-                            ? StubSiteData[i]
-                            : (Country: "Unknown", IsEu: false, IsOecd: false);
-                    return new OverseasSiteModel
-                    {
-                        SiteId = int.TryParse(id, out var parsed) ? parsed : 900001 + i,
-                        SiteName = $"Overseas Site {i + 1} ({data.Country})",
-                        SiteAddress = $"Address {id}",
-                        Country = data.Country,
-                        IsEu = data.IsEu,
-                        IsOecd = data.IsOecd,
-                    };
-                }
-            )
-            .ToList();
-    }
 }

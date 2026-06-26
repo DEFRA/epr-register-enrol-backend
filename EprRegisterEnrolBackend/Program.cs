@@ -116,9 +116,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<ICdpUploaderService, CdpUploaderService>();
     builder.Services.AddSingleton<IPendingUploadService, PendingUploadService>();
 
-    // TODO: replace stub with real HTTP adapter once the ReEx API contract is defined.
-    builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
-
     // CaseWorking: config-driven stub/real switch (default: stub).
     builder.Services.Configure<CaseWorkingApiConfig>(
         builder.Configuration.GetSection("CaseWorking")
@@ -136,6 +133,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
 
     if (builder.Environment.IsDevelopment())
     {
+        builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
+
         builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
@@ -145,6 +144,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     }
     else
     {
+        builder.Services.AddSingleton<IReExApiAdapter, HttpReExApiAdapter>();
+
         builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
     }
 }

@@ -15,4 +15,10 @@ public interface IReExClient
         string accreditationId,
         CancellationToken cancellationToken = default
     );
+
+    Task<ReExResult<bool>> WriteAccreditationAsync(
+        string organisationId,
+        ReExWriteAccreditationPayload payload,
+        CancellationToken cancellationToken = default
+    );
 }

@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.ReEx.Config;
@@ -87,6 +88,63 @@ public class ReExClient : IReExClient
                 organisationId, registrationId, accreditationId
             );
             return ReExResult<OverseasSitesDto>.Fail(new ReExError(ReExErrorKind.TransportError, "Transport error"));
+        }
+    }
+
+    public async Task<ReExResult<bool>> WriteAccreditationAsync(
+        string organisationId,
+        ReExWriteAccreditationPayload payload,
+        CancellationToken cancellationToken = default
+    )
+    {
+        try
+        {
+            using var response = await _httpClient.PostAsJsonAsync(
+                $"v1/organisations/{Uri.EscapeDataString(organisationId)}/accreditations/approved",
+                payload,
+                JsonOptions,
+                cancellationToken
+            );
+            var statusCode = (int)response.StatusCode;
+            if (response.IsSuccessStatusCode)
+                return ReExResult<bool>.Success(true, statusCode);
+
+            return statusCode switch
+            {
+                401 or 403 => ReExResult<bool>.Fail(
+                    new ReExError(ReExErrorKind.AuthError, $"Authentication failed ({statusCode})"),
+                    statusCode
+                ),
+                404 => ReExResult<bool>.Fail(
+                    new ReExError(ReExErrorKind.NotFound, "Resource not found"),
+                    statusCode
+                ),
+                >= 400 and < 500 => ReExResult<bool>.Fail(
+                    new ReExError(ReExErrorKind.ClientError, $"Client error ({statusCode})"),
+                    statusCode
+                ),
+                _ => ReExResult<bool>.Fail(
+                    new ReExError(ReExErrorKind.ServerError, $"Server error ({statusCode})"),
+                    statusCode
+                ),
+            };
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "ReEx API write request timed out for organisation {OrganisationId}",
+                organisationId
+            );
+            return ReExResult<bool>.Fail(new ReExError(ReExErrorKind.Timeout, "Request timed out"));
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(
+                ex,
+                "Transport error calling ReEx API write for organisation {OrganisationId}",
+                organisationId
+            );
+            return ReExResult<bool>.Fail(new ReExError(ReExErrorKind.TransportError, "Transport error"));
         }
     }
 

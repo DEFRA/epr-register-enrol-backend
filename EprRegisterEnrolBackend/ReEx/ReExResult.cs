@@ -15,6 +15,12 @@ public sealed class ReExResult<T>
     public T? Value { get; }
     public ReExError? Error { get; }
 
+    public bool IsNotFound => !IsSuccess && Error?.Kind == ReExErrorKind.NotFound;
+    public bool IsClientError => !IsSuccess && Error?.Kind == ReExErrorKind.ClientError;
+    public bool IsUpstreamFailure =>
+        !IsSuccess
+        && Error?.Kind is ReExErrorKind.ServerError or ReExErrorKind.Timeout or ReExErrorKind.TransportError or ReExErrorKind.DeserializationError;
+
     public static ReExResult<T> Success(T value, int statusCode) =>
         new(true, value, statusCode, null);
 
