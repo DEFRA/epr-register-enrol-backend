@@ -1,16 +1,21 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.ReEx;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
-// TODO: implement client
-// Stub implementation — swapped for a real HTTP adapter once the ReEx API contract is defined.
+// Stub implementation — used in Development. Swapped for HttpReExApiAdapter in non-local environments.
 public class StubReExApiAdapter(ILogger<StubReExApiAdapter> logger) : IReExApiAdapter
 {
-    public Task<ReExAccreditationDto?> GetAccreditationAsync(string organisationId, MaterialType materialType, int year)
+    public Task<ReExResult<ReExAccreditationDto>> GetAccreditationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        int year
+    )
     {
         logger.LogInformation(
-            "StubReExApiAdapter.GetAccreditationAsync called for org={OrganisationId} material={MaterialType} year={Year}",
-            organisationId, materialType, year);
+            "StubReExApiAdapter.GetAccreditationAsync called for org={OrganisationId} reg={RegistrationId} material={MaterialType} year={Year}",
+            organisationId, registrationId, materialType, year);
 
         var fixture = new ReExAccreditationDto
         {
@@ -18,7 +23,11 @@ public class StubReExApiAdapter(ILogger<StubReExApiAdapter> logger) : IReExApiAd
             OrganisationId = organisationId,
             MaterialType = materialType,
             Year = year,
-            SiteId = null,
+            OrganisationName = "Stub Reprocessing Ltd",
+            RegistrationReference = "STUB-REG-001",
+            SiteAddress = "1 Stub Lane, Stubton, ST1 1AB",
+            IsExporter = false,
+            OverseasSites = [],
             Prns = new ReExPrnsDto
             {
                 PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
@@ -38,15 +47,18 @@ public class StubReExApiAdapter(ILogger<StubReExApiAdapter> logger) : IReExApiAd
             }
         };
 
-        return Task.FromResult<ReExAccreditationDto?>(fixture);
+        return Task.FromResult(ReExResult<ReExAccreditationDto>.Success(fixture, 200));
     }
 
-    public Task WriteApprovedAccreditationAsync(ApprovedAccreditationDto accreditation, CancellationToken cancellationToken = default)
+    public Task<ReExResult<bool>> WriteApprovedAccreditationAsync(
+        ApprovedAccreditationDto accreditation,
+        CancellationToken cancellationToken = default
+    )
     {
         logger.LogInformation(
             "StubReExApiAdapter.WriteApprovedAccreditationAsync called for org={OrganisationId} ref={ApplicationReference}",
             accreditation.OrganisationId, accreditation.ApplicationReference);
 
-        return Task.CompletedTask;
+        return Task.FromResult(ReExResult<bool>.Success(true, 200));
     }
 }

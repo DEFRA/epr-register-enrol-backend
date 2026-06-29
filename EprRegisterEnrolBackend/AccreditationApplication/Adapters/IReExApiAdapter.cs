@@ -1,11 +1,21 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.ReEx;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
 public interface IReExApiAdapter
 {
-    Task<ReExAccreditationDto?> GetAccreditationAsync(string organisationId, MaterialType materialType, int year);
-    Task WriteApprovedAccreditationAsync(ApprovedAccreditationDto accreditation, CancellationToken cancellationToken = default);
+    Task<ReExResult<ReExAccreditationDto>> GetAccreditationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        int year
+    );
+
+    Task<ReExResult<bool>> WriteApprovedAccreditationAsync(
+        ApprovedAccreditationDto accreditation,
+        CancellationToken cancellationToken = default
+    );
 }
 
 public class ReExAccreditationDto
@@ -14,7 +24,11 @@ public class ReExAccreditationDto
     public string? OrganisationId { get; set; }
     public MaterialType MaterialType { get; set; }
     public int Year { get; set; }
-    public string? SiteId { get; set; }
+    public string? OrganisationName { get; set; }
+    public string? RegistrationReference { get; set; }
+    public string? SiteAddress { get; set; }
+    public bool IsExporter { get; set; }
+    public List<OverseasSiteModel> OverseasSites { get; set; } = [];
 
     public ReExPrnsDto? Prns { get; set; }
     public ReExBusinessPlanDto? BusinessPlan { get; set; }
@@ -34,6 +48,7 @@ public class ReExBusinessPlanDto
     public int? CommunicationsPercent { get; set; }
     public int? NewMarketsPercent { get; set; }
     public int? NewUsesPercent { get; set; }
+    public int? OtherPercent { get; set; }
 }
 
 public class ApprovedAccreditationDto

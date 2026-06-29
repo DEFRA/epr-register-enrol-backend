@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.CdpUploader.Models;
-using EprRegisterEnrolBackend.Organisation.Models;
+using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using MongoDB.Bson;
 using NSubstitute;
@@ -58,6 +58,25 @@ public class AccreditationApplicationEndpointsTests
         return app;
     }
 
+    private static ReExResult<ReExAccreditationDto> MinimalAdapterSuccess(
+        string orgId = "org-123",
+        MaterialType material = MaterialType.Steel,
+        int year = 2025
+    ) =>
+        ReExResult<ReExAccreditationDto>.Success(
+            new ReExAccreditationDto
+            {
+                AccreditationId = $"reex-acc-{orgId}-{material}-{year}",
+                OrganisationId = orgId,
+                MaterialType = material,
+                Year = year,
+                OrganisationName = "Stub Org Ltd",
+                IsExporter = false,
+                OverseasSites = [],
+            },
+            200
+        );
+
     // --- Seed ---
 
     [Fact]
@@ -66,11 +85,9 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         _factory
             .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(),
-                Arg.Any<MaterialType>(),
-                Arg.Any<int>()
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
             )
-            .Returns(Task.FromResult<ReExAccreditationDto?>(null));
+            .Returns(Task.FromResult(MinimalAdapterSuccess()));
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
@@ -94,18 +111,23 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         _factory
-            .MockReExAdapter.GetAccreditationAsync("org-123", MaterialType.Steel, 2025)
+            .MockReExAdapter.GetAccreditationAsync("org-123", "reg-1", MaterialType.Steel, 2025)
             .Returns(
-                Task.FromResult<ReExAccreditationDto?>(
-                    new ReExAccreditationDto
-                    {
-                        AccreditationId = "reex-abc",
-                        OrganisationId = "org-123",
-                        MaterialType = MaterialType.Steel,
-                        Year = 2025,
-                        Prns = new ReExPrnsDto { PlannedTonnageBand = PlannedTonnageBand.UpTo1000 },
-                        BusinessPlan = new ReExBusinessPlanDto { NewInfrastructurePercent = 20 },
-                    }
+                Task.FromResult(
+                    ReExResult<ReExAccreditationDto>.Success(
+                        new ReExAccreditationDto
+                        {
+                            AccreditationId = "reex-abc",
+                            OrganisationId = "org-123",
+                            MaterialType = MaterialType.Steel,
+                            Year = 2025,
+                            IsExporter = false,
+                            OverseasSites = [],
+                            Prns = new ReExPrnsDto { PlannedTonnageBand = PlannedTonnageBand.UpTo1000 },
+                            BusinessPlan = new ReExBusinessPlanDto { NewInfrastructurePercent = 20 },
+                        },
+                        200
+                    )
                 )
             );
 
@@ -158,11 +180,9 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         _factory
             .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(),
-                Arg.Any<MaterialType>(),
-                Arg.Any<int>()
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
             )
-            .Returns(Task.FromResult<ReExAccreditationDto?>(null));
+            .Returns(Task.FromResult(MinimalAdapterSuccess()));
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
@@ -184,71 +204,32 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task Seed_WithNumericOrganisationId_PopulatesOrganisationNameAndSiteAddress()
+    public async Task Seed_PopulatesOrganisationDataFromAdapter()
     {
         Reset();
         _factory
             .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(),
-                Arg.Any<MaterialType>(),
-                Arg.Any<int>()
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
             )
-            .Returns(Task.FromResult<ReExAccreditationDto?>(null));
-        var registrationObjectId = ObjectId.Parse("aaaaaaaaaaaaaaaaaaaaaaaa");
-        _factory
-            .MockOrganisationPersistence.GetByOrgIdAsync(42)
             .Returns(
-                Task.FromResult<OrganisationModel?>(
-                    new OrganisationModel
-                    {
-                        OrgId = 42,
-                        CompanyDetails = new CompanyDetailsModel { Name = "Acme Reprocessing Ltd" },
-                        Registrations =
-                        [
-                            new RegistrationModel
-                            {
-                                Id = registrationObjectId,
-                                Status = "Active",
-                                Material = "Plastic",
-                                WasteProcessingType = "Reprocessor",
-                                SiteAddress = new SiteAddressModel
-                                {
-                                    Line1 = "1 Factory Lane",
-                                    Town = "Manchester",
-                                    Postcode = "M1 1AA",
-                                },
-                            },
-                        ],
-                    }
+                Task.FromResult(
+                    ReExResult<ReExAccreditationDto>.Success(
+                        new ReExAccreditationDto
+                        {
+                            AccreditationId = "reex-acc-1",
+                            OrganisationId = "org-123",
+                            MaterialType = MaterialType.Steel,
+                            Year = 2025,
+                            OrganisationName = "Acme Reprocessing Ltd",
+                            RegistrationReference = "REP-001",
+                            SiteAddress = "1 Factory Lane, Manchester, M1 1AA",
+                            IsExporter = false,
+                            OverseasSites = [],
+                        },
+                        200
+                    )
                 )
             );
-
-        var request = new SeedRequest { Year = 2026 };
-        var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/42/{registrationObjectId}/Plastic/seed",
-            request,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-        body!.OrganisationName.Should().Be("Acme Reprocessing Ltd");
-        body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
-    }
-
-    [Fact]
-    public async Task Seed_WithNonNumericOrganisationId_LeavesOrganisationNameAndSiteAddressNull()
-    {
-        Reset();
-        _factory
-            .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(),
-                Arg.Any<MaterialType>(),
-                Arg.Any<int>()
-            )
-            .Returns(Task.FromResult<ReExAccreditationDto?>(null));
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
@@ -261,8 +242,84 @@ public class AccreditationApplicationEndpointsTests
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.OrganisationName.Should().BeNull();
-        body.SiteAddress.Should().BeNull();
+        body!.OrganisationName.Should().Be("Acme Reprocessing Ltd");
+        body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
+        body.RegistrationReference.Should().Be("REP-001");
+    }
+
+    [Fact]
+    public async Task Seed_WhenAdapterReturnsNotFound_Returns404()
+    {
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(
+                ReExResult<ReExAccreditationDto>.Fail(
+                    new ReExError(ReExErrorKind.NotFound, "No prior year accreditation found"),
+                    404
+                )
+            ));
+
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Seed_WhenAdapterReturnsUpstreamFailure_Returns502()
+    {
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(
+                ReExResult<ReExAccreditationDto>.Fail(
+                    new ReExError(ReExErrorKind.ServerError, "Upstream error"),
+                    500
+                )
+            ));
+
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+    }
+
+    [Fact]
+    public async Task Seed_DuplicateSeed_ReturnsExistingDocument_WithoutCallingAdapter()
+    {
+        Reset();
+        SeedApplication(orgId: "org-123", configure: a =>
+        {
+            a.RegistrationId = "reg-1";
+            a.MaterialType = MaterialType.Steel;
+            a.Year = 2026;
+        });
+
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory.MockReExAdapter.DidNotReceive()
+            .GetAccreditationAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+            );
     }
 
     // --- GetList ---
@@ -627,7 +684,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<ApprovedAccreditationDto>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(ReExResult<bool>.Success(true, 200)));
 
         var response = await _client.PostAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
@@ -686,7 +743,7 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task Approve_WhenAdapterThrows_ApplicationRemainsSent()
+    public async Task Approve_WhenAdapterFails_Returns502AndApplicationRemainsSent()
     {
         Reset();
         var app = SeedApplication(
@@ -698,7 +755,11 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<ApprovedAccreditationDto>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromException<string>(new HttpRequestException("adapter unavailable")));
+            .Returns(Task.FromResult(
+                ReExResult<bool>.Fail(
+                    new ReExError(ReExErrorKind.ServerError, "upstream failure")
+                )
+            ));
 
         var response = await _client.PostAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
@@ -706,7 +767,7 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
         var stored = await _factory.FakePersistence.GetByIdAsync(
             "org-123",
             app.Id!.Value.ToString()
@@ -983,7 +1044,6 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        // First complete a callback to store the result
         var fileUploadId = "test-upload-id";
         var callbackPayload = new
         {

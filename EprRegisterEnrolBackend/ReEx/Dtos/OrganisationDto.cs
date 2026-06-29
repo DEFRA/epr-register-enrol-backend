@@ -182,9 +182,14 @@ public class AccreditationDto
     public string? Id { get; init; }
     public string? AccreditationNumber { get; init; }
     public string? Status { get; init; }
+    public string? MaterialType { get; init; }
     public PrnIssuanceDto? PrnIssuance { get; init; }
-    // Shape varies; retained as raw JSON to avoid data loss
-    public JsonElement? Dates { get; init; }
+    public AccreditationDatesDto? Dates { get; init; }
+}
+
+public class AccreditationDatesDto
+{
+    public string? ValidFrom { get; init; }
 }
 
 public class PrnIssuanceDto
