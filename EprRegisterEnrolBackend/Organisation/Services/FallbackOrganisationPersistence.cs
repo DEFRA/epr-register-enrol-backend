@@ -4,7 +4,8 @@ namespace EprRegisterEnrolBackend.Organisation.Services;
 
 public class FallbackOrganisationPersistence(
     OrganisationPersistence mongo,
-    FakeOrganisationPersistence fake) : IOrganisationPersistence
+    FakeOrganisationPersistence fake
+) : IOrganisationPersistence
 {
     public async Task<OrganisationModel?> GetByOrgIdAsync(int orgId)
     {
@@ -19,10 +20,25 @@ public class FallbackOrganisationPersistence(
         return fromFake;
     }
 
-    public Task<bool> CreateAsync(OrganisationModel organisation) => mongo.CreateAsync(organisation);
-    public Task<IEnumerable<OrganisationSummaryModel>> GetAllAsync() => mongo.GetAllAsync();
-    public Task<IEnumerable<OrganisationSummaryModel>> SearchByValueAsync(string searchTerm) => mongo.SearchByValueAsync(searchTerm);
-    public Task<bool> UpdateAsync(OrganisationModel organisation) => mongo.UpdateAsync(organisation);
+    public Task<bool> CreateAsync(OrganisationModel organisation) =>
+        mongo.CreateAsync(organisation);
+
+    public async Task<IEnumerable<OrganisationSummaryModel>> GetAllAsync()
+    {
+        var results = (await mongo.GetAllAsync()).ToList();
+        if (results.Count > 0)
+            return results;
+        return await fake.GetAllAsync();
+    }
+
+    public Task<IEnumerable<OrganisationSummaryModel>> SearchByValueAsync(string searchTerm) =>
+        mongo.SearchByValueAsync(searchTerm);
+
+    public Task<bool> UpdateAsync(OrganisationModel organisation) =>
+        mongo.UpdateAsync(organisation);
+
     public Task<bool> DeleteAsync(int orgId) => mongo.DeleteAsync(orgId);
-    public Task<bool> UpsertAsync(OrganisationModel organisation) => mongo.UpsertAsync(organisation);
+
+    public Task<bool> UpsertAsync(OrganisationModel organisation) =>
+        mongo.UpsertAsync(organisation);
 }
