@@ -7,7 +7,7 @@ public class OrganisationDto
 {
     public string? Id { get; init; }
     public int SchemaVersion { get; init; }
-    public string? OrgId { get; init; }
+    public int? OrgId { get; init; }
     public JsonElement? FormSubmission { get; init; }
     public List<string> WasteProcessingTypes { get; init; } = [];
     public List<string> ReprocessingNations { get; init; } = [];
