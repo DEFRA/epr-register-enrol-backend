@@ -15,7 +15,7 @@ public class OrganisationDto
     public CompanyDetailsDto? CompanyDetails { get; init; }
     public ContactDetailsDto? SubmitterContactDetails { get; init; }
     public ContactDetailsDto? ManagementContactDetails { get; init; }
-    public bool? SubmittedToRegulator { get; init; }
+    public string? SubmittedToRegulator { get; init; }
     public List<RegistrationBaseDto> Registrations { get; init; } = [];
     public List<AccreditationDto> Accreditations { get; init; } = [];
 }
@@ -25,7 +25,7 @@ public class CompanyDetailsDto
     public string? Name { get; init; }
     public string? TradingName { get; init; }
     public string? RegistrationNumber { get; init; }
-    public RegisteredAddressDto? RegisteredAddress { get; init; }
+    public RegisteredAddressDto? Address { get; init; }
 }
 
 public class RegisteredAddressDto
@@ -43,8 +43,7 @@ public class ContactDetailsDto
     public string? FullName { get; init; }
     public string? Email { get; init; }
     public string? Phone { get; init; }
-    public string? Role { get; init; }
-    public string? Title { get; init; }
+    public string? JobTitle { get; init; }
 }
 
 /// <summary>
@@ -105,7 +104,7 @@ public class SiteAddressDto
 
 public class YearlyMetricDto
 {
-    public string? Year { get; init; }
+    public int? Year { get; init; }
     public string? Metric { get; init; }
     public MetricInputDto? Input { get; init; }
     public MetricOutputDto? Output { get; init; }
@@ -114,16 +113,22 @@ public class YearlyMetricDto
 public class MetricInputDto
 {
     public string? Type { get; init; }
+    [JsonPropertyName("ukPackagingWasteInTonnes")]
     public int? UkPackagingWaste { get; init; }
+    [JsonPropertyName("nonUkPackagingWasteInTonnes")]
     public int? NonUkPackagingWaste { get; init; }
+    [JsonPropertyName("nonPackagingWasteInTonnes")]
     public int? NonPackagingWaste { get; init; }
 }
 
 public class MetricOutputDto
 {
     public string? Type { get; init; }
+    [JsonPropertyName("sentToAnotherSiteInTonnes")]
     public int? SentToAnotherSite { get; init; }
+    [JsonPropertyName("contaminantsInTonnes")]
     public int? Contaminants { get; init; }
+    [JsonPropertyName("processLossInTonnes")]
     public int? ProcessLoss { get; init; }
 }
 
@@ -150,8 +155,15 @@ public class WasteManagementPermitDto
 {
     public string? Type { get; init; }
     public string? PermitNumber { get; init; }
-    public List<string> AuthorisedMaterials { get; init; } = [];
+    public List<AuthorisedMaterialDto> AuthorisedMaterials { get; init; } = [];
     public List<ExemptionDto> Exemptions { get; init; } = [];
+}
+
+public class AuthorisedMaterialDto
+{
+    public string? Material { get; init; }
+    public int? AuthorisedWeightInTonnes { get; init; }
+    public string? TimeScale { get; init; }
 }
 
 public class ExemptionDto
@@ -164,9 +176,8 @@ public class ExemptionDto
 
 public class FileUploadReferenceDto
 {
-    public string? FileId { get; init; }
-    public string? FileName { get; init; }
-    public string? ContentType { get; init; }
+    public string? DefraFormUploadedFileId { get; init; }
+    public string? DefraFormUserDownloadLink { get; init; }
 }
 
 /// <summary>Registration-level overseas-site reference (key → overseasSiteId).</summary>
@@ -182,14 +193,10 @@ public class AccreditationDto
     public string? Id { get; init; }
     public string? AccreditationNumber { get; init; }
     public string? Status { get; init; }
-    public string? MaterialType { get; init; }
-    public PrnIssuanceDto? PrnIssuance { get; init; }
-    public AccreditationDatesDto? Dates { get; init; }
-}
-
-public class AccreditationDatesDto
-{
+    public string? Material { get; init; }
     public string? ValidFrom { get; init; }
+    public string? ValidTo { get; init; }
+    public PrnIssuanceDto? PrnIssuance { get; init; }
 }
 
 public class PrnIssuanceDto

@@ -215,13 +215,19 @@ public class ReExClientTests
                     "gridReference": "SE123456"
                   },
                   "yearlyMetrics": [
-                    { "year": "2024", "metric": "output" }
+                    { "year": 2024, "metric": "output" }
                   ],
                   "reprocessingType": "mechanical",
                   "glassRecyclingProcess": [],
                   "noticeAddress": { "line1": "1 Road", "postcode": "AB1 2CD", "town": "Leeds", "country": "England" },
                   "wasteManagementPermits": [
-                    { "type": "permit", "permitNumber": "EPR/AB1234CD/A001", "authorisedMaterials": ["paper"] }
+                    {
+                      "type": "permit",
+                      "permitNumber": "EPR/AB1234CD/A001",
+                      "authorisedMaterials": [
+                        { "material": "paper", "authorisedWeightInTonnes": 10, "timeScale": "yearly" }
+                      ]
+                    }
                   ]
                 }
               ],
@@ -239,11 +245,11 @@ public class ReExClientTests
         reg.Site!.Address!.Line1.Should().Be("1 Industrial Way");
         reg.Site.GridReference.Should().Be("SE123456");
         reg.YearlyMetrics.Should().HaveCount(1);
-        reg.YearlyMetrics[0].Year.Should().Be("2024");
+        reg.YearlyMetrics[0].Year.Should().Be(2024);
         reg.NoticeAddress!.Line1.Should().Be("1 Road");
         reg.NoticeAddress.Postcode.Should().Be("AB1 2CD");
         reg.WasteManagementPermits[0].PermitNumber.Should().Be("EPR/AB1234CD/A001");
-        reg.WasteManagementPermits[0].AuthorisedMaterials.Should().Contain("paper");
+        reg.WasteManagementPermits[0].AuthorisedMaterials[0].Material.Should().Be("paper");
     }
 
     [Fact]
@@ -259,7 +265,7 @@ public class ReExClientTests
                   "wasteProcessingType": "exporter",
                   "exportPorts": ["Dover", "Felixstowe"],
                   "overseasSites": { "100": { "overseasSiteId": "6a2fcd76-site" } },
-                  "orsFileUploads": [{ "fileId": "file-1", "fileName": "ors.pdf" }],
+                  "orsFileUploads": [{ "defraFormUploadedFileId": "file-1", "defraFormUserDownloadLink": "https://example.test/file-1" }],
                   "noticeAddress": { "fullAddress": "1 Road, Shanghai, China", "country": "China" }
                 }
               ],
@@ -275,7 +281,7 @@ public class ReExClientTests
         var reg = result.Value!.Registrations[0].Should().BeOfType<ExporterRegistrationDto>().Subject;
         reg.ExportPorts.Should().BeEquivalentTo(["Dover", "Felixstowe"]);
         reg.OverseasSites["100"].OverseasSiteId.Should().Be("6a2fcd76-site");
-        reg.OrsFileUploads[0].FileName.Should().Be("ors.pdf");
+        reg.OrsFileUploads[0].DefraFormUploadedFileId.Should().Be("file-1");
         reg.NoticeAddress!.FullAddress.Should().Be("1 Road, Shanghai, China");
         reg.NoticeAddress.Country.Should().Be("China");
     }
