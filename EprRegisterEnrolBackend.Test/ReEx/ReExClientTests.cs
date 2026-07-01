@@ -28,7 +28,7 @@ public class ReExClientTests
             {
               "id": "org-1",
               "schemaVersion": 3,
-              "orgId": "1234",
+              "orgId": 1234,
               "wasteProcessingTypes": ["paper"],
               "reprocessingNations": ["England"],
               "registrations": [],
@@ -45,6 +45,28 @@ public class ReExClientTests
         result.Error.Should().BeNull();
         result.Value!.Id.Should().Be("org-1");
         result.Value.SchemaVersion.Should().Be(3);
+        result.Value.OrgId.Should().Be(1234);
+    }
+
+    [Fact]
+    public async Task GetOrganisationsAsync_NumericOrgId_DeserializesCorrectly()
+    {
+        const string json = """
+            {
+              "id": "org-1",
+              "schemaVersion": 3,
+              "orgId": 987654,
+              "registrations": [],
+              "accreditations": []
+            }
+            """;
+
+        var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
+
+        var result = await sut.GetOrganisationsAsync("987654");
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value!.OrgId.Should().Be(987654);
     }
 
     [Fact]
@@ -182,7 +204,7 @@ public class ReExClientTests
             {
               "id": "org-1",
               "schemaVersion": 3,
-              "orgId": "1234",
+              "orgId": 1234,
               "registrations": [
                 {
                   "id": "reg-1",
