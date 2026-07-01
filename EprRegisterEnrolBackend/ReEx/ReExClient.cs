@@ -27,6 +27,10 @@ public class ReExClient : IReExClient
         var baseUrl = config.Value.BaseUrl;
         if (!string.IsNullOrWhiteSpace(baseUrl))
             httpClient.BaseAddress = new Uri(baseUrl.TrimEnd('/') + '/');
+        else
+            _logger.LogWarning("ReExApi__BaseUrl is not configured — ReEx calls will fail");
+
+        _logger.LogInformation("ReExClient base URL is: {BaseUrl}", baseUrl);  
         _httpClient = httpClient;
     }
 
