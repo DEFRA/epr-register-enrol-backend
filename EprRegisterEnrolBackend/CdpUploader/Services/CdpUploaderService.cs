@@ -35,6 +35,8 @@ public class CdpUploaderService(
             request.S3Path
         );
 
+        request.Redirect = ToRelativeUri(request.Redirect);
+
         var client = httpClientFactory.CreateClient("DefaultClient");
 
         HttpResponseMessage response;
@@ -81,6 +83,16 @@ public class CdpUploaderService(
 
         logger.LogInformation("CDP upload initiated: uploadId={UploadId}", result.UploadId);
         return result;
+    }
+
+    // CDP Uploader requires "redirect" to be a relative URI; strip scheme/host/port if present.
+    private static string ToRelativeUri(string redirect)
+    {
+        if (Uri.TryCreate(redirect, UriKind.Absolute, out var absolute))
+        {
+            return absolute.PathAndQuery;
+        }
+        return redirect;
     }
 
     private static string RewriteHost(string url, string targetBase)

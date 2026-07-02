@@ -119,10 +119,102 @@ public class CdpUploaderServiceTests
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*not configured*");
     }
 
+    [Fact]
+    public async Task InitiateAsync_ConvertsAbsoluteRedirectToRelativePath()
+    {
+        var cdpResponse = new CdpInitiateResponse
+        {
+            UploadId = "upload-123",
+            UploadUrl = "http://localhost:7337/upload/upload-123",
+            StatusUrl = "http://localhost:7337/status/upload-123",
+        };
+
+        var handler = new StubHttpMessageHandler(HttpStatusCode.OK, cdpResponse);
+        using var client = new HttpClient(handler);
+        var sut = BuildSut(client);
+
+        await sut.InitiateAsync(
+            new CdpInitiateRequest
+            {
+                Redirect = "http://frontend.example.com/accreditation/x/status?y=1",
+                S3Bucket = "my-bucket",
+                S3Path = "uploads/test.csv",
+            }
+        );
+
+        var sentRequest = await handler
+            .LastRequest!
+            .Content!
+            .ReadFromJsonAsync<CdpInitiateRequest>();
+        sentRequest!.Redirect.Should().Be("/accreditation/x/status?y=1");
+    }
+
+    [Fact]
+    public async Task InitiateAsync_LeavesAlreadyRelativeRedirectUnchanged()
+    {
+        var cdpResponse = new CdpInitiateResponse
+        {
+            UploadId = "upload-123",
+            UploadUrl = "http://localhost:7337/upload/upload-123",
+            StatusUrl = "http://localhost:7337/status/upload-123",
+        };
+
+        var handler = new StubHttpMessageHandler(HttpStatusCode.OK, cdpResponse);
+        using var client = new HttpClient(handler);
+        var sut = BuildSut(client);
+
+        await sut.InitiateAsync(
+            new CdpInitiateRequest
+            {
+                Redirect = "/already/relative",
+                S3Bucket = "my-bucket",
+                S3Path = "uploads/test.csv",
+            }
+        );
+
+        var sentRequest = await handler
+            .LastRequest!
+            .Content!
+            .ReadFromJsonAsync<CdpInitiateRequest>();
+        sentRequest!.Redirect.Should().Be("/already/relative");
+    }
+
+    [Fact]
+    public async Task InitiateAsync_MalformedRedirect_PassesThroughUnchanged()
+    {
+        var cdpResponse = new CdpInitiateResponse
+        {
+            UploadId = "upload-123",
+            UploadUrl = "http://localhost:7337/upload/upload-123",
+            StatusUrl = "http://localhost:7337/status/upload-123",
+        };
+
+        var handler = new StubHttpMessageHandler(HttpStatusCode.OK, cdpResponse);
+        using var client = new HttpClient(handler);
+        var sut = BuildSut(client);
+
+        await sut.InitiateAsync(
+            new CdpInitiateRequest
+            {
+                Redirect = "",
+                S3Bucket = "my-bucket",
+                S3Path = "uploads/test.csv",
+            }
+        );
+
+        var sentRequest = await handler
+            .LastRequest!
+            .Content!
+            .ReadFromJsonAsync<CdpInitiateRequest>();
+        sentRequest!.Redirect.Should().Be("");
+    }
+
     private class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _status;
         private readonly object _body;
+
+        public HttpRequestMessage? LastRequest { get; private set; }
 
         public StubHttpMessageHandler(HttpStatusCode status, object body)
         {
@@ -130,13 +222,28 @@ public class CdpUploaderServiceTests
             _body = body;
         }
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken
         )
         {
+            if (request.Content is not null)
+            {
+                var bytes = await request.Content.ReadAsByteArrayAsync(cancellationToken);
+                LastRequest = request;
+                LastRequest.Content = new ByteArrayContent(bytes);
+                foreach (var header in request.Content.Headers)
+                {
+                    LastRequest.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+            else
+            {
+                LastRequest = request;
+            }
+
             var response = new HttpResponseMessage(_status) { Content = JsonContent.Create(_body) };
-            return Task.FromResult(response);
+            return response;
         }
     }
 }
