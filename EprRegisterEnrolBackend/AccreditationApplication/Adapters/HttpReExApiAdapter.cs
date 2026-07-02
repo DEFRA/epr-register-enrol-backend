@@ -112,11 +112,11 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         var accreditation = matches[0];
 
         // Validate the year against the accreditation's validFrom date
-        if (!DateOnly.TryParse(accreditation.Dates?.ValidFrom, out var validFrom))
+        if (!DateOnly.TryParse(accreditation.ValidFrom, out var validFrom))
         {
             logger.LogError(
                 "AccreditationId={AccreditationId}: validFrom is missing or unparseable ({Raw})",
-                accreditationId, accreditation.Dates?.ValidFrom
+                accreditationId, accreditation.ValidFrom
             );
             return ReExResult<ReExAccreditationDto>.Fail(
                 new ReExError(ReExErrorKind.ClientError, "Accreditation validFrom is missing or unparseable"),
