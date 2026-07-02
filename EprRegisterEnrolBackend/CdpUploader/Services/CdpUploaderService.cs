@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using Microsoft.Extensions.Logging;
@@ -12,6 +13,9 @@ public class CdpUploaderService(
     ILogger<CdpUploaderService> logger
 ) : ICdpUploaderService
 {
+    private static readonly JsonSerializerOptions ResponseJsonOptions =
+        new(JsonSerializerDefaults.Web);
+
     private readonly CdpUploaderConfig _config = config.Value;
 
     public async Task<CdpInitiateResponse> InitiateAsync(
@@ -29,13 +33,15 @@ public class CdpUploaderService(
         }
 
         var initiateUrl = $"{uploaderUrl.TrimEnd('/')}/initiate";
-        logger.LogInformation(
-            "Initiating CDP upload to {InitiateUrl} for path {S3Path}",
-            initiateUrl,
-            request.S3Path
-        );
 
         request.Redirect = ToRelativeUri(request.Redirect);
+
+        var requestJson = JsonSerializer.Serialize(request, ResponseJsonOptions);
+        logger.LogInformation(
+            "Calling CDP uploader POST {InitiateUrl} with body: {RequestBody}",
+            initiateUrl,
+            requestJson
+        );
 
         var client = httpClientFactory.CreateClient("DefaultClient");
 
@@ -46,26 +52,41 @@ public class CdpUploaderService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to reach CDP uploader at {InitiateUrl}", initiateUrl);
+            logger.LogError(
+                ex,
+                "Failed to reach CDP uploader at {InitiateUrl} with body: {RequestBody}",
+                initiateUrl,
+                requestJson
+            );
             throw;
         }
 
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+
         if (!response.IsSuccessStatusCode)
         {
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
             logger.LogError(
-                "CDP uploader returned {Status} from {InitiateUrl}: {Body}",
+                "CDP uploader returned {Status} from {InitiateUrl} for request body {RequestBody}: {ResponseBody}",
                 (int)response.StatusCode,
                 initiateUrl,
-                body
+                requestJson,
+                responseBody
             );
             throw new HttpRequestException(
                 $"CDP uploader initiate failed: {(int)response.StatusCode}"
             );
         }
 
-        var result = await response.Content.ReadFromJsonAsync<CdpInitiateResponse>(
-            cancellationToken: cancellationToken
+        logger.LogInformation(
+            "CDP uploader returned {Status} from {InitiateUrl}: {ResponseBody}",
+            (int)response.StatusCode,
+            initiateUrl,
+            responseBody
+        );
+
+        var result = JsonSerializer.Deserialize<CdpInitiateResponse>(
+            responseBody,
+            ResponseJsonOptions
         );
         if (result is null)
         {
@@ -81,7 +102,12 @@ public class CdpUploaderService(
             StatusUrl = RewriteHost(result.StatusUrl, uploaderUrl),
         };
 
-        logger.LogInformation("CDP upload initiated: uploadId={UploadId}", result.UploadId);
+        logger.LogInformation(
+            "CDP upload initiated: uploadId={UploadId}, uploadUrl={UploadUrl}, statusUrl={StatusUrl}",
+            result.UploadId,
+            result.UploadUrl,
+            result.StatusUrl
+        );
         return result;
     }
 
