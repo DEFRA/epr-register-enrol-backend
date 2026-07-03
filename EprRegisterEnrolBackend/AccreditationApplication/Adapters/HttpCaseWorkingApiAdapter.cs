@@ -110,6 +110,8 @@ public class HttpCaseWorkingApiAdapter(
             siteAddress = application.SiteAddress,
             siteAddressPostcode = ExtractPostcode(application.SiteAddress),
             operatorApplicationId = application.ApplicationId,
+            operatorOrganisationId = application.OrganisationId,
+            operatorRegistrationId = application.RegistrationId,
             operatorEmail = application.SubmittedBy?.Email,
             submittedBy = application.SubmittedBy is null ? null : new
             {
