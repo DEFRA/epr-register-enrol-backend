@@ -104,6 +104,8 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("materialsHandled")[0].GetString().Should().Be("plastic");
         payload.GetProperty("previousAccreditationYear").GetInt32().Should().Be(2025);
         payload.GetProperty("complianceIssuesReported").GetInt32().Should().Be(0);
+        payload.GetProperty("operatorOrganisationId").GetString().Should().Be("12345");
+        payload.GetProperty("operatorRegistrationId").GetString().Should().Be("reg-001");
         payload.GetProperty("operatorEmail").GetString().Should().Be("jane@example.com");
         payload.GetProperty("siteAddressPostcode").GetString().Should().Be("SW1A 1AA");
     }
