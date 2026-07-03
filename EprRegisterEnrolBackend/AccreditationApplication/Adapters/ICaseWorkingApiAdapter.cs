@@ -8,6 +8,14 @@ public interface ICaseWorkingApiAdapter
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
     );
+
+    // Returns null | "sent" | "failed", derived from the linked work item's audit log.
+    // Must never throw: a missing link, an unreachable ManagementBe, or a malformed response
+    // all degrade to null rather than failing the caller's GetById response (RA102-j7s).
+    Task<string?> GetNotificationStatusAsync(
+        AccreditationApplicationModel application,
+        CancellationToken cancellationToken = default
+    );
 }
 
 // WorkItemId is null when ManagementBe's response didn't carry a usable id (e.g. unparseable

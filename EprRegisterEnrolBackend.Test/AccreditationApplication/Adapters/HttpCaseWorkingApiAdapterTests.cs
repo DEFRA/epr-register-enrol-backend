@@ -373,6 +373,122 @@ public class HttpCaseWorkingApiAdapterTests
         HttpCaseWorkingApiAdapter.ExtractPostcode(input).Should().Be(expected);
     }
 
+    // --- GetNotificationStatusAsync ---
+
+    [Fact]
+    public async Task GetNotificationStatusAsync_NoLinkedWorkItem_ReturnsNullWithoutCallingManagementBe()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = null;
+
+        var result = await adapter.GetNotificationStatusAsync(app);
+
+        result.Should().BeNull();
+        handler.CapturedRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetNotificationStatusAsync_ResolvesFromAuditLog()
+    {
+        var workItemId = Guid.NewGuid();
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, CognitoClientId = TestClientId }
+        );
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.OK,
+            new
+            {
+                auditLog = new[]
+                {
+                    new
+                    {
+                        action = "notification-sent",
+                        details = new Dictionary<string, string?>
+                        {
+                            ["templateKey"] = "SubmissionConfirmation",
+                        },
+                        createdAt = DateTime.UtcNow,
+                    },
+                },
+            }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = workItemId;
+
+        var result = await adapter.GetNotificationStatusAsync(app);
+
+        result.Should().Be("sent");
+        handler
+            .CapturedRequest!.RequestUri!.ToString()
+            .Should()
+            .Be($"{TestUrl}/work-items/{workItemId}");
+        handler.CapturedRequest!.Method.Should().Be(HttpMethod.Get);
+    }
+
+    [Fact]
+    public async Task GetNotificationStatusAsync_NonSuccessResponse_ReturnsNull()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.InternalServerError,
+            new { title = "Error" }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.GetNotificationStatusAsync(app);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetNotificationStatusAsync_ManagementBeUnreachable_ReturnsNull()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory
+            .CreateClient("DefaultClient")
+            .Returns(new HttpClient(new ThrowingHttpMessageHandler()));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.GetNotificationStatusAsync(app);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetNotificationStatusAsync_EmptyUrl_ReturnsNullWithoutThrowing()
+    {
+        var (adapter, _) = CreateAdapter(url: "");
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.GetNotificationStatusAsync(app);
+
+        result.Should().BeNull();
+    }
+
     #region Test infrastructure
 
     internal class CapturingHttpMessageHandler : HttpMessageHandler
@@ -421,6 +537,17 @@ public class HttpCaseWorkingApiAdapterTests
             return Task.FromResult(
                 new HttpResponseMessage(_status) { Content = new StringContent(_body) }
             );
+        }
+    }
+
+    internal class ThrowingHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            throw new HttpRequestException("Simulated network failure");
         }
     }
 

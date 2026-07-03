@@ -400,6 +400,81 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    [Fact]
+    public async Task GetById_LinkedWorkItem_ReturnsAdapterNotificationStatus()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = Guid.NewGuid());
+        _factory
+            .MockCaseWorkingAdapter.GetNotificationStatusAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult<string?>("failed"));
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.NotificationStatus.Should().Be("failed");
+    }
+
+    [Fact]
+    public async Task GetById_NoLinkedWorkItem_NotificationStatusIsNull()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = null);
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.NotificationStatus.Should().BeNull();
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .GetNotificationStatusAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task GetById_AdapterThrows_Returns200WithNullNotificationStatus()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = Guid.NewGuid());
+        _factory
+            .MockCaseWorkingAdapter.GetNotificationStatusAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromException<string?>(new HttpRequestException("unreachable")));
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.NotificationStatus.Should().BeNull();
+    }
+
     // --- PatchPrns ---
 
     [Fact]

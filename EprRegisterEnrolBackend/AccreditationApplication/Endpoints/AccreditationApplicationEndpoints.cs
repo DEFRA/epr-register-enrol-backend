@@ -156,11 +156,44 @@ public static class AccreditationApplicationEndpoints
     private static async Task<IResult> GetById(
         string organisationId,
         string applicationId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        ICaseWorkingApiAdapter caseWorkingAdapter,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
     )
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        return application is null ? Results.NotFound() : Results.Ok(application);
+        if (application is null)
+            return Results.NotFound();
+
+        // Skip the round-trip entirely when there is nothing to look up (e.g. older
+        // applications submitted before the work-item id was persisted, or applications
+        // never submitted at all). Defence in depth otherwise: GetNotificationStatusAsync
+        // already guarantees it never throws, but this lookup must never be able to fail
+        // the response regardless of adapter implementation (RA102-j7s).
+        if (application.CaseManagementWorkItemId is not null)
+        {
+            try
+            {
+                application.NotificationStatus =
+                    await caseWorkingAdapter.GetNotificationStatusAsync(
+                        application,
+                        cancellationToken
+                    );
+            }
+            catch (Exception ex)
+            {
+                loggerFactory
+                    .CreateLogger("AccreditationApplicationEndpoints")
+                    .LogWarning(
+                        ex,
+                        "Failed to resolve notification status for applicationId={ApplicationId}",
+                        applicationId
+                    );
+            }
+        }
+
+        return Results.Ok(application);
     }
 
     private static async Task<IResult> PatchPrns(
