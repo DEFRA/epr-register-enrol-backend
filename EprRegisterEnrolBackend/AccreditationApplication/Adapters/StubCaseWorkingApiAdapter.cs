@@ -7,21 +7,23 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger)
     : ICaseWorkingApiAdapter
 {
-    public Task<string> SubmitApplicationAsync(
+    public Task<CaseWorkingSubmissionResult> SubmitApplicationAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
     )
     {
         var suffix = RandomNumberGenerator.GetInt32(1_000_000_000);
         var applicationReference = $"RA-{suffix:D9}";
+        var workItemId = Guid.NewGuid();
 
         logger.LogInformation(
-            "StubCaseWorkingApiAdapter.SubmitApplicationAsync called for applicationId={ApplicationId} generatedRef={ApplicationReference} org={OrganisationId}",
+            "StubCaseWorkingApiAdapter.SubmitApplicationAsync called for applicationId={ApplicationId} generatedRef={ApplicationReference} workItemId={WorkItemId} org={OrganisationId}",
             application.Id,
             applicationReference,
+            workItemId,
             application.OrganisationId
         );
 
-        return Task.FromResult(applicationReference);
+        return Task.FromResult(new CaseWorkingSubmissionResult(applicationReference, workItemId));
     }
 }

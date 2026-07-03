@@ -104,10 +104,7 @@ public static class AccreditationApplicationEndpoints
             SourceReExAccreditationId = priorYearData.AccreditationId,
             SourceYear = request.Year - 1,
             OverseasSites = priorYearData.IsExporter
-                ? new AccreditationApplicationOverseasSites
-                {
-                    Sites = priorYearData.OverseasSites,
-                }
+                ? new AccreditationApplicationOverseasSites { Sites = priorYearData.OverseasSites }
                 : null,
         };
 
@@ -482,11 +479,13 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
 
         if (application.ApplicationStatus == ApplicationStatus.Sent)
-            return Results.Ok(new SubmitResponse
-            {
-                AccreditationReference = application.ApplicationReference,
-                CaseManagementReference = application.CaseManagementReference
-            });
+            return Results.Ok(
+                new SubmitResponse
+                {
+                    AccreditationReference = application.ApplicationReference,
+                    CaseManagementReference = application.CaseManagementReference,
+                }
+            );
 
         if (application.ApplicationStatus != ApplicationStatus.Started)
             return Results.Conflict("Application must be in 'Started' status to submit.");
@@ -511,21 +510,24 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        var caseRef = await caseWorkingAdapter.SubmitApplicationAsync(
+        var submissionResult = await caseWorkingAdapter.SubmitApplicationAsync(
             application,
             cancellationToken
         );
-        application.ApplicationReference = caseRef;
-        application.CaseManagementReference = caseRef;
+        application.ApplicationReference = submissionResult.ApplicationReference;
+        application.CaseManagementReference = submissionResult.ApplicationReference;
+        application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to submit accreditation application.")
-            : Results.Ok(new SubmitResponse
-            {
-                AccreditationReference = updated.ApplicationReference,
-                CaseManagementReference = updated.CaseManagementReference
-            });
+            : Results.Ok(
+                new SubmitResponse
+                {
+                    AccreditationReference = updated.ApplicationReference,
+                    CaseManagementReference = updated.CaseManagementReference,
+                }
+            );
     }
 
     private static async Task<IResult> AddFile(
@@ -626,7 +628,10 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        var writeResult = await reExAdapter.WriteApprovedAccreditationAsync(approvedDto, cancellationToken);
+        var writeResult = await reExAdapter.WriteApprovedAccreditationAsync(
+            approvedDto,
+            cancellationToken
+        );
         if (!writeResult.IsSuccess)
             return Results.Problem(
                 statusCode: 502,
@@ -741,5 +746,4 @@ public static class AccreditationApplicationEndpoints
         var status = pendingUploadService.GetStatus(fileUploadId);
         return Results.Ok(status);
     }
-
 }

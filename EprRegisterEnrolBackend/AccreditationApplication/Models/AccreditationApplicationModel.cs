@@ -40,6 +40,8 @@ public class AccreditationApplicationModel
 
     public string? CaseManagementReference { get; set; }
 
+    public Guid? CaseManagementWorkItemId { get; set; }
+
     public string? RegistrationReference { get; set; }
 
     public SubmittedByModel? SubmittedBy { get; set; }

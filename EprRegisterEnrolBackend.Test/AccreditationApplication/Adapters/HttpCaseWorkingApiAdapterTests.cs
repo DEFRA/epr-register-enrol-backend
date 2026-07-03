@@ -82,7 +82,87 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var (adapter, _) = CreateAdapter();
         var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
-        result.Should().MatchRegex(@"^RA-\d{9}$");
+        result.ApplicationReference.Should().MatchRegex(@"^RA-\d{9}$");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_Success_ReturnsWorkItemIdFromResponse()
+    {
+        var expectedId = Guid.NewGuid();
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, CognitoClientId = TestClientId }
+        );
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.Created,
+            new
+            {
+                id = expectedId,
+                typeId = "re-accreditation",
+                stateId = "submitted",
+                payload = new { },
+            }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        result.WorkItemId.Should().Be(expectedId);
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_UnparseableResponseBody_StillReturnsReferenceWithNullWorkItemId()
+    {
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, CognitoClientId = TestClientId }
+        );
+        var handler = new RawBodyHttpMessageHandler(HttpStatusCode.Created, "not valid json");
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        result.ApplicationReference.Should().MatchRegex(@"^RA-\d{9}$");
+        result.WorkItemId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_ResponseMissingIdField_ReturnsNullWorkItemId()
+    {
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, CognitoClientId = TestClientId }
+        );
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.Created,
+            new
+            {
+                typeId = "re-accreditation",
+                stateId = "submitted",
+                payload = new { },
+            }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        result.ApplicationReference.Should().MatchRegex(@"^RA-\d{9}$");
+        result.WorkItemId.Should().BeNull();
     }
 
     [Fact]
@@ -206,8 +286,7 @@ public class HttpCaseWorkingApiAdapterTests
         await adapter.SubmitApplicationAsync(CreateTestApplication());
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
-        doc.RootElement
-            .GetProperty("applicationReference")
+        doc.RootElement.GetProperty("applicationReference")
             .GetString()
             .Should()
             .MatchRegex(@"^RA-\d{9}$");
@@ -222,7 +301,7 @@ public class HttpCaseWorkingApiAdapterTests
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var sent = doc.RootElement.GetProperty("applicationReference").GetString();
 
-        result.Should().Be(sent);
+        result.ApplicationReference.Should().Be(sent);
     }
 
     [Fact]
@@ -320,6 +399,28 @@ public class HttpCaseWorkingApiAdapterTests
                 CapturedRequestBody = await request.Content.ReadAsStringAsync(cancellationToken);
 
             return new HttpResponseMessage(_status) { Content = JsonContent.Create(_body) };
+        }
+    }
+
+    internal class RawBodyHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly HttpStatusCode _status;
+        private readonly string _body;
+
+        public RawBodyHttpMessageHandler(HttpStatusCode status, string body)
+        {
+            _status = status;
+            _body = body;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            return Task.FromResult(
+                new HttpResponseMessage(_status) { Content = new StringContent(_body) }
+            );
         }
     }
 

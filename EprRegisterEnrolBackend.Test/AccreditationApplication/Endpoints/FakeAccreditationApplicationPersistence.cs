@@ -9,9 +9,12 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     private readonly List<AccreditationApplicationModel> _store = [];
 
     public void Seed(AccreditationApplicationModel application) => _store.Add(application);
+
     public void Clear() => _store.Clear();
 
-    public Task<AccreditationApplicationModel?> CreateAsync(AccreditationApplicationModel application)
+    public Task<AccreditationApplicationModel?> CreateAsync(
+        AccreditationApplicationModel application
+    )
     {
         if (application.Id is null || application.Id == ObjectId.Empty)
             application.Id = ObjectId.GenerateNewId();
@@ -19,11 +22,17 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult<AccreditationApplicationModel?>(application);
     }
 
-    public Task<IEnumerable<AccreditationApplicationModel>> GetByOrganisationAsync(string organisationId) =>
+    public Task<IEnumerable<AccreditationApplicationModel>> GetByOrganisationAsync(
+        string organisationId
+    ) =>
         Task.FromResult<IEnumerable<AccreditationApplicationModel>>(
-            _store.Where(a => a.OrganisationId == organisationId).ToList());
+            _store.Where(a => a.OrganisationId == organisationId).ToList()
+        );
 
-    public Task<AccreditationApplicationModel?> GetByIdAsync(string organisationId, string applicationId)
+    public Task<AccreditationApplicationModel?> GetByIdAsync(
+        string organisationId,
+        string applicationId
+    )
     {
         if (!ObjectId.TryParse(applicationId, out var oid))
             return Task.FromResult<AccreditationApplicationModel?>(null);
@@ -33,32 +42,38 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
 
-    public Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application)
+    public Task<AccreditationApplicationModel?> UpdateAsync(
+        AccreditationApplicationModel application
+    )
     {
         var idx = _store.FindIndex(a => a.Id == application.Id);
-        if (idx < 0) return Task.FromResult<AccreditationApplicationModel?>(null);
+        if (idx < 0)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
         _store[idx] = application;
         return Task.FromResult<AccreditationApplicationModel?>(application);
     }
 
-    private static AccreditationApplicationModel ShallowCopy(AccreditationApplicationModel src) => new()
-    {
-        Id = src.Id,
-        OrganisationId = src.OrganisationId,
-        Year = src.Year,
-        RegistrationId = src.RegistrationId,
-        MaterialType = src.MaterialType,
-        ApplicationStatus = src.ApplicationStatus,
-        SourceReExAccreditationId = src.SourceReExAccreditationId,
-        SourceYear = src.SourceYear,
-        ApplicationReference = src.ApplicationReference,
-        SubmittedBy = src.SubmittedBy,
-        DateSent = src.DateSent,
-        DateLastEdited = src.DateLastEdited,
-        CreatedAt = src.CreatedAt,
-        UpdatedAt = src.UpdatedAt,
-        Prns = src.Prns,
-        BusinessPlan = src.BusinessPlan,
-        SamplingPlan = src.SamplingPlan
-    };
+    private static AccreditationApplicationModel ShallowCopy(AccreditationApplicationModel src) =>
+        new()
+        {
+            Id = src.Id,
+            OrganisationId = src.OrganisationId,
+            Year = src.Year,
+            RegistrationId = src.RegistrationId,
+            MaterialType = src.MaterialType,
+            ApplicationStatus = src.ApplicationStatus,
+            SourceReExAccreditationId = src.SourceReExAccreditationId,
+            SourceYear = src.SourceYear,
+            ApplicationReference = src.ApplicationReference,
+            CaseManagementReference = src.CaseManagementReference,
+            CaseManagementWorkItemId = src.CaseManagementWorkItemId,
+            SubmittedBy = src.SubmittedBy,
+            DateSent = src.DateSent,
+            DateLastEdited = src.DateLastEdited,
+            CreatedAt = src.CreatedAt,
+            UpdatedAt = src.UpdatedAt,
+            Prns = src.Prns,
+            BusinessPlan = src.BusinessPlan,
+            SamplingPlan = src.SamplingPlan,
+        };
 }

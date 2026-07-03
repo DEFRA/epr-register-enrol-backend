@@ -22,7 +22,7 @@ public class HttpCaseWorkingApiAdapter(
 
     private readonly CaseWorkingApiConfig _config = config.Value;
 
-    public async Task<string> SubmitApplicationAsync(
+    public async Task<CaseWorkingSubmissionResult> SubmitApplicationAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
     )
@@ -83,18 +83,37 @@ public class HttpCaseWorkingApiAdapter(
             );
         }
 
-        var result = await response.Content.ReadFromJsonAsync<WorkItemResponseDto>(
-            JsonOptions,
-            cancellationToken
-        );
+        WorkItemResponseDto? result = null;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<WorkItemResponseDto>(
+                JsonOptions,
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            // Reference is already known locally, so a failure to parse the id back out of
+            // ManagementBe's response must not fail the submission — it just goes uncaptured.
+            logger.LogWarning(
+                ex,
+                "Failed to parse ManagementBe work item response from {Endpoint}; work item id will not be captured",
+                endpoint
+            );
+        }
+
+        // Guid.Empty means the "id" field was absent from the response body (not a parse
+        // failure — System.Text.Json leaves missing value-type properties at their default),
+        // which is just as uncaptured as a parse failure and must be treated the same way.
+        Guid? workItemId = result is null || result.Id == Guid.Empty ? null : result.Id;
 
         logger.LogInformation(
             "Work item created: workItemId={WorkItemId} applicationReference={ApplicationReference}",
-            result?.Id,
+            workItemId,
             applicationReference
         );
 
-        return applicationReference;
+        return new CaseWorkingSubmissionResult(applicationReference, workItemId);
     }
 
     private static object BuildPayload(AccreditationApplicationModel application)
@@ -111,20 +130,20 @@ public class HttpCaseWorkingApiAdapter(
             siteAddressPostcode = ExtractPostcode(application.SiteAddress),
             operatorApplicationId = application.ApplicationId,
             operatorEmail = application.SubmittedBy?.Email,
-            submittedBy = application.SubmittedBy is null ? null : new
-            {
-                fullName = application.SubmittedBy.FullName,
-                jobTitle = application.SubmittedBy.JobTitle,
-                email = application.SubmittedBy.Email,
-            },
+            submittedBy = application.SubmittedBy is null
+                ? null
+                : new
+                {
+                    fullName = application.SubmittedBy.FullName,
+                    jobTitle = application.SubmittedBy.JobTitle,
+                    email = application.SubmittedBy.Email,
+                },
             prns = new
             {
                 plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
-                authorisers = application.Prns.Authorisers.Select(a => new
-                {
-                    fullName = a.FullName,
-                    email = a.Email,
-                }).ToArray(),
+                authorisers = application
+                    .Prns.Authorisers.Select(a => new { fullName = a.FullName, email = a.Email })
+                    .ToArray(),
             },
             businessPlan = new
             {
@@ -143,12 +162,14 @@ public class HttpCaseWorkingApiAdapter(
             },
             samplingPlan = new
             {
-                files = application.SamplingPlan.Files.Select(f => new
-                {
-                    filename = f.Filename,
-                    uploadedAt = f.UploadedAt,
-                    scanStatus = f.ScanStatus.ToString(),
-                }).ToArray(),
+                files = application
+                    .SamplingPlan.Files.Select(f => new
+                    {
+                        filename = f.Filename,
+                        uploadedAt = f.UploadedAt,
+                        scanStatus = f.ScanStatus.ToString(),
+                    })
+                    .ToArray(),
             },
         };
     }
@@ -161,8 +182,8 @@ public class HttpCaseWorkingApiAdapter(
         var match = System.Text.RegularExpressions.Regex.Match(
             siteAddress,
             @"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase |
-            System.Text.RegularExpressions.RegexOptions.RightToLeft
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.RightToLeft
         );
         return match.Success ? match.Value.ToUpperInvariant() : null;
     }
