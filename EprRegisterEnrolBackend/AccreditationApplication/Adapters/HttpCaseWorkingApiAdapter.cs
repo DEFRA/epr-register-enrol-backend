@@ -22,7 +22,7 @@ public class HttpCaseWorkingApiAdapter(
 
     private readonly CaseWorkingApiConfig _config = config.Value;
 
-    public async Task<string> SubmitApplicationAsync(
+    public async Task<CaseWorkingSubmissionResult> SubmitApplicationAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
     )
@@ -55,7 +55,7 @@ public class HttpCaseWorkingApiAdapter(
 
         var userId = application.SubmittedBy?.Email ?? application.OrganisationId;
         var userName = application.SubmittedBy?.FullName;
-        using var request = BuildRequest(endpoint, body, userId, userName);
+        using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
         var client = httpClientFactory.CreateClient("DefaultClient");
 
         HttpResponseMessage response;
@@ -83,18 +83,101 @@ public class HttpCaseWorkingApiAdapter(
             );
         }
 
-        var result = await response.Content.ReadFromJsonAsync<WorkItemResponseDto>(
-            JsonOptions,
-            cancellationToken
-        );
+        WorkItemResponseDto? result = null;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<WorkItemResponseDto>(
+                JsonOptions,
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            // Reference is already known locally, so a failure to parse the id back out of
+            // ManagementBe's response must not fail the submission — it just goes uncaptured.
+            logger.LogWarning(
+                ex,
+                "Failed to parse ManagementBe work item response from {Endpoint}; work item id will not be captured",
+                endpoint
+            );
+        }
+
+        // Guid.Empty means the "id" field was absent from the response body (not a parse
+        // failure — System.Text.Json leaves missing value-type properties at their default),
+        // which is just as uncaptured as a parse failure and must be treated the same way.
+        Guid? workItemId = result is null || result.Id == Guid.Empty ? null : result.Id;
 
         logger.LogInformation(
             "Work item created: workItemId={WorkItemId} applicationReference={ApplicationReference}",
-            result?.Id,
+            workItemId,
             applicationReference
         );
 
-        return applicationReference;
+        return new CaseWorkingSubmissionResult(applicationReference, workItemId);
+    }
+
+    public async Task<string?> GetNotificationStatusAsync(
+        AccreditationApplicationModel application,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (application.CaseManagementWorkItemId is not { } workItemId)
+        {
+            return null;
+        }
+
+        var url = _config.Url;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            logger.LogWarning(
+                "CaseWorking API URL is not configured. Cannot look up notification status for workItemId={WorkItemId}.",
+                workItemId
+            );
+            return null;
+        }
+
+        var endpoint = $"{url.TrimEnd('/')}/work-items/{workItemId}";
+
+        try
+        {
+            var userId = application.SubmittedBy?.Email ?? application.OrganisationId;
+            var userName = application.SubmittedBy?.FullName;
+            using var request = BuildRequest(
+                HttpMethod.Get,
+                endpoint,
+                userId: userId,
+                userName: userName
+            );
+            var client = httpClientFactory.CreateClient("DefaultClient");
+
+            var response = await client.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogWarning(
+                    "ManagementBe returned {Status} from {Endpoint}; notification status will not be captured",
+                    (int)response.StatusCode,
+                    endpoint
+                );
+                return null;
+            }
+
+            var detail = await response.Content.ReadFromJsonAsync<WorkItemDetailResponseDto>(
+                JsonOptions,
+                cancellationToken
+            );
+            return NotificationStatusResolver.Resolve(detail?.AuditLog);
+        }
+        catch (Exception ex)
+        {
+            // Must never fail the caller's GetById response — the work item id is only ever
+            // an optional correlation aid, not something the operator's own data depends on.
+            logger.LogWarning(
+                ex,
+                "Failed to look up notification status from ManagementBe at {Endpoint}",
+                endpoint
+            );
+            return null;
+        }
     }
 
     private static object BuildPayload(AccreditationApplicationModel application)
@@ -113,20 +196,20 @@ public class HttpCaseWorkingApiAdapter(
             operatorOrganisationId = application.OrganisationId,
             operatorRegistrationId = application.RegistrationId,
             operatorEmail = application.SubmittedBy?.Email,
-            submittedBy = application.SubmittedBy is null ? null : new
-            {
-                fullName = application.SubmittedBy.FullName,
-                jobTitle = application.SubmittedBy.JobTitle,
-                email = application.SubmittedBy.Email,
-            },
+            submittedBy = application.SubmittedBy is null
+                ? null
+                : new
+                {
+                    fullName = application.SubmittedBy.FullName,
+                    jobTitle = application.SubmittedBy.JobTitle,
+                    email = application.SubmittedBy.Email,
+                },
             prns = new
             {
                 plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
-                authorisers = application.Prns.Authorisers.Select(a => new
-                {
-                    fullName = a.FullName,
-                    email = a.Email,
-                }).ToArray(),
+                authorisers = application
+                    .Prns.Authorisers.Select(a => new { fullName = a.FullName, email = a.Email })
+                    .ToArray(),
             },
             businessPlan = new
             {
@@ -145,12 +228,14 @@ public class HttpCaseWorkingApiAdapter(
             },
             samplingPlan = new
             {
-                files = application.SamplingPlan.Files.Select(f => new
-                {
-                    filename = f.Filename,
-                    uploadedAt = f.UploadedAt,
-                    scanStatus = f.ScanStatus.ToString(),
-                }).ToArray(),
+                files = application
+                    .SamplingPlan.Files.Select(f => new
+                    {
+                        filename = f.Filename,
+                        uploadedAt = f.UploadedAt,
+                        scanStatus = f.ScanStatus.ToString(),
+                    })
+                    .ToArray(),
             },
         };
     }
@@ -163,23 +248,25 @@ public class HttpCaseWorkingApiAdapter(
         var match = System.Text.RegularExpressions.Regex.Match(
             siteAddress,
             @"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase |
-            System.Text.RegularExpressions.RegexOptions.RightToLeft
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.RightToLeft
         );
         return match.Success ? match.Value.ToUpperInvariant() : null;
     }
 
     private HttpRequestMessage BuildRequest(
+        HttpMethod method,
         string url,
-        CreateWorkItemRequest body,
+        object? body = null,
         string? userId = null,
         string? userName = null
     )
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, url)
+        var request = new HttpRequestMessage(method, url);
+        if (body is not null)
         {
-            Content = JsonContent.Create(body, options: JsonOptions),
-        };
+            request.Content = JsonContent.Create(body, options: JsonOptions);
+        }
 
         request.Headers.Add("x-cdp-cognito-client-id", _config.CognitoClientId);
 

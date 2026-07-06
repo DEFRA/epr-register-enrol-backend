@@ -40,6 +40,8 @@ public class AccreditationApplicationModel
 
     public string? CaseManagementReference { get; set; }
 
+    public Guid? CaseManagementWorkItemId { get; set; }
+
     public string? RegistrationReference { get; set; }
 
     public SubmittedByModel? SubmittedBy { get; set; }
@@ -61,6 +63,11 @@ public class AccreditationApplicationModel
     public AccreditationApplicationOverseasSites? OverseasSites { get; set; }
 
     public AccreditationApplicationBesEvidence? BesEvidence { get; set; }
+
+    // RA102-j7s: live-derived on GetById from the linked ManagementBe work item's audit log —
+    // never persisted, so BsonIgnore keeps a transient read-time value out of Mongo writes.
+    [BsonIgnore]
+    public string? NotificationStatus { get; set; }
 }
 
 public class SubmittedByModel

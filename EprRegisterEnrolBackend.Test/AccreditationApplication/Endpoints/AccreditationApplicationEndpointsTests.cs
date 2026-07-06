@@ -85,7 +85,10 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         _factory
             .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
             )
             .Returns(Task.FromResult(MinimalAdapterSuccess()));
 
@@ -123,8 +126,14 @@ public class AccreditationApplicationEndpointsTests
                             Year = 2025,
                             IsExporter = false,
                             OverseasSites = [],
-                            Prns = new ReExPrnsDto { PlannedTonnageBand = PlannedTonnageBand.UpTo1000 },
-                            BusinessPlan = new ReExBusinessPlanDto { NewInfrastructurePercent = 20 },
+                            Prns = new ReExPrnsDto
+                            {
+                                PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+                            },
+                            BusinessPlan = new ReExBusinessPlanDto
+                            {
+                                NewInfrastructurePercent = 20,
+                            },
                         },
                         200
                     )
@@ -180,7 +189,10 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         _factory
             .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
             )
             .Returns(Task.FromResult(MinimalAdapterSuccess()));
 
@@ -209,7 +221,10 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         _factory
             .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
             )
             .Returns(
                 Task.FromResult(
@@ -253,14 +268,19 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         _factory
             .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
             )
-            .Returns(Task.FromResult(
-                ReExResult<ReExAccreditationDto>.Fail(
-                    new ReExError(ReExErrorKind.NotFound, "No prior year accreditation found"),
-                    404
+            .Returns(
+                Task.FromResult(
+                    ReExResult<ReExAccreditationDto>.Fail(
+                        new ReExError(ReExErrorKind.NotFound, "No prior year accreditation found"),
+                        404
+                    )
                 )
-            ));
+            );
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
@@ -278,14 +298,19 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         _factory
             .MockReExAdapter.GetAccreditationAsync(
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
             )
-            .Returns(Task.FromResult(
-                ReExResult<ReExAccreditationDto>.Fail(
-                    new ReExError(ReExErrorKind.ServerError, "Upstream error"),
-                    500
+            .Returns(
+                Task.FromResult(
+                    ReExResult<ReExAccreditationDto>.Fail(
+                        new ReExError(ReExErrorKind.ServerError, "Upstream error"),
+                        500
+                    )
                 )
-            ));
+            );
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
@@ -301,12 +326,15 @@ public class AccreditationApplicationEndpointsTests
     public async Task Seed_DuplicateSeed_ReturnsExistingDocument_WithoutCallingAdapter()
     {
         Reset();
-        SeedApplication(orgId: "org-123", configure: a =>
-        {
-            a.RegistrationId = "reg-1";
-            a.MaterialType = MaterialType.Steel;
-            a.Year = 2026;
-        });
+        SeedApplication(
+            orgId: "org-123",
+            configure: a =>
+            {
+                a.RegistrationId = "reg-1";
+                a.MaterialType = MaterialType.Steel;
+                a.Year = 2026;
+            }
+        );
 
         var request = new SeedRequest { Year = 2026 };
         var response = await _client.PostAsJsonAsync(
@@ -316,9 +344,13 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        await _factory.MockReExAdapter.DidNotReceive()
+        await _factory
+            .MockReExAdapter.DidNotReceive()
             .GetAccreditationAsync(
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MaterialType>(), Arg.Any<int>()
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
             );
     }
 
@@ -366,6 +398,81 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task GetById_LinkedWorkItem_ReturnsAdapterNotificationStatus()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = Guid.NewGuid());
+        _factory
+            .MockCaseWorkingAdapter.GetNotificationStatusAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult<string?>("failed"));
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.NotificationStatus.Should().Be("failed");
+    }
+
+    [Fact]
+    public async Task GetById_NoLinkedWorkItem_NotificationStatusIsNull()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = null);
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.NotificationStatus.Should().BeNull();
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .GetNotificationStatusAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task GetById_AdapterThrows_Returns200WithNullNotificationStatus()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = Guid.NewGuid());
+        _factory
+            .MockCaseWorkingAdapter.GetNotificationStatusAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromException<string?>(new HttpRequestException("unreachable")));
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.NotificationStatus.Should().BeNull();
     }
 
     // --- PatchPrns ---
@@ -501,7 +608,9 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult("RA-123456789"));
+            .Returns(
+                Task.FromResult(new CaseWorkingSubmissionResult("RA-123456789", Guid.NewGuid()))
+            );
 
         var request = new SubmitRequest
         {
@@ -528,6 +637,88 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             );
+    }
+
+    [Fact]
+    public async Task Submit_Success_PersistsCaseManagementWorkItemId()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Completed;
+                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
+                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
+            }
+        );
+        var workItemId = Guid.NewGuid();
+        _factory
+            .MockCaseWorkingAdapter.SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new CaseWorkingSubmissionResult("RA-123456789", workItemId)));
+
+        var request = new SubmitRequest
+        {
+            FullName = "John Operator",
+            JobTitle = "Operations Manager",
+            Email = "john@example.com",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.CaseManagementWorkItemId.Should().Be(workItemId);
+    }
+
+    [Fact]
+    public async Task Submit_AdapterReturnsNullWorkItemId_PersistsNullWithoutFailingSubmission()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Completed;
+                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
+                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new CaseWorkingSubmissionResult("RA-123456789", null)));
+
+        var request = new SubmitRequest
+        {
+            FullName = "John Operator",
+            JobTitle = "Operations Manager",
+            Email = "john@example.com",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationReference.Should().Be("RA-123456789");
+        stored.CaseManagementWorkItemId.Should().BeNull();
     }
 
     [Fact]
@@ -646,7 +837,11 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromException<string>(new HttpRequestException("adapter unavailable")));
+            .Returns(
+                Task.FromException<CaseWorkingSubmissionResult>(
+                    new HttpRequestException("adapter unavailable")
+                )
+            );
 
         var request = new SubmitRequest
         {
@@ -755,11 +950,13 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<ApprovedAccreditationDto>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(
-                ReExResult<bool>.Fail(
-                    new ReExError(ReExErrorKind.ServerError, "upstream failure")
+            .Returns(
+                Task.FromResult(
+                    ReExResult<bool>.Fail(
+                        new ReExError(ReExErrorKind.ServerError, "upstream failure")
+                    )
                 )
-            ));
+            );
 
         var response = await _client.PostAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
