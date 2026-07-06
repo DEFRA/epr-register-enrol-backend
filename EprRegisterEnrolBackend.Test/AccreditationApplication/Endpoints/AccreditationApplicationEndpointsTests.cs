@@ -973,7 +973,12 @@ public class AccreditationApplicationEndpointsTests
                 }
             );
 
-        var request = new { redirectUrl = "http://frontend/redirect", s3Path = "uploads/test.csv" };
+        var request = new
+        {
+            redirectUrl = "http://frontend/redirect",
+            s3Bucket = "test-bucket",
+            s3Path = "uploads/test.csv",
+        };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/initiate",
             request,
@@ -988,6 +993,94 @@ public class AccreditationApplicationEndpointsTests
         body!.UploadUrl.Should().Be("http://localhost:7337/upload/cdp-upload-id");
         body.StatusUrl.Should().Contain("/files/").And.Contain("/status");
         body.FileUploadId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task InitiateUpload_SendsClientSuppliedBucketAndPrefixedPath()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        _factory
+            .MockCdpUploaderService.InitiateAsync(
+                Arg.Any<CdpInitiateRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new CdpInitiateResponse
+                {
+                    UploadId = "cdp-upload-id",
+                    UploadUrl = "http://localhost:7337/upload/cdp-upload-id",
+                    StatusUrl = "http://localhost:7337/status/cdp-upload-id",
+                }
+            );
+
+        var request = new
+        {
+            redirectUrl = "http://frontend/redirect",
+            s3Bucket = "test-epr-register-enrol-bucket",
+            s3Path = "uploads/test.csv",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/initiate",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockCdpUploaderService.Received(1)
+            .InitiateAsync(
+                Arg.Is<CdpInitiateRequest>(r =>
+                    r.S3Bucket == "test-epr-register-enrol-bucket"
+                    && r.S3Path == "sampling-plans/uploads/test.csv"
+                ),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task InitiateBesEvidenceUpload_PrefixesPathWithBesEvidenceBucket()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        _factory
+            .MockCdpUploaderService.InitiateAsync(
+                Arg.Any<CdpInitiateRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new CdpInitiateResponse
+                {
+                    UploadId = "cdp-upload-id",
+                    UploadUrl = "http://localhost:7337/upload/cdp-upload-id",
+                    StatusUrl = "http://localhost:7337/status/cdp-upload-id",
+                }
+            );
+
+        var request = new
+        {
+            redirectUrl = "http://frontend/redirect",
+            s3Bucket = "test-epr-register-enrol-bucket",
+            s3Path = "accreditation/bes-evidence/test.pdf",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/bes-evidence/initiate",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockCdpUploaderService.Received(1)
+            .InitiateAsync(
+                Arg.Is<CdpInitiateRequest>(r =>
+                    r.S3Bucket == "test-epr-register-enrol-bucket"
+                    && r.S3Path == "bes-evidence/accreditation/bes-evidence/test.pdf"
+                ),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]

@@ -72,6 +72,7 @@ public class CdpStatusResponse
 public class InitiateUploadRequest
 {
     public required string RedirectUrl { get; set; }
+    public required string S3Bucket { get; set; }
     public required string S3Path { get; set; }
     public List<string> MimeTypes { get; set; } = [];
     public long? MaxFileSize { get; set; }

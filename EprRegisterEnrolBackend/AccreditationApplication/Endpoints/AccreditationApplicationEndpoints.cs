@@ -42,6 +42,10 @@ public static class AccreditationApplicationEndpoints
         group.MapPost("{organisationId}/{applicationId}/approve", Approve);
         group.MapPost("{organisationId}/{applicationId}/reject", Reject);
         group.MapPost("{organisationId}/{applicationId}/files/initiate", InitiateUpload);
+        group.MapPost(
+            "{organisationId}/{applicationId}/files/bes-evidence/initiate",
+            InitiateBesEvidenceUpload
+        );
         group.MapPost("files/upload-completed", UploadCompleted);
         group.MapGet(
             "{organisationId}/{applicationId}/files/{fileUploadId}/status",
@@ -670,7 +674,7 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(updated);
     }
 
-    private static async Task<IResult> InitiateUpload(
+    private static Task<IResult> InitiateUpload(
         string organisationId,
         string applicationId,
         InitiateUploadRequest request,
@@ -679,6 +683,51 @@ public static class AccreditationApplicationEndpoints
         IOptions<CdpUploaderConfig> cdpConfig,
         IOptions<AppConfig> appConfig,
         CancellationToken cancellationToken
+    ) =>
+        InitiateUploadInternal(
+            organisationId,
+            applicationId,
+            request,
+            cdpUploaderService,
+            pendingUploadService,
+            cdpConfig,
+            appConfig,
+            cancellationToken,
+            cdpConfig.Value.SamplingPlanBucket
+        );
+
+    private static Task<IResult> InitiateBesEvidenceUpload(
+        string organisationId,
+        string applicationId,
+        InitiateUploadRequest request,
+        ICdpUploaderService cdpUploaderService,
+        IPendingUploadService pendingUploadService,
+        IOptions<CdpUploaderConfig> cdpConfig,
+        IOptions<AppConfig> appConfig,
+        CancellationToken cancellationToken
+    ) =>
+        InitiateUploadInternal(
+            organisationId,
+            applicationId,
+            request,
+            cdpUploaderService,
+            pendingUploadService,
+            cdpConfig,
+            appConfig,
+            cancellationToken,
+            cdpConfig.Value.BesEvidenceBucket
+        );
+
+    private static async Task<IResult> InitiateUploadInternal(
+        string organisationId,
+        string applicationId,
+        InitiateUploadRequest request,
+        ICdpUploaderService cdpUploaderService,
+        IPendingUploadService pendingUploadService,
+        IOptions<CdpUploaderConfig> cdpConfig,
+        IOptions<AppConfig> appConfig,
+        CancellationToken cancellationToken,
+        string bucketPrefix
     )
     {
         var fileUploadId = Guid.NewGuid().ToString();
@@ -696,8 +745,8 @@ public static class AccreditationApplicationEndpoints
         {
             Redirect = request.RedirectUrl,
             Callback = callbackUrl,
-            S3Bucket = cdpConfig.Value.SamplingPlanBucket,
-            S3Path = request.S3Path,
+            S3Bucket = request.S3Bucket,
+            S3Path = $"{bucketPrefix.Trim('/')}/{request.S3Path.TrimStart('/')}",
             MimeTypes = request.MimeTypes,
             MaxFileSize = request.MaxFileSize,
             Metadata = metadata,
