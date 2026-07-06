@@ -44,6 +44,7 @@ public static class FileUploadEndpoints
             Filename = request.Filename,
             ContentType = request.ContentType,
             S3Key = request.S3Key,
+            S3Bucket = request.S3Bucket,
             UploadedByUserId = request.UploadedByUserId,
             ScanStatus = request.ScanStatus,
         };
@@ -112,7 +113,7 @@ public static class FileUploadEndpoints
             );
 
         var presignedUrl = await s3Service.GeneratePresignedDownloadUrlAsync(
-            cdpConfig.Value.GenericFilesBucket,
+            fileUpload.S3Bucket ?? cdpConfig.Value.GenericFilesBucket,
             fileUpload.S3Key,
             fileUpload.Filename,
             cancellationToken
@@ -144,8 +145,8 @@ public static class FileUploadEndpoints
         {
             Redirect = request.RedirectUrl,
             Callback = callbackUrl,
-            S3Bucket = cdpConfig.Value.GenericFilesBucket,
-            S3Path = request.S3Path,
+            S3Bucket = request.S3Bucket,
+            S3Path = $"{cdpConfig.Value.GenericFilesBucket.Trim('/')}/{request.S3Path.TrimStart('/')}",
             MimeTypes = request.MimeTypes,
             MaxFileSize = request.MaxFileSize,
             Metadata = metadata,

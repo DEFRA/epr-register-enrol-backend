@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.FileUpload.Models;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -46,6 +47,7 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
             Filename = "test.pdf",
             ContentType = "application/pdf",
             S3Key = $"file-uploads/{material}/{year}/test.pdf",
+            S3Bucket = "test-epr-register-enrol-bucket",
             ScanStatus = scanStatus,
         };
         configure?.Invoke(model);
@@ -63,6 +65,7 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
             Filename = "report.pdf",
             ContentType = "application/pdf",
             S3Key = "file-uploads/Steel/2025/report.pdf",
+            S3Bucket = "test-epr-register-enrol-bucket",
         };
 
     // --- POST /api/v1/file-uploads ---
@@ -270,6 +273,48 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         body.Should().Contain("presignedUrl");
         body.Should().Contain(expectedUrl);
+
+        await _factory
+            .MockS3Service.Received(1)
+            .GeneratePresignedDownloadUrlAsync(
+                "test-epr-register-enrol-bucket",
+                seeded.S3Key,
+                seeded.Filename,
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Download_FileWithoutPersistedBucket_FallsBackToGenericFilesBucketConfig()
+    {
+        Reset();
+        var seeded = SeedFileUpload(
+            scanStatus: FileScanStatus.Clean,
+            configure: m => m.S3Bucket = null
+        );
+        _factory
+            .MockS3Service.GeneratePresignedDownloadUrlAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult("https://s3.example.com/presigned?sig=abc"));
+
+        var response = await _client.GetAsync(
+            $"/api/v1/file-uploads/{seeded.FileUploadId}/download",
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockS3Service.Received(1)
+            .GeneratePresignedDownloadUrlAsync(
+                "file-uploads",
+                seeded.S3Key,
+                seeded.Filename,
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -311,5 +356,49 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // --- POST /api/v1/file-uploads/initiate ---
+
+    [Fact]
+    public async Task InitiateFileUpload_SendsClientSuppliedBucketAndPrefixedPath()
+    {
+        Reset();
+        _factory
+            .MockCdpUploaderService.InitiateAsync(
+                Arg.Any<CdpInitiateRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new CdpInitiateResponse
+                {
+                    UploadId = "cdp-upload-id",
+                    UploadUrl = "http://localhost:7337/upload/cdp-upload-id",
+                    StatusUrl = "http://localhost:7337/status/cdp-upload-id",
+                }
+            );
+
+        var request = new
+        {
+            redirectUrl = "http://frontend/redirect",
+            s3Bucket = "test-epr-register-enrol-bucket",
+            s3Path = "Steel/2025/report.pdf",
+        };
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/file-uploads/initiate",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockCdpUploaderService.Received(1)
+            .InitiateAsync(
+                Arg.Is<CdpInitiateRequest>(r =>
+                    r.S3Bucket == "test-epr-register-enrol-bucket"
+                    && r.S3Path == "file-uploads/Steel/2025/report.pdf"
+                ),
+                Arg.Any<CancellationToken>()
+            );
     }
 }

@@ -29,6 +29,8 @@ public class FileUploadModel
 
     public required string S3Key { get; set; }
 
+    public string? S3Bucket { get; set; }
+
     public FileScanStatus ScanStatus { get; set; } = FileScanStatus.Pending;
 
     public string? UploadedByUserId { get; set; }
