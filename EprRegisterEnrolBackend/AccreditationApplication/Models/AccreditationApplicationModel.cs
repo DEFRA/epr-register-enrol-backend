@@ -40,6 +40,10 @@ public class AccreditationApplicationModel
 
     public string? CaseManagementReference { get; set; }
 
+    // Explicit representation required: this driver version defaults an unannotated Guid to
+    // GuidRepresentation.Unspecified, which throws BsonSerializationException on write rather
+    // than silently picking a default.
+    [BsonGuidRepresentation(GuidRepresentation.Standard)]
     public Guid? CaseManagementWorkItemId { get; set; }
 
     public string? RegistrationReference { get; set; }
