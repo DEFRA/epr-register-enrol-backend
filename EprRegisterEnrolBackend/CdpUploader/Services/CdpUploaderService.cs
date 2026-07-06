@@ -13,8 +13,9 @@ public class CdpUploaderService(
     ILogger<CdpUploaderService> logger
 ) : ICdpUploaderService
 {
-    private static readonly JsonSerializerOptions ResponseJsonOptions =
-        new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions ResponseJsonOptions = new(
+        JsonSerializerDefaults.Web
+    );
 
     private readonly CdpUploaderConfig _config = config.Value;
 
@@ -48,7 +49,16 @@ public class CdpUploaderService(
         HttpResponseMessage response;
         try
         {
-            response = await client.PostAsJsonAsync(initiateUrl, request, cancellationToken);
+            // CDP uploader is a Node service expecting camelCase JSON (s3Bucket, s3Path,
+            // etc.) — without ResponseJsonOptions here, PostAsJsonAsync's PascalCase default
+            // means fields like S3Bucket never reach it under a name it recognises, so the
+            // bucket is effectively never passed even though the C# property is set.
+            response = await client.PostAsJsonAsync(
+                initiateUrl,
+                request,
+                ResponseJsonOptions,
+                cancellationToken
+            );
         }
         catch (Exception ex)
         {
