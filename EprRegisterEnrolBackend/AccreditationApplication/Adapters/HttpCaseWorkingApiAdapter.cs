@@ -73,10 +73,11 @@ public class HttpCaseWorkingApiAdapter(
         {
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
             logger.LogError(
-                "ManagementBe returned {Status} from {Endpoint}: {Body}",
+                "ManagementBe returned {Status} from {Endpoint}: {Body}. ResponseHeaders={ResponseHeaders}",
                 (int)response.StatusCode,
                 endpoint,
-                responseBody
+                responseBody,
+                FormatHeaders(response.Headers)
             );
             throw new HttpRequestException(
                 $"ManagementBe work item submission failed: {(int)response.StatusCode}"
@@ -275,6 +276,16 @@ public class HttpCaseWorkingApiAdapter(
         if (!string.IsNullOrEmpty(userName))
             request.Headers.Add("x-cdp-user-name", userName);
 
+        logger.LogInformation(
+            "ManagementBe auth config: url={Url} cognitoClientId={CognitoClientId} sharedSecretConfigured={SharedSecretConfigured} sharedSecretLength={SharedSecretLength} userId={UserId} userName={UserName}",
+            url,
+            _config.CognitoClientId,
+            !string.IsNullOrEmpty(_config.SharedSecret),
+            _config.SharedSecret?.Length ?? 0,
+            userId,
+            userName
+        );
+
         if (!string.IsNullOrEmpty(_config.SharedSecret))
         {
             var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
@@ -292,10 +303,37 @@ public class HttpCaseWorkingApiAdapter(
             request.Headers.Add("x-cdp-auth-signature", signature);
             request.Headers.Add("x-cdp-auth-timestamp", timestamp);
             request.Headers.Add("x-cdp-auth-nonce", nonce);
+
+            logger.LogInformation(
+                "ManagementBe auth signature computed: timestamp={Timestamp} nonce={Nonce} signature={Signature}",
+                timestamp,
+                nonce,
+                signature
+            );
         }
+        else
+        {
+            logger.LogWarning(
+                "ManagementBe request to {Url} will be sent WITHOUT auth signature headers because CaseWorking:SharedSecret is not configured",
+                url
+            );
+        }
+
+        logger.LogInformation(
+            "ManagementBe outbound request: method={Method} url={Url} headers=[{Headers}]",
+            method,
+            url,
+            FormatHeaders(request.Headers)
+        );
 
         return request;
     }
+
+    private static string FormatHeaders(System.Net.Http.Headers.HttpHeaders headers) =>
+        string.Join(
+            "; ",
+            headers.Select(h => $"{h.Key}={string.Join(",", h.Value)}")
+        );
 
     // Port of ManagementBe's CognitoClientIdAuthenticationHandler.ComputeSignature
     // (v2 canonical payload). Must stay in sync — any change is a breaking change.
