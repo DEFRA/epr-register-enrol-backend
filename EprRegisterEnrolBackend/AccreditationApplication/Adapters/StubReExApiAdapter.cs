@@ -128,4 +128,28 @@ public class StubReExApiAdapter(
 
         return Task.FromResult(ReExResult<bool>.Success(true, 200));
     }
+
+    public Task<ReExResult<LinkedDefraOrganisationResult>> GetLinkedDefraOrganisationAsync(
+        string organisationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        logger.LogInformation(
+            "StubReExApiAdapter.GetLinkedDefraOrganisationAsync called for org={OrganisationId}",
+            organisationId
+        );
+
+        // Stub: the linked Defra organisation id echoes the ReEx org id so local
+        // dev and integration runs are self-consistent.
+        return Task.FromResult(
+            ReExResult<LinkedDefraOrganisationResult>.Success(
+                new LinkedDefraOrganisationResult
+                {
+                    OrganisationId = organisationId,
+                    LinkedDefraOrganisationId = organisationId,
+                },
+                200
+            )
+        );
+    }
 }

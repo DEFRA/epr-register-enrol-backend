@@ -208,6 +208,8 @@ static WebApplication SetupApplication(WebApplication app)
 
     // Organisation endpoints
     app.UseOrganisationEndpoints();
+    // ReEx-backed organisation endpoints (live ReEx lookups, e.g. Defra org link)
+    app.UseReExOrganisationEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
     // File upload endpoints
