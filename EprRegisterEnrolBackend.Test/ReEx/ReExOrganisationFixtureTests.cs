@@ -47,6 +47,7 @@ public class ReExOrganisationFixtureTests
         org.ReprocessingNations.Should().Contain("england");
         org.BusinessType.Should().Be("individual");
         org.SubmittedToRegulator.Should().Be("ea");
+        org.LinkedDefraOrganisation!.OrgId.Should().Be(123456);
 
         org.CompanyDetails!.Name.Should().Be("Test Recycling Solutions Ltd");
         org.CompanyDetails.Address!.Line1.Should().Be("1 Example Hill");
@@ -149,6 +150,9 @@ public class ReExOrganisationFixtureTests
             "jobTitle": "Compliance Manager"
           },
           "submittedToRegulator": "ea",
+          "linkedDefraOrganisation": {
+            "orgId": 123456
+          },
           "registrations": [
             {
               "id": "reg-reprocessor-1",

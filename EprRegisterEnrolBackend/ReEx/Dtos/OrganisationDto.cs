@@ -16,8 +16,19 @@ public class OrganisationDto
     public ContactDetailsDto? SubmitterContactDetails { get; init; }
     public ContactDetailsDto? ManagementContactDetails { get; init; }
     public string? SubmittedToRegulator { get; init; }
+    public LinkedDefraOrganisationDto? LinkedDefraOrganisation { get; init; }
     public List<RegistrationBaseDto> Registrations { get; init; } = [];
     public List<AccreditationDto> Accreditations { get; init; } = [];
+}
+
+/// <summary>
+/// The Defra Customer organisation that this ReEx organisation is linked to.
+/// OrgId is the Defra organisation id carried in an operator's Defra ID relationships,
+/// used to authorise access to this organisation's data.
+/// </summary>
+public class LinkedDefraOrganisationDto
+{
+    public int? OrgId { get; init; }
 }
 
 public class CompanyDetailsDto

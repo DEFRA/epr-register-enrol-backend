@@ -16,6 +16,21 @@ public interface IReExApiAdapter
         ApprovedAccreditationDto accreditation,
         CancellationToken cancellationToken = default
     );
+
+    Task<ReExResult<LinkedDefraOrganisationResult>> GetLinkedDefraOrganisationAsync(
+        string organisationId,
+        CancellationToken cancellationToken = default
+    );
+}
+
+/// <summary>
+/// The Defra organisation an operator must be related to in order to access the given
+/// ReEx organisation. LinkedDefraOrganisationId is null when ReEx has no link recorded.
+/// </summary>
+public class LinkedDefraOrganisationResult
+{
+    public required string OrganisationId { get; set; }
+    public int? LinkedDefraOrganisationId { get; set; }
 }
 
 public class ReExAccreditationDto

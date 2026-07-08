@@ -217,6 +217,44 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         );
     }
 
+    public async Task<ReExResult<LinkedDefraOrganisationResult>> GetLinkedDefraOrganisationAsync(
+        string organisationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var orgResult = await reExClient.GetOrganisationsAsync(organisationId, cancellationToken);
+        if (!orgResult.IsSuccess)
+        {
+            if (orgResult.IsNotFound)
+                logger.LogWarning(
+                    "ReEx organisation not found for organisationId={OrganisationId}",
+                    organisationId
+                );
+            else
+                logger.LogError(
+                    "ReEx GetOrganisations failed for organisationId={OrganisationId}: {Error}",
+                    organisationId, orgResult.Error?.Message
+                );
+            return ReExResult<LinkedDefraOrganisationResult>.Fail(orgResult.Error!, orgResult.StatusCode);
+        }
+
+        var linkedOrgId = orgResult.Value!.LinkedDefraOrganisation?.OrgId;
+        if (linkedOrgId is null)
+            logger.LogWarning(
+                "ReEx organisation {OrganisationId} has no linkedDefraOrganisation.orgId",
+                organisationId
+            );
+
+        return ReExResult<LinkedDefraOrganisationResult>.Success(
+            new LinkedDefraOrganisationResult
+            {
+                OrganisationId = organisationId,
+                LinkedDefraOrganisationId = linkedOrgId,
+            },
+            200
+        );
+    }
+
     public async Task<ReExResult<bool>> WriteApprovedAccreditationAsync(
         ApprovedAccreditationDto accreditation,
         CancellationToken cancellationToken = default
