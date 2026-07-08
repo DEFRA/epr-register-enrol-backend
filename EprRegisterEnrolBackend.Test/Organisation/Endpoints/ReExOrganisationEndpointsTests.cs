@@ -35,7 +35,7 @@ public class ReExOrganisationEndpointsTests
                     new LinkedDefraOrganisationResult
                     {
                         OrganisationId = "50002",
-                        LinkedDefraOrganisationId = 907001,
+                        LinkedDefraOrganisationId = "67b9e8fc-2235-431a-a7b9-80663c81b6ff",
                     },
                     200
                 )
@@ -48,7 +48,7 @@ public class ReExOrganisationEndpointsTests
             JsonOptions
         );
         body!.OrganisationId.Should().Be("50002");
-        body.LinkedDefraOrganisationId.Should().Be(907001);
+        body.LinkedDefraOrganisationId.Should().Be("67b9e8fc-2235-431a-a7b9-80663c81b6ff");
     }
 
     [Fact]

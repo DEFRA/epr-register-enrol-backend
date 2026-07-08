@@ -30,7 +30,7 @@ public interface IReExApiAdapter
 public class LinkedDefraOrganisationResult
 {
     public required string OrganisationId { get; set; }
-    public int? LinkedDefraOrganisationId { get; set; }
+    public string? LinkedDefraOrganisationId { get; set; }
 }
 
 public class ReExAccreditationDto

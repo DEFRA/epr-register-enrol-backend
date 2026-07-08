@@ -47,7 +47,7 @@ public class ReExOrganisationFixtureTests
         org.ReprocessingNations.Should().Contain("england");
         org.BusinessType.Should().Be("individual");
         org.SubmittedToRegulator.Should().Be("ea");
-        org.LinkedDefraOrganisation!.OrgId.Should().Be(123456);
+        org.LinkedDefraOrganisation!.OrgId.Should().Be("67b9e8fc-2235-431a-a7b9-80663c81b6ff");
 
         org.CompanyDetails!.Name.Should().Be("Test Recycling Solutions Ltd");
         org.CompanyDetails.Address!.Line1.Should().Be("1 Example Hill");
@@ -151,7 +151,7 @@ public class ReExOrganisationFixtureTests
           },
           "submittedToRegulator": "ea",
           "linkedDefraOrganisation": {
-            "orgId": 123456
+            "orgId": "67b9e8fc-2235-431a-a7b9-80663c81b6ff"
           },
           "registrations": [
             {

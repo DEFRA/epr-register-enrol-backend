@@ -23,12 +23,12 @@ public class OrganisationDto
 
 /// <summary>
 /// The Defra Customer organisation that this ReEx organisation is linked to.
-/// OrgId is the Defra organisation id carried in an operator's Defra ID relationships,
-/// used to authorise access to this organisation's data.
+/// OrgId is the Defra organisation id (a UUID) carried in an operator's Defra ID
+/// relationships, used to authorise access to this organisation's data.
 /// </summary>
 public class LinkedDefraOrganisationDto
 {
-    public int? OrgId { get; init; }
+    public string? OrgId { get; init; }
 }
 
 public class CompanyDetailsDto
