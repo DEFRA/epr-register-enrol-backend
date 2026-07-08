@@ -19,10 +19,14 @@ public static class ReExOrganisationEndpoints
 
     private static async Task<IResult> GetDefraLink(
         string organisationId,
-        IReExApiAdapter reExAdapter
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
     )
     {
-        var result = await reExAdapter.GetLinkedDefraOrganisationAsync(organisationId);
+        var result = await reExAdapter.GetLinkedDefraOrganisationAsync(
+            organisationId,
+            cancellationToken
+        );
 
         if (result.IsSuccess)
             return Results.Ok(result.Value);
