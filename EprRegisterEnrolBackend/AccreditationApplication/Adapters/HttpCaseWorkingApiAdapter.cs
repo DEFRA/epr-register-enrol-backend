@@ -186,7 +186,7 @@ public class HttpCaseWorkingApiAdapter(
         {
             organisationName = application.OrganisationName,
             registrationNumber = application.RegistrationReference,
-            materialsHandled = new[] { application.MaterialType.ToString().ToLowerInvariant() },
+            material = application.MaterialType.ToString().ToLowerInvariant(),
             accreditationYear = application.Year,
             previousAccreditationYear = application.Year - 1,
             complianceIssuesReported = 0,
