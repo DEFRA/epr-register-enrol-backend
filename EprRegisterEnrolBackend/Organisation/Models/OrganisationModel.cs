@@ -116,6 +116,7 @@ public class RegistrationModel
     public string? FormSubmissionTime { get; set; }
     public required string Status { get; set; }
     public required string Material { get; set; }
+    public string? GlassRecyclingProcess { get; set; }
     public required string WasteProcessingType { get; set; }
     public ObjectId? AccreditationId { get; set; }
     public string? GridReference { get; set; }
@@ -203,6 +204,7 @@ public class AccreditationModel
     public string? FormSubmissionTime { get; set; }
     public required string Status { get; set; }
     public required string Material { get; set; }
+    public string? GlassRecyclingProcess { get; set; }
     public required string WasteProcessingType { get; set; }
     public string? FormSubmissionRawDataId { get; set; }
     public SiteAddressModel? SiteAddress { get; set; }
