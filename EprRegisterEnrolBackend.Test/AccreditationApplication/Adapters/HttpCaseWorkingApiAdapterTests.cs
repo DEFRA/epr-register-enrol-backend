@@ -181,7 +181,7 @@ public class HttpCaseWorkingApiAdapterTests
         var payload = root.GetProperty("payload");
         payload.GetProperty("organisationName").GetString().Should().Be("Acme Recycling Ltd");
         payload.GetProperty("registrationNumber").GetString().Should().Be("EPR-100023");
-        payload.GetProperty("materialsHandled")[0].GetString().Should().Be("plastic");
+        payload.GetProperty("material").GetString().Should().Be("plastic");
         payload.GetProperty("previousAccreditationYear").GetInt32().Should().Be(2025);
         payload.GetProperty("complianceIssuesReported").GetInt32().Should().Be(0);
         payload.GetProperty("operatorOrganisationId").GetString().Should().Be("12345");

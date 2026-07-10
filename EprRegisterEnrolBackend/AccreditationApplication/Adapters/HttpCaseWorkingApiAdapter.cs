@@ -188,6 +188,7 @@ public class HttpCaseWorkingApiAdapter(
             registrationNumber = application.RegistrationReference,
             materialsHandled = new[] { application.MaterialType.ToString().ToLowerInvariant() },
             glassRecyclingProcess = application.GlassRecyclingProcess,
+            material = application.MaterialType.ToString().ToLowerInvariant(),
             accreditationYear = application.Year,
             previousAccreditationYear = application.Year - 1,
             complianceIssuesReported = 0,
