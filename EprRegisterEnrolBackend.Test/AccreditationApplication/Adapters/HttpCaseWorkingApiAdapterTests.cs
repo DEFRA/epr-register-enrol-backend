@@ -191,6 +191,35 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
+    public async Task SubmitApplicationAsync_GlassMaterial_IncludesGlassRecyclingProcessInPayload()
+    {
+        var application = CreateTestApplication();
+        application.MaterialType = MaterialType.Glass;
+        application.GlassRecyclingProcess = GlassRecyclingProcess.Remelt;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var payload = doc.RootElement.GetProperty("payload");
+
+        payload.GetProperty("materialsHandled")[0].GetString().Should().Be("glass");
+        payload.GetProperty("glassRecyclingProcess").GetString().Should().Be("glass_re_melt");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_NonGlassMaterial_OmitsGlassRecyclingProcessFromPayload()
+    {
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var payload = doc.RootElement.GetProperty("payload");
+
+        payload.TryGetProperty("glassRecyclingProcess", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task SubmitApplicationAsync_SetsAuthHeaders()
     {
         var (adapter, handler) = CreateAdapter();

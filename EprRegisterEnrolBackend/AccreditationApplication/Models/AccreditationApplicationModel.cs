@@ -30,6 +30,9 @@ public class AccreditationApplicationModel
     public required MaterialType MaterialType { get; set; }
 
     [BsonRepresentation(BsonType.String)]
+    public GlassRecyclingProcess? GlassRecyclingProcess { get; set; }
+
+    [BsonRepresentation(BsonType.String)]
     public ApplicationStatus ApplicationStatus { get; set; } = ApplicationStatus.Saved;
 
     public string? SourceReExAccreditationId { get; set; }

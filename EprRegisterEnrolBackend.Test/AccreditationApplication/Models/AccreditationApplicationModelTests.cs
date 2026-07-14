@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -51,5 +52,35 @@ public class AccreditationApplicationModelTests
         var roundTripped = BsonSerializer.Deserialize<AccreditationApplicationModel>(document);
 
         roundTripped.CaseManagementWorkItemId.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(GlassRecyclingProcess.Remelt)]
+    [InlineData(GlassRecyclingProcess.Other)]
+    [InlineData(null)]
+    public void GlassRecyclingProcess_RoundTripsThroughBsonUnchanged(
+        GlassRecyclingProcess? glassRecyclingProcess
+    )
+    {
+        var model = CreateModel(null);
+        model.GlassRecyclingProcess = glassRecyclingProcess;
+
+        var document = model.ToBsonDocument();
+        var roundTripped = BsonSerializer.Deserialize<AccreditationApplicationModel>(document);
+
+        roundTripped.GlassRecyclingProcess.Should().Be(glassRecyclingProcess);
+    }
+
+    [Theory]
+    [InlineData(GlassRecyclingProcess.Remelt, "glass_re_melt")]
+    [InlineData(GlassRecyclingProcess.Other, "glass_other")]
+    public void GlassRecyclingProcess_SerializesToJsonAsSnakeCaseWireValue(
+        GlassRecyclingProcess value,
+        string expectedWireValue
+    )
+    {
+        var json = JsonSerializer.Serialize(value);
+
+        json.Should().Be($"\"{expectedWireValue}\"");
     }
 }
