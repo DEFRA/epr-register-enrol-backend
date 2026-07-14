@@ -89,7 +89,8 @@ public enum ApplicationStatus
 {
     Saved,
     Started,
-    Sent,
+    Submitted,
+    Queried,
     Approved,
     Rejected,
 }
@@ -100,4 +101,6 @@ public enum SectionStatus
     NotStarted,
     InProgress,
     Completed,
+    Submitted,
+    Queried,
 }
