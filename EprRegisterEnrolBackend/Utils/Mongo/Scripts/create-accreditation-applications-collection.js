@@ -44,11 +44,13 @@ export async function createAccreditationApplicationsCollection(
                         },
                         organisationName: {
                             bsonType: ["string", "null"],
-                            description: "Denormalised organisation display name",
+                            description:
+                                "Denormalised organisation display name",
                         },
                         siteAddress: {
                             bsonType: ["string", "null"],
-                            description: "Denormalised site address string for display",
+                            description:
+                                "Denormalised site address string for display",
                         },
                         materialType: {
                             bsonType: "string",
@@ -67,7 +69,8 @@ export async function createAccreditationApplicationsCollection(
                             enum: [
                                 "Saved",
                                 "Started",
-                                "Sent",
+                                "Submitted",
+                                "Queried",
                                 "Approved",
                                 "Rejected",
                             ],
@@ -137,6 +140,8 @@ export async function createAccreditationApplicationsCollection(
                                         "NotStarted",
                                         "InProgress",
                                         "Completed",
+                                        "Submitted",
+                                        "Queried",
                                     ],
                                 },
                             },
@@ -182,6 +187,8 @@ export async function createAccreditationApplicationsCollection(
                                         "NotStarted",
                                         "InProgress",
                                         "Completed",
+                                        "Submitted",
+                                        "Queried",
                                     ],
                                 },
                             },
@@ -225,6 +232,8 @@ export async function createAccreditationApplicationsCollection(
                                         "NotStarted",
                                         "InProgress",
                                         "Completed",
+                                        "Submitted",
+                                        "Queried",
                                     ],
                                 },
                             },

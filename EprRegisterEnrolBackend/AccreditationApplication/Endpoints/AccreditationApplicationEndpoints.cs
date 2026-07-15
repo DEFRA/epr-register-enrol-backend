@@ -515,7 +515,7 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
-        if (application.ApplicationStatus == ApplicationStatus.Sent)
+        if (application.ApplicationStatus == ApplicationStatus.Submitted)
             return Results.Ok(
                 new SubmitResponse
                 {
@@ -536,7 +536,7 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest("All sections must be completed before submission.");
         }
 
-        application.ApplicationStatus = ApplicationStatus.Sent;
+        application.ApplicationStatus = ApplicationStatus.Submitted;
         application.DateSent = DateTime.UtcNow;
         application.DateLastEdited = DateTime.UtcNow;
         application.SubmittedBy = new SubmittedByModel
@@ -649,7 +649,7 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Approved)
             return Results.Ok(application);
 
-        if (application.ApplicationStatus != ApplicationStatus.Sent)
+        if (application.ApplicationStatus != ApplicationStatus.Submitted)
             return Results.Conflict("Only submitted applications can be approved.");
 
         var approvedDto = new ApprovedAccreditationDto
@@ -700,7 +700,7 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Rejected)
             return Results.Ok(application);
 
-        if (application.ApplicationStatus != ApplicationStatus.Sent)
+        if (application.ApplicationStatus != ApplicationStatus.Submitted)
             return Results.Conflict("Only submitted applications can be rejected.");
 
         application.ApplicationStatus = ApplicationStatus.Rejected;

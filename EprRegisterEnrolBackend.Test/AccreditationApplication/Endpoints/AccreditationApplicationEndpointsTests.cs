@@ -747,7 +747,7 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var app = SeedApplication(
-            status: ApplicationStatus.Sent,
+            status: ApplicationStatus.Submitted,
             configure: a => a.ApplicationReference = "RA-123456789"
         );
 
@@ -871,7 +871,7 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var app = SeedApplication(
-            status: ApplicationStatus.Sent,
+            status: ApplicationStatus.Submitted,
             configure: a => a.ApplicationReference = "RA-123456789"
         );
         _factory
@@ -942,7 +942,7 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var app = SeedApplication(
-            status: ApplicationStatus.Sent,
+            status: ApplicationStatus.Submitted,
             configure: a => a.ApplicationReference = "RA-123456789"
         );
         _factory
@@ -969,7 +969,7 @@ public class AccreditationApplicationEndpointsTests
             "org-123",
             app.Id!.Value.ToString()
         );
-        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Sent);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
     }
 
     // --- Reject ---
@@ -978,7 +978,7 @@ public class AccreditationApplicationEndpointsTests
     public async Task Reject_SetsRejectedStatus()
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Sent);
+        var app = SeedApplication(status: ApplicationStatus.Submitted);
 
         var response = await _client.PostAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",

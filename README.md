@@ -118,9 +118,9 @@ Valid `materialType` values: `Steel`, `Wood`, `Aluminium`, `Fibre`, `Glass`, `Pa
 
 #### Application lifecycle
 
-`Saved` → `Started` (on first section edit) → `Sent` (on submit) → `Approved` or `Rejected`
+`Saved` → `Started` (on first section edit) → `Submitted` (on submit) → `Approved` or `Rejected` (`Queried` may occur after submission)
 
-Each section tracks its own status: `NotStarted` → `InProgress` → `Completed`
+Each section tracks its own status: `NotStarted` → `InProgress` → `Completed` (`Submitted`/`Queried` reserved for future use)
 
 #### External adapters
 
