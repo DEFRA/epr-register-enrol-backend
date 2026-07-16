@@ -88,7 +88,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         var materialPrefix = MaterialPrefix(application.MaterialType.ToString());
 
         var reference =
-            $"APP{year:D2}{agency}{organisationId}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
+            $"AP{year:D2}{agency}{organisationId}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
 
         return reference.Length > maxLength ? reference[..maxLength] : reference;
     }
