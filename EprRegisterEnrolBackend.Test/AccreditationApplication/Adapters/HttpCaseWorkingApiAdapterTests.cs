@@ -14,6 +14,7 @@ public class HttpCaseWorkingApiAdapterTests
 {
     private const string TestUrl = "http://mgmt-be:8085";
     private const string TestClientId = "epr-register-enrol-backend";
+    private const string TestApplicationReference = "APP26EA123451AAPL";
 
     private static AccreditationApplicationModel CreateTestApplication()
     {
@@ -62,6 +63,7 @@ public class HttpCaseWorkingApiAdapterTests
                 typeId = "re-accreditation",
                 stateId = "submitted",
                 payload = new { },
+                applicationReference = TestApplicationReference,
             }
         );
 
@@ -78,11 +80,11 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_Success_ReturnsApplicationReference()
+    public async Task SubmitApplicationAsync_Success_ReturnsApplicationReferenceFromManagementBeResponse()
     {
         var (adapter, _) = CreateAdapter();
         var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
-        result.ApplicationReference.Should().MatchRegex(@"^RA-\d{9}$");
+        result.ApplicationReference.Should().Be(TestApplicationReference);
     }
 
     [Fact]
@@ -100,6 +102,7 @@ public class HttpCaseWorkingApiAdapterTests
                 typeId = "re-accreditation",
                 stateId = "submitted",
                 payload = new { },
+                applicationReference = TestApplicationReference,
             }
         );
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
@@ -116,8 +119,11 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_UnparseableResponseBody_StillReturnsReferenceWithNullWorkItemId()
+    public async Task SubmitApplicationAsync_UnparseableResponseBody_ThrowsHttpRequestException()
     {
+        // RA-318: applicationReference is ManagementBe-generated with no local fallback, so
+        // an unparseable response can no longer be tolerated the way a missing id can — the
+        // submission must fail rather than proceed without a valid reference to persist.
         var config = Options.Create(
             new CaseWorkingApiConfig { Url = TestUrl, CognitoClientId = TestClientId }
         );
@@ -130,10 +136,40 @@ public class HttpCaseWorkingApiAdapterTests
             NullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
+        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
 
-        result.ApplicationReference.Should().MatchRegex(@"^RA-\d{9}$");
-        result.WorkItemId.Should().BeNull();
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_ResponseMissingApplicationReference_ThrowsHttpRequestException()
+    {
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, CognitoClientId = TestClientId }
+        );
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.Created,
+            new
+            {
+                id = Guid.NewGuid(),
+                typeId = "re-accreditation",
+                stateId = "submitted",
+                payload = new { },
+            }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        await act.Should()
+            .ThrowAsync<HttpRequestException>()
+            .WithMessage("*application reference*");
     }
 
     [Fact]
@@ -149,6 +185,7 @@ public class HttpCaseWorkingApiAdapterTests
                 typeId = "re-accreditation",
                 stateId = "submitted",
                 payload = new { },
+                applicationReference = TestApplicationReference,
             }
         );
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
@@ -161,7 +198,7 @@ public class HttpCaseWorkingApiAdapterTests
 
         var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
 
-        result.ApplicationReference.Should().MatchRegex(@"^RA-\d{9}$");
+        result.ApplicationReference.Should().Be(TestApplicationReference);
         result.WorkItemId.Should().BeNull();
     }
 
@@ -311,28 +348,16 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_IncludesApplicationReferenceInRequest()
+    public async Task SubmitApplicationAsync_DoesNotSendApplicationReferenceInRequest()
     {
+        // RA-318: ManagementBe owns reference generation and ignores any value a caller
+        // sends, so the backend must not send one at all — sending a value it knows will be
+        // silently discarded is misleading about where the reference actually comes from.
         var (adapter, handler) = CreateAdapter();
         await adapter.SubmitApplicationAsync(CreateTestApplication());
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
-        doc.RootElement.GetProperty("applicationReference")
-            .GetString()
-            .Should()
-            .MatchRegex(@"^RA-\d{9}$");
-    }
-
-    [Fact]
-    public async Task SubmitApplicationAsync_ReturnedReferenceMatchesSentToManagementBe()
-    {
-        var (adapter, handler) = CreateAdapter();
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
-
-        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
-        var sent = doc.RootElement.GetProperty("applicationReference").GetString();
-
-        result.ApplicationReference.Should().Be(sent);
+        doc.RootElement.TryGetProperty("applicationReference", out _).Should().BeFalse();
     }
 
     [Fact]

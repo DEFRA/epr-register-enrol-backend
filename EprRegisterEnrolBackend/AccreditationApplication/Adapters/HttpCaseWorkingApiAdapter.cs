@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using Microsoft.Extensions.Options;
@@ -34,14 +35,13 @@ public class HttpCaseWorkingApiAdapter(
             throw new InvalidOperationException("CaseWorking API URL is not configured.");
         }
 
-        var suffix = RandomNumberGenerator.GetInt32(1_000_000_000);
-        var applicationReference = $"RA-{suffix:D9}";
-
+        // RA-318: ManagementBe owns applicationReference generation — it is never
+        // supplied by the caller (ManagementBe ignores any value sent here) and is
+        // read back from its response below rather than generated locally.
         var body = new CreateWorkItemRequest
         {
             TypeId = "re-accreditation",
             Source = "operator-fe",
-            ApplicationReference = applicationReference,
             Payload = BuildPayload(application),
         };
 
@@ -83,7 +83,7 @@ public class HttpCaseWorkingApiAdapter(
             );
         }
 
-        WorkItemResponseDto? result = null;
+        WorkItemResponseDto? result;
         try
         {
             result = await response.Content.ReadFromJsonAsync<WorkItemResponseDto>(
@@ -93,27 +93,44 @@ public class HttpCaseWorkingApiAdapter(
         }
         catch (Exception ex)
         {
-            // Reference is already known locally, so a failure to parse the id back out of
-            // ManagementBe's response must not fail the submission — it just goes uncaptured.
-            logger.LogWarning(
+            // Unlike workItemId below, applicationReference has no local fallback — it is
+            // ManagementBe-generated, so a response we can't parse means we have no valid
+            // reference to persist and the submission must fail rather than proceed silently.
+            logger.LogError(
                 ex,
-                "Failed to parse ManagementBe work item response from {Endpoint}; work item id will not be captured",
+                "Failed to parse ManagementBe work item response from {Endpoint}; cannot obtain application reference",
                 endpoint
+            );
+            throw new HttpRequestException(
+                $"Failed to parse ManagementBe work item response from {endpoint}.",
+                ex
+            );
+        }
+
+        if (string.IsNullOrWhiteSpace(result?.ApplicationReference))
+        {
+            logger.LogError(
+                "ManagementBe response from {Endpoint} did not include an application reference",
+                endpoint
+            );
+            throw new HttpRequestException(
+                $"ManagementBe work item response from {endpoint} did not include an application reference."
             );
         }
 
         // Guid.Empty means the "id" field was absent from the response body (not a parse
-        // failure — System.Text.Json leaves missing value-type properties at their default),
-        // which is just as uncaptured as a parse failure and must be treated the same way.
-        Guid? workItemId = result is null || result.Id == Guid.Empty ? null : result.Id;
+        // failure — System.Text.Json leaves missing value-type properties at their default).
+        // Unlike applicationReference, workItemId is only ever an optional correlation aid,
+        // so a missing id must not fail the submission.
+        Guid? workItemId = result.Id == Guid.Empty ? null : result.Id;
 
         logger.LogInformation(
             "Work item created: workItemId={WorkItemId} applicationReference={ApplicationReference}",
             workItemId,
-            applicationReference
+            result.ApplicationReference
         );
 
-        return new CaseWorkingSubmissionResult(applicationReference, workItemId);
+        return new CaseWorkingSubmissionResult(result.ApplicationReference, workItemId);
     }
 
     public async Task<string?> GetNotificationStatusAsync(
@@ -334,7 +351,6 @@ public class HttpCaseWorkingApiAdapter(
         public required string TypeId { get; init; }
         public required object Payload { get; init; }
         public string? Source { get; init; }
-        public string? ApplicationReference { get; init; }
     }
 
     internal sealed class WorkItemResponseDto
@@ -343,6 +359,7 @@ public class HttpCaseWorkingApiAdapter(
         public string? TypeId { get; init; }
         public string? StateId { get; init; }
         public JsonElement Payload { get; init; }
+        public string? ApplicationReference { get; init; }
     }
 
     #endregion

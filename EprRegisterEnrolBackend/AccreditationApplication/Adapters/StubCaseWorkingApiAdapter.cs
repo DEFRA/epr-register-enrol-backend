@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
@@ -7,13 +6,50 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger)
     : ICaseWorkingApiAdapter
 {
+    // RA-318: mirrors ManagementBe's ApplicationReferenceGenerator format so local/dev
+    // testing sees realistic references — there is no real ManagementBe to call here, so
+    // the stub must fabricate one itself rather than leaving it to a downstream service.
+    private static readonly HashSet<string> s_scotlandPrefixes = new(
+        StringComparer.OrdinalIgnoreCase
+    )
+    {
+        "AB",
+        "DD",
+        "DG",
+        "EH",
+        "FK",
+        "G",
+        "HS",
+        "IV",
+        "KA",
+        "KW",
+        "KY",
+        "ML",
+        "PA",
+        "PH",
+        "TD",
+        "ZE",
+    };
+
+    private static readonly HashSet<string> s_walesPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CF",
+        "CH",
+        "LD",
+        "LL",
+        "NP",
+        "SA",
+        "SY",
+    };
+
+    private const string NiPrefix = "BT";
+
     public Task<CaseWorkingSubmissionResult> SubmitApplicationAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
     )
     {
-        var suffix = RandomNumberGenerator.GetInt32(1_000_000_000);
-        var applicationReference = $"RA-{suffix:D9}";
+        var applicationReference = GenerateReference(application);
         var workItemId = Guid.NewGuid();
 
         logger.LogInformation(
@@ -39,5 +75,85 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         );
 
         return Task.FromResult<string?>(null);
+    }
+
+    private static string GenerateReference(AccreditationApplicationModel application)
+    {
+        const int maxLength = 18;
+        var postcode = HttpCaseWorkingApiAdapter.ExtractPostcode(application.SiteAddress);
+        var year = application.Year % 100;
+        var agency = ResolveAgencyCode(postcode);
+        var organisationId = application.OrganisationId;
+        var postcodeSuffix = PostcodeSuffix(postcode);
+        var materialPrefix = MaterialPrefix(application.MaterialType.ToString());
+
+        var reference =
+            $"AP{year:D2}{agency}{organisationId}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
+
+        return reference.Length > maxLength ? reference[..maxLength] : reference;
+    }
+
+    private static string ResolveAgencyCode(string? postcode)
+    {
+        var area = ExtractAreaCode(postcode);
+        if (area is null)
+        {
+            return "EA";
+        }
+
+        if (area.Equals(NiPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return "NI";
+        }
+
+        if (s_scotlandPrefixes.Contains(area))
+        {
+            return "SE";
+        }
+
+        if (s_walesPrefixes.Contains(area))
+        {
+            return "NR";
+        }
+
+        return "EA";
+    }
+
+    private static string? ExtractAreaCode(string? postcode)
+    {
+        if (string.IsNullOrWhiteSpace(postcode))
+        {
+            return null;
+        }
+
+        var trimmed = postcode.TrimStart();
+        var length = 0;
+        while (length < trimmed.Length && char.IsLetter(trimmed[length]))
+        {
+            length++;
+        }
+
+        return length == 0 ? null : trimmed[..length];
+    }
+
+    private static string PostcodeSuffix(string? postcode)
+    {
+        if (string.IsNullOrWhiteSpace(postcode))
+        {
+            return string.Empty;
+        }
+
+        var compact = postcode.Replace(" ", string.Empty);
+        return compact.Length <= 3 ? compact : compact[^3..];
+    }
+
+    private static string MaterialPrefix(string? material)
+    {
+        if (string.IsNullOrWhiteSpace(material))
+        {
+            return string.Empty;
+        }
+
+        return material.Length <= 2 ? material : material[..2];
     }
 }
