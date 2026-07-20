@@ -2,10 +2,15 @@ using EprRegisterEnrolBackend.CdpUploader.Models;
 
 namespace EprRegisterEnrolBackend.CdpUploader.Services;
 
-// Auto-completes pending file uploads in Development where the CDP uploader's
-// mock virus scan cannot call back (SQS queues don't exist in Floci).
+// Completes pending file uploads in Development by polling CDP Uploader's real
+// status endpoint directly, since its scan-complete webhook callback can't reach
+// this backend locally (it targets a host/route only reachable from outside this
+// Docker network). Polling — rather than faking the result — means local dev
+// exercises the same file metadata (real filename, fileId) and S3 key shape that
+// production gets from the real callback.
 public class DevScanAutoCompleteService(
     IPendingUploadService pendingUploadService,
+    ICdpUploaderService cdpUploaderService,
     ILogger<DevScanAutoCompleteService> logger
 ) : BackgroundService
 {
@@ -15,7 +20,7 @@ public class DevScanAutoCompleteService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation(
-            "DevScanAutoCompleteService started — pending uploads will auto-complete"
+            "DevScanAutoCompleteService started — polling CDP uploader status for pending uploads"
         );
         await Task.Delay(StartupDelay, stoppingToken);
 
@@ -25,22 +30,79 @@ public class DevScanAutoCompleteService(
 
             foreach (var fileUploadId in pendingIds)
             {
-                var fakeResult = new CdpCallbackFile
+                try
                 {
-                    FileId = fileUploadId,
-                    Filename = "dev-auto-completed.pdf",
-                    FileStatus = "complete",
-                    ContentType = "application/pdf",
-                };
-
-                pendingUploadService.Complete(fileUploadId, fakeResult);
-                logger.LogInformation(
-                    "DevScanAutoComplete: auto-completed upload {FileUploadId}",
-                    fileUploadId
-                );
+                    await TryCompleteFromCdpStatus(fileUploadId, stoppingToken);
+                }
+                catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+                {
+                    logger.LogWarning(
+                        ex,
+                        "DevScanAutoComplete: unexpected error completing upload {FileUploadId}",
+                        fileUploadId
+                    );
+                }
             }
 
             await Task.Delay(PollInterval, stoppingToken);
         }
+    }
+
+    private async Task TryCompleteFromCdpStatus(
+        string fileUploadId,
+        CancellationToken cancellationToken
+    )
+    {
+        var details = pendingUploadService.TryGetPendingUploadDetails(fileUploadId);
+        if (details is null)
+            return;
+
+        CdpStatusResponse? cdpStatus;
+        try
+        {
+            cdpStatus = await cdpUploaderService.GetStatusAsync(
+                details.CdpStatusUrl,
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "DevScanAutoComplete: failed to poll CDP status for upload {FileUploadId}",
+                fileUploadId
+            );
+            return;
+        }
+
+        if (cdpStatus?.UploadStatus != "ready")
+            return;
+
+        var file = cdpStatus.Form?.File;
+        if (file is null)
+            return;
+
+        var fileStatus = cdpStatus.ProcessingStatus == "validated" ? "complete" : "rejected";
+        var s3Key =
+            details.S3Path is not null && details.CdpUploadId is not null
+                ? $"{details.S3Path.TrimEnd('/')}/{details.CdpUploadId}/{file.FileId}"
+                : null;
+
+        var result = new CdpCallbackFile
+        {
+            FileId = file.FileId,
+            Filename = file.Filename,
+            FileStatus = fileStatus,
+            ContentType = file.ContentType ?? file.DetectedContentType,
+            S3Bucket = details.S3Bucket,
+            S3Key = s3Key,
+        };
+
+        pendingUploadService.Complete(fileUploadId, result);
+        logger.LogInformation(
+            "DevScanAutoComplete: completed upload {FileUploadId} from real CDP status (fileStatus={FileStatus})",
+            fileUploadId,
+            fileStatus
+        );
     }
 }

@@ -31,5 +31,6 @@ public class FileUploadRequestValidator : AbstractValidator<FileUploadRequest>
             .NotEmpty()
             .Must(ct => PermittedContentTypes.Contains(ct))
             .WithMessage("Content type is not permitted.");
+        RuleFor(r => r.S3Key).NotEmpty().MaximumLength(1024);
     }
 }

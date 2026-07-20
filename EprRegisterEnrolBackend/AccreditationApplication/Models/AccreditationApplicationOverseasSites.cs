@@ -35,6 +35,8 @@ public class BesEvidenceFileModel
     public string? BesEvidenceExpiryDate { get; set; }
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
     public string? UploadedBy { get; set; }
+    public required string S3Key { get; set; }
+    public string? S3Bucket { get; set; }
 }
 
 public class AccreditationApplicationBesEvidence
