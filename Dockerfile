@@ -21,6 +21,18 @@ WORKDIR "/src"
 # unit test and code coverage
 RUN dotnet test EprRegisterEnrolBackend.Test
 
+# Development image: runs `dotnet watch` for hot reload during local development.
+# Used by docker compose --watch via the `develop:` block in compose.yml.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS development
+WORKDIR /src
+COPY . .
+WORKDIR /src/EprRegisterEnrolBackend
+RUN dotnet restore
+EXPOSE 8080
+ENV DOTNET_USE_POLLING_FILE_WATCHER=1
+ENV ASPNETCORE_URLS=http://+:8080
+ENTRYPOINT ["dotnet", "watch", "run", "--no-launch-profile", "--non-interactive"]
+
 FROM build AS publish
 RUN dotnet publish EprRegisterEnrolBackend -c Release -o /app/publish /p:UseAppHost=false
 
