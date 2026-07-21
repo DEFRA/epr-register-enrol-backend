@@ -409,6 +409,8 @@ public static class AccreditationApplicationEndpoints
                 ScanStatus = request.ScanStatus,
                 BesEvidenceValidFromDate = request.BesEvidenceValidFromDate,
                 BesEvidenceExpiryDate = request.BesEvidenceExpiryDate,
+                S3Key = request.S3Key,
+                S3Bucket = request.S3Bucket,
             }
         );
 
@@ -593,6 +595,8 @@ public static class AccreditationApplicationEndpoints
             ContentType = request.ContentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
             ScanStatus = request.ScanStatus ?? FileScanStatus.Pending,
+            S3Key = request.S3Key,
+            S3Bucket = request.S3Bucket,
         };
 
         application.SamplingPlan.Files.Add(file);
@@ -791,7 +795,13 @@ public static class AccreditationApplicationEndpoints
         };
 
         var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
-        pendingUploadService.Create(fileUploadId, cdpResponse.StatusUrl);
+        pendingUploadService.Create(
+            fileUploadId,
+            cdpResponse.StatusUrl,
+            cdpResponse.UploadId,
+            cdpRequest.S3Bucket,
+            cdpRequest.S3Path
+        );
 
         return Results.Ok(
             new InitiateUploadResponse

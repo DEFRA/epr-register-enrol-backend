@@ -121,6 +121,48 @@ public class CdpUploaderService(
         return result;
     }
 
+    public async Task<CdpStatusResponse> GetStatusAsync(
+        string statusUrl,
+        CancellationToken cancellationToken = default
+    )
+    {
+        // Plain client, not "DefaultClient": that one carries header propagation, which
+        // requires an active HTTP request context. This is polled from a BackgroundService
+        // with no ambient request, so header propagation would throw.
+        var client = httpClientFactory.CreateClient();
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await client.GetAsync(statusUrl, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to reach CDP uploader status at {StatusUrl}", statusUrl);
+            throw;
+        }
+
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"CDP uploader status check failed: {(int)response.StatusCode}"
+            );
+        }
+
+        var result = JsonSerializer.Deserialize<CdpStatusResponse>(
+            responseBody,
+            ResponseJsonOptions
+        );
+        if (result is null)
+        {
+            throw new InvalidOperationException("CDP uploader returned empty status response.");
+        }
+
+        return result;
+    }
+
     // CDP Uploader requires "redirect" to be a relative URI; strip scheme/host/port if present.
     private static string ToRelativeUri(string redirect)
     {

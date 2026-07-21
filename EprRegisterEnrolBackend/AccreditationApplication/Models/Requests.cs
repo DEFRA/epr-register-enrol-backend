@@ -55,6 +55,8 @@ public class AddBesEvidenceFileRequest
     public string? ScanStatus { get; set; }
     public string? BesEvidenceValidFromDate { get; set; }
     public string? BesEvidenceExpiryDate { get; set; }
+    public required string S3Key { get; set; }
+    public string? S3Bucket { get; set; }
 }
 
 public class PatchBesEvidenceRequest
@@ -91,4 +93,6 @@ public class FileUploadRequest
     public required string Filename { get; set; }
     public required string ContentType { get; set; }
     public FileScanStatus? ScanStatus { get; set; }
+    public required string S3Key { get; set; }
+    public string? S3Bucket { get; set; }
 }

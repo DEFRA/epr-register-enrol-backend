@@ -153,7 +153,13 @@ public static class FileUploadEndpoints
         };
 
         var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
-        pendingUploadService.Create(fileUploadId, cdpResponse.StatusUrl);
+        pendingUploadService.Create(
+            fileUploadId,
+            cdpResponse.StatusUrl,
+            cdpResponse.UploadId,
+            cdpRequest.S3Bucket,
+            cdpRequest.S3Path
+        );
 
         return Results.Ok(
             new InitiateUploadResponse
