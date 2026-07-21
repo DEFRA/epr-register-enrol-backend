@@ -1242,6 +1242,82 @@ public class AccreditationApplicationEndpointsTests
             );
     }
 
+    // --- AddBesEvidenceFile ---
+
+    private AccreditationApplicationModel SeedApplicationWithOverseasSite(
+        int siteId = 1,
+        string siteName = "Test Site"
+    ) =>
+        SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [new OverseasSiteModel { SiteId = siteId, SiteName = siteName }],
+            }
+        );
+
+    [Fact]
+    public async Task AddBesEvidenceFile_AddsFileToSite_Returns201()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-001",
+            Filename = "evidence.pdf",
+            S3Key = "bes-evidence/bes-file-001",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_EmptyS3Key_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-002",
+            Filename = "evidence.pdf",
+            S3Key = string.Empty,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_InvalidFilename_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-003",
+            Filename = "../../etc/passwd",
+            S3Key = "bes-evidence/bes-file-003",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     [Fact]
     public async Task InitiateBesEvidenceUpload_PrefixesPathWithBesEvidenceBucket()
     {
