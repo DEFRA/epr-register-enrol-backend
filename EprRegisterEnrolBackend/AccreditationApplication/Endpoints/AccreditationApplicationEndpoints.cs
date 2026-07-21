@@ -388,9 +388,14 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         int siteId,
         AddBesEvidenceFileRequest request,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IValidator<AddBesEvidenceFileRequest> validator
     )
     {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
