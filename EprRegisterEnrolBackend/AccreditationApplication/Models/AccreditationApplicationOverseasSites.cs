@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 public class AccreditationApplicationOverseasSites
@@ -5,6 +7,16 @@ public class AccreditationApplicationOverseasSites
     public List<OverseasSiteModel> Sites { get; set; } = [];
 
     public SectionStatus SectionStatus { get; set; } = SectionStatus.NotStarted;
+
+    // Snapshotted on Submit and on each resubmit-after-query — never sent to the FE (RA-311 §6).
+    [JsonIgnore]
+    public List<OverseasSitesSnapshot> Versions { get; set; } = [];
+}
+
+public class OverseasSitesSnapshot
+{
+    public List<OverseasSiteModel> Sites { get; set; } = [];
+    public DateTime VersionedAt { get; set; }
 }
 
 public class OverseasSiteModel
@@ -56,4 +68,13 @@ public class BesEvidenceFileModel
 public class AccreditationApplicationBesEvidence
 {
     public SectionStatus SectionStatus { get; set; } = SectionStatus.NotStarted;
+
+    // Snapshotted on Submit and on each resubmit-after-query — never sent to the FE (RA-311 §6).
+    [JsonIgnore]
+    public List<BesEvidenceSnapshot> Versions { get; set; } = [];
+}
+
+public class BesEvidenceSnapshot
+{
+    public DateTime VersionedAt { get; set; }
 }

@@ -40,6 +40,13 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
+    public async Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId)
+    {
+        return await Collection
+            .Find(a => a.CaseManagementWorkItemId == workItemId)
+            .FirstOrDefaultAsync();
+    }
+
     public async Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application)
     {
         if (application.Id is null)

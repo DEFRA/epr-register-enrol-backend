@@ -42,6 +42,14 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
 
+    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId
+    )
+    {
+        var stored = _store.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
+        return Task.FromResult(stored is null ? null : ShallowCopy(stored));
+    }
+
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application
     )
@@ -60,6 +68,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             OrganisationId = src.OrganisationId,
             Year = src.Year,
             RegistrationId = src.RegistrationId,
+            IsExporter = src.IsExporter,
             MaterialType = src.MaterialType,
             ApplicationStatus = src.ApplicationStatus,
             SourceReExAccreditationId = src.SourceReExAccreditationId,
@@ -76,5 +85,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             BusinessPlan = src.BusinessPlan,
             SamplingPlan = src.SamplingPlan,
             OverseasSites = src.OverseasSites,
+            BesEvidence = src.BesEvidence,
+            Query = src.Query,
         };
 }

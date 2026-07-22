@@ -1,11 +1,13 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Utils;
 using FluentValidation;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
@@ -39,6 +41,13 @@ public static class AccreditationApplicationEndpoints
         );
         group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection);
         group.MapPost("{organisationId}/{applicationId}/submit", Submit);
+        group.MapPost("{organisationId}/{applicationId}/resubmit", Resubmit);
+        group
+            .MapPost("case-management/{workItemId}/query", QueryFromCaseManagement)
+            .RequireAuthorization(policy =>
+                policy.AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
         group.MapPost("{organisationId}/{applicationId}/files", AddFile);
         group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile);
         group.MapPost("{organisationId}/{applicationId}/approve", Approve);
@@ -218,6 +227,14 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.Prns.SectionStatus
+            )
+        )
+            return Results.Conflict("PRNs section is not editable in the application's current status.");
+
         if (request.PlannedTonnageBand.HasValue)
             application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
 
@@ -252,6 +269,14 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.Prns.SectionStatus
+            )
+        )
+            return Results.Conflict("PRNs section is not editable in the application's current status.");
+
         if (request.PlannedTonnageBand.HasValue)
             application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
 
@@ -283,6 +308,16 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.BusinessPlan.SectionStatus
+            )
+        )
+            return Results.Conflict(
+                "Business plan section is not editable in the application's current status."
+            );
 
         var bp = application.BusinessPlan;
         if (request.NewInfrastructurePercent.HasValue)
@@ -334,6 +369,16 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.SamplingPlan.SectionStatus
+            )
+        )
+            return Results.Conflict(
+                "Sampling plan section is not editable in the application's current status."
+            );
+
         if (request.Files != null)
             application.SamplingPlan.Files = request.Files;
 
@@ -361,6 +406,16 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
 
         if (application.OverseasSites is null)
             application.OverseasSites = new AccreditationApplicationOverseasSites();
@@ -478,6 +533,16 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "BES evidence section is not editable in the application's current status."
+            );
+
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
             return Results.NotFound();
@@ -516,6 +581,16 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "BES evidence section is not editable in the application's current status."
+            );
+
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
             return Results.NotFound();
@@ -545,6 +620,16 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "BES evidence section is not editable in the application's current status."
+            );
+
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site?.BesEvidence is null)
             return Results.NotFound();
@@ -564,12 +649,27 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         PatchBesEvidenceSectionRequest request,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchBesEvidenceSectionRequest> validator
     )
     {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "BES evidence section is not editable in the application's current status."
+            );
 
         application.BesEvidence ??= new AccreditationApplicationBesEvidence();
         if (request.SectionStatus.HasValue)
@@ -627,6 +727,34 @@ public static class AccreditationApplicationEndpoints
             Email = request.Email,
         };
 
+        // Version 1 for every section that exists on this application — only OverseasSites/
+        // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.
+        var versionedAt = DateTime.UtcNow;
+        AccreditationApplicationSections.SnapshotSection(application, OperatorSection.Prns, versionedAt);
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.BusinessPlan,
+            versionedAt
+        );
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.SamplingPlan,
+            versionedAt
+        );
+        if (application.IsExporter)
+        {
+            AccreditationApplicationSections.SnapshotSection(
+                application,
+                OperatorSection.OverseasSites,
+                versionedAt
+            );
+            AccreditationApplicationSections.SnapshotSection(
+                application,
+                OperatorSection.BesEvidence,
+                versionedAt
+            );
+        }
+
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
         var submissionResult = await caseWorkingAdapter.SubmitApplicationAsync(
             application,
@@ -641,6 +769,153 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(
                 new SubmitResponse { AccreditationReference = updated.ApplicationReference }
             );
+    }
+
+    private static async Task<IResult> Resubmit(
+        string organisationId,
+        string applicationId,
+        ResubmitRequest request,
+        IAccreditationApplicationPersistence persistence,
+        ICaseWorkingApiAdapter caseWorkingAdapter,
+        CancellationToken cancellationToken
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (application.ApplicationStatus == ApplicationStatus.Updated)
+            return Results.Ok(application);
+
+        if (application.ApplicationStatus != ApplicationStatus.Queried)
+            return Results.Conflict("Application must be in 'Queried' status to resubmit.");
+
+        var sectionKeys = application.Query?.QueriedSectionKeys ?? [];
+        var queriedSections = sectionKeys
+            .Select(key =>
+                AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section)
+                    ? section
+                    : (OperatorSection?)null
+            )
+            .Where(section => section is not null)
+            .Select(section => section!.Value)
+            .Distinct()
+            .ToList();
+
+        var contactDetails = new QuerySubmitterContactDetails
+        {
+            FullName = request.FullName ?? string.Empty,
+            Email = request.Email ?? string.Empty,
+            Role = request.Role ?? string.Empty,
+        };
+
+        // Call adapter before persisting: if the call fails, leave ApplicationStatus at Queried
+        // so the operator can retry — this matters more here than on the raise-side fire-and-
+        // forget hook, since a failure after persisting Updated would lock the application with
+        // CM never told.
+        var result = await caseWorkingAdapter.ResumeFromQueryAsync(
+            application,
+            contactDetails,
+            sectionKeys,
+            cancellationToken
+        );
+        if (!result.IsSuccess)
+            return Results.Problem(
+                statusCode: 502,
+                detail: "Failed to resume query with case management."
+            );
+
+        var versionedAt = DateTime.UtcNow;
+        foreach (var section in queriedSections)
+        {
+            AccreditationApplicationSections.SnapshotSection(application, section, versionedAt);
+
+            // Sections the operator edited while Queried already cleared away from Queried as a
+            // side effect of that PATCH; only sections still Queried (untouched) need resetting.
+            if (
+                AccreditationApplicationSections.GetSectionStatus(application, section)
+                == SectionStatus.Queried
+            )
+                AccreditationApplicationSections.SetSectionStatus(
+                    application,
+                    section,
+                    AccreditationApplicationSections.ComputeCurrentStatus(application, section)
+                );
+        }
+
+        application.Query ??= new AccreditationApplicationQuery();
+        application.Query.QuerySubmissions.Add(
+            new QuerySubmission
+            {
+                QuerySubmissionTime = versionedAt,
+                SectionKeys = sectionKeys,
+                QuerySubmitterContactDetails = contactDetails,
+            }
+        );
+        application.Query.QueriedSectionKeys = [];
+
+        application.ApplicationStatus = ApplicationStatus.Updated;
+        application.DateLastEdited = versionedAt;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to resubmit accreditation application.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> QueryFromCaseManagement(
+        Guid workItemId,
+        QueryFromCaseManagementRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<QueryFromCaseManagementRequest> validator
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (
+            !application.IsExporter
+            && request.SectionKeys.Any(
+                AccreditationApplicationSections.ExporterOnlyCmSectionKeys.Contains
+            )
+        )
+            return Results.BadRequest(
+                "BES evidence / overseas sites section keys are not valid for non-exporter applications."
+            );
+
+        // Every key is already known-valid — the validator above rejects anything outside the
+        // six-key set (AllCmSectionKeys), which is exactly what TryMapCmKeyToSection recognises.
+        var sections = request
+            .SectionKeys.Select(key =>
+            {
+                AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section);
+                return section;
+            })
+            .ToHashSet();
+
+        foreach (var section in sections)
+            AccreditationApplicationSections.SetSectionStatus(
+                application,
+                section,
+                SectionStatus.Queried
+            );
+
+        application.Query ??= new AccreditationApplicationQuery();
+        application.Query.QueryNote = request.QueryNote;
+        application.Query.QueriedSectionKeys = request.SectionKeys;
+
+        application.ApplicationStatus = ApplicationStatus.Queried;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to record query from case management.")
+            : Results.Ok(updated);
     }
 
     private static async Task<IResult> AddFile(
@@ -727,7 +1002,7 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Approved)
             return Results.Ok(application);
 
-        if (application.ApplicationStatus != ApplicationStatus.Submitted)
+        if (application.ApplicationStatus is not (ApplicationStatus.Submitted or ApplicationStatus.Updated))
             return Results.Conflict("Only submitted applications can be approved.");
 
         var approvedDto = new ApprovedAccreditationDto
@@ -778,7 +1053,7 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Rejected)
             return Results.Ok(application);
 
-        if (application.ApplicationStatus != ApplicationStatus.Submitted)
+        if (application.ApplicationStatus is not (ApplicationStatus.Submitted or ApplicationStatus.Updated))
             return Results.Conflict("Only submitted applications can be rejected.");
 
         application.ApplicationStatus = ApplicationStatus.Rejected;
@@ -794,6 +1069,7 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         InitiateUploadRequest request,
+        IAccreditationApplicationPersistence persistence,
         ICdpUploaderService cdpUploaderService,
         IPendingUploadService pendingUploadService,
         IOptions<CdpUploaderConfig> cdpConfig,
@@ -804,18 +1080,21 @@ public static class AccreditationApplicationEndpoints
             organisationId,
             applicationId,
             request,
+            persistence,
             cdpUploaderService,
             pendingUploadService,
             cdpConfig,
             appConfig,
             cancellationToken,
-            cdpConfig.Value.SamplingPlanBucket
+            cdpConfig.Value.SamplingPlanBucket,
+            OperatorSection.SamplingPlan
         );
 
     private static Task<IResult> InitiateBesEvidenceUpload(
         string organisationId,
         string applicationId,
         InitiateUploadRequest request,
+        IAccreditationApplicationPersistence persistence,
         ICdpUploaderService cdpUploaderService,
         IPendingUploadService pendingUploadService,
         IOptions<CdpUploaderConfig> cdpConfig,
@@ -826,26 +1105,42 @@ public static class AccreditationApplicationEndpoints
             organisationId,
             applicationId,
             request,
+            persistence,
             cdpUploaderService,
             pendingUploadService,
             cdpConfig,
             appConfig,
             cancellationToken,
-            cdpConfig.Value.BesEvidenceBucket
+            cdpConfig.Value.BesEvidenceBucket,
+            OperatorSection.BesEvidence
         );
 
     private static async Task<IResult> InitiateUploadInternal(
         string organisationId,
         string applicationId,
         InitiateUploadRequest request,
+        IAccreditationApplicationPersistence persistence,
         ICdpUploaderService cdpUploaderService,
         IPendingUploadService pendingUploadService,
         IOptions<CdpUploaderConfig> cdpConfig,
         IOptions<AppConfig> appConfig,
         CancellationToken cancellationToken,
-        string bucketPrefix
+        string bucketPrefix,
+        OperatorSection section
     )
     {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                AccreditationApplicationSections.GetSectionStatus(application, section)
+            )
+        )
+            return Results.Conflict("Section is not editable in the application's current status.");
+
         var fileUploadId = Guid.NewGuid().ToString();
         var baseUrl = appConfig.Value.BaseUrl.TrimEnd('/');
         var callbackUrl = $"{baseUrl}/api/v1/accreditation-applications/files/upload-completed";

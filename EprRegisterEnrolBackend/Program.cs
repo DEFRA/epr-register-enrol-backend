@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
@@ -116,6 +117,19 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<ICdpUploaderService, CdpUploaderService>();
     builder.Services.AddSingleton<IPendingUploadService, PendingUploadService>();
 
+    // CaseManagement inbound auth: verifies pushes from ManagementBe (RA-311 OBE-2).
+    builder.Services.AddMemoryCache();
+    builder.Services.Configure<CaseManagementAuthConfig>(
+        builder.Configuration.GetSection("CaseManagementAuth")
+    );
+    builder
+        .Services.AddAuthentication()
+        .AddScheme<CaseManagementAuthenticationOptions, CaseManagementAuthenticationHandler>(
+            CaseManagementAuthenticationHandler.SchemeName,
+            _ => { }
+        );
+    builder.Services.AddAuthorization();
+
     // CaseWorking: config-driven stub/real switch (default: stub).
     builder.Services.Configure<CaseWorkingApiConfig>(
         builder.Configuration.GetSection("CaseWorking")
@@ -200,6 +214,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
+    app.UseAuthentication();
+    app.UseAuthorization();
     app.MapHealthChecks("/health");
 
     // Enable Swagger UI so the API can be explored in the browser

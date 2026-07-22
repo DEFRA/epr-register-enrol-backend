@@ -77,6 +77,23 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult<string?>(null);
     }
 
+    public Task<ResumeFromQueryResult> ResumeFromQueryAsync(
+        AccreditationApplicationModel application,
+        QuerySubmitterContactDetails contactDetails,
+        IReadOnlyList<string> sectionKeys,
+        CancellationToken cancellationToken = default
+    )
+    {
+        logger.LogInformation(
+            "StubCaseWorkingApiAdapter.ResumeFromQueryAsync called for applicationId={ApplicationId} workItemId={WorkItemId} sectionKeys={SectionKeys}",
+            application.Id,
+            application.CaseManagementWorkItemId,
+            string.Join(',', sectionKeys)
+        );
+
+        return Task.FromResult(new ResumeFromQueryResult(true));
+    }
+
     private static string GenerateReference(AccreditationApplicationModel application)
     {
         const int maxLength = 18;

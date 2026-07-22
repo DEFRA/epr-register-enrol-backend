@@ -1699,4 +1699,429 @@ public class AccreditationApplicationEndpointsTests
         );
         body!.UploadStatus.Should().Be("pending");
     }
+
+    // --- QueryFromCaseManagement ---
+
+    [Fact]
+    public async Task QueryFromCaseManagement_ValidPush_SetsSectionStatusAndApplicationStatus()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.Submitted,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new
+        {
+            queryNote = "Please clarify your business plan.",
+            sectionKeys = new[] { "business-plan" },
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Queried);
+        body.BusinessPlan.SectionStatus.Should().Be(SectionStatus.Queried);
+        body.Query!.QueryNote.Should().Be("Please clarify your business plan.");
+    }
+
+    [Fact]
+    public async Task QueryFromCaseManagement_UnknownSectionKey_Returns400()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(configure: a => a.CaseManagementWorkItemId = workItemId);
+
+        var request = new { queryNote = "note", sectionKeys = new[] { "not-a-real-key" } };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task QueryFromCaseManagement_ExporterOnlyKeyForNonExporter_Returns400()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.IsExporter = false;
+            }
+        );
+
+        var request = new
+        {
+            queryNote = "note",
+            sectionKeys = new[] { "overseas-reprocessing-sites" },
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task QueryFromCaseManagement_ExporterOnlyKeyForExporter_Succeeds()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.IsExporter = true;
+            }
+        );
+
+        var request = new
+        {
+            queryNote = "note",
+            sectionKeys = new[] { "overseas-reprocessing-sites" },
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task QueryFromCaseManagement_AuthorityToIssueAndPrnTonnage_CollapseOntoPrnsOnce()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = workItemId);
+
+        var request = new
+        {
+            queryNote = "note",
+            sectionKeys = new[] { "authority-to-issue", "prn-tonnage" },
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.Prns.SectionStatus.Should().Be(SectionStatus.Queried);
+    }
+
+    [Fact]
+    public async Task QueryFromCaseManagement_UnknownWorkItem_Returns404()
+    {
+        Reset();
+        var request = new { queryNote = "note", sectionKeys = new[] { "business-plan" } };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{Guid.NewGuid()}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // --- Section edit gate ---
+
+    [Fact]
+    public async Task PatchPrns_WhenQueriedAndPrnsSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.BusinessPlan.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new PatchPrnsRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/prns",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchPrns_WhenQueriedAndPrnsSectionIsQueried_SucceedsAndClearsQueriedStatus()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new PatchPrnsRequest
+        {
+            PlannedTonnageBand = PlannedTonnageBand.UpTo500,
+            Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" }],
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/prns",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Prns.SectionStatus.Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_WhenQueriedAndBesEvidenceSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "Test Site" }],
+                }
+        );
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-001",
+            Filename = "evidence.pdf",
+            S3Key = "bes-evidence/bes-file-001",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task InitiateUpload_WhenQueriedAndSamplingPlanSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Queried);
+
+        var request = new
+        {
+            redirectUrl = "http://frontend/redirect",
+            s3Bucket = "test-bucket",
+            s3Path = "uploads/test.csv",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/initiate",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceSection_SettingQueriedDirectly_Returns400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new PatchBesEvidenceSectionRequest { SectionStatus = SectionStatus.Queried };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/bes-evidence",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    // --- Resubmit ---
+
+    [Fact]
+    public async Task Resubmit_WhenNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Started);
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenAlreadyUpdated_ReturnsIdempotentOk()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Updated);
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Resubmit_AdapterFails_Returns502AndApplicationRemainsQueried()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = Guid.NewGuid();
+                a.BusinessPlan.SectionStatus = SectionStatus.Queried;
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify",
+                    QueriedSectionKeys = ["business-plan"],
+                };
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new ResumeFromQueryResult(false)));
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Queried);
+    }
+
+    [Fact]
+    public async Task Resubmit_Success_TransitionsToUpdatedAndAppendsQuerySubmission()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = Guid.NewGuid();
+                a.BusinessPlan.SectionStatus = SectionStatus.Queried; // untouched by operator
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify",
+                    QueriedSectionKeys = ["business-plan"],
+                };
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new ResumeFromQueryResult(true)));
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Updated);
+        // Untouched (still-Queried) section is force-reset to its computed status.
+        body.BusinessPlan.SectionStatus.Should().Be(SectionStatus.NotStarted);
+        body.Query!.QueriedSectionKeys.Should().BeEmpty();
+        body.Query.QuerySubmissions.Should().ContainSingle();
+        body.Query.QuerySubmissions[0].QuerySubmitterContactDetails.FullName.Should().Be("Jane");
+        body.Query.QueryNote.Should().Be("clarify");
+    }
+
+    // --- Approve/Reject from Updated ---
+
+    [Fact]
+    public async Task Approve_WhenUpdated_Succeeds()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Updated,
+            configure: a => a.ApplicationReference = "RA-123456789"
+        );
+        _factory
+            .MockReExAdapter.WriteApprovedAccreditationAsync(
+                Arg.Any<ApprovedAccreditationDto>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(ReExResult<bool>.Success(true, 200)));
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Reject_WhenUpdated_Succeeds()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Updated);
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",
+            null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
 }

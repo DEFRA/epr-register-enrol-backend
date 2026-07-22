@@ -96,6 +96,23 @@ public class SubmitRequest
     public string? Email { get; set; }
 }
 
+// Pushed by ManagementBe when CM raises a query (RA-311 §3/§5/§6). SectionKeys use CM's own
+// closed six-key vocabulary, not operator section names — see AccreditationApplicationSections.
+public class QueryFromCaseManagementRequest
+{
+    public string? QueryNote { get; set; }
+    public List<string> SectionKeys { get; set; } = [];
+}
+
+// Submitter contact details captured on the query-declaration page. No completeness validation —
+// explicit in the ticket (RA-311 §6).
+public class ResubmitRequest
+{
+    public string? FullName { get; set; }
+    public string? Email { get; set; }
+    public string? Role { get; set; }
+}
+
 public record SubmitResponse
 {
     public string? AccreditationReference { get; init; }
