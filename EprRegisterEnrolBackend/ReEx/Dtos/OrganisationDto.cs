@@ -72,8 +72,10 @@ public class RegistrationBaseDto
 {
     public string? Id { get; init; }
     public string? AccreditationId { get; init; }
+    public string? RegistrationNumber { get; init; }
     public NoticeAddressDto? NoticeAddress { get; init; }
     public List<WasteManagementPermitDto> WasteManagementPermits { get; init; } = [];
+
     // Present only when wasteProcessingType is glass (values: "glass_re_melt", "glass_other")
     public List<string> GlassRecyclingProcess { get; init; } = [];
 }
@@ -90,6 +92,7 @@ public class ExporterRegistrationDto : RegistrationBaseDto
 {
     public List<string> ExportPorts { get; init; } = [];
     public List<FileUploadReferenceDto> OrsFileUploads { get; init; } = [];
+
     // Keyed by a numeric-string site key matching the overseas-sites endpoint
     public Dictionary<string, OverseasSiteRefDto> OverseasSites { get; init; } = [];
 }
@@ -124,10 +127,13 @@ public class YearlyMetricDto
 public class MetricInputDto
 {
     public string? Type { get; init; }
+
     [JsonPropertyName("ukPackagingWasteInTonnes")]
     public int? UkPackagingWaste { get; init; }
+
     [JsonPropertyName("nonUkPackagingWasteInTonnes")]
     public int? NonUkPackagingWaste { get; init; }
+
     [JsonPropertyName("nonPackagingWasteInTonnes")]
     public int? NonPackagingWaste { get; init; }
 }
@@ -135,10 +141,13 @@ public class MetricInputDto
 public class MetricOutputDto
 {
     public string? Type { get; init; }
+
     [JsonPropertyName("sentToAnotherSiteInTonnes")]
     public int? SentToAnotherSite { get; init; }
+
     [JsonPropertyName("contaminantsInTonnes")]
     public int? Contaminants { get; init; }
+
     [JsonPropertyName("processLossInTonnes")]
     public int? ProcessLoss { get; init; }
 }
