@@ -303,7 +303,6 @@ public class HttpCaseWorkingApiAdapter(
                 _config.CognitoClientId,
                 userId,
                 userName,
-                null,
                 timestamp,
                 nonce
             );
@@ -317,24 +316,23 @@ public class HttpCaseWorkingApiAdapter(
     }
 
     // Port of ManagementBe's CognitoClientIdAuthenticationHandler.ComputeSignature
-    // (v2 canonical payload). Must stay in sync — any change is a breaking change.
+    // (v3 canonical payload — see ManagementBe ADR-0005). Must stay in sync —
+    // any change is a breaking change requiring a coordinated deploy.
     internal static string ComputeSignature(
         string sharedSecret,
         string clientId,
         string? userId,
         string? userName,
-        string? userRoles,
         string timestamp,
         string nonce
     )
     {
         var payload = string.Join(
             '\n',
-            "v2",
+            "v3",
             clientId,
             userId ?? string.Empty,
             userName ?? string.Empty,
-            userRoles ?? string.Empty,
             timestamp,
             nonce
         );
