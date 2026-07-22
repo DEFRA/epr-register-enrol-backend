@@ -12,4 +12,10 @@ public interface ICdpUploaderService
         CdpInitiateRequest request,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>Poll CDP Uploader's own status endpoint directly (server-to-server).</summary>
+    Task<CdpStatusResponse> GetStatusAsync(
+        string statusUrl,
+        CancellationToken cancellationToken = default
+    );
 }

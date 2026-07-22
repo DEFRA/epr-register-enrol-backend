@@ -250,9 +250,42 @@ public class HttpCaseWorkingApiAdapter(
                 files = application
                     .SamplingPlan.Files.Select(f => new
                     {
+                        fileId = f.FileId,
                         filename = f.Filename,
+                        contentType = f.ContentType,
                         uploadedAt = f.UploadedAt,
                         scanStatus = f.ScanStatus.ToString(),
+                        s3Key = f.S3Key,
+                        s3Bucket = f.S3Bucket,
+                    })
+                    .ToArray(),
+            },
+            overseasSites = new
+            {
+                sites = (application.OverseasSites?.Sites ?? [])
+                    .Select(s => new
+                    {
+                        siteId = s.SiteId,
+                        siteName = s.SiteName,
+                        siteAddress = s.SiteAddress,
+                        country = s.Country,
+                        besEvidence = new
+                        {
+                            files = (s.BesEvidence?.BesEvidenceUploads ?? [])
+                                .Select(f => new
+                                {
+                                    fileId = f.FileId,
+                                    filename = f.Filename,
+                                    contentType = f.ContentType,
+                                    uploadedAt = f.UploadedAt,
+                                    scanStatus = f.ScanStatus,
+                                    besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
+                                    besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
+                                    s3Key = f.S3Key,
+                                    s3Bucket = f.S3Bucket,
+                                })
+                                .ToArray(),
+                        },
                     })
                     .ToArray(),
             },

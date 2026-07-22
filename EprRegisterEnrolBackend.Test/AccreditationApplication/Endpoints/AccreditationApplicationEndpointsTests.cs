@@ -1037,6 +1037,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-001",
             Filename = "plan.pdf",
             ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-001",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1058,6 +1059,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-002",
             Filename = "../../etc/passwd",
             ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-002",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1079,6 +1081,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-003",
             Filename = "script.js",
             ContentType = "text/javascript",
+            S3Key = "sampling-plans/file-003",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1103,6 +1106,7 @@ public class AccreditationApplicationEndpointsTests
                         Filename = $"file{i}.pdf",
                         ContentType = "application/pdf",
                         UploadedByUserId = string.Empty,
+                        S3Key = $"sampling-plans/existing-{i}",
                     }
                 );
         });
@@ -1112,6 +1116,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-new",
             Filename = "new.pdf",
             ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-new",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1136,6 +1141,7 @@ public class AccreditationApplicationEndpointsTests
                     Filename = "plan.pdf",
                     ContentType = "application/pdf",
                     UploadedByUserId = string.Empty,
+                    S3Key = "sampling-plans/file-001",
                 }
             )
         );
@@ -1234,6 +1240,82 @@ public class AccreditationApplicationEndpointsTests
                 ),
                 Arg.Any<CancellationToken>()
             );
+    }
+
+    // --- AddBesEvidenceFile ---
+
+    private AccreditationApplicationModel SeedApplicationWithOverseasSite(
+        int siteId = 1,
+        string siteName = "Test Site"
+    ) =>
+        SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [new OverseasSiteModel { SiteId = siteId, SiteName = siteName }],
+            }
+        );
+
+    [Fact]
+    public async Task AddBesEvidenceFile_AddsFileToSite_Returns201()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-001",
+            Filename = "evidence.pdf",
+            S3Key = "bes-evidence/bes-file-001",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_EmptyS3Key_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-002",
+            Filename = "evidence.pdf",
+            S3Key = string.Empty,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_InvalidFilename_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-003",
+            Filename = "../../etc/passwd",
+            S3Key = "bes-evidence/bes-file-003",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]

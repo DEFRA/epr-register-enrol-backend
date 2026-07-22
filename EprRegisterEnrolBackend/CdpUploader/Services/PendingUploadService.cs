@@ -8,16 +8,28 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
 {
     private record PendingUpload(
         string CdpStatusUrl,
+        string? CdpUploadId,
+        string? S3Bucket,
+        string? S3Path,
         CdpCallbackFile? ScanResult,
         FileProcessingStatus Status
     );
 
     private readonly ConcurrentDictionary<string, PendingUpload> _uploads = new();
 
-    public void Create(string fileUploadId, string cdpStatusUrl)
+    public void Create(
+        string fileUploadId,
+        string cdpStatusUrl,
+        string? cdpUploadId = null,
+        string? s3Bucket = null,
+        string? s3Path = null
+    )
     {
         _uploads[fileUploadId] = new PendingUpload(
             cdpStatusUrl,
+            cdpUploadId,
+            s3Bucket,
+            s3Path,
             null,
             FileProcessingStatus.Preprocessing
         );
@@ -25,6 +37,21 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
             "Upload {FileUploadId} state → {Status}",
             fileUploadId,
             FileProcessingStatus.Preprocessing
+        );
+    }
+
+    public PendingUploadDetails? TryGetPendingUploadDetails(string fileUploadId)
+    {
+        if (!_uploads.TryGetValue(fileUploadId, out var upload))
+            return null;
+        if (upload.Status != FileProcessingStatus.Preprocessing)
+            return null;
+
+        return new PendingUploadDetails(
+            upload.CdpStatusUrl,
+            upload.CdpUploadId,
+            upload.S3Bucket,
+            upload.S3Path
         );
     }
 
@@ -37,7 +64,7 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
 
         _uploads.AddOrUpdate(
             fileUploadId,
-            _ => new PendingUpload(string.Empty, fileResult, newStatus),
+            _ => new PendingUpload(string.Empty, null, null, null, fileResult, newStatus),
             (_, existing) => existing with { ScanResult = fileResult, Status = newStatus }
         );
 

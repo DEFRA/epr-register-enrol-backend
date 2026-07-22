@@ -106,7 +106,7 @@ public class SectionStatusComputationTests
                 new AccreditationApplicationFile
                 {
                     FileId = "f1", Filename = "plan.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Pending
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Pending, S3Key = "sampling-plans/f1"
                 }
             ]
         };
@@ -123,7 +123,7 @@ public class SectionStatusComputationTests
                 new AccreditationApplicationFile
                 {
                     FileId = "f1", Filename = "plan.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f1"
                 }
             ]
         };
@@ -140,7 +140,7 @@ public class SectionStatusComputationTests
                 new AccreditationApplicationFile
                 {
                     FileId = "f1", Filename = "bad.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Infected
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Infected, S3Key = "sampling-plans/f1"
                 }
             ]
         };
@@ -157,12 +157,12 @@ public class SectionStatusComputationTests
                 new AccreditationApplicationFile
                 {
                     FileId = "f1", Filename = "good.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f1"
                 },
                 new AccreditationApplicationFile
                 {
                     FileId = "f2", Filename = "bad.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Infected
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Infected, S3Key = "sampling-plans/f2"
                 }
             ]
         };
@@ -179,12 +179,12 @@ public class SectionStatusComputationTests
                 new AccreditationApplicationFile
                 {
                     FileId = "f1", Filename = "good.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f1"
                 },
                 new AccreditationApplicationFile
                 {
                     FileId = "f2", Filename = "pending.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Pending
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Pending, S3Key = "sampling-plans/f2"
                 }
             ]
         };
@@ -201,12 +201,12 @@ public class SectionStatusComputationTests
                 new AccreditationApplicationFile
                 {
                     FileId = "f1", Filename = "doc1.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f1"
                 },
                 new AccreditationApplicationFile
                 {
                     FileId = "f2", Filename = "doc2.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean
+                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f2"
                 }
             ]
         };
