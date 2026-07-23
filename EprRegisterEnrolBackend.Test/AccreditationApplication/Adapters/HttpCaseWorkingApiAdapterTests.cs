@@ -304,7 +304,6 @@ public class HttpCaseWorkingApiAdapterTests
             TestClientId,
             "jane@example.com",
             "Jane Smith",
-            null,
             timestamp,
             nonce
         );
@@ -406,15 +405,16 @@ public class HttpCaseWorkingApiAdapterTests
             "my-client",
             null,
             null,
-            null,
             "2026-06-22T10:00:00Z",
             "dGVzdC1ub25jZQ=="
         );
 
-        // Pre-computed: HMAC-SHA256("my-secret", "v2\nmy-client\n\n\n\n2026-06-22T10:00:00Z\ndGVzdC1ub25jZQ==")
-        // Verify this is a valid base64 string of the right length (44 chars for SHA-256)
-        result.Should().NotBeNullOrEmpty();
-        Convert.FromBase64String(result).Should().HaveCount(32);
+        // Pre-computed: HMAC-SHA256("my-secret", "v3\nmy-client\n\n\n2026-06-22T10:00:00Z\ndGVzdC1ub25jZQ==")
+        // Computed with: printf 'v3\n...' | openssl dgst -sha256 -hmac 'my-secret' -binary | base64
+        // Pinning the exact value (not just base64-of-32-bytes) is what
+        // actually guards this port against drifting from ManagementBe's
+        // canonical payload format — see the class comment on ComputeSignature.
+        result.Should().Be("jjnCJCHFRVd/zdy16hBAQIzJ1NqP4OlupV4vlLvj9V4=");
     }
 
     [Theory]
