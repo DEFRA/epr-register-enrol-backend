@@ -1756,6 +1756,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var workItemId = Guid.NewGuid();
         SeedApplication(
+            status: ApplicationStatus.Submitted,
             configure: a =>
             {
                 a.CaseManagementWorkItemId = workItemId;
@@ -1783,6 +1784,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var workItemId = Guid.NewGuid();
         SeedApplication(
+            status: ApplicationStatus.Submitted,
             configure: a =>
             {
                 a.CaseManagementWorkItemId = workItemId;
@@ -1809,7 +1811,10 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var workItemId = Guid.NewGuid();
-        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = workItemId);
+        var app = SeedApplication(
+            status: ApplicationStatus.Submitted,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
 
         var request = new
         {
@@ -1842,6 +1847,87 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task QueryFromCaseManagement_AlreadyQueried_Returns409WithoutOverwritingQueriedSectionKeys()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "Original query",
+                    QueriedSectionKeys = ["business-plan"],
+                };
+            }
+        );
+
+        var request = new
+        {
+            queryNote = "Second query while first is open",
+            sectionKeys = new[] { "sampling-and-inspection-plan" },
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.Query!.QueryNote.Should().Be("Original query");
+        stored.Query.QueriedSectionKeys.Should().BeEquivalentTo(["business-plan"]);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Saved)]
+    [InlineData(ApplicationStatus.Started)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task QueryFromCaseManagement_IllegalStatus_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: status,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new { queryNote = "note", sectionKeys = new[] { "business-plan" } };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task QueryFromCaseManagement_UpdatedStatus_Succeeds()
+    {
+        // Updated = a prior query was already resolved via resubmit; CM must be able to raise
+        // a fresh query against the same application.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.Updated,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new { queryNote = "note", sectionKeys = new[] { "business-plan" } };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     // --- Section edit gate ---

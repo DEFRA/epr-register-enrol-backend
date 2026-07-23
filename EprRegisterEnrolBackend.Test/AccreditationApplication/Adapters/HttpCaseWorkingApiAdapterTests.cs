@@ -613,12 +613,12 @@ public class HttpCaseWorkingApiAdapterTests
         handler
             .CapturedRequest!.RequestUri!.ToString()
             .Should()
-            .Be($"{TestUrl}/work-items/{workItemId}/resume-from-query");
+            .Be($"{TestUrl}/work-items/re-accreditation/{workItemId}/resume-from-query");
         handler.CapturedRequest!.Method.Should().Be(HttpMethod.Post);
     }
 
     [Fact]
-    public async Task ResumeFromQueryAsync_MapsContactDetailsAndSectionKeysIntoPayload()
+    public async Task ResumeFromQueryAsync_MapsResponderContactDetailsAndSectionKeysIntoPayload()
     {
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -639,8 +639,16 @@ public class HttpCaseWorkingApiAdapterTests
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var root = doc.RootElement;
 
-        root.GetProperty("contactDetails").GetProperty("fullName").GetString().Should().Be("Jane Smith");
-        root.GetProperty("contactDetails").GetProperty("email").GetString().Should().Be("jane@example.com");
+        root.GetProperty("responderContactDetails")
+            .GetProperty("fullName")
+            .GetString()
+            .Should()
+            .Be("Jane Smith");
+        root.GetProperty("responderContactDetails")
+            .GetProperty("email")
+            .GetString()
+            .Should()
+            .Be("jane@example.com");
         root.GetProperty("sectionKeys")[0].GetString().Should().Be("business-plan");
         root.GetProperty("sections")
             .GetProperty("BusinessPlan")
@@ -648,6 +656,30 @@ public class HttpCaseWorkingApiAdapterTests
             .GetInt32()
             .Should()
             .Be(40);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_DoesNotSendContactDetailsPropertyName()
+    {
+        // OBE-F5: MBE-1 expects "responderContactDetails", not "contactDetails" — assert the
+        // old property name is genuinely absent rather than substring-matching the body.
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        doc.RootElement.TryGetProperty("contactDetails", out _).Should().BeFalse();
     }
 
     [Fact]

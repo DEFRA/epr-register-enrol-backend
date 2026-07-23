@@ -226,7 +226,7 @@ public class HttpCaseWorkingApiAdapter(
 
         var body = new ResumeFromQueryRequest
         {
-            ContactDetails = new
+            ResponderContactDetails = new
             {
                 fullName = contactDetails.FullName,
                 email = contactDetails.Email,
@@ -236,7 +236,8 @@ public class HttpCaseWorkingApiAdapter(
             Sections = BuildSectionsPayload(application, sectionKeys),
         };
 
-        var endpoint = $"{url.TrimEnd('/')}/work-items/{workItemId}/resume-from-query";
+        var endpoint =
+            $"{url.TrimEnd('/')}/work-items/re-accreditation/{workItemId}/resume-from-query";
 
         try
         {
@@ -562,7 +563,7 @@ public class HttpCaseWorkingApiAdapter(
 
     internal sealed class ResumeFromQueryRequest
     {
-        public required object ContactDetails { get; init; }
+        public required object ResponderContactDetails { get; init; }
         public required IReadOnlyList<string> SectionKeys { get; init; }
         public required Dictionary<string, object?> Sections { get; init; }
     }

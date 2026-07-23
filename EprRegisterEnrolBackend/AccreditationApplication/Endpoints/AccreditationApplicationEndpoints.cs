@@ -878,6 +878,17 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
+        // A second query while one is already open is rejected rather than merged into the
+        // existing QueriedSectionKeys (RA-311 §3) — the operator must resubmit the open query
+        // before CM can raise another.
+        if (application.ApplicationStatus == ApplicationStatus.Queried)
+            return Results.Conflict("A query is already open for this application.");
+
+        if (application.ApplicationStatus is not (ApplicationStatus.Submitted or ApplicationStatus.Updated))
+            return Results.Conflict(
+                "Application must be in 'Submitted' or 'Updated' status to raise a query."
+            );
+
         if (
             !application.IsExporter
             && request.SectionKeys.Any(
