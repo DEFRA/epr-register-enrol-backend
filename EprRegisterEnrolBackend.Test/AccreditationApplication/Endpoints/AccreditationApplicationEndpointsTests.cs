@@ -1425,6 +1425,55 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Fact]
+    public async Task AddOverseasSite_DuplicateOrsId_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Existing",
+                        OrsId = "001",
+                    },
+                ],
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_NonOecdEuCountry_IsOecdFalse()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { Country = "Bulgaria" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.IsEu.Should().BeTrue();
+        site.IsOecd.Should().BeFalse();
+    }
+
     // --- AddBesEvidenceFile ---
 
     private AccreditationApplicationModel SeedApplicationWithOverseasSite(

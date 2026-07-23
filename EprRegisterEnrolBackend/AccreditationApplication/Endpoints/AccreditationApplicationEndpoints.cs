@@ -403,6 +403,17 @@ public static class AccreditationApplicationEndpoints
 
         application.OverseasSites ??= new AccreditationApplicationOverseasSites();
 
+        const int maxSitesPerApplication = 500;
+        if (application.OverseasSites.Sites.Count >= maxSitesPerApplication)
+            return Results.UnprocessableEntity(
+                $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
+            );
+
+        if (application.OverseasSites.Sites.Any(s => s.OrsId == request.OrsId))
+            return Results.Conflict(
+                $"A site with OrsId '{request.OrsId}' already exists on this application."
+            );
+
         var nextSiteId =
             application.OverseasSites.Sites.Count > 0
                 ? application.OverseasSites.Sites.Max(s => s.SiteId) + 1
