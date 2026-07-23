@@ -517,11 +517,7 @@ public static class AccreditationApplicationEndpoints
 
         if (application.ApplicationStatus == ApplicationStatus.Submitted)
             return Results.Ok(
-                new SubmitResponse
-                {
-                    AccreditationReference = application.ApplicationReference,
-                    CaseManagementReference = application.CaseManagementReference,
-                }
+                new SubmitResponse { AccreditationReference = application.ApplicationReference }
             );
 
         if (application.ApplicationStatus != ApplicationStatus.Started)
@@ -558,10 +554,7 @@ public static class AccreditationApplicationEndpoints
         return updated is null
             ? Results.Problem("Failed to submit accreditation application.")
             : Results.Ok(
-                new SubmitResponse
-                {
-                    AccreditationReference = updated.ApplicationReference,
-                }
+                new SubmitResponse { AccreditationReference = updated.ApplicationReference }
             );
     }
 
