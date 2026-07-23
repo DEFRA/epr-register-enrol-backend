@@ -552,7 +552,6 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
         application.ApplicationReference = submissionResult.ApplicationReference;
-        application.CaseManagementReference = submissionResult.ApplicationReference;
         application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
         var updated = await persistence.UpdateAsync(application);
@@ -562,7 +561,6 @@ public static class AccreditationApplicationEndpoints
                 new SubmitResponse
                 {
                     AccreditationReference = updated.ApplicationReference,
-                    CaseManagementReference = updated.CaseManagementReference,
                 }
             );
     }
