@@ -47,6 +47,26 @@ public class PatchOverseasSitesRequest
     public List<OverseasSiteModel>? Sites { get; set; }
 }
 
+public record AddOverseasSiteRequest
+{
+    public required string OrsId { get; set; }
+    public required string SiteName { get; set; }
+    public required string AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public required string TownOrCity { get; set; }
+    public required string Country { get; set; }
+    public string? Coordinates { get; set; }
+    public required string ContactName { get; set; }
+    public required string ContactEmail { get; set; }
+    public string? ContactPhone { get; set; }
+    public required string OperationCode { get; set; }
+    public required string Code1 { get; set; }
+    public string? Code2 { get; set; }
+    public string? Code3 { get; set; }
+    public required string RepatriatedLoads { get; set; }
+    public bool? ConditionsOfExport { get; set; }
+}
+
 public class AddBesEvidenceFileRequest
 {
     public required string FileId { get; set; }
