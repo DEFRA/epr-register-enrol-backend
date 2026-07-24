@@ -4,6 +4,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.Utils;
 using FluentValidation;
 using Microsoft.Extensions.Options;
 
@@ -23,6 +24,7 @@ public static class AccreditationApplicationEndpoints
         group.MapPatch("{organisationId}/{applicationId}/business-plan", PatchBusinessPlan);
         group.MapPatch("{organisationId}/{applicationId}/sampling-plan", PatchSamplingPlan);
         group.MapPatch("{organisationId}/{applicationId}/overseas-sites", PatchOverseasSites);
+        group.MapPost("{organisationId}/{applicationId}/overseas-sites", AddOverseasSite);
         group.MapPost(
             "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files",
             AddBesEvidenceFile
@@ -381,6 +383,82 @@ public static class AccreditationApplicationEndpoints
         return updated is null
             ? Results.Problem("Failed to update overseas sites.")
             : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> AddOverseasSite(
+        string organisationId,
+        string applicationId,
+        AddOverseasSiteRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<AddOverseasSiteRequest> validator
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        application.OverseasSites ??= new AccreditationApplicationOverseasSites();
+
+        const int maxSitesPerApplication = 500;
+        if (application.OverseasSites.Sites.Count >= maxSitesPerApplication)
+            return Results.UnprocessableEntity(
+                $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
+            );
+
+        if (application.OverseasSites.Sites.Any(s => s.OrsId == request.OrsId))
+            return Results.Conflict(
+                $"A site with OrsId '{request.OrsId}' already exists on this application."
+            );
+
+        var nextSiteId =
+            application.OverseasSites.Sites.Count > 0
+                ? application.OverseasSites.Sites.Max(s => s.SiteId) + 1
+                : 1;
+
+        var newSite = new OverseasSiteModel
+        {
+            SiteId = nextSiteId,
+            OrsId = request.OrsId,
+            SiteName = request.SiteName,
+            AddressLine1 = request.AddressLine1,
+            AddressLine2 = request.AddressLine2,
+            TownOrCity = request.TownOrCity,
+            Country = request.Country,
+            SiteAddress = string.Join(
+                ", ",
+                new[] { request.AddressLine1, request.TownOrCity, request.Country }.Where(s =>
+                    !string.IsNullOrWhiteSpace(s)
+                )
+            ),
+            Coordinates = request.Coordinates,
+            ContactName = request.ContactName,
+            ContactEmail = request.ContactEmail,
+            ContactPhone = request.ContactPhone,
+            OperationCode = request.OperationCode,
+            Code1 = request.Code1,
+            Code2 = request.Code2,
+            Code3 = request.Code3,
+            RepatriatedLoads = request.RepatriatedLoads,
+            ConditionsOfExport = request.ConditionsOfExport,
+            IsEu = CountryClassifications.IsEu(request.Country),
+            IsOecd = CountryClassifications.IsOecd(request.Country),
+        };
+
+        application.OverseasSites.Sites.Add(newSite);
+        application.OverseasSites.SectionStatus = SectionStatus.InProgress;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to add overseas site.")
+            : Results.Created(string.Empty, newSite);
     }
 
     private static async Task<IResult> AddBesEvidenceFile(

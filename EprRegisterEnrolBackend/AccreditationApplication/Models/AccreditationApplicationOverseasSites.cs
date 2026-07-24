@@ -10,9 +10,23 @@ public class AccreditationApplicationOverseasSites
 public class OverseasSiteModel
 {
     public required int SiteId { get; set; }
+    public string? OrsId { get; set; }
     public required string SiteName { get; set; }
     public string? SiteAddress { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public string? TownOrCity { get; set; }
     public string? Country { get; set; }
+    public string? Coordinates { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactEmail { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? OperationCode { get; set; }
+    public string? Code1 { get; set; }
+    public string? Code2 { get; set; }
+    public string? Code3 { get; set; }
+    public string? RepatriatedLoads { get; set; }
+    public bool? ConditionsOfExport { get; set; }
     public bool IsEu { get; set; }
     public bool IsOecd { get; set; }
     public bool Selected { get; set; } = true;
