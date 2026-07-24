@@ -78,6 +78,11 @@ public class AccreditationApplicationPersistence(
                     builder.Ascending(a => a.Year))),
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Ascending(a => a.ApplicationReference),
+                new CreateIndexOptions { Unique = true, Sparse = true }),
+            // Backs GetByCaseManagementWorkItemIdAsync, called on every inbound CM query push —
+            // without this the lookup is a full collection scan (RA-311 OBE-2).
+            new CreateIndexModel<AccreditationApplicationModel>(
+                builder.Ascending(a => a.CaseManagementWorkItemId),
                 new CreateIndexOptions { Unique = true, Sparse = true })
         ];
     }
