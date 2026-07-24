@@ -27,6 +27,9 @@ public class CaseManagementAuthenticationHandler(
 
     private static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(5);
 
+    // Guards the nonce check-then-set below across concurrent requests on this instance.
+    private static readonly object NonceLock = new();
+
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var config = authConfig.Value;
@@ -103,10 +106,17 @@ public class CaseManagementAuthenticationHandler(
         if (!signatureValid)
             return Task.FromResult(AuthenticateResult.Fail("Invalid signature."));
 
+        // TryGetValue + Set is check-then-act; without the lock, two requests racing on the
+        // same nonce could both observe "not present" and both proceed, defeating single-use
+        // replay protection. IMemoryCache (incl. the GetOrCreate extension) has no atomic
+        // add-if-absent primitive, so the critical section is serialised explicitly.
         var nonceCacheKey = $"case-management-auth-nonce:{nonce}";
-        if (nonceCache.TryGetValue(nonceCacheKey, out _))
-            return Task.FromResult(AuthenticateResult.Fail("Nonce has already been used."));
-        nonceCache.Set(nonceCacheKey, true, ClockSkew);
+        lock (NonceLock)
+        {
+            if (nonceCache.TryGetValue(nonceCacheKey, out _))
+                return Task.FromResult(AuthenticateResult.Fail("Nonce has already been used."));
+            nonceCache.Set(nonceCacheKey, true, ClockSkew);
+        }
 
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, clientId) };
         if (!string.IsNullOrEmpty(userId))

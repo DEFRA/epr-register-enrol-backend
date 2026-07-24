@@ -252,6 +252,45 @@ public class CaseManagementAuthenticationHandlerTests
     }
 
     [Fact]
+    public async Task ReplayedNonce_ConcurrentRequests_OnlyOneSucceeds()
+    {
+        // Nonce reuse is checked via TryGetValue+Set, which is not atomic on its own — two
+        // requests racing on the same nonce could otherwise both observe "not present" and
+        // both be authenticated. Fire a batch of identical requests concurrently and assert
+        // single-use is still enforced under contention.
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var nonce = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
+        var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var signature = CaseManagementAuthenticationHandler.ComputeSignature(
+            TestSecret,
+            TestClientId,
+            "jane@example.com",
+            "Jane Smith",
+            null,
+            timestamp,
+            nonce
+        );
+
+        var tasks = Enumerable
+            .Range(0, 20)
+            .Select(_ =>
+                AuthenticateAsync(
+                    CreateValidRequestContext(
+                        timestampOverride: timestamp,
+                        nonceOverride: nonce,
+                        signatureOverride: signature
+                    ),
+                    cache: cache
+                )
+            )
+            .ToArray();
+
+        var results = await Task.WhenAll(tasks);
+
+        results.Count(r => r.Succeeded).Should().Be(1);
+    }
+
+    [Fact]
     public async Task MissingSharedSecret_OutsideDevelopment_FailsClosed()
     {
         var context = CreateValidRequestContext();
