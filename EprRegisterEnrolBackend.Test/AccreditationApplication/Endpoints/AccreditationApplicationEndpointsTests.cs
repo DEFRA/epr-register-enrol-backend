@@ -183,6 +183,23 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Theory]
+    [InlineData("undefined")]
+    [InlineData("Undefined")]
+    [InlineData("null")]
+    [InlineData("Null")]
+    public async Task Seed_InvalidRegistrationId_Returns400(string registrationId)
+    {
+        Reset();
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{registrationId}/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     [Fact]
     public async Task Seed_ValidRequest_MaterialTypeAndStatusSerializedAsStrings()
     {

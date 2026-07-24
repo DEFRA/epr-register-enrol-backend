@@ -77,6 +77,13 @@ public static class AccreditationApplicationEndpoints
         if (!Enum.TryParse<MaterialType>(materialType, out var materialTypeEnum))
             return Results.BadRequest("Invalid material type.");
 
+        if (
+            string.IsNullOrWhiteSpace(registrationId)
+            || registrationId.Equals("undefined", StringComparison.OrdinalIgnoreCase)
+            || registrationId.Equals("null", StringComparison.OrdinalIgnoreCase)
+        )
+            return Results.BadRequest("Invalid registration id.");
+
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
