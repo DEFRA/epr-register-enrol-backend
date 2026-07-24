@@ -602,11 +602,7 @@ public static class AccreditationApplicationEndpoints
 
         if (application.ApplicationStatus == ApplicationStatus.Submitted)
             return Results.Ok(
-                new SubmitResponse
-                {
-                    AccreditationReference = application.ApplicationReference,
-                    CaseManagementReference = application.CaseManagementReference,
-                }
+                new SubmitResponse { AccreditationReference = application.ApplicationReference }
             );
 
         if (application.ApplicationStatus != ApplicationStatus.Started)
@@ -637,18 +633,13 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
         application.ApplicationReference = submissionResult.ApplicationReference;
-        application.CaseManagementReference = submissionResult.ApplicationReference;
         application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to submit accreditation application.")
             : Results.Ok(
-                new SubmitResponse
-                {
-                    AccreditationReference = updated.ApplicationReference,
-                    CaseManagementReference = updated.CaseManagementReference,
-                }
+                new SubmitResponse { AccreditationReference = updated.ApplicationReference }
             );
     }
 
