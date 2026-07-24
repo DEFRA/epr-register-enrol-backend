@@ -241,7 +241,8 @@ public static class AccreditationApplicationEndpoints
         if (request.Authorisers != null)
             application.Prns.Authorisers = request.Authorisers;
 
-        application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
+        if (application.Prns.SectionStatus != SectionStatus.Queried)
+            application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -283,7 +284,8 @@ public static class AccreditationApplicationEndpoints
         if (request.Authorisers != null)
             application.Prns.Authorisers = request.Authorisers;
 
-        application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
+        if (application.Prns.SectionStatus != SectionStatus.Queried)
+            application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -346,7 +348,8 @@ public static class AccreditationApplicationEndpoints
         if (request.NewUsesDetail != null)
             bp.NewUsesDetail = request.NewUsesDetail;
 
-        bp.SectionStatus = SectionStatusService.ComputeBusinessPlan(bp);
+        if (bp.SectionStatus != SectionStatus.Queried)
+            bp.SectionStatus = SectionStatusService.ComputeBusinessPlan(bp);
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -382,9 +385,10 @@ public static class AccreditationApplicationEndpoints
         if (request.Files != null)
             application.SamplingPlan.Files = request.Files;
 
-        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
-            application.SamplingPlan
-        );
+        if (application.SamplingPlan.SectionStatus != SectionStatus.Queried)
+            application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
+                application.SamplingPlan
+            );
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -423,11 +427,12 @@ public static class AccreditationApplicationEndpoints
         if (request.Sites != null)
             application.OverseasSites.Sites = request.Sites;
 
-        application.OverseasSites.SectionStatus = application.OverseasSites.Sites.Any(s =>
-            s.Selected
-        )
-            ? SectionStatus.Completed
-            : SectionStatus.NotStarted;
+        if (application.OverseasSites.SectionStatus != SectionStatus.Queried)
+            application.OverseasSites.SectionStatus = application.OverseasSites.Sites.Any(s =>
+                s.Selected
+            )
+                ? SectionStatus.Completed
+                : SectionStatus.NotStarted;
 
         application.DateLastEdited = DateTime.UtcNow;
 
@@ -672,7 +677,10 @@ public static class AccreditationApplicationEndpoints
             );
 
         application.BesEvidence ??= new AccreditationApplicationBesEvidence();
-        if (request.SectionStatus.HasValue)
+        if (
+            request.SectionStatus.HasValue
+            && application.BesEvidence.SectionStatus != SectionStatus.Queried
+        )
             application.BesEvidence.SectionStatus = request.SectionStatus.Value;
 
         application.DateLastEdited = DateTime.UtcNow;
@@ -830,8 +838,10 @@ public static class AccreditationApplicationEndpoints
         {
             AccreditationApplicationSections.SnapshotSection(application, section, versionedAt);
 
-            // Sections the operator edited while Queried already cleared away from Queried as a
-            // side effect of that PATCH; only sections still Queried (untouched) need resetting.
+            // Every queried section is still Queried here — the Patch* endpoints no longer clear
+            // it as a side effect of an in-progress edit — so this branch fires for all of them,
+            // touched or not, and ComputeCurrentStatus resolves each to its real value now that
+            // the operator is done.
             if (
                 AccreditationApplicationSections.GetSectionStatus(application, section)
                 == SectionStatus.Queried

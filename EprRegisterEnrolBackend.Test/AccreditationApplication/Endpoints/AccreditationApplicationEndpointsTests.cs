@@ -561,6 +561,38 @@ public class AccreditationApplicationEndpointsTests
         body.Prns.Authorisers.Should().ContainSingle(a => a.FullName == "Jane Smith");
     }
 
+    [Fact]
+    public async Task PatchTonnage_WhenQueriedAndPrnsSectionIsQueried_SucceedsAndKeepsQueriedStatus()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                // Both fields already populated from an earlier submission — reproduces the
+                // resume-a-query scenario where a same-band re-save of tonnage alone must not
+                // flip SectionStatus to Completed before the operator reaches the authorisers page.
+                a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000;
+                a.Prns.Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" }];
+                a.Prns.SectionStatus = SectionStatus.Queried;
+            }
+        );
+
+        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo1000 };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Prns.SectionStatus.Should().Be(SectionStatus.Queried);
+    }
+
     // --- PatchBusinessPlan ---
 
     [Fact]
@@ -1952,7 +1984,7 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task PatchPrns_WhenQueriedAndPrnsSectionIsQueried_SucceedsAndClearsQueriedStatus()
+    public async Task PatchPrns_WhenQueriedAndPrnsSectionIsQueried_SucceedsAndKeepsQueriedStatus()
     {
         Reset();
         var app = SeedApplication(
@@ -1976,7 +2008,11 @@ public class AccreditationApplicationEndpointsTests
             JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.Prns.SectionStatus.Should().Be(SectionStatus.Completed);
+
+        // SectionStatus must stay Queried while ApplicationStatus == Queried — only Resubmit
+        // recomputes it. Otherwise a partial PATCH prematurely clears the query marker before
+        // the operator has finished responding across every field the section covers.
+        body!.Prns.SectionStatus.Should().Be(SectionStatus.Queried);
     }
 
     [Fact]
