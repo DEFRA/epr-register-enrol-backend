@@ -1036,6 +1036,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-001",
             Filename = "plan.pdf",
             ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-001",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1057,6 +1058,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-002",
             Filename = "../../etc/passwd",
             ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-002",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1078,6 +1080,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-003",
             Filename = "script.js",
             ContentType = "text/javascript",
+            S3Key = "sampling-plans/file-003",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1102,6 +1105,7 @@ public class AccreditationApplicationEndpointsTests
                         Filename = $"file{i}.pdf",
                         ContentType = "application/pdf",
                         UploadedByUserId = string.Empty,
+                        S3Key = $"sampling-plans/existing-{i}",
                     }
                 );
         });
@@ -1111,6 +1115,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-new",
             Filename = "new.pdf",
             ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-new",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1135,6 +1140,7 @@ public class AccreditationApplicationEndpointsTests
                     Filename = "plan.pdf",
                     ContentType = "application/pdf",
                     UploadedByUserId = string.Empty,
+                    S3Key = "sampling-plans/file-001",
                 }
             )
         );
@@ -1233,6 +1239,314 @@ public class AccreditationApplicationEndpointsTests
                 ),
                 Arg.Any<CancellationToken>()
             );
+    }
+
+    // --- AddOverseasSite ---
+
+    private static AddOverseasSiteRequest ValidAddOrsRequest() =>
+        new()
+        {
+            OrsId = "001",
+            SiteName = "Test Recycling GmbH",
+            AddressLine1 = "Industriestrasse 42",
+            TownOrCity = "Hamburg",
+            Country = "Germany",
+            ContactName = "Hans Müller",
+            ContactEmail = "hans@testrecycling.de",
+            OperationCode = "R3",
+            Code1 = "A1181",
+            RepatriatedLoads = "Rejected loads returned within 30 days at our expense.",
+        };
+
+    [Fact]
+    public async Task AddOverseasSite_ValidRequest_Returns201WithNewSite()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteName.Should().Be("Test Recycling GmbH");
+        site.OrsId.Should().Be("001");
+        site.Code1.Should().Be("A1181");
+        site.SiteId.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_DeriveIsEuAndIsOecd_CorrectlyClassifiesCountry()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { Country = "Germany" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.IsEu.Should().BeTrue();
+        site.IsOecd.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_SiteIdIsOneMoreThanExistingMax()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel { SiteId = 900001, SiteName = "Existing Site 1" },
+                    new OverseasSiteModel { SiteId = 900002, SiteName = "Existing Site 2" },
+                ],
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteId.Should().Be(900003);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_ApplicationNotFound_Returns404()
+    {
+        Reset();
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/nonexistent-id/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_MissingSiteName_Returns400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new AddOverseasSiteRequest
+        {
+            OrsId = "001",
+            SiteName = "",
+            AddressLine1 = "Test St",
+            TownOrCity = "Hamburg",
+            Country = "Germany",
+            ContactName = "Hans",
+            ContactEmail = "hans@test.de",
+            OperationCode = "R3",
+            Code1 = "A1181",
+            RepatriatedLoads = "Details here.",
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_InvalidEmailFormat_Returns400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { ContactEmail = "not-an-email" };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_InvalidBaselCode_Returns400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { Code1 = "INVALID" };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_InvalidOperationCode_Returns400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { OperationCode = "R99" };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_DuplicateOrsId_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Existing",
+                        OrsId = "001",
+                    },
+                ],
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_NonOecdEuCountry_IsOecdFalse()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { Country = "Bulgaria" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.IsEu.Should().BeTrue();
+        site.IsOecd.Should().BeFalse();
+    }
+
+    // --- AddBesEvidenceFile ---
+
+    private AccreditationApplicationModel SeedApplicationWithOverseasSite(
+        int siteId = 1,
+        string siteName = "Test Site"
+    ) =>
+        SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [new OverseasSiteModel { SiteId = siteId, SiteName = siteName }],
+            }
+        );
+
+    [Fact]
+    public async Task AddBesEvidenceFile_AddsFileToSite_Returns201()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-001",
+            Filename = "evidence.pdf",
+            S3Key = "bes-evidence/bes-file-001",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_EmptyS3Key_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-002",
+            Filename = "evidence.pdf",
+            S3Key = string.Empty,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_InvalidFilename_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-003",
+            Filename = "../../etc/passwd",
+            S3Key = "bes-evidence/bes-file-003",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]

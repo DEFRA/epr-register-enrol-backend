@@ -75,5 +75,6 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             Prns = src.Prns,
             BusinessPlan = src.BusinessPlan,
             SamplingPlan = src.SamplingPlan,
+            OverseasSites = src.OverseasSites,
         };
 }

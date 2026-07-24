@@ -60,23 +60,32 @@ public class ReExOrganisationFixtureTests
         org.ManagementContactDetails!.JobTitle.Should().Be("Compliance Manager");
 
         // ── Reprocessor registration ────────────────────────────────────────
-        var reprocessor = org.Registrations.Should().ContainSingle(r => r is ReprocessorRegistrationDto)
-            .Subject.Should().BeOfType<ReprocessorRegistrationDto>().Subject;
+        var reprocessor = org
+            .Registrations.Should()
+            .ContainSingle(r => r is ReprocessorRegistrationDto)
+            .Subject.Should()
+            .BeOfType<ReprocessorRegistrationDto>()
+            .Subject;
 
         reprocessor.Id.Should().Be("reg-reprocessor-1");
         reprocessor.AccreditationId.Should().Be("acc-reprocessor-1");
+        reprocessor.RegistrationNumber.Should().Be("R25SR500000912AL");
         reprocessor.Site!.Address!.Line1.Should().Be("Reprocessor Site Road");
         reprocessor.Site.GridReference.Should().Be("TQ 132 546");
 
-        var permit = reprocessor.WasteManagementPermits.Should()
-            .ContainSingle(p => p.Type == "environmental_permit").Subject;
+        var permit = reprocessor
+            .WasteManagementPermits.Should()
+            .ContainSingle(p => p.Type == "environmental_permit")
+            .Subject;
         permit.AuthorisedMaterials.Should().HaveCount(2);
         permit.AuthorisedMaterials[0].Material.Should().Be("aluminium");
         permit.AuthorisedMaterials[0].AuthorisedWeightInTonnes.Should().Be(10);
         permit.AuthorisedMaterials[0].TimeScale.Should().Be("yearly");
 
-        var exemptionPermit = reprocessor.WasteManagementPermits.Should()
-            .ContainSingle(p => p.Type == "waste_exemption").Subject;
+        var exemptionPermit = reprocessor
+            .WasteManagementPermits.Should()
+            .ContainSingle(p => p.Type == "waste_exemption")
+            .Subject;
         exemptionPermit.Exemptions[0].Reference.Should().Be("WEX123456");
         exemptionPermit.Exemptions[0].ExemptionCode.Should().Be("U9");
 
@@ -89,32 +98,46 @@ public class ReExOrganisationFixtureTests
         metric.Output.Contaminants.Should().Be(11);
 
         // ── Exporter registration ───────────────────────────────────────────
-        var exporter = org.Registrations.Should().ContainSingle(r => r is ExporterRegistrationDto)
-            .Subject.Should().BeOfType<ExporterRegistrationDto>().Subject;
+        var exporter = org
+            .Registrations.Should()
+            .ContainSingle(r => r is ExporterRegistrationDto)
+            .Subject.Should()
+            .BeOfType<ExporterRegistrationDto>()
+            .Subject;
 
         exporter.AccreditationId.Should().Be("acc-exporter-1");
+        exporter.RegistrationNumber.Should().Be("E25SR500020912AL");
         exporter.NoticeAddress!.FullAddress.Should().Be("1 Example Parade, Example Town");
         exporter.ExportPorts.Should().BeEquivalentTo(["Southampton", "Portsmouth"]);
         exporter.OrsFileUploads.Should().ContainSingle();
-        exporter.OrsFileUploads[0].DefraFormUploadedFileId.Should().Be("00e85b5b-e88f-4d97-afc7-0a985803ab3b");
+        exporter
+            .OrsFileUploads[0]
+            .DefraFormUploadedFileId.Should()
+            .Be("00e85b5b-e88f-4d97-afc7-0a985803ab3b");
         exporter.OrsFileUploads[0].DefraFormUserDownloadLink.Should().NotBeNullOrEmpty();
         exporter.OverseasSites.Should().ContainKey("100");
         exporter.OverseasSites["100"].OverseasSiteId.Should().Be("overseas-site-1");
 
         // ── Accreditations ───────────────────────────────────────────────────
-        var reprocessorAccreditation = org.Accreditations.Should()
-            .ContainSingle(a => a.Id == "acc-reprocessor-1").Subject;
+        var reprocessorAccreditation = org
+            .Accreditations.Should()
+            .ContainSingle(a => a.Id == "acc-reprocessor-1")
+            .Subject;
         reprocessorAccreditation.Material.Should().Be("aluminium");
         reprocessorAccreditation.ValidFrom.Should().Be("2026-01-01");
         reprocessorAccreditation.ValidTo.Should().Be("2027-01-01");
         reprocessorAccreditation.PrnIssuance!.TonnageBand.Should().Be("over_10000");
         reprocessorAccreditation.PrnIssuance.Signatories.Should().ContainSingle();
-        var businessPlanItem = reprocessorAccreditation.PrnIssuance.IncomeBusinessPlan.Should()
-            .ContainSingle(i => i.UsageDescription == "Support for business collections").Subject;
+        var businessPlanItem = reprocessorAccreditation
+            .PrnIssuance.IncomeBusinessPlan.Should()
+            .ContainSingle(i => i.UsageDescription == "Support for business collections")
+            .Subject;
         businessPlanItem.PercentIncomeSpent.Should().Be(91);
 
-        var exporterAccreditation = org.Accreditations.Should()
-            .ContainSingle(a => a.Id == "acc-exporter-1").Subject;
+        var exporterAccreditation = org
+            .Accreditations.Should()
+            .ContainSingle(a => a.Id == "acc-exporter-1")
+            .Subject;
         exporterAccreditation.ValidFrom.Should().Be("2026-01-01");
         exporterAccreditation.ValidTo.Should().Be("2027-01-01");
     }
@@ -317,10 +340,15 @@ public class ReExOrganisationFixtureTests
             _body = body;
         }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(_status)
-            {
-                Content = new StringContent(_body, Encoding.UTF8, "application/json")
-            });
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) =>
+            Task.FromResult(
+                new HttpResponseMessage(_status)
+                {
+                    Content = new StringContent(_body, Encoding.UTF8, "application/json"),
+                }
+            );
     }
 }

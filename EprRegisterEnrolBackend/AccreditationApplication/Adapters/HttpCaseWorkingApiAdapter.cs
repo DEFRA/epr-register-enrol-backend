@@ -250,9 +250,42 @@ public class HttpCaseWorkingApiAdapter(
                 files = application
                     .SamplingPlan.Files.Select(f => new
                     {
+                        fileId = f.FileId,
                         filename = f.Filename,
+                        contentType = f.ContentType,
                         uploadedAt = f.UploadedAt,
                         scanStatus = f.ScanStatus.ToString(),
+                        s3Key = f.S3Key,
+                        s3Bucket = f.S3Bucket,
+                    })
+                    .ToArray(),
+            },
+            overseasSites = new
+            {
+                sites = (application.OverseasSites?.Sites ?? [])
+                    .Select(s => new
+                    {
+                        siteId = s.SiteId,
+                        siteName = s.SiteName,
+                        siteAddress = s.SiteAddress,
+                        country = s.Country,
+                        besEvidence = new
+                        {
+                            files = (s.BesEvidence?.BesEvidenceUploads ?? [])
+                                .Select(f => new
+                                {
+                                    fileId = f.FileId,
+                                    filename = f.Filename,
+                                    contentType = f.ContentType,
+                                    uploadedAt = f.UploadedAt,
+                                    scanStatus = f.ScanStatus,
+                                    besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
+                                    besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
+                                    s3Key = f.S3Key,
+                                    s3Bucket = f.S3Bucket,
+                                })
+                                .ToArray(),
+                        },
                     })
                     .ToArray(),
             },
@@ -303,7 +336,6 @@ public class HttpCaseWorkingApiAdapter(
                 _config.CognitoClientId,
                 userId,
                 userName,
-                null,
                 timestamp,
                 nonce
             );
@@ -317,24 +349,23 @@ public class HttpCaseWorkingApiAdapter(
     }
 
     // Port of ManagementBe's CognitoClientIdAuthenticationHandler.ComputeSignature
-    // (v2 canonical payload). Must stay in sync — any change is a breaking change.
+    // (v3 canonical payload — see ManagementBe ADR-0005). Must stay in sync —
+    // any change is a breaking change requiring a coordinated deploy.
     internal static string ComputeSignature(
         string sharedSecret,
         string clientId,
         string? userId,
         string? userName,
-        string? userRoles,
         string timestamp,
         string nonce
     )
     {
         var payload = string.Join(
             '\n',
-            "v2",
+            "v3",
             clientId,
             userId ?? string.Empty,
             userName ?? string.Empty,
-            userRoles ?? string.Empty,
             timestamp,
             nonce
         );
