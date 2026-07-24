@@ -188,6 +188,7 @@ public class AccreditationApplicationEndpointsTests
     [InlineData("Undefined")]
     [InlineData("null")]
     [InlineData("Null")]
+    [InlineData("%20")] // whitespace-only registrationId — exercises the IsNullOrWhiteSpace branch
     public async Task Seed_InvalidRegistrationId_Returns400(string registrationId)
     {
         Reset();
@@ -2097,6 +2098,151 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // The gate itself (IsSectionEditable) is exhaustively unit-tested in
+    // AccreditationApplicationSectionsTests. The tests below exist to prove each endpoint is
+    // actually wired to it — PatchPrns/PatchTonnage/AddBesEvidenceFile/InitiateUpload above cover
+    // three of the ten gated call sites; everything below was previously untested at the endpoint
+    // level, leaving the wiring (not just the shared helper) unverified.
+
+    [Fact]
+    public async Task PatchBusinessPlan_WhenQueriedAndBusinessPlanSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new PatchBusinessPlanRequest();
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/business-plan",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchSamplingPlan_WhenQueriedAndSamplingPlanSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new PatchSamplingPlanRequest();
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/sampling-plan",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_WhenQueriedAndOverseasSitesSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new PatchOverseasSitesRequest();
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidence_WhenQueriedAndBesEvidenceSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new PatchBesEvidenceRequest { DoYouWantToUploadMoreEvidence = true };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task DeleteBesEvidenceFile_WhenQueriedAndBesEvidenceSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var response = await _client.DeleteAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/bes-file-001",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task InitiateBesEvidenceUpload_WhenQueriedAndBesEvidenceSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new
+        {
+            redirectUrl = "http://frontend/redirect",
+            s3Bucket = "test-bucket",
+            s3Path = "uploads/test.pdf",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/bes-evidence/initiate",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceSection_WhenQueriedAndBesEvidenceSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        // Completed (not Queried) so this clears the validator and reaches the gate check itself —
+        // distinct from PatchBesEvidenceSection_SettingQueriedDirectly_Returns400 above, which
+        // never gets past the validator.
+        var request = new PatchBesEvidenceSectionRequest { SectionStatus = SectionStatus.Completed };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/bes-evidence",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
     // --- Resubmit ---
 
     [Fact]
@@ -2221,6 +2367,52 @@ public class AccreditationApplicationEndpointsTests
         body.Query.QuerySubmissions.Should().ContainSingle();
         body.Query.QuerySubmissions[0].QuerySubmitterContactDetails.FullName.Should().Be("Jane");
         body.Query.QueryNote.Should().Be("clarify");
+    }
+
+    [Fact]
+    public async Task Resubmit_SectionWithRealData_RecomputesToNonTrivialStatusNotJustNotStarted()
+    {
+        // The other Resubmit-success test only proves the recompute branch resolves an *empty*
+        // section to NotStarted — that would still pass even if ComputeCurrentStatus were broken
+        // (e.g. always returned NotStarted). This seeds Prns with real data so only a correct
+        // ComputePrns-equivalent calculation can produce Completed.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = Guid.NewGuid();
+                a.Prns.SectionStatus = SectionStatus.Queried;
+                a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo500;
+                a.Prns.Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" }];
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify tonnage",
+                    QueriedSectionKeys = ["authority-to-issue", "prn-tonnage"],
+                };
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new ResumeFromQueryResult(true)));
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Prns.SectionStatus.Should().Be(SectionStatus.Completed);
     }
 
     // --- Approve/Reject from Updated ---

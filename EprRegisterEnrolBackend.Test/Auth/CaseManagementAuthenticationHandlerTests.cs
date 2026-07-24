@@ -110,6 +110,56 @@ public class CaseManagementAuthenticationHandlerTests
     }
 
     [Fact]
+    public async Task MissingSignatureHeader_Fails()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers["x-cdp-cognito-client-id"] = TestClientId;
+        context.Request.Headers["x-cdp-auth-timestamp"] = DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ssZ"
+        );
+        context.Request.Headers["x-cdp-auth-nonce"] = Convert.ToBase64String(
+            Guid.NewGuid().ToByteArray()
+        );
+        // x-cdp-auth-signature intentionally omitted.
+
+        var result = await AuthenticateAsync(context);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MissingTimestampHeader_Fails()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers["x-cdp-cognito-client-id"] = TestClientId;
+        context.Request.Headers["x-cdp-auth-signature"] = "irrelevant-timestamp-missing";
+        context.Request.Headers["x-cdp-auth-nonce"] = Convert.ToBase64String(
+            Guid.NewGuid().ToByteArray()
+        );
+        // x-cdp-auth-timestamp intentionally omitted.
+
+        var result = await AuthenticateAsync(context);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MissingNonceHeader_Fails()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers["x-cdp-cognito-client-id"] = TestClientId;
+        context.Request.Headers["x-cdp-auth-signature"] = "irrelevant-nonce-missing";
+        context.Request.Headers["x-cdp-auth-timestamp"] = DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ssZ"
+        );
+        // x-cdp-auth-nonce intentionally omitted.
+
+        var result = await AuthenticateAsync(context);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task UnrecognisedClientId_Fails()
     {
         var context = new DefaultHttpContext();
@@ -149,6 +199,18 @@ public class CaseManagementAuthenticationHandlerTests
             .UtcNow.AddMinutes(-10)
             .ToString("yyyy-MM-ddTHH:mm:ssZ");
         var context = CreateValidRequestContext(timestampOverride: staleTimestamp);
+
+        var result = await AuthenticateAsync(context);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UnparseableTimestamp_Fails()
+    {
+        // Caught by the DateTime.TryParse guard, which runs before signature verification —
+        // distinct from ExpiredTimestamp_Fails (a validly-formatted but stale timestamp).
+        var context = CreateValidRequestContext(timestampOverride: "not-a-timestamp");
 
         var result = await AuthenticateAsync(context);
 
