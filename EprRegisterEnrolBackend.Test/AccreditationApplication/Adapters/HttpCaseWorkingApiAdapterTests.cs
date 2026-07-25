@@ -545,6 +545,205 @@ public class HttpCaseWorkingApiAdapterTests
         result.Should().BeNull();
     }
 
+    // --- ResumeFromQueryAsync ---
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_NoLinkedWorkItem_ReturnsFailureWithoutCallingManagementBe()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = null;
+
+        var result = await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        handler.CapturedRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_EmptyUrl_ReturnsFailureWithoutThrowing()
+    {
+        var (adapter, _) = CreateAdapter(url: "");
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        result.IsSuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_Success_PostsToWorkItemResumeFromQueryUrl()
+    {
+        var workItemId = Guid.NewGuid();
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = workItemId;
+
+        var result = await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        result.IsSuccess.Should().BeTrue();
+        handler
+            .CapturedRequest!.RequestUri!.ToString()
+            .Should()
+            .Be($"{TestUrl}/work-items/re-accreditation/{workItemId}/resume-from-query");
+        handler.CapturedRequest!.Method.Should().Be(HttpMethod.Post);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_MapsResponderContactDetailsAndSectionKeysIntoPayload()
+    {
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+        app.BusinessPlan.NewInfrastructurePercent = 40;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var root = doc.RootElement;
+
+        root.GetProperty("responderContactDetails")
+            .GetProperty("fullName")
+            .GetString()
+            .Should()
+            .Be("Jane Smith");
+        root.GetProperty("responderContactDetails")
+            .GetProperty("email")
+            .GetString()
+            .Should()
+            .Be("jane@example.com");
+        root.GetProperty("sectionKeys")[0].GetString().Should().Be("business-plan");
+        root.GetProperty("sections")
+            .GetProperty("BusinessPlan")
+            .GetProperty("newInfrastructurePercent")
+            .GetInt32()
+            .Should()
+            .Be(40);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_DoesNotSendContactDetailsPropertyName()
+    {
+        // OBE-F5: MBE-1 expects "responderContactDetails", not "contactDetails" — assert the
+        // old property name is genuinely absent rather than substring-matching the body.
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        doc.RootElement.TryGetProperty("contactDetails", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_NonSuccessResponse_ReturnsFailure()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.InternalServerError,
+            new { title = "Error" }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        result.IsSuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_ManagementBeUnreachable_ReturnsFailureWithoutThrowing()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory
+            .CreateClient("DefaultClient")
+            .Returns(new HttpClient(new ThrowingHttpMessageHandler()));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        result.IsSuccess.Should().BeFalse();
+    }
+
     #region Test infrastructure
 
     internal class CapturingHttpMessageHandler : HttpMessageHandler

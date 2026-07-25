@@ -71,6 +71,8 @@ public class AccreditationApplicationModel
 
     public AccreditationApplicationBesEvidence? BesEvidence { get; set; }
 
+    public AccreditationApplicationQuery? Query { get; set; }
+
     // RA102-j7s: live-derived on GetById from the linked ManagementBe work item's audit log —
     // never persisted, so BsonIgnore keeps a transient read-time value out of Mongo writes.
     [BsonIgnore]
@@ -91,6 +93,7 @@ public enum ApplicationStatus
     Started,
     Submitted,
     Queried,
+    Updated,
     Approved,
     Rejected,
 }

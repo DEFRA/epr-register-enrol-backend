@@ -83,4 +83,59 @@ public class AccreditationApplicationModelTests
 
         json.Should().Be($"\"{expectedWireValue}\"");
     }
+
+    [Fact]
+    public void Query_RoundTripsThroughBsonUnchanged()
+    {
+        var model = CreateModel(null);
+        model.Query = new AccreditationApplicationQuery
+        {
+            QueryNote = "Please clarify tonnage.",
+            QueriedSectionKeys = ["business-plan"],
+            QuerySubmissions =
+            [
+                new QuerySubmission
+                {
+                    QuerySubmissionTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    SectionKeys = ["business-plan"],
+                    QuerySubmitterContactDetails = new QuerySubmitterContactDetails
+                    {
+                        FullName = "Jane Doe",
+                        Email = "jane@example.com",
+                        Role = "Manager",
+                    },
+                },
+            ],
+        };
+
+        var document = model.ToBsonDocument();
+        var roundTripped = BsonSerializer.Deserialize<AccreditationApplicationModel>(document);
+
+        roundTripped.Query.Should().NotBeNull();
+        roundTripped.Query!.QueryNote.Should().Be("Please clarify tonnage.");
+        roundTripped
+            .Query.QueriedSectionKeys.Should()
+            .ContainSingle()
+            .Which.Should()
+            .Be("business-plan");
+        roundTripped.Query.QuerySubmissions.Should().ContainSingle();
+        roundTripped
+            .Query.QuerySubmissions[0]
+            .QuerySubmitterContactDetails.FullName.Should()
+            .Be("Jane Doe");
+    }
+
+    [Fact]
+    public void SectionVersions_RoundTripThroughBson_ButAreNotSerializedToJson()
+    {
+        var model = CreateModel(null);
+        model.Prns.Versions.Add(new PrnsSnapshot { VersionedAt = DateTime.UtcNow });
+
+        var document = model.ToBsonDocument();
+        var roundTripped = BsonSerializer.Deserialize<AccreditationApplicationModel>(document);
+        roundTripped.Prns.Versions.Should().ContainSingle();
+
+        var json = JsonSerializer.Serialize(model);
+        json.Should().NotContain("Versions");
+    }
 }

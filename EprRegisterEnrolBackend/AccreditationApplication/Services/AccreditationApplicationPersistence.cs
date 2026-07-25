@@ -40,6 +40,13 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
+    public async Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId)
+    {
+        return await Collection
+            .Find(a => a.CaseManagementWorkItemId == workItemId)
+            .FirstOrDefaultAsync();
+    }
+
     public async Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application)
     {
         if (application.Id is null)
@@ -71,6 +78,11 @@ public class AccreditationApplicationPersistence(
                     builder.Ascending(a => a.Year))),
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Ascending(a => a.ApplicationReference),
+                new CreateIndexOptions { Unique = true, Sparse = true }),
+            // Backs GetByCaseManagementWorkItemIdAsync, called on every inbound CM query push —
+            // without this the lookup is a full collection scan (RA-311 OBE-2).
+            new CreateIndexModel<AccreditationApplicationModel>(
+                builder.Ascending(a => a.CaseManagementWorkItemId),
                 new CreateIndexOptions { Unique = true, Sparse = true })
         ];
     }

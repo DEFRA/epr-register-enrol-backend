@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
@@ -195,6 +196,173 @@ public class HttpCaseWorkingApiAdapter(
             );
             return null;
         }
+    }
+
+    public async Task<ResumeFromQueryResult> ResumeFromQueryAsync(
+        AccreditationApplicationModel application,
+        QuerySubmitterContactDetails contactDetails,
+        IReadOnlyList<string> sectionKeys,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (application.CaseManagementWorkItemId is not { } workItemId)
+        {
+            logger.LogError(
+                "Cannot resume-from-query: applicationId={ApplicationId} has no CaseManagementWorkItemId.",
+                application.ApplicationId
+            );
+            return new ResumeFromQueryResult(false);
+        }
+
+        var url = _config.Url;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            logger.LogError(
+                "CaseWorking API URL is not configured. Cannot resume-from-query for workItemId={WorkItemId}.",
+                workItemId
+            );
+            return new ResumeFromQueryResult(false);
+        }
+
+        var body = new ResumeFromQueryRequest
+        {
+            ResponderContactDetails = new
+            {
+                fullName = contactDetails.FullName,
+                email = contactDetails.Email,
+                role = contactDetails.Role,
+            },
+            SectionKeys = sectionKeys,
+            Sections = BuildSectionsPayload(application, sectionKeys),
+        };
+
+        var endpoint =
+            $"{url.TrimEnd('/')}/work-items/re-accreditation/{workItemId}/resume-from-query";
+
+        try
+        {
+            var userId = contactDetails.Email;
+            var userName = contactDetails.FullName;
+            using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
+            var client = httpClientFactory.CreateClient("DefaultClient");
+
+            var response = await client.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogError(
+                    "ManagementBe returned {Status} from {Endpoint}: {Body}",
+                    (int)response.StatusCode,
+                    endpoint,
+                    responseBody
+                );
+                return new ResumeFromQueryResult(false);
+            }
+
+            return new ResumeFromQueryResult(true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            return new ResumeFromQueryResult(false);
+        }
+    }
+
+    private static Dictionary<string, object?> BuildSectionsPayload(
+        AccreditationApplicationModel application,
+        IReadOnlyList<string> sectionKeys
+    )
+    {
+        var payload = new Dictionary<string, object?>();
+        var sections = sectionKeys
+            .Select(key =>
+                AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section)
+                    ? section
+                    : (OperatorSection?)null
+            )
+            .Where(section => section is not null)
+            .Select(section => section!.Value)
+            .Distinct();
+
+        foreach (var section in sections)
+        {
+            payload[section.ToString()] = section switch
+            {
+                OperatorSection.Prns => new
+                {
+                    plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
+                    authorisers = application
+                        .Prns.Authorisers.Select(a => new { fullName = a.FullName, email = a.Email })
+                        .ToArray(),
+                },
+                OperatorSection.BusinessPlan => new
+                {
+                    newInfrastructurePercent = application.BusinessPlan.NewInfrastructurePercent,
+                    priceSupportPercent = application.BusinessPlan.PriceSupportPercent,
+                    businessCollectionsPercent = application.BusinessPlan.BusinessCollectionsPercent,
+                    communicationsPercent = application.BusinessPlan.CommunicationsPercent,
+                    newMarketsPercent = application.BusinessPlan.NewMarketsPercent,
+                    newUsesPercent = application.BusinessPlan.NewUsesPercent,
+                    newInfrastructureDetail = application.BusinessPlan.NewInfrastructureDetail,
+                    priceSupportDetail = application.BusinessPlan.PriceSupportDetail,
+                    businessCollectionsDetail = application.BusinessPlan.BusinessCollectionsDetail,
+                    communicationsDetail = application.BusinessPlan.CommunicationsDetail,
+                    newMarketsDetail = application.BusinessPlan.NewMarketsDetail,
+                    newUsesDetail = application.BusinessPlan.NewUsesDetail,
+                },
+                OperatorSection.SamplingPlan => new
+                {
+                    files = application
+                        .SamplingPlan.Files.Select(f => new
+                        {
+                            fileId = f.FileId,
+                            filename = f.Filename,
+                            contentType = f.ContentType,
+                            uploadedAt = f.UploadedAt,
+                            scanStatus = f.ScanStatus.ToString(),
+                            s3Key = f.S3Key,
+                            s3Bucket = f.S3Bucket,
+                        })
+                        .ToArray(),
+                },
+                OperatorSection.OverseasSites => new
+                {
+                    sites = (application.OverseasSites?.Sites ?? [])
+                        .Select(s => new
+                        {
+                            siteId = s.SiteId,
+                            siteName = s.SiteName,
+                            siteAddress = s.SiteAddress,
+                            country = s.Country,
+                            besEvidence = new
+                            {
+                                files = (s.BesEvidence?.BesEvidenceUploads ?? [])
+                                    .Select(f => new
+                                    {
+                                        fileId = f.FileId,
+                                        filename = f.Filename,
+                                        contentType = f.ContentType,
+                                        uploadedAt = f.UploadedAt,
+                                        scanStatus = f.ScanStatus,
+                                        besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
+                                        besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
+                                        s3Key = f.S3Key,
+                                        s3Bucket = f.S3Bucket,
+                                    })
+                                    .ToArray(),
+                            },
+                        })
+                        .ToArray(),
+                },
+                OperatorSection.BesEvidence => new
+                {
+                    sectionStatus = application.BesEvidence?.SectionStatus.ToString(),
+                },
+                _ => null,
+            };
+        }
+
+        return payload;
     }
 
     private static object BuildPayload(AccreditationApplicationModel application)
@@ -391,6 +559,13 @@ public class HttpCaseWorkingApiAdapter(
         public string? StateId { get; init; }
         public JsonElement Payload { get; init; }
         public string? ApplicationReference { get; init; }
+    }
+
+    internal sealed class ResumeFromQueryRequest
+    {
+        public required object ResponderContactDetails { get; init; }
+        public required IReadOnlyList<string> SectionKeys { get; init; }
+        public required Dictionary<string, object?> Sections { get; init; }
     }
 
     #endregion
