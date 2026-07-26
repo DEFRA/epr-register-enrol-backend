@@ -591,7 +591,10 @@ public class AccreditationApplicationEndpointsTests
                 // resume-a-query scenario where a same-band re-save of tonnage alone must not
                 // flip SectionStatus to Completed before the operator reaches the authorisers page.
                 a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000;
-                a.Prns.Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" }];
+                a.Prns.Authorisers =
+                [
+                    new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" },
+                ];
                 a.Prns.SectionStatus = SectionStatus.Queried;
             }
         );
@@ -1523,6 +1526,302 @@ public class AccreditationApplicationEndpointsTests
         site.IsOecd.Should().BeFalse();
     }
 
+    [Fact]
+    public async Task AddOverseasSite_WithLinkedWorkItem_NotifiesManagementBeOfNewOrsSite()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = Guid.NewGuid());
+
+        await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .NotifySiteAddedAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                "ors",
+                "001",
+                null,
+                true,
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_WithoutLinkedWorkItem_DoesNotNotifyManagementBe()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .NotifySiteAddedAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    // --- AddInterimSite ---
+
+    private static AddInterimSiteRequest ValidAddInterimSiteRequest() =>
+        new()
+        {
+            Country = "France",
+            SiteName = "Interim Recycling Site",
+            AddressLine1 = "1 Rue Example",
+            TownOrCity = "Paris",
+            ContactName = "Jane Smith",
+            ContactEmail = "jane.smith@example.com",
+            ContactPhone = "+33 1 23 45 67 89",
+        };
+
+    [Fact]
+    public async Task AddInterimSite_ValidRequest_Returns201WithNewInterimSite()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var interimSite = await response.Content.ReadFromJsonAsync<InterimSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        interimSite!.SiteName.Should().Be("Interim Recycling Site");
+        interimSite.ContactPhone.Should().Be("+33 1 23 45 67 89");
+        interimSite.IsNewSite.Should().BeTrue();
+        interimSite.SiteId.Should().Be(2);
+        interimSite.SiteNumber.Should().Be("SN-0002");
+    }
+
+    [Fact]
+    public async Task AddInterimSite_SiteIdIsUniqueAcrossOrsAndInterimSites()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel { SiteId = 1, SiteName = "ORS 1" },
+                    new OverseasSiteModel
+                    {
+                        SiteId = 5,
+                        SiteName = "ORS 2",
+                        InterimSite = new InterimSiteModel
+                        {
+                            SiteId = 12,
+                            SiteNumber = "SN-0012",
+                            Country = "Spain",
+                            SiteName = "Existing Interim",
+                            AddressLine1 = "1 Example Ave",
+                            TownOrCity = "Madrid",
+                            ContactName = "Existing Contact",
+                            ContactEmail = "existing@example.com",
+                            ContactPhone = "+34 123 456 789",
+                        },
+                    },
+                ],
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var interimSite = await response.Content.ReadFromJsonAsync<InterimSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        interimSite!.SiteId.Should().Be(13);
+        interimSite.SiteNumber.Should().Be("SN-0013");
+    }
+
+    [Fact]
+    public async Task AddInterimSite_ApplicationNotFound_Returns404()
+    {
+        Reset();
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/nonexistent-id/overseas-sites/1/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task AddInterimSite_OverseasSiteNotFound_Returns404()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite(siteId: 1);
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/999/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task AddInterimSite_AlreadyHasInterimSite_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "ORS 1",
+                        InterimSite = new InterimSiteModel
+                        {
+                            SiteId = 2,
+                            SiteNumber = "SN-0002",
+                            Country = "Spain",
+                            SiteName = "Existing Interim",
+                            AddressLine1 = "1 Example Ave",
+                            TownOrCity = "Madrid",
+                            ContactName = "Existing Contact",
+                            ContactEmail = "existing@example.com",
+                            ContactPhone = "+34 123 456 789",
+                        },
+                    },
+                ],
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddInterimSite_InvalidEmailFormat_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = ValidAddInterimSiteRequest() with { ContactEmail = "not-an-email" };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddInterimSite_MissingContactPhone_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = ValidAddInterimSiteRequest() with { ContactPhone = "" };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddInterimSite_WithLinkedWorkItem_NotifiesManagementBeOfNewInterimSite()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.CaseManagementWorkItemId = Guid.NewGuid();
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "ORS 1",
+                        OrsId = "001",
+                    },
+                ],
+            };
+        });
+
+        await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .NotifySiteAddedAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                "interim",
+                "001",
+                "SN-0002",
+                true,
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task AddInterimSite_WithoutLinkedWorkItem_DoesNotNotifyManagementBe()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .NotifySiteAddedAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
     // --- AddBesEvidenceFile ---
 
     private AccreditationApplicationModel SeedApplicationWithOverseasSite(
@@ -1943,10 +2242,7 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var workItemId = Guid.NewGuid();
-        SeedApplication(
-            status: status,
-            configure: a => a.CaseManagementWorkItemId = workItemId
-        );
+        SeedApplication(status: status, configure: a => a.CaseManagementWorkItemId = workItemId);
 
         var request = new { queryNote = "note", sectionKeys = new[] { "business-plan" } };
         var response = await _client.PostAsJsonAsync(
@@ -2233,7 +2529,10 @@ public class AccreditationApplicationEndpointsTests
         // Completed (not Queried) so this clears the validator and reaches the gate check itself —
         // distinct from PatchBesEvidenceSection_SettingQueriedDirectly_Returns400 above, which
         // never gets past the validator.
-        var request = new PatchBesEvidenceSectionRequest { SectionStatus = SectionStatus.Completed };
+        var request = new PatchBesEvidenceSectionRequest
+        {
+            SectionStatus = SectionStatus.Completed,
+        };
         var response = await _client.PatchAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/bes-evidence",
             request,
@@ -2253,7 +2552,12 @@ public class AccreditationApplicationEndpointsTests
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
-            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            new ResubmitRequest
+            {
+                FullName = "Jane",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2268,7 +2572,12 @@ public class AccreditationApplicationEndpointsTests
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
-            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            new ResubmitRequest
+            {
+                FullName = "Jane",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2311,7 +2620,12 @@ public class AccreditationApplicationEndpointsTests
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
-            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            new ResubmitRequest
+            {
+                FullName = "Jane",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2351,7 +2665,12 @@ public class AccreditationApplicationEndpointsTests
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
-            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            new ResubmitRequest
+            {
+                FullName = "Jane",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2384,7 +2703,10 @@ public class AccreditationApplicationEndpointsTests
                 a.CaseManagementWorkItemId = Guid.NewGuid();
                 a.Prns.SectionStatus = SectionStatus.Queried;
                 a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo500;
-                a.Prns.Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" }];
+                a.Prns.Authorisers =
+                [
+                    new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" },
+                ];
                 a.Query = new AccreditationApplicationQuery
                 {
                     QueryNote = "clarify tonnage",
@@ -2403,7 +2725,12 @@ public class AccreditationApplicationEndpointsTests
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
-            new ResubmitRequest { FullName = "Jane", Email = "jane@example.com", Role = "Manager" },
+            new ResubmitRequest
+            {
+                FullName = "Jane",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
             cancellationToken: TestContext.Current.CancellationToken
         );
 

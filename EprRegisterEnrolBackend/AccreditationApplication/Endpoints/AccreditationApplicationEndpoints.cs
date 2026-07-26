@@ -28,6 +28,10 @@ public static class AccreditationApplicationEndpoints
         group.MapPatch("{organisationId}/{applicationId}/overseas-sites", PatchOverseasSites);
         group.MapPost("{organisationId}/{applicationId}/overseas-sites", AddOverseasSite);
         group.MapPost(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-site",
+            AddInterimSite
+        );
+        group.MapPost(
             "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files",
             AddBesEvidenceFile
         );
@@ -45,7 +49,8 @@ public static class AccreditationApplicationEndpoints
         group
             .MapPost("case-management/{workItemId}/query", QueryFromCaseManagement)
             .RequireAuthorization(policy =>
-                policy.AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                policy
+                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
         group.MapPost("{organisationId}/{applicationId}/files", AddFile);
@@ -240,7 +245,9 @@ public static class AccreditationApplicationEndpoints
                 application.Prns.SectionStatus
             )
         )
-            return Results.Conflict("PRNs section is not editable in the application's current status.");
+            return Results.Conflict(
+                "PRNs section is not editable in the application's current status."
+            );
 
         if (request.PlannedTonnageBand.HasValue)
             application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
@@ -283,7 +290,9 @@ public static class AccreditationApplicationEndpoints
                 application.Prns.SectionStatus
             )
         )
-            return Results.Conflict("PRNs section is not editable in the application's current status.");
+            return Results.Conflict(
+                "PRNs section is not editable in the application's current status."
+            );
 
         if (request.PlannedTonnageBand.HasValue)
             application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
@@ -457,7 +466,10 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         AddOverseasSiteRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<AddOverseasSiteRequest> validator
+        IValidator<AddOverseasSiteRequest> validator,
+        ICaseWorkingApiAdapter caseWorkingAdapter,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
     )
     {
         var validation = await validator.ValidateAsync(request);
@@ -481,10 +493,7 @@ public static class AccreditationApplicationEndpoints
                 $"A site with OrsId '{request.OrsId}' already exists on this application."
             );
 
-        var nextSiteId =
-            application.OverseasSites.Sites.Count > 0
-                ? application.OverseasSites.Sites.Max(s => s.SiteId) + 1
-                : 1;
+        var nextSiteId = NextSiteId(application.OverseasSites);
 
         var newSite = new OverseasSiteModel
         {
@@ -523,9 +532,139 @@ public static class AccreditationApplicationEndpoints
             application.ApplicationStatus = ApplicationStatus.Started;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to add overseas site.")
-            : Results.Created(string.Empty, newSite);
+        if (updated is null)
+            return Results.Problem("Failed to add overseas site.");
+
+        // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
+        // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s): skip the round-trip
+        // entirely when there is nothing to notify, and defend in depth around the call even
+        // though NotifySiteAddedAsync itself already guarantees it never throws.
+        if (updated.CaseManagementWorkItemId is not null)
+        {
+            try
+            {
+                await caseWorkingAdapter.NotifySiteAddedAsync(
+                    updated,
+                    siteType: "ors",
+                    orsId: newSite.OrsId ?? string.Empty,
+                    siteNumber: null,
+                    isNewSite: newSite.IsNewSite,
+                    cancellationToken: cancellationToken
+                );
+            }
+            catch (Exception ex)
+            {
+                loggerFactory
+                    .CreateLogger("AccreditationApplicationEndpoints")
+                    .LogWarning(
+                        ex,
+                        "Failed to notify ManagementBe of new overseas site for applicationId={ApplicationId}",
+                        applicationId
+                    );
+            }
+        }
+
+        return Results.Created(string.Empty, newSite);
+    }
+
+    // Site numbers must be unique application-wide across both ORS sites and their nested
+    // interim sites (RA-294), so the next id is the max across both, not just the ORS list.
+    private static int NextSiteId(AccreditationApplicationOverseasSites overseasSites)
+    {
+        var maxSiteId = 0;
+        foreach (var site in overseasSites.Sites)
+        {
+            if (site.SiteId > maxSiteId)
+                maxSiteId = site.SiteId;
+            if (site.InterimSite is not null && site.InterimSite.SiteId > maxSiteId)
+                maxSiteId = site.InterimSite.SiteId;
+        }
+        return maxSiteId + 1;
+    }
+
+    private static async Task<IResult> AddInterimSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        AddInterimSiteRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<AddInterimSiteRequest> validator,
+        ICaseWorkingApiAdapter caseWorkingAdapter,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        if (site.InterimSite is not null)
+            return Results.Conflict(
+                $"An interim site already exists for overseas site '{siteId}'."
+            );
+
+        var nextSiteId = NextSiteId(application.OverseasSites!);
+
+        var interimSite = new InterimSiteModel
+        {
+            SiteId = nextSiteId,
+            SiteNumber = $"SN-{nextSiteId:D4}",
+            Country = request.Country,
+            SiteName = request.SiteName,
+            AddressLine1 = request.AddressLine1,
+            AddressLine2 = request.AddressLine2,
+            TownOrCity = request.TownOrCity,
+            StateOrRegion = request.StateOrRegion,
+            Postcode = request.Postcode,
+            ContactName = request.ContactName,
+            ContactEmail = request.ContactEmail,
+            ContactPhone = request.ContactPhone,
+            IsNewSite = true,
+        };
+
+        site.InterimSite = interimSite;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        if (updated is null)
+            return Results.Problem("Failed to add interim site.");
+
+        // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
+        // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s).
+        if (updated.CaseManagementWorkItemId is not null)
+        {
+            try
+            {
+                await caseWorkingAdapter.NotifySiteAddedAsync(
+                    updated,
+                    siteType: "interim",
+                    orsId: site.OrsId ?? string.Empty,
+                    siteNumber: interimSite.SiteNumber,
+                    isNewSite: interimSite.IsNewSite,
+                    cancellationToken: cancellationToken
+                );
+            }
+            catch (Exception ex)
+            {
+                loggerFactory
+                    .CreateLogger("AccreditationApplicationEndpoints")
+                    .LogWarning(
+                        ex,
+                        "Failed to notify ManagementBe of new interim site for applicationId={ApplicationId}",
+                        applicationId
+                    );
+            }
+        }
+
+        return Results.Created(string.Empty, interimSite);
     }
 
     private static async Task<IResult> AddBesEvidenceFile(
@@ -745,7 +884,11 @@ public static class AccreditationApplicationEndpoints
         // Version 1 for every section that exists on this application — only OverseasSites/
         // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.
         var versionedAt = DateTime.UtcNow;
-        AccreditationApplicationSections.SnapshotSection(application, OperatorSection.Prns, versionedAt);
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.Prns,
+            versionedAt
+        );
         AccreditationApplicationSections.SnapshotSection(
             application,
             OperatorSection.BusinessPlan,
@@ -901,7 +1044,10 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Queried)
             return Results.Conflict("A query is already open for this application.");
 
-        if (application.ApplicationStatus is not (ApplicationStatus.Submitted or ApplicationStatus.Updated))
+        if (
+            application.ApplicationStatus
+            is not (ApplicationStatus.Submitted or ApplicationStatus.Updated)
+        )
             return Results.Conflict(
                 "Application must be in 'Submitted' or 'Updated' status to raise a query."
             );
@@ -1030,7 +1176,10 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Approved)
             return Results.Ok(application);
 
-        if (application.ApplicationStatus is not (ApplicationStatus.Submitted or ApplicationStatus.Updated))
+        if (
+            application.ApplicationStatus
+            is not (ApplicationStatus.Submitted or ApplicationStatus.Updated)
+        )
             return Results.Conflict("Only submitted applications can be approved.");
 
         var approvedDto = new ApprovedAccreditationDto
@@ -1081,7 +1230,10 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Rejected)
             return Results.Ok(application);
 
-        if (application.ApplicationStatus is not (ApplicationStatus.Submitted or ApplicationStatus.Updated))
+        if (
+            application.ApplicationStatus
+            is not (ApplicationStatus.Submitted or ApplicationStatus.Updated)
+        )
             return Results.Conflict("Only submitted applications can be rejected.");
 
         application.ApplicationStatus = ApplicationStatus.Rejected;
