@@ -75,6 +75,7 @@ public class StubReExApiAdapter(
                                 Country = country,
                                 IsEu = isEu,
                                 IsOecd = isOecd,
+                                IsNewSite = false,
                             };
                         }
                     )
