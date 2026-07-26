@@ -331,6 +331,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             IsEu = CountryClassifications.IsEu(dto.Country),
             IsOecd = CountryClassifications.IsOecd(dto.Country),
             Selected = false,
+            IsNewSite = false,
         };
 
     private static string? FormatAddress(SiteAddressDto? addr) =>
