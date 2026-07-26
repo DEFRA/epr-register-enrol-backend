@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(curl -s -m 3 http://localhost:5000/api/v1/stub/accreditation-applications/50002)",
-      "PowerShell(Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue)",
-      "Bash(gh pr *)"
-    ]
-  }
-}
