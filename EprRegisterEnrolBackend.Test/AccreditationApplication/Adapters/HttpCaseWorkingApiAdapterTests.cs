@@ -257,6 +257,85 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
+    public async Task SubmitApplicationAsync_OrsSite_ForwardsOrsIdAndIsNewSite()
+    {
+        var application = CreateTestApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    OrsId = "001",
+                    SiteName = "Overseas Recycling Co",
+                    IsNewSite = false,
+                },
+            ],
+        };
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var site = doc
+            .RootElement.GetProperty("payload")
+            .GetProperty("overseasSites")
+            .GetProperty("sites")[0];
+
+        site.GetProperty("orsId").GetString().Should().Be("001");
+        site.GetProperty("isNewSite").GetBoolean().Should().BeFalse();
+        site.TryGetProperty("interimSite", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_SiteWithInterimSite_ForwardsNestedInterimSiteObject()
+    {
+        var application = CreateTestApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    OrsId = "001",
+                    SiteName = "Overseas Recycling Co",
+                    IsNewSite = true,
+                    InterimSite = new InterimSiteModel
+                    {
+                        SiteId = 2,
+                        SiteNumber = "SN-0002",
+                        Country = "France",
+                        SiteName = "Interim Recycling Site",
+                        AddressLine1 = "1 Rue Example",
+                        TownOrCity = "Paris",
+                        ContactName = "Jane Smith",
+                        ContactEmail = "jane.smith@example.com",
+                        ContactPhone = "+33 1 23 45 67 89",
+                    },
+                },
+            ],
+        };
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var interimSite = doc
+            .RootElement.GetProperty("payload")
+            .GetProperty("overseasSites")
+            .GetProperty("sites")[0]
+            .GetProperty("interimSite");
+
+        interimSite.GetProperty("siteNumber").GetString().Should().Be("SN-0002");
+        interimSite.GetProperty("isNewSite").GetBoolean().Should().BeTrue();
+        interimSite.GetProperty("siteName").GetString().Should().Be("Interim Recycling Site");
+        interimSite.GetProperty("townOrCity").GetString().Should().Be("Paris");
+        interimSite.GetProperty("contactPhone").GetString().Should().Be("+33 1 23 45 67 89");
+    }
+
+    [Fact]
     public async Task SubmitApplicationAsync_SetsAuthHeaders()
     {
         var (adapter, handler) = CreateAdapter();
@@ -742,6 +821,116 @@ public class HttpCaseWorkingApiAdapterTests
         );
 
         result.IsSuccess.Should().BeFalse();
+    }
+
+    // --- NotifySiteAddedAsync ---
+
+    [Fact]
+    public async Task NotifySiteAddedAsync_NoLinkedWorkItem_DoesNotCallManagementBe()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = null;
+
+        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+
+        handler.CapturedRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task NotifySiteAddedAsync_OrsSite_PostsToSiteAddedUrlWithNullSiteNumber()
+    {
+        var workItemId = Guid.NewGuid();
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = workItemId;
+
+        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+
+        handler
+            .CapturedRequest!.RequestUri!.ToString()
+            .Should()
+            .Be($"{TestUrl}/work-items/re-accreditation/{workItemId}/site-added");
+        handler.CapturedRequest!.Method.Should().Be(HttpMethod.Post);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var root = doc.RootElement;
+        root.GetProperty("siteType").GetString().Should().Be("ors");
+        root.GetProperty("orsId").GetString().Should().Be("001");
+        root.GetProperty("siteNumber").ValueKind.Should().Be(JsonValueKind.Null);
+        root.GetProperty("isNewSite").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task NotifySiteAddedAsync_InterimSite_PostsSiteNumber()
+    {
+        var workItemId = Guid.NewGuid();
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = workItemId;
+
+        await adapter.NotifySiteAddedAsync(app, "interim", "001", "SN-0002", true);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var root = doc.RootElement;
+        root.GetProperty("siteType").GetString().Should().Be("interim");
+        root.GetProperty("siteNumber").GetString().Should().Be("SN-0002");
+    }
+
+    [Fact]
+    public async Task NotifySiteAddedAsync_EmptyUrl_DoesNotThrow()
+    {
+        var (adapter, _) = CreateAdapter(url: "");
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var act = async () => await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+
+        await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task NotifySiteAddedAsync_ManagementBeUnreachable_DoesNotThrow()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory
+            .CreateClient("DefaultClient")
+            .Returns(new HttpClient(new ThrowingHttpMessageHandler()));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var act = async () => await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+
+        await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task NotifySiteAddedAsync_NonSuccessResponse_DoesNotThrow()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.InternalServerError,
+            new { title = "Error" }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var act = async () => await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+
+        await act.Should().NotThrowAsync();
     }
 
     #region Test infrastructure

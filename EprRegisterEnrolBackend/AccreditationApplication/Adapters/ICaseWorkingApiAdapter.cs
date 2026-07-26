@@ -27,6 +27,18 @@ public interface ICaseWorkingApiAdapter
         IReadOnlyList<string> sectionKeys,
         CancellationToken cancellationToken = default
     );
+
+    // Courtesy notification fired after a new ORS or interim site is saved (RA-294 AC05 /
+    // RA-297 AC04) — not part of the save transaction, so like GetNotificationStatusAsync this
+    // must never throw. siteNumber is only populated when siteType == "interim".
+    Task NotifySiteAddedAsync(
+        AccreditationApplicationModel application,
+        string siteType,
+        string orsId,
+        string? siteNumber,
+        bool isNewSite,
+        CancellationToken cancellationToken = default
+    );
 }
 
 // WorkItemId is null when ManagementBe's response didn't carry a usable id (e.g. unparseable
