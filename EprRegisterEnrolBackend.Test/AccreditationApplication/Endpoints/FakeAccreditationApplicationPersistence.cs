@@ -42,9 +42,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
 
-    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
-        Guid workItemId
-    )
+    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId)
     {
         var stored = _store.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
@@ -77,6 +75,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             CaseManagementReference = src.CaseManagementReference,
             CaseManagementWorkItemId = src.CaseManagementWorkItemId,
             SubmittedBy = src.SubmittedBy,
+            WithdrawalReason = src.WithdrawalReason,
             DateSent = src.DateSent,
             DateLastEdited = src.DateLastEdited,
             CreatedAt = src.CreatedAt,

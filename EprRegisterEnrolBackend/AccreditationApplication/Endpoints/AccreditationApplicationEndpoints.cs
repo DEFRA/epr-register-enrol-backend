@@ -46,6 +46,7 @@ public static class AccreditationApplicationEndpoints
         group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection);
         group.MapPost("{organisationId}/{applicationId}/submit", Submit);
         group.MapPost("{organisationId}/{applicationId}/resubmit", Resubmit);
+        group.MapPost("{organisationId}/{applicationId}/withdraw", Withdraw);
         group
             .MapPost("case-management/{workItemId}/query", QueryFromCaseManagement)
             .RequireAuthorization(policy =>
@@ -1242,6 +1243,55 @@ public static class AccreditationApplicationEndpoints
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to reject accreditation application.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> Withdraw(
+        string organisationId,
+        string applicationId,
+        WithdrawRequest request,
+        IAccreditationApplicationPersistence persistence,
+        ICaseWorkingApiAdapter caseWorkingAdapter,
+        IValidator<WithdrawRequest> validator,
+        CancellationToken cancellationToken
+    )
+    {
+        var validation = await validator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (application.ApplicationStatus == ApplicationStatus.Withdrawn)
+            return Results.Ok(application);
+
+        if (
+            application.ApplicationStatus
+            is ApplicationStatus.Approved
+                or ApplicationStatus.Rejected
+        )
+            return Results.Conflict("Only applications not yet decided can be withdrawn.");
+
+        // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
+        var withdrawResult = await caseWorkingAdapter.WithdrawApplicationAsync(
+            application,
+            request.Reason,
+            cancellationToken
+        );
+        if (!withdrawResult.IsSuccess)
+            return Results.Problem(
+                "Failed to withdraw accreditation application with the case management service."
+            );
+
+        application.ApplicationStatus = ApplicationStatus.Withdrawn;
+        application.WithdrawalReason = request.Reason;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to withdraw accreditation application.")
             : Results.Ok(updated);
     }
 

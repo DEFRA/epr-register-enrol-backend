@@ -127,6 +127,13 @@ public class ResubmitRequest
     public string? Role { get; set; }
 }
 
+// RA-252: the operator's stated reason for withdrawing, captured on the frontend's
+// withdraw-application confirmation page.
+public class WithdrawRequest
+{
+    public required string Reason { get; set; }
+}
+
 public record SubmitResponse
 {
     public string? AccreditationReference { get; init; }
