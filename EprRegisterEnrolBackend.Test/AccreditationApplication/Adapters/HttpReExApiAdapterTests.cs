@@ -20,9 +20,12 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 /// </summary>
 public class HttpReExApiAdapterTests
 {
-    private static HttpReExApiAdapter BuildSut(string organisationJson)
+    private static HttpReExApiAdapter BuildSut(
+        string organisationJson,
+        string overseasSitesJson = "{}"
+    )
     {
-        var handler = new RoutingHandler(organisationJson);
+        var handler = new RoutingHandler(organisationJson, overseasSitesJson);
         var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExConfig { BaseUrl = "http://localhost:5000/" });
         var reExClient = new ReExClient(httpClient, config, NullLogger<ReExClient>.Instance);
@@ -59,6 +62,36 @@ public class HttpReExApiAdapterTests
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.RegistrationReference.Should().Be("E25SR500020912AL");
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsSeededSitesWithIsNewSiteFalse()
+    {
+        const string overseasSitesJson = """
+            {
+              "1": {
+                "name": "Overseas Recycling Co",
+                "country": "France",
+                "address": { "line1": "1 Rue Example", "townOrCity": "Paris" }
+              }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OverseasSites.Should().ContainSingle();
+        var site = result.Value!.OverseasSites[0];
+        site.SiteId.Should().Be(1);
+        site.SiteName.Should().Be("Overseas Recycling Co");
+        site.IsNewSite.Should()
+            .BeFalse(because: "RA-297: ReEx-seeded sites are the registry, not new sites");
     }
 
     // Realistic redacted ReEx organisation payload — companyDetails deliberately has no
@@ -176,10 +209,12 @@ public class HttpReExApiAdapterTests
     private sealed class RoutingHandler : HttpMessageHandler
     {
         private readonly string _organisationJson;
+        private readonly string _overseasSitesJson;
 
-        public RoutingHandler(string organisationJson)
+        public RoutingHandler(string organisationJson, string overseasSitesJson = "{}")
         {
             _organisationJson = organisationJson;
+            _overseasSitesJson = overseasSitesJson;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -188,7 +223,7 @@ public class HttpReExApiAdapterTests
         )
         {
             var isOverseasSites = request.RequestUri!.AbsolutePath.Contains("overseas-sites");
-            var body = isOverseasSites ? "{}" : _organisationJson;
+            var body = isOverseasSites ? _overseasSitesJson : _organisationJson;
 
             return Task.FromResult(
                 new HttpResponseMessage(HttpStatusCode.OK)

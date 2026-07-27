@@ -43,6 +43,25 @@ public class OverseasSiteModel
     public bool IsOecd { get; set; }
     public bool Selected { get; set; } = true;
     public BesEvidenceModel? BesEvidence { get; set; }
+    public bool IsNewSite { get; set; } = true;
+    public InterimSiteModel? InterimSite { get; set; }
+}
+
+public class InterimSiteModel
+{
+    public required int SiteId { get; set; }
+    public required string SiteNumber { get; set; }
+    public required string Country { get; set; }
+    public required string SiteName { get; set; }
+    public required string AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public required string TownOrCity { get; set; }
+    public string? StateOrRegion { get; set; }
+    public string? Postcode { get; set; }
+    public required string ContactName { get; set; }
+    public required string ContactEmail { get; set; }
+    public required string ContactPhone { get; set; }
+    public bool IsNewSite { get; set; } = true;
 }
 
 public class BesEvidenceModel

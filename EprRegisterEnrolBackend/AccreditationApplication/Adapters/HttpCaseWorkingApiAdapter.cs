@@ -268,6 +268,87 @@ public class HttpCaseWorkingApiAdapter(
         }
     }
 
+    // Body must always carry an explicit "siteNumber": null for ORS sites rather than omitting
+    // the key — ManagementBe's contract distinguishes "absent" from "not applicable" (RA-294
+    // AC05 / RA-297 AC04) — so this uses its own options without the shared JsonOptions'
+    // WhenWritingNull behaviour.
+    private static readonly JsonSerializerOptions SiteAddedJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    public async Task NotifySiteAddedAsync(
+        AccreditationApplicationModel application,
+        string siteType,
+        string orsId,
+        string? siteNumber,
+        bool isNewSite,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (application.CaseManagementWorkItemId is not { } workItemId)
+        {
+            return;
+        }
+
+        var url = _config.Url;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            logger.LogWarning(
+                "CaseWorking API URL is not configured. Cannot notify site-added for workItemId={WorkItemId}.",
+                workItemId
+            );
+            return;
+        }
+
+        var endpoint = $"{url.TrimEnd('/')}/work-items/re-accreditation/{workItemId}/site-added";
+        var body = new SiteAddedRequest
+        {
+            SiteType = siteType,
+            OrsId = orsId,
+            SiteNumber = siteNumber,
+            IsNewSite = isNewSite,
+        };
+
+        try
+        {
+            var userId = application.SubmittedBy?.Email ?? application.OrganisationId;
+            var userName = application.SubmittedBy?.FullName;
+            using var request = BuildRequest(
+                HttpMethod.Post,
+                endpoint,
+                body,
+                userId,
+                userName,
+                SiteAddedJsonOptions
+            );
+            var client = httpClientFactory.CreateClient("DefaultClient");
+
+            var response = await client.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogWarning(
+                    "ManagementBe returned {Status} from {Endpoint}: {Body}",
+                    (int)response.StatusCode,
+                    endpoint,
+                    responseBody
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            // Courtesy notification only, not part of the save transaction — must never fail
+            // the caller, mirroring GetNotificationStatusAsync's "must never fail the caller"
+            // convention (RA102-j7s).
+            logger.LogWarning(
+                ex,
+                "Failed to notify ManagementBe of site-added at {Endpoint}",
+                endpoint
+            );
+        }
+    }
+
     private static Dictionary<string, object?> BuildSectionsPayload(
         AccreditationApplicationModel application,
         IReadOnlyList<string> sectionKeys
@@ -292,14 +373,20 @@ public class HttpCaseWorkingApiAdapter(
                 {
                     plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
                     authorisers = application
-                        .Prns.Authorisers.Select(a => new { fullName = a.FullName, email = a.Email })
+                        .Prns.Authorisers.Select(a => new
+                        {
+                            fullName = a.FullName,
+                            email = a.Email,
+                        })
                         .ToArray(),
                 },
                 OperatorSection.BusinessPlan => new
                 {
                     newInfrastructurePercent = application.BusinessPlan.NewInfrastructurePercent,
                     priceSupportPercent = application.BusinessPlan.PriceSupportPercent,
-                    businessCollectionsPercent = application.BusinessPlan.BusinessCollectionsPercent,
+                    businessCollectionsPercent = application
+                        .BusinessPlan
+                        .BusinessCollectionsPercent,
                     communicationsPercent = application.BusinessPlan.CommunicationsPercent,
                     newMarketsPercent = application.BusinessPlan.NewMarketsPercent,
                     newUsesPercent = application.BusinessPlan.NewUsesPercent,
@@ -434,9 +521,29 @@ public class HttpCaseWorkingApiAdapter(
                     .Select(s => new
                     {
                         siteId = s.SiteId,
+                        orsId = s.OrsId,
                         siteName = s.SiteName,
                         siteAddress = s.SiteAddress,
                         country = s.Country,
+                        isNewSite = s.IsNewSite,
+                        interimSite = s.InterimSite is null
+                            ? null
+                            : new
+                            {
+                                siteId = s.InterimSite.SiteId,
+                                siteNumber = s.InterimSite.SiteNumber,
+                                isNewSite = s.InterimSite.IsNewSite,
+                                country = s.InterimSite.Country,
+                                siteName = s.InterimSite.SiteName,
+                                addressLine1 = s.InterimSite.AddressLine1,
+                                addressLine2 = s.InterimSite.AddressLine2,
+                                townOrCity = s.InterimSite.TownOrCity,
+                                stateOrRegion = s.InterimSite.StateOrRegion,
+                                postcode = s.InterimSite.Postcode,
+                                contactName = s.InterimSite.ContactName,
+                                contactEmail = s.InterimSite.ContactEmail,
+                                contactPhone = s.InterimSite.ContactPhone,
+                            },
                         besEvidence = new
                         {
                             files = (s.BesEvidence?.BesEvidenceUploads ?? [])
@@ -479,13 +586,14 @@ public class HttpCaseWorkingApiAdapter(
         string url,
         object? body = null,
         string? userId = null,
-        string? userName = null
+        string? userName = null,
+        JsonSerializerOptions? contentOptions = null
     )
     {
         var request = new HttpRequestMessage(method, url);
         if (body is not null)
         {
-            request.Content = JsonContent.Create(body, options: JsonOptions);
+            request.Content = JsonContent.Create(body, options: contentOptions ?? JsonOptions);
         }
 
         request.Headers.Add("x-cdp-cognito-client-id", _config.CognitoClientId);
@@ -566,6 +674,14 @@ public class HttpCaseWorkingApiAdapter(
         public required object ResponderContactDetails { get; init; }
         public required IReadOnlyList<string> SectionKeys { get; init; }
         public required Dictionary<string, object?> Sections { get; init; }
+    }
+
+    internal sealed class SiteAddedRequest
+    {
+        public required string SiteType { get; init; }
+        public required string OrsId { get; init; }
+        public string? SiteNumber { get; init; }
+        public required bool IsNewSite { get; init; }
     }
 
     #endregion

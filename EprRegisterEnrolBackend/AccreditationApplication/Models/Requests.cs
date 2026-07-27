@@ -67,6 +67,20 @@ public record AddOverseasSiteRequest
     public bool? ConditionsOfExport { get; set; }
 }
 
+public record AddInterimSiteRequest
+{
+    public required string Country { get; set; }
+    public required string SiteName { get; set; }
+    public required string AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public required string TownOrCity { get; set; }
+    public string? StateOrRegion { get; set; }
+    public string? Postcode { get; set; }
+    public required string ContactName { get; set; }
+    public required string ContactEmail { get; set; }
+    public required string ContactPhone { get; set; }
+}
+
 public class AddBesEvidenceFileRequest
 {
     public required string FileId { get; set; }

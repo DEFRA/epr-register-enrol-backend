@@ -94,6 +94,27 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new ResumeFromQueryResult(true));
     }
 
+    public Task NotifySiteAddedAsync(
+        AccreditationApplicationModel application,
+        string siteType,
+        string orsId,
+        string? siteNumber,
+        bool isNewSite,
+        CancellationToken cancellationToken = default
+    )
+    {
+        logger.LogInformation(
+            "StubCaseWorkingApiAdapter.NotifySiteAddedAsync called for applicationId={ApplicationId} siteType={SiteType} orsId={OrsId} siteNumber={SiteNumber} isNewSite={IsNewSite}",
+            application.Id,
+            siteType,
+            orsId,
+            siteNumber,
+            isNewSite
+        );
+
+        return Task.CompletedTask;
+    }
+
     private static string GenerateReference(AccreditationApplicationModel application)
     {
         const int maxLength = 18;
