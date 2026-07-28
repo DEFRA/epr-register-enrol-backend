@@ -128,10 +128,13 @@ public class ResubmitRequest
 }
 
 // RA-252: the operator's stated reason for withdrawing, captured on the frontend's
-// withdraw-application confirmation page.
+// withdraw-application confirmation page. FullName/Email identify the acting user (who is
+// withdrawing now), not the application's original submitter — mirrors ResubmitRequest.
 public class WithdrawRequest
 {
     public required string Reason { get; set; }
+    public string? FullName { get; set; }
+    public string? Email { get; set; }
 }
 
 public record SubmitResponse

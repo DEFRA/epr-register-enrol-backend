@@ -270,6 +270,7 @@ public class HttpCaseWorkingApiAdapter(
 
     public async Task<WithdrawResult> WithdrawApplicationAsync(
         AccreditationApplicationModel application,
+        QuerySubmitterContactDetails contactDetails,
         string reason,
         CancellationToken cancellationToken = default
     )
@@ -299,8 +300,8 @@ public class HttpCaseWorkingApiAdapter(
 
         try
         {
-            var userId = application.SubmittedBy?.Email ?? application.OrganisationId;
-            var userName = application.SubmittedBy?.FullName;
+            var userId = contactDetails.Email;
+            var userName = contactDetails.FullName;
             using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
             var client = httpClientFactory.CreateClient("DefaultClient");
 

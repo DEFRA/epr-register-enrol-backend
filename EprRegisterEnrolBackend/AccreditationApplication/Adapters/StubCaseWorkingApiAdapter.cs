@@ -96,15 +96,17 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
 
     public Task<WithdrawResult> WithdrawApplicationAsync(
         AccreditationApplicationModel application,
+        QuerySubmitterContactDetails contactDetails,
         string reason,
         CancellationToken cancellationToken = default
     )
     {
         logger.LogInformation(
-            "StubCaseWorkingApiAdapter.WithdrawApplicationAsync called for applicationId={ApplicationId} workItemId={WorkItemId} reason={Reason}",
+            "StubCaseWorkingApiAdapter.WithdrawApplicationAsync called for applicationId={ApplicationId} workItemId={WorkItemId} reason={Reason} withdrawnBy={WithdrawnBy}",
             application.Id,
             application.CaseManagementWorkItemId,
-            reason
+            reason,
+            contactDetails.Email
         );
 
         return Task.FromResult(new WithdrawResult(true));

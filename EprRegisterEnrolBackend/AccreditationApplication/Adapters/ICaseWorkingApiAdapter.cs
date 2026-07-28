@@ -43,9 +43,11 @@ public interface ICaseWorkingApiAdapter
     // Calls ManagementBe's withdraw action (RA-252) so the linked work item — and its
     // automatic audit trail — reflect the withdrawal. Like ResumeFromQueryAsync this is
     // allowed to throw: the caller (Withdraw) must know whether the call succeeded before
-    // persisting the Withdrawn transition.
+    // persisting the Withdrawn transition. contactDetails identifies the user actually
+    // withdrawing now, not the application's original submitter.
     Task<WithdrawResult> WithdrawApplicationAsync(
         AccreditationApplicationModel application,
+        QuerySubmitterContactDetails contactDetails,
         string reason,
         CancellationToken cancellationToken = default
     );
