@@ -268,6 +268,65 @@ public class HttpCaseWorkingApiAdapter(
         }
     }
 
+    public async Task<WithdrawResult> WithdrawApplicationAsync(
+        AccreditationApplicationModel application,
+        QuerySubmitterContactDetails contactDetails,
+        string reason,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (application.CaseManagementWorkItemId is not { } workItemId)
+        {
+            logger.LogError(
+                "Cannot withdraw: applicationId={ApplicationId} has no CaseManagementWorkItemId.",
+                application.ApplicationId
+            );
+            return new WithdrawResult(false);
+        }
+
+        var url = _config.Url;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            logger.LogError(
+                "CaseWorking API URL is not configured. Cannot withdraw workItemId={WorkItemId}.",
+                workItemId
+            );
+            return new WithdrawResult(false);
+        }
+
+        var body = new WithdrawWorkItemRequest { Reason = reason };
+
+        var endpoint = $"{url.TrimEnd('/')}/work-items/re-accreditation/{workItemId}/withdraw";
+
+        try
+        {
+            var userId = contactDetails.Email;
+            var userName = contactDetails.FullName;
+            using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
+            var client = httpClientFactory.CreateClient("DefaultClient");
+
+            var response = await client.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogError(
+                    "ManagementBe returned {Status} from {Endpoint}: {Body}",
+                    (int)response.StatusCode,
+                    endpoint,
+                    responseBody
+                );
+                return new WithdrawResult(false);
+            }
+
+            return new WithdrawResult(true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            return new WithdrawResult(false);
+        }
+    }
+
     // Body must always carry an explicit "siteNumber": null for ORS sites rather than omitting
     // the key — ManagementBe's contract distinguishes "absent" from "not applicable" (RA-294
     // AC05 / RA-297 AC04) — so this uses its own options without the shared JsonOptions'
@@ -674,6 +733,11 @@ public class HttpCaseWorkingApiAdapter(
         public required object ResponderContactDetails { get; init; }
         public required IReadOnlyList<string> SectionKeys { get; init; }
         public required Dictionary<string, object?> Sections { get; init; }
+    }
+
+    internal sealed class WithdrawWorkItemRequest
+    {
+        public required string Reason { get; init; }
     }
 
     internal sealed class SiteAddedRequest

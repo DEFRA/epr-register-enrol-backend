@@ -94,6 +94,24 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new ResumeFromQueryResult(true));
     }
 
+    public Task<WithdrawResult> WithdrawApplicationAsync(
+        AccreditationApplicationModel application,
+        QuerySubmitterContactDetails contactDetails,
+        string reason,
+        CancellationToken cancellationToken = default
+    )
+    {
+        logger.LogInformation(
+            "StubCaseWorkingApiAdapter.WithdrawApplicationAsync called for applicationId={ApplicationId} workItemId={WorkItemId} reason={Reason} withdrawnBy={WithdrawnBy}",
+            application.Id,
+            application.CaseManagementWorkItemId,
+            reason,
+            contactDetails.Email
+        );
+
+        return Task.FromResult(new WithdrawResult(true));
+    }
+
     public Task NotifySiteAddedAsync(
         AccreditationApplicationModel application,
         string siteType,

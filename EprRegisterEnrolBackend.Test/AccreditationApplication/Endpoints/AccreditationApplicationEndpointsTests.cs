@@ -614,6 +614,22 @@ public class AccreditationApplicationEndpointsTests
         body!.Prns.SectionStatus.Should().Be(SectionStatus.Queried);
     }
 
+    [Fact]
+    public async Task PatchTonnage_WhenWithdrawn_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Withdrawn);
+
+        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
     // --- PatchBusinessPlan ---
 
     [Fact]
@@ -1076,6 +1092,242 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // --- Withdraw ---
+
+    [Fact]
+    public async Task Withdraw_SetsWithdrawnStatusAndPersistsReason()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Submitted);
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new WithdrawResult(true)));
+
+        var request = new WithdrawRequest
+        {
+            Reason = "No longer required",
+            FullName = "Alex Withdrawer",
+            Email = "alex.withdrawer@example.com",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        stored.WithdrawalReason.Should().Be("No longer required");
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Is<QuerySubmitterContactDetails>(c =>
+                    c.Email == "alex.withdrawer@example.com" && c.FullName == "Alex Withdrawer"
+                ),
+                "No longer required",
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Withdraw_FromQueried_Succeeds()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.BusinessPlan.SectionStatus = SectionStatus.Queried;
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify",
+                    QueriedSectionKeys = ["business-plan"],
+                };
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new WithdrawResult(true)));
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        body.Query!.QueriedSectionKeys.Should().BeEmpty();
+        body.BusinessPlan.SectionStatus.Should().NotBe(SectionStatus.Queried);
+    }
+
+    [Fact]
+    public async Task Withdraw_WhenAlreadyWithdrawn_ReturnsIdempotentOkWithoutCallingAdapter()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Withdrawn);
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Withdraw_WhenApproved_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Approved);
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Withdraw_WhenRejected_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Rejected);
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Saved)]
+    [InlineData(ApplicationStatus.Started)]
+    public async Task Withdraw_WhenNeverSubmittedDraft_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Withdraw_MissingReason_Returns400()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Started);
+
+        var request = new WithdrawRequest { Reason = "" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Withdraw_ReasonOver200Words_Returns400()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Started);
+
+        var request = new WithdrawRequest
+        {
+            Reason = string.Join(' ', Enumerable.Repeat("word", 201)),
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Withdraw_WhenAdapterFails_ApplicationRemainsUnchanged()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Submitted);
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new WithdrawResult(false)));
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
+        stored.WithdrawalReason.Should().BeNull();
+    }
+
     // --- AddFile ---
 
     [Fact]
@@ -1098,6 +1350,28 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task AddFile_WhenWithdrawn_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Withdrawn);
+
+        var request = new FileUploadRequest
+        {
+            FileId = "file-004",
+            Filename = "plan.pdf",
+            ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-004",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
     [Fact]

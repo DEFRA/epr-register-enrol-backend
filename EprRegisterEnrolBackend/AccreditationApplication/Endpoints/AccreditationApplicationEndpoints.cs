@@ -46,6 +46,7 @@ public static class AccreditationApplicationEndpoints
         group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection);
         group.MapPost("{organisationId}/{applicationId}/submit", Submit);
         group.MapPost("{organisationId}/{applicationId}/resubmit", Resubmit);
+        group.MapPost("{organisationId}/{applicationId}/withdraw", Withdraw);
         group
             .MapPost("case-management/{workItemId}/query", QueryFromCaseManagement)
             .RequireAuthorization(policy =>
@@ -68,6 +69,13 @@ public static class AccreditationApplicationEndpoints
             GetUploadStatus
         );
     }
+
+    // RA-252: a withdrawn application's data must not be editable through any of the ordinary
+    // write endpoints, even if the frontend's own session guard fails open or is bypassed.
+    private static IResult? RejectIfWithdrawn(AccreditationApplicationModel application) =>
+        application.ApplicationStatus == ApplicationStatus.Withdrawn
+            ? Results.Conflict("Application has been withdrawn and can no longer be edited.")
+            : null;
 
     private static async Task<IResult> Seed(
         string organisationId,
@@ -238,6 +246,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -283,6 +293,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -326,6 +338,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -387,6 +401,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -426,6 +442,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -479,6 +497,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         application.OverseasSites ??= new AccreditationApplicationOverseasSites();
 
@@ -601,6 +621,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -683,6 +705,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -731,6 +755,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -770,6 +796,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -811,6 +839,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
@@ -1107,6 +1137,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         if (application.SamplingPlan.Files.Count >= 10)
             return Results.UnprocessableEntity("Maximum of 10 files permitted per application.");
@@ -1147,6 +1179,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
 
         var removed = application.SamplingPlan.Files.RemoveAll(f => f.FileId == fileId);
         if (removed == 0)
@@ -1242,6 +1276,95 @@ public static class AccreditationApplicationEndpoints
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to reject accreditation application.")
+            : Results.Ok(updated);
+    }
+
+    private static async Task<IResult> Withdraw(
+        string organisationId,
+        string applicationId,
+        WithdrawRequest request,
+        IAccreditationApplicationPersistence persistence,
+        ICaseWorkingApiAdapter caseWorkingAdapter,
+        IValidator<WithdrawRequest> validator,
+        CancellationToken cancellationToken
+    )
+    {
+        var validation = await validator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (application.ApplicationStatus == ApplicationStatus.Withdrawn)
+            return Results.Ok(application);
+
+        if (
+            application.ApplicationStatus
+            is not (
+                ApplicationStatus.Submitted
+                or ApplicationStatus.Queried
+                or ApplicationStatus.Updated
+            )
+        )
+            return Results.Conflict("Only applications not yet decided can be withdrawn.");
+
+        var contactDetails = new QuerySubmitterContactDetails
+        {
+            FullName = request.FullName ?? string.Empty,
+            Email = request.Email ?? string.Empty,
+            Role = string.Empty,
+        };
+
+        // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
+        var withdrawResult = await caseWorkingAdapter.WithdrawApplicationAsync(
+            application,
+            contactDetails,
+            request.Reason,
+            cancellationToken
+        );
+        if (!withdrawResult.IsSuccess)
+            return Results.Problem(
+                "Failed to withdraw accreditation application with the case management service."
+            );
+
+        if (application.ApplicationStatus == ApplicationStatus.Queried)
+        {
+            var queriedSections = (application.Query?.QueriedSectionKeys ?? [])
+                .Select(key =>
+                    AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section)
+                        ? section
+                        : (OperatorSection?)null
+                )
+                .Where(section => section is not null)
+                .Select(section => section!.Value)
+                .Distinct();
+
+            foreach (var section in queriedSections)
+            {
+                if (
+                    AccreditationApplicationSections.GetSectionStatus(application, section)
+                    == SectionStatus.Queried
+                )
+                    AccreditationApplicationSections.SetSectionStatus(
+                        application,
+                        section,
+                        AccreditationApplicationSections.ComputeCurrentStatus(application, section)
+                    );
+            }
+
+            application.Query ??= new AccreditationApplicationQuery();
+            application.Query.QueriedSectionKeys = [];
+        }
+
+        application.ApplicationStatus = ApplicationStatus.Withdrawn;
+        application.WithdrawalReason = request.Reason;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to withdraw accreditation application.")
             : Results.Ok(updated);
     }
 

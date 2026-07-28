@@ -823,6 +823,165 @@ public class HttpCaseWorkingApiAdapterTests
         result.IsSuccess.Should().BeFalse();
     }
 
+    // --- WithdrawApplicationAsync ---
+
+    // The acting user withdrawing now — deliberately different from CreateTestApplication's
+    // SubmittedBy (Jane Smith) so tests can prove the adapter sends the withdrawer's identity,
+    // not the original submitter's (RA-252 review fix).
+    private static QuerySubmitterContactDetails WithdrawingUserContactDetails() =>
+        new()
+        {
+            FullName = "Alex Withdrawer",
+            Email = "alex.withdrawer@example.com",
+            Role = string.Empty,
+        };
+
+    [Fact]
+    public async Task WithdrawApplicationAsync_NoLinkedWorkItem_ReturnsFailureWithoutCallingManagementBe()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = null;
+
+        var result = await adapter.WithdrawApplicationAsync(
+            app,
+            WithdrawingUserContactDetails(),
+            "No longer required"
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        handler.CapturedRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WithdrawApplicationAsync_EmptyUrl_ReturnsFailureWithoutThrowing()
+    {
+        var (adapter, _) = CreateAdapter(url: "");
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.WithdrawApplicationAsync(
+            app,
+            WithdrawingUserContactDetails(),
+            "No longer required"
+        );
+
+        result.IsSuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WithdrawApplicationAsync_Success_PostsToWorkItemWithdrawUrl()
+    {
+        var workItemId = Guid.NewGuid();
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = workItemId;
+
+        var result = await adapter.WithdrawApplicationAsync(
+            app,
+            WithdrawingUserContactDetails(),
+            "No longer required"
+        );
+
+        result.IsSuccess.Should().BeTrue();
+        handler
+            .CapturedRequest!.RequestUri!.ToString()
+            .Should()
+            .Be($"{TestUrl}/work-items/re-accreditation/{workItemId}/withdraw");
+        handler.CapturedRequest!.Method.Should().Be(HttpMethod.Post);
+    }
+
+    [Fact]
+    public async Task WithdrawApplicationAsync_MapsReasonIntoPayload()
+    {
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.WithdrawApplicationAsync(
+            app,
+            WithdrawingUserContactDetails(),
+            "No longer required"
+        );
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        doc.RootElement.GetProperty("reason").GetString().Should().Be("No longer required");
+    }
+
+    [Fact]
+    public async Task WithdrawApplicationAsync_SetsAuthHeadersFromActingUserNotOriginalSubmitter()
+    {
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.WithdrawApplicationAsync(
+            app,
+            WithdrawingUserContactDetails(),
+            "No longer required"
+        );
+
+        handler.CapturedRequest.Should().NotBeNull();
+        var request = handler.CapturedRequest!;
+        request
+            .Headers.GetValues("x-cdp-user-id")
+            .Should()
+            .ContainSingle("alex.withdrawer@example.com");
+        request.Headers.GetValues("x-cdp-user-name").Should().ContainSingle("Alex Withdrawer");
+    }
+
+    [Fact]
+    public async Task WithdrawApplicationAsync_NonSuccessResponse_ReturnsFailure()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.InternalServerError,
+            new { title = "Error" }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.WithdrawApplicationAsync(
+            app,
+            WithdrawingUserContactDetails(),
+            "No longer required"
+        );
+
+        result.IsSuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WithdrawApplicationAsync_ManagementBeUnreachable_ReturnsFailureWithoutThrowing()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory
+            .CreateClient("DefaultClient")
+            .Returns(new HttpClient(new ThrowingHttpMessageHandler()));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.WithdrawApplicationAsync(
+            app,
+            WithdrawingUserContactDetails(),
+            "No longer required"
+        );
+
+        result.IsSuccess.Should().BeFalse();
+    }
+
     // --- NotifySiteAddedAsync ---
 
     [Fact]
