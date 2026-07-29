@@ -50,8 +50,18 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddHttpContextAccessor();
     builder.Host.UseSerilog(CdpLogging.Configuration);
 
-    // Default HTTP Client
-    builder.Services.AddHttpClient("DefaultClient").AddHeaderPropagation();
+    // Default HTTP Client. Used (among other things) for the OJ BE -> ManagementBe submit call
+    // (HttpCaseWorkingApiAdapter.SubmitApplicationAsync). Without an explicit Timeout this
+    // defaults to .NET's 100s, which can leave OJ BE still waiting long after OJ FE's own
+    // ~20s submit-call budget has already given up, producing a false-failure page for the
+    // operator (RA-311). 15s keeps this comfortably under that budget with margin; it is a
+    // principled starting point, not measured CM BE latency.
+    builder
+        .Services.AddHttpClient(
+            "DefaultClient",
+            client => client.Timeout = TimeSpan.FromSeconds(15)
+        )
+        .AddHeaderPropagation();
 
     // Proxy HTTP Client
     builder.Services.AddTransient<ProxyHttpMessageHandler>();

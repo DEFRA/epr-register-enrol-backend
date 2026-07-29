@@ -64,6 +64,24 @@ public class HttpCaseWorkingApiAdapter(
         {
             response = await client.SendAsync(request, cancellationToken);
         }
+        // The "DefaultClient" HttpClient carries an explicit 15s Timeout (Program.cs) so this
+        // call fails fast rather than hanging up to .NET's 100s default. HttpClient reports its
+        // own timeout as a TaskCanceledException indistinguishable by type from a caller-driven
+        // cancellation — the `when` clause is what tells them apart (mirrors ReExClient's same
+        // distinction). Surfaced as a dedicated exception type so the Submit endpoint can return
+        // a clear, distinguishable response instead of a generic unhandled-exception 500 (RA-311).
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogError(
+                ex,
+                "Timed out waiting for ManagementBe at {Endpoint} (client timeout exceeded)",
+                endpoint
+            );
+            throw new CaseWorkingApiTimeoutException(
+                $"Timed out waiting for ManagementBe at {endpoint}.",
+                ex
+            );
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);

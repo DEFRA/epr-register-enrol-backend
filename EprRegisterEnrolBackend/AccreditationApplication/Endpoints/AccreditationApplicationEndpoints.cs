@@ -944,10 +944,28 @@ public static class AccreditationApplicationEndpoints
         }
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        var submissionResult = await caseWorkingAdapter.SubmitApplicationAsync(
-            application,
-            cancellationToken
-        );
+        CaseWorkingSubmissionResult submissionResult;
+        try
+        {
+            submissionResult = await caseWorkingAdapter.SubmitApplicationAsync(
+                application,
+                cancellationToken
+            );
+        }
+        catch (CaseWorkingApiTimeoutException)
+        {
+            // OJ FE's apiClient gives the whole submit POST a ~5s budget; without this, the
+            // caller would instead see a generic 500 from ExceptionLoggingHandler only once
+            // the "DefaultClient" HttpClient's own 15s Timeout (Program.cs) finally elapses,
+            // long after OJ FE has already given up (RA-311). 504 + a distinct title lets OJ
+            // FE's error handling distinguish "downstream timed out, maybe retry" from a
+            // generic server error.
+            return Results.Problem(
+                statusCode: StatusCodes.Status504GatewayTimeout,
+                title: "Case working service timed out",
+                detail: "The case working service did not respond in time. Please try again."
+            );
+        }
         application.ApplicationReference = submissionResult.ApplicationReference;
         application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
@@ -1057,30 +1075,80 @@ public static class AccreditationApplicationEndpoints
         Guid workItemId,
         QueryFromCaseManagementRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<QueryFromCaseManagementRequest> validator
+        IValidator<QueryFromCaseManagementRequest> validator,
+        HttpContext httpContext,
+        ILoggerFactory loggerFactory
     )
     {
+        var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+        // CM BE's push hook sends this on every request for cross-service tracing (RA-311).
+        // Purely a diagnostic aid — absence must never fail the request.
+        var correlationId = httpContext.Request.Headers.TryGetValue(
+            "X-Correlation-Id",
+            out var correlationValues
+        )
+            ? correlationValues.ToString()
+            : null;
+
+        logger.LogInformation(
+            "QueryFromCaseManagement request received for workItemId={WorkItemId} correlationId={CorrelationId}",
+            workItemId,
+            correlationId ?? "(absent)"
+        );
+
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
+        {
+            logger.LogWarning(
+                "QueryFromCaseManagement validation failed for workItemId={WorkItemId} correlationId={CorrelationId}: {Errors}",
+                workItemId,
+                correlationId ?? "(absent)",
+                string.Join("; ", validation.Errors.Select(e => e.ErrorMessage))
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
         if (application is null)
+        {
+            logger.LogWarning(
+                "QueryFromCaseManagement: no application found for workItemId={WorkItemId} correlationId={CorrelationId}",
+                workItemId,
+                correlationId ?? "(absent)"
+            );
             return Results.NotFound();
+        }
 
         // A second query while one is already open is rejected rather than merged into the
         // existing QueriedSectionKeys (RA-311 §3) — the operator must resubmit the open query
         // before CM can raise another.
         if (application.ApplicationStatus == ApplicationStatus.Queried)
+        {
+            logger.LogWarning(
+                "QueryFromCaseManagement: a query is already open for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
+                workItemId,
+                application.Id,
+                correlationId ?? "(absent)"
+            );
             return Results.Conflict("A query is already open for this application.");
+        }
 
         if (
             application.ApplicationStatus
             is not (ApplicationStatus.Submitted or ApplicationStatus.Updated)
         )
+        {
+            logger.LogWarning(
+                "QueryFromCaseManagement: application status {Status} is not valid to raise a query for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
+                application.ApplicationStatus,
+                workItemId,
+                application.Id,
+                correlationId ?? "(absent)"
+            );
             return Results.Conflict(
                 "Application must be in 'Submitted' or 'Updated' status to raise a query."
             );
+        }
 
         if (
             !application.IsExporter
@@ -1088,9 +1156,16 @@ public static class AccreditationApplicationEndpoints
                 AccreditationApplicationSections.ExporterOnlyCmSectionKeys.Contains
             )
         )
+        {
+            logger.LogWarning(
+                "QueryFromCaseManagement: exporter-only section keys rejected for non-exporter applicationId={ApplicationId} correlationId={CorrelationId}",
+                application.Id,
+                correlationId ?? "(absent)"
+            );
             return Results.BadRequest(
                 "BES evidence / overseas sites section keys are not valid for non-exporter applications."
             );
+        }
 
         // Every key is already known-valid — the validator above rejects anything outside the
         // six-key set (AllCmSectionKeys), which is exactly what TryMapCmKeyToSection recognises.
@@ -1109,6 +1184,8 @@ public static class AccreditationApplicationEndpoints
                 SectionStatus.Queried
             );
 
+        // Note: QueryNote is user/CM-supplied free text and is intentionally never interpolated
+        // into a log message (RA-311 security note) — only structured, server-known values are.
         application.Query ??= new AccreditationApplicationQuery();
         application.Query.QueryNote = request.QueryNote;
         application.Query.QueriedSectionKeys = request.SectionKeys;
@@ -1117,9 +1194,24 @@ public static class AccreditationApplicationEndpoints
         application.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to record query from case management.")
-            : Results.Ok(updated);
+        if (updated is null)
+        {
+            logger.LogError(
+                "QueryFromCaseManagement: failed to persist query for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
+                application.Id,
+                workItemId,
+                correlationId ?? "(absent)"
+            );
+            return Results.Problem("Failed to record query from case management.");
+        }
+
+        logger.LogInformation(
+            "QueryFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
+            updated.Id,
+            workItemId,
+            correlationId ?? "(absent)"
+        );
+        return Results.Ok(updated);
     }
 
     private static async Task<IResult> AddFile(
