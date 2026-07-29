@@ -11,7 +11,7 @@ using Microsoft.Extensions.Options;
 namespace EprRegisterEnrolBackend.Auth;
 
 // Verifies inbound pushes from ManagementBe (RA-311 OBE-2), the reverse direction of
-// HttpCaseWorkingApiAdapter's own outbound signing. Recomputes the same v2 canonical-payload
+// HttpCaseWorkingApiAdapter's own outbound signing. Recomputes the same v3 canonical-payload
 // HMAC-SHA256 signature ManagementBe's CognitoClientIdAuthenticationHandler produces, with
 // clock-skew bounding and single-use nonce replay protection.
 public class CaseManagementAuthenticationHandler(
@@ -30,40 +30,72 @@ public class CaseManagementAuthenticationHandler(
     // Guards the nonce check-then-set below across concurrent requests on this instance.
     private static readonly object NonceLock = new();
 
+    // Header the CM BE push hook sends on every request for cross-service tracing (RA-311).
+    // Purely a diagnostic aid: absence must never fail the request.
+    private const string CorrelationIdHeaderName = "X-Correlation-Id";
+
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var config = authConfig.Value;
+        var correlationId = GetCorrelationId();
+
+        // Centralises failure logging so every Fail() return below is logged the same way,
+        // without repeating the log call at each of the many early-return sites. Never logs
+        // the shared secret, computed signature, or nonce — outcomes only (RA-311 security note).
+        AuthenticateResult Fail(string reason)
+        {
+            Logger.LogWarning(
+                "CaseManagement auth failed: {Reason} correlationId={CorrelationId}",
+                reason,
+                correlationId ?? "(absent)"
+            );
+            return AuthenticateResult.Fail(reason);
+        }
 
         // Fail closed everywhere except Development — mirrors the outbound adapter's own
         // dev-mode bypass when CaseWorkingApiConfig.SharedSecret is empty.
         if (string.IsNullOrEmpty(config.SharedSecret))
         {
             if (!environment.IsDevelopment())
+            {
+                Logger.LogError(
+                    "CaseManagement auth misconfigured: shared secret is not configured in environment '{Environment}'. correlationId={CorrelationId}",
+                    environment.EnvironmentName,
+                    correlationId ?? "(absent)"
+                );
                 return Task.FromResult(
                     AuthenticateResult.Fail("CaseManagement shared secret is not configured.")
                 );
+            }
 
             var devPrincipal = new ClaimsPrincipal(new ClaimsIdentity(SchemeName));
+            Logger.LogInformation(
+                "CaseManagement auth succeeded (development header-trust bypass) correlationId={CorrelationId}",
+                correlationId ?? "(absent)"
+            );
             return Task.FromResult(
                 AuthenticateResult.Success(new AuthenticationTicket(devPrincipal, SchemeName))
             );
         }
 
+        Logger.LogInformation(
+            "CaseManagement auth request received correlationId={CorrelationId}",
+            correlationId ?? "(absent)"
+        );
+
         if (!Request.Headers.TryGetValue("x-cdp-cognito-client-id", out var clientIdValues))
-            return Task.FromResult(
-                AuthenticateResult.Fail("Missing x-cdp-cognito-client-id header.")
-            );
+            return Task.FromResult(Fail("Missing x-cdp-cognito-client-id header."));
 
         var clientId = clientIdValues.ToString();
         if (!string.Equals(clientId, config.ExpectedCognitoClientId, StringComparison.Ordinal))
-            return Task.FromResult(AuthenticateResult.Fail("Unrecognised x-cdp-cognito-client-id."));
+            return Task.FromResult(Fail("Unrecognised x-cdp-cognito-client-id."));
 
         if (!Request.Headers.TryGetValue("x-cdp-auth-signature", out var signatureValues))
-            return Task.FromResult(AuthenticateResult.Fail("Missing x-cdp-auth-signature header."));
+            return Task.FromResult(Fail("Missing x-cdp-auth-signature header."));
         if (!Request.Headers.TryGetValue("x-cdp-auth-timestamp", out var timestampValues))
-            return Task.FromResult(AuthenticateResult.Fail("Missing x-cdp-auth-timestamp header."));
+            return Task.FromResult(Fail("Missing x-cdp-auth-timestamp header."));
         if (!Request.Headers.TryGetValue("x-cdp-auth-nonce", out var nonceValues))
-            return Task.FromResult(AuthenticateResult.Fail("Missing x-cdp-auth-nonce header."));
+            return Task.FromResult(Fail("Missing x-cdp-auth-nonce header."));
 
         var signature = signatureValues.ToString();
         var timestamp = timestampValues.ToString();
@@ -83,11 +115,11 @@ public class CaseManagementAuthenticationHandler(
                 out var requestTime
             )
         )
-            return Task.FromResult(AuthenticateResult.Fail("Invalid x-cdp-auth-timestamp header."));
+            return Task.FromResult(Fail("Invalid x-cdp-auth-timestamp header."));
 
         if ((DateTime.UtcNow - requestTime).Duration() > ClockSkew)
             return Task.FromResult(
-                AuthenticateResult.Fail("Request timestamp is outside the allowed clock-skew window.")
+                Fail("Request timestamp is outside the allowed clock-skew window.")
             );
 
         var expectedSignature = ComputeSignature(
@@ -95,7 +127,6 @@ public class CaseManagementAuthenticationHandler(
             clientId,
             userId,
             userName,
-            null,
             timestamp,
             nonce
         );
@@ -104,7 +135,7 @@ public class CaseManagementAuthenticationHandler(
             Encoding.UTF8.GetBytes(expectedSignature)
         );
         if (!signatureValid)
-            return Task.FromResult(AuthenticateResult.Fail("Invalid signature."));
+            return Task.FromResult(Fail("Invalid signature."));
 
         // TryGetValue + Set is check-then-act; without the lock, two requests racing on the
         // same nonce could both observe "not present" and both proceed, defeating single-use
@@ -114,7 +145,7 @@ public class CaseManagementAuthenticationHandler(
         lock (NonceLock)
         {
             if (nonceCache.TryGetValue(nonceCacheKey, out _))
-                return Task.FromResult(AuthenticateResult.Fail("Nonce has already been used."));
+                return Task.FromResult(Fail("Nonce has already been used."));
             nonceCache.Set(nonceCacheKey, true, ClockSkew);
         }
 
@@ -125,12 +156,22 @@ public class CaseManagementAuthenticationHandler(
             claims.Add(new Claim("cdp_user_name", userName));
 
         var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, SchemeName));
+        Logger.LogInformation(
+            "CaseManagement auth succeeded for clientId={ClientId} correlationId={CorrelationId}",
+            clientId,
+            correlationId ?? "(absent)"
+        );
         return Task.FromResult(
             AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName))
         );
     }
 
-    // Verification-side counterpart of HttpCaseWorkingApiAdapter.ComputeSignature (v2 canonical
+    private string? GetCorrelationId() =>
+        Request.Headers.TryGetValue(CorrelationIdHeaderName, out var values)
+            ? values.ToString()
+            : null;
+
+    // Verification-side counterpart of HttpCaseWorkingApiAdapter.ComputeSignature (v3 canonical
     // payload) — the reverse direction of the same scheme ManagementBe's
     // CognitoClientIdAuthenticationHandler uses. Must stay in sync — any change is breaking.
     internal static string ComputeSignature(
@@ -138,18 +179,16 @@ public class CaseManagementAuthenticationHandler(
         string clientId,
         string? userId,
         string? userName,
-        string? userRoles,
         string timestamp,
         string nonce
     )
     {
         var payload = string.Join(
             '\n',
-            "v2",
+            "v3",
             clientId,
             userId ?? string.Empty,
             userName ?? string.Empty,
-            userRoles ?? string.Empty,
             timestamp,
             nonce
         );
