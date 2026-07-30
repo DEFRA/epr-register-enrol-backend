@@ -142,6 +142,57 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
+    public async Task SubmitApplicationAsync_ClientTimeout_ThrowsCaseWorkingApiTimeoutException()
+    {
+        // Simulates the "DefaultClient" HttpClient.Timeout (Program.cs, 15s) elapsing: HttpClient
+        // surfaces this as a TaskCanceledException that is NOT attributable to the caller's own
+        // cancellationToken (which stays uncancelled here). RA-311 fix 3 requires this to become
+        // a clean, distinguishable error rather than propagating an unhandled/generic exception.
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, CognitoClientId = TestClientId }
+        );
+        var handler = new TimeoutHttpMessageHandler();
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication(), CancellationToken.None);
+
+        await act.Should().ThrowAsync<CaseWorkingApiTimeoutException>();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_CallerCancellation_DoesNotThrowTimeoutException()
+    {
+        // Distinguishes "the client's own Timeout elapsed" from "the caller cancelled us" — only
+        // the former should be reported as CaseWorkingApiTimeoutException. Both surface as
+        // TaskCanceledException from HttpClient, so the adapter must tell them apart via the
+        // supplied CancellationToken's own IsCancellationRequested state.
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, CognitoClientId = TestClientId }
+        );
+        var handler = new TimeoutHttpMessageHandler();
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication(), cts.Token);
+
+        await act.Should().ThrowAsync<TaskCanceledException>();
+    }
+
+    [Fact]
     public async Task SubmitApplicationAsync_ResponseMissingApplicationReference_ThrowsHttpRequestException()
     {
         var config = Options.Create(
@@ -1151,6 +1202,23 @@ public class HttpCaseWorkingApiAdapterTests
         )
         {
             throw new HttpRequestException("Simulated network failure");
+        }
+    }
+
+    // Simulates HttpClient.Timeout elapsing: real HttpClient reports this as a
+    // TaskCanceledException whose inner exception is a TimeoutException, distinct in shape from
+    // a plain caller-driven OperationCanceledException.
+    internal class TimeoutHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            throw new TaskCanceledException(
+                "The request was canceled due to the configured HttpClient.Timeout of 15 seconds elapsing.",
+                new TimeoutException()
+            );
         }
     }
 
