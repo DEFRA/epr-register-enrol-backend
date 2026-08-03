@@ -469,12 +469,7 @@ public static class AccreditationApplicationEndpoints
         if (request.Sites != null)
             application.OverseasSites.Sites = request.Sites;
 
-        if (application.OverseasSites.SectionStatus != SectionStatus.Queried)
-            application.OverseasSites.SectionStatus = application.OverseasSites.Sites.Any(s =>
-                s.Selected
-            )
-                ? SectionStatus.Completed
-                : SectionStatus.NotStarted;
+        RecomputeOverseasSitesSectionStatus(application.OverseasSites);
 
         application.DateLastEdited = DateTime.UtcNow;
 
