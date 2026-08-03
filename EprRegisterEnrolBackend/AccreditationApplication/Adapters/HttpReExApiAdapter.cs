@@ -287,38 +287,6 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         );
     }
 
-    public async Task<ReExResult<bool>> WriteApprovedAccreditationAsync(
-        ApprovedAccreditationDto accreditation,
-        CancellationToken cancellationToken = default
-    )
-    {
-        var payload = new ReExWriteAccreditationPayload
-        {
-            ApplicationId = accreditation.ApplicationId,
-            OrganisationId = accreditation.OrganisationId,
-            MaterialType = accreditation.MaterialType.ToString(),
-            Year = accreditation.Year,
-            SiteId = accreditation.SiteId,
-            ApplicationReference = accreditation.ApplicationReference,
-        };
-
-        var result = await reExClient.WriteAccreditationAsync(
-            accreditation.OrganisationId,
-            payload,
-            cancellationToken
-        );
-
-        if (!result.IsSuccess)
-            logger.LogError(
-                "Failed to write approved accreditation to ReEx for org={OrganisationId} ref={ApplicationReference}: {Error}",
-                accreditation.OrganisationId,
-                accreditation.ApplicationReference,
-                result.Error?.Message
-            );
-
-        return result;
-    }
-
     private static OverseasSiteModel MapOverseasSite(string key, OverseasSiteDto dto) =>
         new()
         {

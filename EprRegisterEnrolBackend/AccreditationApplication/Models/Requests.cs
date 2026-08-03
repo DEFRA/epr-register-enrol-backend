@@ -118,6 +118,17 @@ public class QueryFromCaseManagementRequest
     public List<string> SectionKeys { get; set; } = [];
 }
 
+// Pushed by ManagementBe on every generic work-item transition (RA-368) — the OJ-facing
+// projection of CM's progress. ToStateId is CM's raw, stable wire-contract state id.
+public class StatusChangedFromCaseManagementRequest
+{
+    public required string ToStateId { get; set; }
+    public string? ToStateDisplayName { get; set; }
+    public required string ActionId { get; set; }
+    public string? ActionDisplayName { get; set; }
+    public DateTime OccurredAt { get; set; }
+}
+
 // Submitter contact details captured on the query-declaration page. No completeness validation —
 // explicit in the ticket (RA-311 §6).
 public class ResubmitRequest

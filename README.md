@@ -105,8 +105,7 @@ Base path: `api/v1/accreditation-applications/{organisationId}`
 | `POST`   | `/{organisationId}/{applicationId}/files`          | Add a file to the sampling plan                                                   |
 | `DELETE` | `/{organisationId}/{applicationId}/files/{fileId}` | Remove a file from the sampling plan                                              |
 | `POST`   | `/{organisationId}/{applicationId}/submit`         | Submit the application (requires all sections `Completed`)                        |
-| `POST`   | `/{organisationId}/{applicationId}/approve`        | Approve a submitted application (caseworker)                                      |
-| `POST`   | `/{organisationId}/{applicationId}/reject`         | Reject a submitted application (caseworker)                                       |
+| `POST`   | `/case-management/{workItemId}/status`             | Push a CM work-item status change onto `ApplicationStatus` (CM caller)            |
 
 #### Seed request body
 

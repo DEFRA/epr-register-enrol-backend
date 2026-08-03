@@ -12,11 +12,6 @@ public interface IReExApiAdapter
         int year
     );
 
-    Task<ReExResult<bool>> WriteApprovedAccreditationAsync(
-        ApprovedAccreditationDto accreditation,
-        CancellationToken cancellationToken = default
-    );
-
     Task<ReExResult<LinkedDefraOrganisationResult>> GetLinkedDefraOrganisationAsync(
         string organisationId,
         CancellationToken cancellationToken = default
@@ -64,16 +59,4 @@ public class ReExBusinessPlanDto
     public int? NewMarketsPercent { get; set; }
     public int? NewUsesPercent { get; set; }
     public int? OtherPercent { get; set; }
-}
-
-public class ApprovedAccreditationDto
-{
-    public required string ApplicationId { get; set; }
-    public required string OrganisationId { get; set; }
-    public required MaterialType MaterialType { get; set; }
-    public required int Year { get; set; }
-    public string? SiteId { get; set; }
-    public required string ApplicationReference { get; set; }
-    public required AccreditationApplicationPrns Prns { get; set; }
-    public required AccreditationApplicationBusinessPlan BusinessPlan { get; set; }
 }
