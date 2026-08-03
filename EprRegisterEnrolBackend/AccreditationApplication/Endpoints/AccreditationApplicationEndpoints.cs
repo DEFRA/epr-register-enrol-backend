@@ -28,6 +28,14 @@ public static class AccreditationApplicationEndpoints
         group.MapPatch("{organisationId}/{applicationId}/overseas-sites", PatchOverseasSites);
         group.MapPost("{organisationId}/{applicationId}/overseas-sites", AddOverseasSite);
         group.MapPost(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/promote",
+            PromoteOverseasSite
+        );
+        group.MapPost(
+            "{organisationId}/{applicationId}/overseas-sites/{siteId}/revert",
+            RevertOverseasSite
+        );
+        group.MapPost(
             "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-site",
             AddInterimSite
         );
@@ -600,6 +608,199 @@ public static class AccreditationApplicationEndpoints
                 maxSiteId = site.InterimSite.SiteId;
         }
         return maxSiteId + 1;
+    }
+
+    // Shared by PatchOverseasSites/PromoteOverseasSite/RevertOverseasSite so the three don't
+    // each duplicate the Queried guard.
+    private static void RecomputeOverseasSitesSectionStatus(
+        AccreditationApplicationOverseasSites overseasSites
+    )
+    {
+        if (overseasSites.SectionStatus == SectionStatus.Queried)
+            return;
+        overseasSites.SectionStatus = overseasSites.Sites.Any(s => s.Selected)
+            ? SectionStatus.Completed
+            : SectionStatus.NotStarted;
+    }
+
+    private static void ApplyPromotedFields(
+        OverseasSiteModel site,
+        PromoteOverseasSiteRequest request
+    )
+    {
+        site.SiteName = request.SiteName;
+        site.AddressLine1 = request.AddressLine1;
+        site.AddressLine2 = request.AddressLine2;
+        site.TownOrCity = request.TownOrCity;
+        site.Country = request.Country;
+        site.SiteAddress = string.Join(
+            ", ",
+            new[] { request.AddressLine1, request.TownOrCity, request.Country }.Where(s =>
+                !string.IsNullOrWhiteSpace(s)
+            )
+        );
+        site.Coordinates = request.Coordinates;
+        site.ContactName = request.ContactName;
+        site.ContactEmail = request.ContactEmail;
+        site.ContactPhone = request.ContactPhone;
+        site.OperationCode = request.OperationCode;
+        site.Code1 = request.Code1;
+        site.Code2 = request.Code2;
+        site.Code3 = request.Code3;
+        site.RepatriatedLoads = request.RepatriatedLoads;
+        site.ConditionsOfExport = request.ConditionsOfExport;
+        site.IsEu = CountryClassifications.IsEu(request.Country);
+        site.IsOecd = CountryClassifications.IsOecd(request.Country);
+    }
+
+    private static void RestoreSnapshotFields(OverseasSiteModel site, OverseasSiteModel snapshot)
+    {
+        site.SiteName = snapshot.SiteName;
+        site.SiteAddress = snapshot.SiteAddress;
+        site.AddressLine1 = snapshot.AddressLine1;
+        site.AddressLine2 = snapshot.AddressLine2;
+        site.TownOrCity = snapshot.TownOrCity;
+        site.Country = snapshot.Country;
+        site.Coordinates = snapshot.Coordinates;
+        site.ContactName = snapshot.ContactName;
+        site.ContactEmail = snapshot.ContactEmail;
+        site.ContactPhone = snapshot.ContactPhone;
+        site.OperationCode = snapshot.OperationCode;
+        site.Code1 = snapshot.Code1;
+        site.Code2 = snapshot.Code2;
+        site.Code3 = snapshot.Code3;
+        site.RepatriatedLoads = snapshot.RepatriatedLoads;
+        site.ConditionsOfExport = snapshot.ConditionsOfExport;
+        site.IsEu = snapshot.IsEu;
+        site.IsOecd = snapshot.IsOecd;
+    }
+
+    private static async Task<IResult> PromoteOverseasSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PromoteOverseasSiteRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PromoteOverseasSiteRequest> validator
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        // Snapshot current fields (undo target) before overwriting — never nest a snapshot's
+        // own PreviousSites.
+        site.PreviousSites.Add(
+            new OverseasSiteModel
+            {
+                SiteId = site.SiteId,
+                OrsId = site.OrsId,
+                SiteName = site.SiteName,
+                SiteAddress = site.SiteAddress,
+                AddressLine1 = site.AddressLine1,
+                AddressLine2 = site.AddressLine2,
+                TownOrCity = site.TownOrCity,
+                Country = site.Country,
+                Coordinates = site.Coordinates,
+                ContactName = site.ContactName,
+                ContactEmail = site.ContactEmail,
+                ContactPhone = site.ContactPhone,
+                OperationCode = site.OperationCode,
+                Code1 = site.Code1,
+                Code2 = site.Code2,
+                Code3 = site.Code3,
+                RepatriatedLoads = site.RepatriatedLoads,
+                ConditionsOfExport = site.ConditionsOfExport,
+                IsEu = site.IsEu,
+                IsOecd = site.IsOecd,
+                Selected = site.Selected,
+                IsNewSite = site.IsNewSite,
+                RegisteredNowAccredited = site.RegisteredNowAccredited,
+            }
+        );
+
+        ApplyPromotedFields(site, request);
+        site.Selected = true;
+        site.RegisteredNowAccredited = true;
+
+        RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
+        application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to promote overseas site.")
+            : Results.Ok(site);
+    }
+
+    private static async Task<IResult> RevertOverseasSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfWithdrawn(application) is { } conflict)
+            return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        if (!site.RegisteredNowAccredited || site.PreviousSites.Count == 0)
+            return Results.Conflict(
+                "This site has not been promoted from a registered site and cannot be reverted."
+            );
+
+        var snapshot = site.PreviousSites[^1];
+        site.PreviousSites.RemoveAt(site.PreviousSites.Count - 1);
+
+        RestoreSnapshotFields(site, snapshot);
+        site.Selected = false;
+        site.RegisteredNowAccredited = false;
+
+        RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to revert overseas site.")
+            : Results.Ok(site);
     }
 
     private static async Task<IResult> AddInterimSite(
