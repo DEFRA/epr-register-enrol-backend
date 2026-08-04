@@ -233,6 +233,8 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 RegistrationReference = registration.RegistrationNumber,
                 SiteAddress = siteAddress,
                 IsExporter = isExporter,
+                CompanyRegisterAddressPostcode = org.CompanyDetails?.Address?.Postcode,
+                WasteProcessingType = isExporter ? "exporter" : "reprocessor",
                 OverseasSites = overseasSites,
                 Prns = new ReExPrnsDto
                 {

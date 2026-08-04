@@ -65,6 +65,40 @@ public class HttpReExApiAdapterTests
     }
 
     [Fact]
+    public async Task GetAccreditationAsync_ReprocessorRegistration_MapsWasteProcessingTypeAndPostcode()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.WasteProcessingType.Should().Be("reprocessor");
+        result.Value!.CompanyRegisterAddressPostcode.Should().Be("AB1 2CD");
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsWasteProcessingTypeAndPostcode()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.WasteProcessingType.Should().Be("exporter");
+        result.Value!.CompanyRegisterAddressPostcode.Should().Be("AB1 2CD");
+    }
+
+    [Fact]
     public async Task GetAccreditationAsync_ExporterRegistration_MapsSeededSitesWithIsNewSiteFalse()
     {
         const string overseasSitesJson = """

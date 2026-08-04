@@ -257,6 +257,8 @@ public class AccreditationApplicationEndpointsTests
                             RegistrationReference = "REP-001",
                             SiteAddress = "1 Factory Lane, Manchester, M1 1AA",
                             IsExporter = false,
+                            CompanyRegisterAddressPostcode = "EC1A 1BB",
+                            WasteProcessingType = "reprocessor",
                             OverseasSites = [],
                         },
                         200
@@ -278,6 +280,8 @@ public class AccreditationApplicationEndpointsTests
         body!.OrganisationName.Should().Be("Acme Reprocessing Ltd");
         body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
         body.RegistrationReference.Should().Be("REP-001");
+        body.CompanyRegisterAddressPostcode.Should().Be("EC1A 1BB");
+        body.WasteProcessingType.Should().Be("reprocessor");
     }
 
     [Fact]
