@@ -62,10 +62,15 @@ public static class AccreditationApplicationEndpoints
                     .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
+        group
+            .MapPost("case-management/{workItemId}/status", StatusChangedFromCaseManagement)
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
         group.MapPost("{organisationId}/{applicationId}/files", AddFile);
         group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile);
-        group.MapPost("{organisationId}/{applicationId}/approve", Approve);
-        group.MapPost("{organisationId}/{applicationId}/reject", Reject);
         group.MapPost("{organisationId}/{applicationId}/files/initiate", InitiateUpload);
         group.MapPost(
             "{organisationId}/{applicationId}/files/bes-evidence/initiate",
@@ -1260,6 +1265,9 @@ public static class AccreditationApplicationEndpoints
 
         application.ApplicationStatus = ApplicationStatus.Updated;
         application.DateLastEdited = versionedAt;
+        // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
+        // single CaseManagementStatusUpdatedAt orders every CM-driven status write, resubmit or not.
+        application.CaseManagementStatusUpdatedAt = versionedAt;
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
@@ -1331,7 +1339,11 @@ public static class AccreditationApplicationEndpoints
 
         if (
             application.ApplicationStatus
-            is not (ApplicationStatus.Submitted or ApplicationStatus.Updated)
+            is not (
+                ApplicationStatus.Submitted
+                or ApplicationStatus.DulyMade
+                or ApplicationStatus.Updated
+            )
         )
         {
             logger.LogWarning(
@@ -1342,7 +1354,7 @@ public static class AccreditationApplicationEndpoints
                 correlationId ?? "(absent)"
             );
             return Results.Conflict(
-                "Application must be in 'Submitted' or 'Updated' status to raise a query."
+                "Application must be in 'Submitted', 'DulyMade' or 'Updated' status to raise a query."
             );
         }
 
@@ -1386,8 +1398,12 @@ public static class AccreditationApplicationEndpoints
         application.Query.QueryNote = request.QueryNote;
         application.Query.QueriedSectionKeys = request.SectionKeys;
 
+        var queriedAt = DateTime.UtcNow;
         application.ApplicationStatus = ApplicationStatus.Queried;
-        application.DateLastEdited = DateTime.UtcNow;
+        application.DateLastEdited = queriedAt;
+        // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
+        // single CaseManagementStatusUpdatedAt orders every CM-driven status write, query or not.
+        application.CaseManagementStatusUpdatedAt = queriedAt;
 
         var updated = await persistence.UpdateAsync(application);
         if (updated is null)
@@ -1483,88 +1499,163 @@ public static class AccreditationApplicationEndpoints
         return updated is null ? Results.Problem("Failed to delete file.") : Results.Ok();
     }
 
-    private static async Task<IResult> Approve(
-        string organisationId,
-        string applicationId,
-        IAccreditationApplicationPersistence persistence,
-        IReExApiAdapter reExAdapter,
-        CancellationToken cancellationToken
-    )
-    {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-
-        if (application.ApplicationStatus == ApplicationStatus.Approved)
-            return Results.Ok(application);
-
-        if (
-            application.ApplicationStatus
-            is not (ApplicationStatus.Submitted or ApplicationStatus.Updated)
-        )
-            return Results.Conflict("Only submitted applications can be approved.");
-
-        var approvedDto = new ApprovedAccreditationDto
+    // Raw CM state id -> the ApplicationStatus it projects onto in OJ (RA-368 §4.3). States with
+    // no entry (assessment-in-progress, awaiting-decision, or anything CM adds in future) are a
+    // deliberate no-op for ApplicationStatus — the push still updates CaseManagementStatusUpdatedAt
+    // for ordering purposes. "queried"/"withdrawn" are never sent here: query keeps its own richer
+    // /query endpoint, and withdrawal is entirely out of scope for this plan (§4.1, §4.5).
+    private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(
+        string toStateId
+    ) =>
+        toStateId switch
         {
-            ApplicationId = applicationId,
-            OrganisationId = organisationId,
-            MaterialType = application.MaterialType,
-            Year = application.Year,
-            SiteId = application.RegistrationId,
-            ApplicationReference = application.ApplicationReference ?? string.Empty,
-            Prns = application.Prns,
-            BusinessPlan = application.BusinessPlan,
+            "submitted" => ApplicationStatus.Submitted,
+            "duly-made" => ApplicationStatus.DulyMade,
+            "updated" => ApplicationStatus.Updated,
+            "approved" => ApplicationStatus.Approved,
+            "rejected" => ApplicationStatus.Rejected,
+            _ => null,
         };
 
-        // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
-        var writeResult = await reExAdapter.WriteApprovedAccreditationAsync(
-            approvedDto,
-            cancellationToken
-        );
-        if (!writeResult.IsSuccess)
-            return Results.Problem(
-                statusCode: 502,
-                detail: "Failed to write approved accreditation to ReEx."
-            );
-
-        // TODO: Write approved data to org document's accreditations array once
-        // IOrganisationPersistence.UpsertAccreditationAsync is implemented (deferred from RA-101).
-
-        application.ApplicationStatus = ApplicationStatus.Approved;
-        application.DateLastEdited = DateTime.UtcNow;
-
-        var updated = await persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to approve accreditation application.")
-            : Results.Ok(updated);
-    }
-
-    private static async Task<IResult> Reject(
-        string organisationId,
-        string applicationId,
-        IAccreditationApplicationPersistence persistence
+    private static async Task<IResult> StatusChangedFromCaseManagement(
+        Guid workItemId,
+        StatusChangedFromCaseManagementRequest request,
+        IAccreditationApplicationPersistence persistence,
+        HttpContext httpContext,
+        ILoggerFactory loggerFactory
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-
-        if (application.ApplicationStatus == ApplicationStatus.Rejected)
-            return Results.Ok(application);
-
-        if (
-            application.ApplicationStatus
-            is not (ApplicationStatus.Submitted or ApplicationStatus.Updated)
+        var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+        // CM BE's push hook sends this on every request for cross-service tracing (RA-311/RA-368).
+        // Purely a diagnostic aid — absence must never fail the request.
+        var correlationId = httpContext.Request.Headers.TryGetValue(
+            "X-Correlation-Id",
+            out var correlationValues
         )
-            return Results.Conflict("Only submitted applications can be rejected.");
+            ? correlationValues.ToString()
+            : null;
 
-        application.ApplicationStatus = ApplicationStatus.Rejected;
+        logger.LogInformation(
+            "StatusChangedFromCaseManagement request received for workItemId={WorkItemId} toStateId={ToStateId} actionId={ActionId} correlationId={CorrelationId}",
+            workItemId,
+            request.ToStateId,
+            request.ActionId,
+            correlationId ?? "(absent)"
+        );
+
+        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        if (application is null)
+        {
+            logger.LogWarning(
+                "StatusChangedFromCaseManagement: no application found for workItemId={WorkItemId} correlationId={CorrelationId}",
+                workItemId,
+                correlationId ?? "(absent)"
+            );
+            return Results.NotFound();
+        }
+
+        // Ordering guard, not a status-precedence table (RA-368 §4.3): a push whose OccurredAt is
+        // not strictly after the last applied push is a duplicate or an out-of-order retry, so it
+        // is accepted (200) but not applied.
+        if (
+            application.CaseManagementStatusUpdatedAt is { } lastUpdated
+            && request.OccurredAt <= lastUpdated
+        )
+        {
+            logger.LogInformation(
+                "StatusChangedFromCaseManagement: out-of-order or duplicate push ignored for applicationId={ApplicationId} workItemId={WorkItemId} occurredAt={OccurredAt} lastUpdated={LastUpdated} correlationId={CorrelationId}",
+                application.Id,
+                workItemId,
+                request.OccurredAt,
+                lastUpdated,
+                correlationId ?? "(absent)"
+            );
+            return Results.Ok(application);
+        }
+
+        var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
+
+        // Terminal-status guard: once OJ has recorded a CM push as Approved, Rejected or
+        // Withdrawn, no later mapped push may move the application again — a withdrawn
+        // application re-opening as DulyMade (or an approved one flipping to Rejected) would
+        // undo the very gates the terminal statuses exist to enforce. Unmapped pushes
+        // (assessment-in-progress, awaiting-decision, ...) are exempt: they only update the
+        // ordering watermark below, never ApplicationStatus.
+        if (
+            mappedStatus is not null
+            && (
+                RejectIfWithdrawn(application) is not null
+                || application.ApplicationStatus
+                    is ApplicationStatus.Approved
+                        or ApplicationStatus.Rejected
+            )
+        )
+        {
+            logger.LogWarning(
+                "StatusChangedFromCaseManagement: application status {Status} is terminal and cannot accept toStateId={ToStateId} for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
+                application.ApplicationStatus,
+                request.ToStateId,
+                workItemId,
+                application.Id,
+                correlationId ?? "(absent)"
+            );
+            return Results.Conflict(
+                "Application is already Approved, Rejected or Withdrawn and can no longer be updated."
+            );
+        }
+
+        // Approve/reject legality: the old Approve/Reject endpoints carried this check but are
+        // deleted (RA-368 §4.5) — nothing else in the codebase still enforces it, so it is
+        // written fresh here (RA-368 §4.3).
+        if (
+            request.ToStateId is "approved" or "rejected"
+            && application.ApplicationStatus
+                is not (
+                    ApplicationStatus.Submitted
+                    or ApplicationStatus.Updated
+                    or ApplicationStatus.DulyMade
+                )
+        )
+        {
+            logger.LogWarning(
+                "StatusChangedFromCaseManagement: application status {Status} is not valid for toStateId={ToStateId} for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
+                application.ApplicationStatus,
+                request.ToStateId,
+                workItemId,
+                application.Id,
+                correlationId ?? "(absent)"
+            );
+            return Results.Conflict(
+                "Application must be in 'Submitted', 'Updated' or 'DulyMade' status to approve or reject."
+            );
+        }
+
+        if (mappedStatus is { } newStatus)
+            application.ApplicationStatus = newStatus;
+
+        application.CaseManagementStatusUpdatedAt = request.OccurredAt;
         application.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to reject accreditation application.")
-            : Results.Ok(updated);
+        if (updated is null)
+        {
+            logger.LogError(
+                "StatusChangedFromCaseManagement: failed to persist status change for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
+                application.Id,
+                workItemId,
+                correlationId ?? "(absent)"
+            );
+            return Results.Problem("Failed to record status change from case management.");
+        }
+
+        logger.LogInformation(
+            "StatusChangedFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
+            updated.Id,
+            workItemId,
+            request.ToStateId,
+            correlationId ?? "(absent)"
+        );
+        return Results.Ok(updated);
     }
 
     private static async Task<IResult> Withdraw(
@@ -1592,6 +1683,7 @@ public static class AccreditationApplicationEndpoints
             application.ApplicationStatus
             is not (
                 ApplicationStatus.Submitted
+                or ApplicationStatus.DulyMade
                 or ApplicationStatus.Queried
                 or ApplicationStatus.Updated
             )

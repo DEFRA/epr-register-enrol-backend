@@ -932,166 +932,6 @@ public class AccreditationApplicationEndpointsTests
         stored.ApplicationReference.Should().BeNull();
     }
 
-    // --- Approve ---
-
-    [Fact]
-    public async Task Approve_SetsApprovedStatusAndCallsReExAdapter()
-    {
-        Reset();
-        var app = SeedApplication(
-            status: ApplicationStatus.Submitted,
-            configure: a => a.ApplicationReference = "RA-123456789"
-        );
-        _factory
-            .MockReExAdapter.WriteApprovedAccreditationAsync(
-                Arg.Any<ApprovedAccreditationDto>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult(ReExResult<bool>.Success(true, 200)));
-
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
-            null,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-        body!.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
-        await _factory
-            .MockReExAdapter.Received(1)
-            .WriteApprovedAccreditationAsync(
-                Arg.Any<ApprovedAccreditationDto>(),
-                Arg.Any<CancellationToken>()
-            );
-    }
-
-    [Fact]
-    public async Task Approve_WhenAlreadyApproved_ReturnsIdempotentOk()
-    {
-        Reset();
-        var app = SeedApplication(status: ApplicationStatus.Approved);
-
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
-            null,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        await _factory
-            .MockReExAdapter.DidNotReceive()
-            .WriteApprovedAccreditationAsync(
-                Arg.Any<ApprovedAccreditationDto>(),
-                Arg.Any<CancellationToken>()
-            );
-    }
-
-    [Fact]
-    public async Task Approve_WhenNotSent_Returns409()
-    {
-        Reset();
-        var app = SeedApplication(status: ApplicationStatus.Started);
-
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
-            null,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-    }
-
-    [Fact]
-    public async Task Approve_WhenAdapterFails_Returns502AndApplicationRemainsSent()
-    {
-        Reset();
-        var app = SeedApplication(
-            status: ApplicationStatus.Submitted,
-            configure: a => a.ApplicationReference = "RA-123456789"
-        );
-        _factory
-            .MockReExAdapter.WriteApprovedAccreditationAsync(
-                Arg.Any<ApprovedAccreditationDto>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(
-                Task.FromResult(
-                    ReExResult<bool>.Fail(
-                        new ReExError(ReExErrorKind.ServerError, "upstream failure")
-                    )
-                )
-            );
-
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
-            null,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
-        var stored = await _factory.FakePersistence.GetByIdAsync(
-            "org-123",
-            app.Id!.Value.ToString()
-        );
-        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
-    }
-
-    // --- Reject ---
-
-    [Fact]
-    public async Task Reject_SetsRejectedStatus()
-    {
-        Reset();
-        var app = SeedApplication(status: ApplicationStatus.Submitted);
-
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",
-            null,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-        body!.ApplicationStatus.Should().Be(ApplicationStatus.Rejected);
-    }
-
-    [Fact]
-    public async Task Reject_WhenAlreadyRejected_ReturnsIdempotentOk()
-    {
-        Reset();
-        var app = SeedApplication(status: ApplicationStatus.Rejected);
-
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",
-            null,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-    }
-
-    [Fact]
-    public async Task Reject_WhenNotSent_Returns409()
-    {
-        Reset();
-        var app = SeedApplication(status: ApplicationStatus.Saved);
-
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",
-            null,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-    }
-
     // --- Withdraw ---
 
     [Fact]
@@ -3265,26 +3105,348 @@ public class AccreditationApplicationEndpointsTests
         body!.Prns.SectionStatus.Should().Be(SectionStatus.Completed);
     }
 
-    // --- Approve/Reject from Updated ---
+    // --- StatusChangedFromCaseManagement ---
 
-    [Fact]
-    public async Task Approve_WhenUpdated_Succeeds()
+    [Theory]
+    [InlineData("submitted", ApplicationStatus.Submitted)]
+    [InlineData("duly-made", ApplicationStatus.DulyMade)]
+    [InlineData("updated", ApplicationStatus.Updated)]
+    public async Task StatusChangedFromCaseManagement_MappedState_SetsApplicationStatus(
+        string toStateId,
+        ApplicationStatus expectedStatus
+    )
     {
         Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.Submitted,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = toStateId,
+            ActionId = "some-action",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(expectedStatus);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.Updated)]
+    [InlineData(ApplicationStatus.DulyMade)]
+    public async Task StatusChangedFromCaseManagement_Approved_FromLegalStatus_Succeeds(
+        ApplicationStatus fromStatus
+    )
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(status: fromStatus, configure: a => a.CaseManagementWorkItemId = workItemId);
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "approved",
+            ActionId = "approve",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
+    }
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_Rejected_FromLegalStatus_Succeeds()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.Submitted,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "rejected",
+            ActionId = "reject",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Rejected);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Saved)]
+    [InlineData(ApplicationStatus.Started)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    public async Task StatusChangedFromCaseManagement_ApproveFromIllegalStatus_Returns409(
+        ApplicationStatus status
+    )
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(status: status, configure: a => a.CaseManagementWorkItemId = workItemId);
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "approved",
+            ActionId = "approve",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_UnknownWorkItem_Returns404()
+    {
+        Reset();
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "submitted",
+            ActionId = "submit",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{Guid.NewGuid()}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_OutOfOrderDelivery_IsNoOp()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var lastUpdated = DateTime.UtcNow;
         var app = SeedApplication(
             status: ApplicationStatus.Updated,
-            configure: a => a.ApplicationReference = "RA-123456789"
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = lastUpdated;
+            }
         );
-        _factory
-            .MockReExAdapter.WriteApprovedAccreditationAsync(
-                Arg.Any<ApprovedAccreditationDto>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult(ReExResult<bool>.Success(true, 200)));
 
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/approve",
-            null,
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "duly-made",
+            ActionId = "duly-made-transition",
+            OccurredAt = lastUpdated.AddSeconds(-1),
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Updated);
+    }
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_ContinueReviewDuringDulyMaking_DowngradesFromUpdatedToSubmitted()
+    {
+        // Mirrors CM's continue-review-during-duly-making action, which can push CM (and
+        // therefore OJ) back to 'submitted' from 'updated' — ordering is timestamp-based, not
+        // state-precedence-based (RA-368 §4.3).
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.Updated,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+            }
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "submitted",
+            ActionId = "continue-review-during-duly-making",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn, "duly-made")]
+    [InlineData(ApplicationStatus.Withdrawn, "submitted")]
+    [InlineData(ApplicationStatus.Approved, "duly-made")]
+    [InlineData(ApplicationStatus.Rejected, "updated")]
+    public async Task StatusChangedFromCaseManagement_MappedPushFromTerminalStatus_Returns409AndLeavesStatusUnchanged(
+        ApplicationStatus fromStatus,
+        string toStateId
+    )
+    {
+        // A withdrawn/approved/rejected application must stay terminal even for pushes that
+        // aren't themselves "approved"/"rejected" — otherwise a duly-made push could reopen a
+        // withdrawn application's withdraw/query/approve paths (RA-368 review).
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(status: fromStatus, configure: a => a.CaseManagementWorkItemId = workItemId);
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = toStateId,
+            ActionId = "some-action",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(fromStatus);
+    }
+
+    [Theory]
+    [InlineData("assessment-in-progress")]
+    [InlineData("awaiting-decision")]
+    public async Task StatusChangedFromCaseManagement_UnmappedState_LeavesApplicationStatusUnchanged(
+        string toStateId
+    )
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.DulyMade,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = toStateId,
+            ActionId = "payment-received",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.DulyMade);
+    }
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_PushOlderThanQuery_IsIgnoredAndLeavesQueriedStatus()
+    {
+        // QueryFromCaseManagement stamps CaseManagementStatusUpdatedAt so it shares one ordering
+        // watermark with StatusChangedFromCaseManagement (RA-368 review) — a status push whose
+        // OccurredAt predates the query must not silently clobber the open Queried status.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.Submitted,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var queryRequest = new { queryNote = "note", sectionKeys = new[] { "business-plan" } };
+        var queryResponse = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            queryRequest,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        queryResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var statusRequest = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "duly-made",
+            ActionId = "duly-made-transition",
+            OccurredAt = DateTime.UtcNow.AddMinutes(-5),
+        };
+        var statusResponse = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            statusRequest,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        statusResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Queried);
+    }
+
+    // --- Widened legality gates (query/withdraw now also allow DulyMade) ---
+
+    [Fact]
+    public async Task QueryFromCaseManagement_DulyMadeStatus_Succeeds()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.DulyMade,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new { queryNote = "note", sectionKeys = new[] { "business-plan" } };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -3292,14 +3454,23 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task Reject_WhenUpdated_Succeeds()
+    public async Task Withdraw_FromDulyMade_Succeeds()
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Updated);
+        var app = SeedApplication(status: ApplicationStatus.DulyMade);
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new WithdrawResult(true)));
 
-        var response = await _client.PostAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/reject",
-            null,
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
             cancellationToken: TestContext.Current.CancellationToken
         );
 

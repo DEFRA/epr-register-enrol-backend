@@ -116,20 +116,6 @@ public class StubReExApiAdapter(
         return ReExResult<ReExAccreditationDto>.Success(fixture, 200);
     }
 
-    public Task<ReExResult<bool>> WriteApprovedAccreditationAsync(
-        ApprovedAccreditationDto accreditation,
-        CancellationToken cancellationToken = default
-    )
-    {
-        logger.LogInformation(
-            "StubReExApiAdapter.WriteApprovedAccreditationAsync called for org={OrganisationId} ref={ApplicationReference}",
-            accreditation.OrganisationId,
-            accreditation.ApplicationReference
-        );
-
-        return Task.FromResult(ReExResult<bool>.Success(true, 200));
-    }
-
     public Task<ReExResult<LinkedDefraOrganisationResult>> GetLinkedDefraOrganisationAsync(
         string organisationId,
         CancellationToken cancellationToken = default

@@ -57,6 +57,11 @@ public class AccreditationApplicationModel
 
     public DateTime? DateSent { get; set; }
 
+    // Internal ordering guard for RA-368's status-push endpoint — not displayed. A push is
+    // applied only if its OccurredAt is strictly after this value, so pushes arriving
+    // out of order (e.g. a delayed retry) can't regress the application's status.
+    public DateTime? CaseManagementStatusUpdatedAt { get; set; }
+
     public DateTime DateLastEdited { get; set; } = DateTime.UtcNow;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -94,6 +99,7 @@ public enum ApplicationStatus
     Saved,
     Started,
     Submitted,
+    DulyMade,
     Queried,
     Updated,
     Approved,

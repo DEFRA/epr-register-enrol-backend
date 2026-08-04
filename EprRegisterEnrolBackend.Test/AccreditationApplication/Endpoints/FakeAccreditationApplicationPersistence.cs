@@ -77,6 +77,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             SubmittedBy = src.SubmittedBy,
             WithdrawalReason = src.WithdrawalReason,
             DateSent = src.DateSent,
+            CaseManagementStatusUpdatedAt = src.CaseManagementStatusUpdatedAt,
             DateLastEdited = src.DateLastEdited,
             CreatedAt = src.CreatedAt,
             UpdatedAt = src.UpdatedAt,
