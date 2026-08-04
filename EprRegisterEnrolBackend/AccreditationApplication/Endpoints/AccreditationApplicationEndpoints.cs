@@ -1069,6 +1069,9 @@ public static class AccreditationApplicationEndpoints
 
         application.ApplicationStatus = ApplicationStatus.Updated;
         application.DateLastEdited = versionedAt;
+        // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
+        // single CaseManagementStatusUpdatedAt orders every CM-driven status write, resubmit or not.
+        application.CaseManagementStatusUpdatedAt = versionedAt;
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
@@ -1199,8 +1202,12 @@ public static class AccreditationApplicationEndpoints
         application.Query.QueryNote = request.QueryNote;
         application.Query.QueriedSectionKeys = request.SectionKeys;
 
+        var queriedAt = DateTime.UtcNow;
         application.ApplicationStatus = ApplicationStatus.Queried;
-        application.DateLastEdited = DateTime.UtcNow;
+        application.DateLastEdited = queriedAt;
+        // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
+        // single CaseManagementStatusUpdatedAt orders every CM-driven status write, query or not.
+        application.CaseManagementStatusUpdatedAt = queriedAt;
 
         var updated = await persistence.UpdateAsync(application);
         if (updated is null)
@@ -1370,6 +1377,37 @@ public static class AccreditationApplicationEndpoints
             return Results.Ok(application);
         }
 
+        var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
+
+        // Terminal-status guard: once OJ has recorded a CM push as Approved, Rejected or
+        // Withdrawn, no later mapped push may move the application again — a withdrawn
+        // application re-opening as DulyMade (or an approved one flipping to Rejected) would
+        // undo the very gates the terminal statuses exist to enforce. Unmapped pushes
+        // (assessment-in-progress, awaiting-decision, ...) are exempt: they only update the
+        // ordering watermark below, never ApplicationStatus.
+        if (
+            mappedStatus is not null
+            && (
+                RejectIfWithdrawn(application) is not null
+                || application.ApplicationStatus
+                    is ApplicationStatus.Approved
+                        or ApplicationStatus.Rejected
+            )
+        )
+        {
+            logger.LogWarning(
+                "StatusChangedFromCaseManagement: application status {Status} is terminal and cannot accept toStateId={ToStateId} for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
+                application.ApplicationStatus,
+                request.ToStateId,
+                workItemId,
+                application.Id,
+                correlationId ?? "(absent)"
+            );
+            return Results.Conflict(
+                "Application is already Approved, Rejected or Withdrawn and can no longer be updated."
+            );
+        }
+
         // Approve/reject legality: the old Approve/Reject endpoints carried this check but are
         // deleted (RA-368 §4.5) — nothing else in the codebase still enforces it, so it is
         // written fresh here (RA-368 §4.3).
@@ -1396,7 +1434,7 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
-        if (MapCaseManagementStateToApplicationStatus(request.ToStateId) is { } newStatus)
+        if (mappedStatus is { } newStatus)
             application.ApplicationStatus = newStatus;
 
         application.CaseManagementStatusUpdatedAt = request.OccurredAt;

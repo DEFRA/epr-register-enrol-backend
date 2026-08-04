@@ -3077,6 +3077,40 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Theory]
+    [InlineData(ApplicationStatus.Withdrawn, "duly-made")]
+    [InlineData(ApplicationStatus.Withdrawn, "submitted")]
+    [InlineData(ApplicationStatus.Approved, "duly-made")]
+    [InlineData(ApplicationStatus.Rejected, "updated")]
+    public async Task StatusChangedFromCaseManagement_MappedPushFromTerminalStatus_Returns409AndLeavesStatusUnchanged(
+        ApplicationStatus fromStatus,
+        string toStateId
+    )
+    {
+        // A withdrawn/approved/rejected application must stay terminal even for pushes that
+        // aren't themselves "approved"/"rejected" — otherwise a duly-made push could reopen a
+        // withdrawn application's withdraw/query/approve paths (RA-368 review).
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(status: fromStatus, configure: a => a.CaseManagementWorkItemId = workItemId);
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = toStateId,
+            ActionId = "some-action",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(fromStatus);
+    }
+
+    [Theory]
     [InlineData("assessment-in-progress")]
     [InlineData("awaiting-decision")]
     public async Task StatusChangedFromCaseManagement_UnmappedState_LeavesApplicationStatusUnchanged(
@@ -3108,6 +3142,44 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.ApplicationStatus.Should().Be(ApplicationStatus.DulyMade);
+    }
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_PushOlderThanQuery_IsIgnoredAndLeavesQueriedStatus()
+    {
+        // QueryFromCaseManagement stamps CaseManagementStatusUpdatedAt so it shares one ordering
+        // watermark with StatusChangedFromCaseManagement (RA-368 review) — a status push whose
+        // OccurredAt predates the query must not silently clobber the open Queried status.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.Submitted,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var queryRequest = new { queryNote = "note", sectionKeys = new[] { "business-plan" } };
+        var queryResponse = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            queryRequest,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        queryResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var statusRequest = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "duly-made",
+            ActionId = "duly-made-transition",
+            OccurredAt = DateTime.UtcNow.AddMinutes(-5),
+        };
+        var statusResponse = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            statusRequest,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        statusResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Queried);
     }
 
     // --- Widened legality gates (query/withdraw now also allow DulyMade) ---
