@@ -44,6 +44,13 @@ public class OverseasSiteModel
     public bool Selected { get; set; } = true;
     public BesEvidenceModel? BesEvidence { get; set; }
     public bool IsNewSite { get; set; } = true;
+    public bool RegisteredNowAccredited { get; set; } = false;
+
+    // Undo stack for promote/revert (RA-298/RA-300): promoting a registered site pushes its
+    // pre-promotion field values here before overwriting them; reverting pops the last entry
+    // back over the current fields. Backend-internal only — never sent to the FE.
+    [JsonIgnore]
+    public List<OverseasSiteModel> PreviousSites { get; set; } = [];
     public InterimSiteModel? InterimSite { get; set; }
 }
 

@@ -1848,6 +1848,255 @@ public class AccreditationApplicationEndpointsTests
             );
     }
 
+    // --- PromoteOverseasSite / RevertOverseasSite ---
+
+    private static PromoteOverseasSiteRequest ValidPromoteRequest() =>
+        new()
+        {
+            SiteName = "Promoted Recycling GmbH",
+            AddressLine1 = "Neue Strasse 1",
+            TownOrCity = "Munich",
+            Country = "Germany",
+            ContactName = "Greta Schmidt",
+            ContactEmail = "greta@promotedrecycling.de",
+            OperationCode = "R3",
+            Code1 = "A1181",
+            RepatriatedLoads = "Rejected loads returned within 30 days at our expense.",
+        };
+
+    private static OverseasSiteModel RegisteredOnlySite(int siteId = 900001) =>
+        new()
+        {
+            SiteId = siteId,
+            OrsId = "001",
+            SiteName = "Registered Only Site",
+            Country = "France",
+            Selected = false,
+            IsNewSite = false,
+            RegisteredNowAccredited = false,
+        };
+
+    [Fact]
+    public async Task PromoteOverseasSite_ValidRequest_OverwritesFieldsAndSetsFlags()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteId.Should().Be(900001);
+        site.OrsId.Should().Be("001");
+        site.SiteName.Should().Be("Promoted Recycling GmbH");
+        site.Selected.Should().BeTrue();
+        site.RegisteredNowAccredited.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PromoteOverseasSite_ApplicationNotFound_Returns404()
+    {
+        Reset();
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/nonexistent-id/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task PromoteOverseasSite_SiteNotFound_Returns404()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites { Sites = [] }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task PromoteOverseasSite_MissingSiteName_Returns400()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var request = ValidPromoteRequest() with { SiteName = "" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PromoteOverseasSite_WhenQueriedAndOverseasSitesSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Queried;
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [RegisteredOnlySite()],
+                };
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PromoteOverseasSite_Withdrawn_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Withdrawn,
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [RegisteredOnlySite()],
+                }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task RevertOverseasSite_ValidRequest_RestoresSnapshotAndClearsFlags()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/revert",
+            content: null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteId.Should().Be(900001);
+        site.SiteName.Should().Be("Registered Only Site");
+        site.Selected.Should().BeFalse();
+        site.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RevertOverseasSite_NotPreviouslyPromoted_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/revert",
+            content: null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task RevertOverseasSite_SiteNotFound_Returns404()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites { Sites = [] }
+        );
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/revert",
+            content: null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task RevertOverseasSite_Withdrawn_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Withdrawn,
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [RegisteredOnlySite()],
+                }
+        );
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/revert",
+            content: null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
     // --- AddInterimSite ---
 
     private static AddInterimSiteRequest ValidAddInterimSiteRequest() =>
