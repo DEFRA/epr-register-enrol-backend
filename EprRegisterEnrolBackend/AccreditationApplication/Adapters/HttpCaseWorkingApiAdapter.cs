@@ -543,6 +543,8 @@ public class HttpCaseWorkingApiAdapter(
             complianceIssuesReported = 0,
             siteAddress = application.SiteAddress,
             siteAddressPostcode = ExtractPostcode(application.SiteAddress),
+            companyRegisterAddressPostcode = application.CompanyRegisterAddressPostcode,
+            wasteProcessingType = application.WasteProcessingType,
             operatorApplicationId = application.ApplicationId,
             operatorOrganisationId = application.OrganisationId,
             operatorRegistrationId = application.RegistrationId,

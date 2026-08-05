@@ -36,6 +36,8 @@ public class StubReExApiAdapter(
         string? organisationName = null;
         string? registrationReference = null;
         string? siteAddress = null;
+        string? companyRegisterAddressPostcode = null;
+        string? wasteProcessingType = null;
         var isExporter = false;
         List<OverseasSiteModel> overseasSites = [];
 
@@ -44,15 +46,14 @@ public class StubReExApiAdapter(
             var org = await fakeOrgs.GetByOrgIdAsync(orgIdInt);
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
+            companyRegisterAddressPostcode = org?.CompanyDetails?.RegisteredAddress?.Postcode;
 
             var registration = org?.Registrations?.FirstOrDefault(r =>
                 r.Id.ToString() == registrationId
             );
+            wasteProcessingType = registration?.WasteProcessingType;
             isExporter =
-                registration?.WasteProcessingType?.Equals(
-                    "exporter",
-                    StringComparison.OrdinalIgnoreCase
-                ) == true;
+                wasteProcessingType?.Equals("exporter", StringComparison.OrdinalIgnoreCase) == true;
             siteAddress = registration?.SiteAddress is { } addr
                 ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
                 : null;
@@ -93,6 +94,8 @@ public class StubReExApiAdapter(
             RegistrationReference = registrationReference ?? "STUB-REG-001",
             SiteAddress = siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
             IsExporter = isExporter,
+            CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
+            WasteProcessingType = wasteProcessingType ?? (isExporter ? "exporter" : "reprocessor"),
             OverseasSites = overseasSites,
             Prns = new ReExPrnsDto
             {

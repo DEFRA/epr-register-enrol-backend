@@ -38,6 +38,8 @@ public class ReExAccreditationDto
     public string? RegistrationReference { get; set; }
     public string? SiteAddress { get; set; }
     public bool IsExporter { get; set; }
+    public string? CompanyRegisterAddressPostcode { get; set; }
+    public string? WasteProcessingType { get; set; }
     public List<OverseasSiteModel> OverseasSites { get; set; } = [];
 
     public ReExPrnsDto? Prns { get; set; }

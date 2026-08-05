@@ -83,6 +83,21 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
 
         var isExporter = registration is ExporterRegistrationDto;
 
+        if (isExporter && string.IsNullOrWhiteSpace(org.CompanyDetails?.Address?.Postcode))
+        {
+            logger.LogError(
+                "Exporter org={OrganisationId} has no registered-office postcode; refusing to build accreditation payload to avoid a silent regulator fallback downstream",
+                organisationId
+            );
+            return ReExResult<ReExAccreditationDto>.Fail(
+                new ReExError(
+                    ReExErrorKind.ClientError,
+                    "Exporter organisation is missing a registered-office postcode"
+                ),
+                500
+            );
+        }
+
         string? siteAddress = registration is ReprocessorRegistrationDto reprocessor
             ? FormatAddress(reprocessor.Site?.Address)
             : null;
@@ -233,6 +248,8 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 RegistrationReference = registration.RegistrationNumber,
                 SiteAddress = siteAddress,
                 IsExporter = isExporter,
+                CompanyRegisterAddressPostcode = org.CompanyDetails?.Address?.Postcode,
+                WasteProcessingType = isExporter ? "exporter" : "reprocessor",
                 OverseasSites = overseasSites,
                 Prns = new ReExPrnsDto
                 {

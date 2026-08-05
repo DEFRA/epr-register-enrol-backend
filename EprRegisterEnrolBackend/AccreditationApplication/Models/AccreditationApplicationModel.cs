@@ -26,6 +26,10 @@ public class AccreditationApplicationModel
 
     public string? SiteAddress { get; set; }
 
+    public string? CompanyRegisterAddressPostcode { get; set; }
+
+    public string? WasteProcessingType { get; set; }
+
     [BsonRepresentation(BsonType.String)]
     public required MaterialType MaterialType { get; set; }
 

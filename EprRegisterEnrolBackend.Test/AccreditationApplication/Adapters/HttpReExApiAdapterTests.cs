@@ -65,6 +65,40 @@ public class HttpReExApiAdapterTests
     }
 
     [Fact]
+    public async Task GetAccreditationAsync_ReprocessorRegistration_MapsWasteProcessingTypeAndPostcode()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.WasteProcessingType.Should().Be("reprocessor");
+        result.Value!.CompanyRegisterAddressPostcode.Should().Be("AB1 2CD");
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsWasteProcessingTypeAndPostcode()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.WasteProcessingType.Should().Be("exporter");
+        result.Value!.CompanyRegisterAddressPostcode.Should().Be("AB1 2CD");
+    }
+
+    [Fact]
     public async Task GetAccreditationAsync_ExporterRegistration_MapsSeededSitesWithIsNewSiteFalse()
     {
         const string overseasSitesJson = """
@@ -94,6 +128,41 @@ public class HttpReExApiAdapterTests
             .BeFalse(because: "RA-297: ReEx-seeded sites are the registry, not new sites");
     }
 
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_NoRegisteredOfficePostcode_FailsRatherThanSubmittingMalformedPayload()
+    {
+        var sut = BuildSut(OrganisationJsonNoCompanyPostcode);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_ReprocessorRegistration_NoRegisteredOfficePostcode_StillSucceeds()
+    {
+        var sut = BuildSut(OrganisationJsonNoCompanyPostcode);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result
+            .IsSuccess.Should()
+            .BeTrue(
+                because: "the registered-office postcode guard only applies to exporters — reprocessors derive their regulator postcode from the site address"
+            );
+    }
+
     // Realistic redacted ReEx organisation payload — companyDetails deliberately has no
     // registrationNumber key, matching the real API. Mirrors the fixture used in
     // ReExOrganisationFixtureTests.cs.
@@ -111,6 +180,114 @@ public class HttpReExApiAdapterTests
             "address": {
               "line1": "1 Example Hill",
               "postcode": "AB1 2CD",
+              "country": "UK",
+              "town": "Exampleton"
+            }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": {
+                "address": {
+                  "line1": "Reprocessor Site Road",
+                  "postcode": "HU7 7BX",
+                  "country": "UK",
+                  "town": "Exampleton"
+                },
+                "gridReference": "TQ 132 546"
+              },
+              "cbduNumber": "CBDU663848",
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            },
+            {
+              "id": "reg-exporter-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "noticeAddress": {
+                "fullAddress": "1 Example Parade, Example Town",
+                "country": "UK"
+              },
+              "cbduNumber": "CBDU506923",
+              "material": "aluminium",
+              "exportPorts": ["Southampton", "Portsmouth"],
+              "wasteProcessingType": "exporter",
+              "accreditationId": "acc-exporter-1",
+              "registrationNumber": "E25SR500020912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": {
+                "tonnageBand": "over_10000",
+                "signatories": [
+                  { "fullName": "Test Signatory", "email": "signatory@example.test", "phone": "0111 000 0002", "jobTitle": "Director" }
+                ],
+                "incomeBusinessPlan": []
+              },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            },
+            {
+              "id": "acc-exporter-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "exporter",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": {
+                "tonnageBand": "up_to_5000",
+                "signatories": [
+                  { "fullName": "Test Exporter Signatory", "email": "exporter.signatory@example.test", "phone": "1234567890", "jobTitle": "Director" }
+                ],
+                "incomeBusinessPlan": []
+              },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "E-ACC12245AL",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    // Same as OrganisationJson but companyDetails.address has no postcode key, reproducing
+    // the malformed-upstream-data shape from PR review comment
+    // DEFRA/epr-register-enrol-backend#64.
+    private const string OrganisationJsonNoCompanyPostcode = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor", "exporter"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "tradingName": "Test Recycling Solutions Ltd",
+            "address": {
+              "line1": "1 Example Hill",
               "country": "UK",
               "town": "Exampleton"
             }

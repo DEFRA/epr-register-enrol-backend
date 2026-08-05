@@ -28,6 +28,8 @@ public class HttpCaseWorkingApiAdapterTests
             MaterialType = MaterialType.Plastic,
             ApplicationStatus = ApplicationStatus.Started,
             SiteAddress = "123 High Street, London, SW1A 1AA",
+            CompanyRegisterAddressPostcode = "EC1A 1BB",
+            WasteProcessingType = "reprocessor",
             SubmittedBy = new SubmittedByModel
             {
                 FullName = "Jane Smith",
@@ -160,7 +162,8 @@ public class HttpCaseWorkingApiAdapterTests
             NullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
-        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication(), CancellationToken.None);
+        var act = () =>
+            adapter.SubmitApplicationAsync(CreateTestApplication(), CancellationToken.None);
 
         await act.Should().ThrowAsync<CaseWorkingApiTimeoutException>();
     }
@@ -276,6 +279,8 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("operatorRegistrationId").GetString().Should().Be("reg-001");
         payload.GetProperty("operatorEmail").GetString().Should().Be("jane@example.com");
         payload.GetProperty("siteAddressPostcode").GetString().Should().Be("SW1A 1AA");
+        payload.GetProperty("companyRegisterAddressPostcode").GetString().Should().Be("EC1A 1BB");
+        payload.GetProperty("wasteProcessingType").GetString().Should().Be("reprocessor");
     }
 
     [Fact]

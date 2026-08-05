@@ -146,6 +146,8 @@ public static class AccreditationApplicationEndpoints
             RegistrationId = registrationId,
             IsExporter = priorYearData.IsExporter,
             SiteAddress = priorYearData.SiteAddress,
+            CompanyRegisterAddressPostcode = priorYearData.CompanyRegisterAddressPostcode,
+            WasteProcessingType = priorYearData.WasteProcessingType,
             RegistrationReference = priorYearData.RegistrationReference,
             MaterialType = materialTypeEnum,
             ApplicationStatus = ApplicationStatus.Saved,
