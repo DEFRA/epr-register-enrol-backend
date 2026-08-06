@@ -376,6 +376,270 @@ public class AccreditationApplicationEndpointsTests
             );
     }
 
+    // --- Seed: restart after withdrawal (RA-357) ---
+
+    private void ArrangeAdapterSuccess() =>
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(MinimalAdapterSuccess()));
+
+    private async Task<List<AccreditationApplicationModel>> StoredApplications(
+        string orgId = "org-123"
+    ) => (await _factory.FakePersistence.GetByOrganisationAsync(orgId)).ToList();
+
+    private Task<HttpResponseMessage> PostSeed(int year = 2026) =>
+        _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            new SeedRequest { Year = year },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+    // `applicationId` is a computed, getter-only projection of the BSON `_id` (and `Id` itself is
+    // never serialised), so it cannot round-trip back into the model — read it from the raw JSON.
+    private static async Task<(
+        AccreditationApplicationModel Model,
+        string? ApplicationId
+    )> ReadApplication(HttpResponseMessage response)
+    {
+        var raw = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        var model = JsonSerializer.Deserialize<AccreditationApplicationModel>(raw, JsonOptions)!;
+        var applicationId = JsonDocument
+            .Parse(raw)
+            .RootElement.GetProperty("applicationId")
+            .GetString();
+        return (model, applicationId);
+    }
+
+    private AccreditationApplicationModel SeedWithdrawn(string reason = "no longer required") =>
+        SeedApplication(
+            status: ApplicationStatus.Withdrawn,
+            configure: a =>
+            {
+                a.RegistrationId = "reg-1";
+                a.MaterialType = MaterialType.Steel;
+                a.Year = 2026;
+                a.WithdrawalReason = reason;
+            }
+        );
+
+    [Fact]
+    public async Task Seed_WhenOnlyMatchIsWithdrawn_CreatesNewApplicationForSameYear()
+    {
+        Reset();
+        ArrangeAdapterSuccess();
+        var withdrawn = SeedWithdrawn();
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var (body, applicationId) = await ReadApplication(response);
+        body.ApplicationStatus.Should().Be(ApplicationStatus.Saved);
+        body.Year.Should().Be(2026, "a restart stays on the same accreditation year");
+        body.RegistrationId.Should().Be("reg-1");
+        body.MaterialType.Should().Be(MaterialType.Steel);
+        applicationId.Should().NotBeNullOrEmpty().And.NotBe(withdrawn.ApplicationId);
+
+        // AC2: the prior-year ReEx lookup is unchanged — still year - 1.
+        await _factory
+            .MockReExAdapter.Received(1)
+            .GetAccreditationAsync("org-123", "reg-1", MaterialType.Steel, 2025);
+        body.SourceYear.Should().Be(2025);
+    }
+
+    [Fact]
+    public async Task Seed_WhenOnlyMatchIsWithdrawn_LeavesWithdrawnApplicationUntouched()
+    {
+        Reset();
+        ArrangeAdapterSuccess();
+        var withdrawn = SeedWithdrawn();
+        var originalId = withdrawn.ApplicationId;
+        var originalEdited = withdrawn.DateLastEdited;
+        var originalCreated = withdrawn.CreatedAt;
+
+        (await PostSeed()).StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var stored = await StoredApplications();
+        stored.Should().HaveCount(2, "the withdrawn record is retained alongside the new one");
+
+        var retained = stored.Single(a => a.ApplicationId == originalId);
+        retained.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        retained.WithdrawalReason.Should().Be("no longer required");
+        retained.Year.Should().Be(2026);
+        retained.DateLastEdited.Should().Be(originalEdited);
+        retained.CreatedAt.Should().Be(originalCreated);
+
+        stored
+            .Should()
+            .ContainSingle(a => a.ApplicationStatus == ApplicationStatus.Saved)
+            .Which.Year.Should()
+            .Be(2026);
+    }
+
+    [Fact]
+    public async Task Seed_WhenLiveApplicationExists_ReturnsExistingAndCreatesNothing()
+    {
+        Reset();
+        var live = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.RegistrationId = "reg-1";
+                a.MaterialType = MaterialType.Steel;
+                a.Year = 2026;
+            }
+        );
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (_, applicationId) = await ReadApplication(response);
+        applicationId.Should().Be(live.ApplicationId);
+        (await StoredApplications()).Should().HaveCount(1);
+        await _factory
+            .MockReExAdapter.DidNotReceive()
+            .GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            );
+    }
+
+    [Fact]
+    public async Task Seed_WhenWithdrawnAndLiveExistForSameYear_ReturnsTheLiveOne()
+    {
+        Reset();
+        SeedWithdrawn();
+        var live = SeedApplication(
+            status: ApplicationStatus.Saved,
+            configure: a =>
+            {
+                a.RegistrationId = "reg-1";
+                a.MaterialType = MaterialType.Steel;
+                a.Year = 2026;
+            }
+        );
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (body, applicationId) = await ReadApplication(response);
+        applicationId.Should().Be(live.ApplicationId);
+        body.ApplicationStatus.Should().Be(ApplicationStatus.Saved);
+        (await StoredApplications()).Should().HaveCount(2, "nothing new is created");
+    }
+
+    [Fact]
+    public async Task Seed_WhenMultipleWithdrawnAndNoLive_CreatesExactlyOneNewApplication()
+    {
+        Reset();
+        ArrangeAdapterSuccess();
+        var first = SeedWithdrawn("first attempt");
+        var second = SeedWithdrawn("second attempt");
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var stored = await StoredApplications();
+        stored.Should().HaveCount(3);
+        stored
+            .Should()
+            .ContainSingle(a => a.ApplicationStatus == ApplicationStatus.Saved)
+            .Which.Year.Should()
+            .Be(2026);
+        stored
+            .Where(a => a.ApplicationStatus == ApplicationStatus.Withdrawn)
+            .Select(a => a.ApplicationId)
+            .Should()
+            .BeEquivalentTo([first.ApplicationId, second.ApplicationId]);
+    }
+
+    [Theory]
+    // Each row makes exactly one clause of the live-application predicate false, so the seed
+    // must fall through and create a new application rather than returning the seeded record.
+    [InlineData("reg-other", MaterialType.Steel, 2026)] // registrationId differs
+    [InlineData("reg-1", MaterialType.Wood, 2026)] // materialType differs
+    [InlineData("reg-1", MaterialType.Steel, 2027)] // year differs
+    public async Task Seed_WhenExistingApplicationDoesNotMatchKey_CreatesNewApplication(
+        string registrationId,
+        MaterialType materialType,
+        int year
+    )
+    {
+        Reset();
+        ArrangeAdapterSuccess();
+        SeedApplication(configure: a =>
+        {
+            a.RegistrationId = registrationId;
+            a.MaterialType = materialType;
+            a.Year = year;
+        });
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await StoredApplications()).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Seed_WithMultipleLiveApplications_ReturnsTheMostRecentlyCreated()
+    {
+        Reset();
+        var older = SeedApplication(configure: a =>
+        {
+            a.RegistrationId = "reg-1";
+            a.MaterialType = MaterialType.Steel;
+            a.Year = 2026;
+            a.CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        });
+        var newer = SeedApplication(configure: a =>
+        {
+            a.RegistrationId = "reg-1";
+            a.MaterialType = MaterialType.Steel;
+            a.Year = 2026;
+            a.CreatedAt = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        });
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (_, applicationId) = await ReadApplication(response);
+        applicationId.Should().Be(newer.ApplicationId).And.NotBe(older.ApplicationId);
+    }
+
+    [Fact]
+    public async Task Seed_WithLiveApplicationsSharingCreatedAt_BreaksTheTieDeterministicallyById()
+    {
+        Reset();
+        var createdAt = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+        var idA = ObjectId.GenerateNewId();
+        var idB = ObjectId.GenerateNewId();
+        var expectedId = idA > idB ? idA : idB;
+
+        foreach (var id in new[] { idA, idB })
+        {
+            SeedApplication(configure: a =>
+            {
+                a.Id = id;
+                a.RegistrationId = "reg-1";
+                a.MaterialType = MaterialType.Steel;
+                a.Year = 2026;
+                a.CreatedAt = createdAt;
+            });
+        }
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (_, applicationId) = await ReadApplication(response);
+        applicationId.Should().Be(expectedId.ToString());
+    }
+
     // --- GetList ---
 
     [Fact]
@@ -395,6 +659,100 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body.Should().HaveCount(1);
+    }
+
+    // RA-357: the list is now one-to-many per (registrationId, materialType, year), so its order
+    // is a contract. Ids come from the raw JSON — `applicationId` cannot round-trip into the model.
+    private static async Task<List<string?>> ReadApplicationIds(HttpResponseMessage response)
+    {
+        var raw = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        return JsonDocument
+            .Parse(raw)
+            .RootElement.EnumerateArray()
+            .Select(e => e.GetProperty("applicationId").GetString())
+            .ToList();
+    }
+
+    private Task<HttpResponseMessage> GetList() =>
+        _client.GetAsync(
+            "/api/v1/accreditation-applications/org-123",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+    [Fact]
+    public async Task GetList_OrdersByCreatedAtDescending()
+    {
+        Reset();
+        // Seeded oldest-first so a pass cannot come from incidental insertion order.
+        var oldest = SeedApplication(configure: a =>
+            a.CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+        var middle = SeedApplication(configure: a =>
+            a.CreatedAt = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+        var newest = SeedApplication(configure: a =>
+            a.CreatedAt = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+
+        var response = await GetList();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplicationIds(response))
+            .Should()
+            .ContainInOrder(newest.ApplicationId, middle.ApplicationId, oldest.ApplicationId);
+    }
+
+    [Fact]
+    public async Task GetList_WithEqualCreatedAt_BreaksTheTieByIdDescending()
+    {
+        Reset();
+        var createdAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+        var idA = ObjectId.GenerateNewId();
+        var idB = ObjectId.GenerateNewId();
+
+        foreach (var id in new[] { idA, idB })
+        {
+            SeedApplication(configure: a =>
+            {
+                a.Id = id;
+                a.CreatedAt = createdAt;
+            });
+        }
+
+        var response = await GetList();
+
+        var expected = new[] { idA, idB }
+            .OrderByDescending(id => id)
+            .Select(id => id.ToString())
+            .ToArray();
+        (await ReadApplicationIds(response)).Should().ContainInOrder(expected);
+    }
+
+    [Fact]
+    public async Task GetList_IncludesWithdrawnApplications()
+    {
+        Reset();
+        var withdrawn = SeedApplication(
+            status: ApplicationStatus.Withdrawn,
+            configure: a => a.CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+        var live = SeedApplication(configure: a =>
+            a.CreatedAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+
+        var response = await GetList();
+
+        // Withdrawn records must stay visible — consumers need to render them.
+        (await ReadApplicationIds(response))
+            .Should()
+            .ContainInOrder(live.ApplicationId, withdrawn.ApplicationId);
+        var body = await response.Content.ReadFromJsonAsync<List<AccreditationApplicationModel>>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Select(a => a.ApplicationStatus)
+            .Should()
+            .BeEquivalentTo([ApplicationStatus.Saved, ApplicationStatus.Withdrawn]);
     }
 
     // --- GetById ---
