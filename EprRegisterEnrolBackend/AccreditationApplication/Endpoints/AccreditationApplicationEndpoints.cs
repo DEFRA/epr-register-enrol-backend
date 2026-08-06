@@ -120,7 +120,8 @@ public static class AccreditationApplicationEndpoints
         // they are retained untouched for audit (RA-252 keeps them read-only), and the restart falls
         // through to create a brand new application exactly as a first-time seed would.
         // GetByOrganisationAsync applies no server-side sort, so order the candidates explicitly
-        // rather than relying on incidental storage order to decide which one is "the live one".
+        // (NewestFirst — the shared rule, also used by GetList) rather than relying on incidental
+        // storage order to decide which one is "the live one".
         //
         // At most one live application per (org, registrationId, materialType, year) is
         // BEST-EFFORT, not an invariant. This is a read-then-create with no transaction, and
@@ -139,8 +140,7 @@ public static class AccreditationApplicationEndpoints
                 && a.Year == request.Year
                 && a.ApplicationStatus != ApplicationStatus.Withdrawn
             )
-            .OrderByDescending(a => a.CreatedAt)
-            .ThenByDescending(a => a.Id)
+            .NewestFirst()
             .FirstOrDefault();
         if (existing is not null)
             return Results.Ok(existing);
@@ -222,14 +222,13 @@ public static class AccreditationApplicationEndpoints
     {
         // RA-357: (organisationId, registrationId, materialType, year) is now one-to-many — a
         // restart after a withdrawal adds a second record for the same key. GetByOrganisationAsync
-        // applies no server-side sort, so order here with the same rule Seed uses to pick the live
-        // application: newest first. That gives every consumer a stable list and makes a naive
-        // "first match wins" client land on the newest record rather than an arbitrary one.
-        // Withdrawn records are deliberately NOT filtered out — consumers legitimately need to
-        // display them; choosing the live one is the caller's decision.
-        var applications = (await persistence.GetByOrganisationAsync(organisationId))
-            .OrderByDescending(a => a.CreatedAt)
-            .ThenByDescending(a => a.Id);
+        // applies no server-side sort, so order here with NewestFirst — the same shared rule Seed
+        // uses to pick the live application. That gives every consumer a stable list and makes a
+        // naive "first match wins" client land on the newest record rather than an arbitrary one;
+        // FE #204 relies on exactly that. Withdrawn records are deliberately NOT filtered out —
+        // consumers legitimately need to display them; choosing the live one is the caller's
+        // decision.
+        var applications = (await persistence.GetByOrganisationAsync(organisationId)).NewestFirst();
         return Results.Ok(applications);
     }
 
