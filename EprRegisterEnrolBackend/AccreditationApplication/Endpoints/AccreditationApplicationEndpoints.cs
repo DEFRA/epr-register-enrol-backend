@@ -121,6 +121,17 @@ public static class AccreditationApplicationEndpoints
         // through to create a brand new application exactly as a first-time seed would.
         // GetByOrganisationAsync applies no server-side sort, so order the candidates explicitly
         // rather than relying on incidental storage order to decide which one is "the live one".
+        //
+        // At most one live application per (org, registrationId, materialType, year) is
+        // BEST-EFFORT, not an invariant. This is a read-then-create with no transaction, and
+        // "Start new accreditation application" is now a user-triggered create, so concurrent
+        // seeds can both pass this check and both create — leaving a second live record that
+        // still shows up in GET /{organisationId}. Consumers must therefore tolerate duplicates
+        // and apply this same newest-first rule rather than assuming uniqueness. See epr-zdhg.
+        // A unique partial index would be the real fix but is not available today: index
+        // creation is disabled service-wide (MongoService.EnsureIndexes has CreateMany commented
+        // out, see epr-hsjp), so adding one would be silently inert — worse than none, because it
+        // would read as a guarantee that does not exist.
         var existing = (await persistence.GetByOrganisationAsync(organisationId))
             .Where(a =>
                 a.RegistrationId == registrationId
@@ -209,7 +220,16 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence
     )
     {
-        var applications = await persistence.GetByOrganisationAsync(organisationId);
+        // RA-357: (organisationId, registrationId, materialType, year) is now one-to-many — a
+        // restart after a withdrawal adds a second record for the same key. GetByOrganisationAsync
+        // applies no server-side sort, so order here with the same rule Seed uses to pick the live
+        // application: newest first. That gives every consumer a stable list and makes a naive
+        // "first match wins" client land on the newest record rather than an arbitrary one.
+        // Withdrawn records are deliberately NOT filtered out — consumers legitimately need to
+        // display them; choosing the live one is the caller's decision.
+        var applications = (await persistence.GetByOrganisationAsync(organisationId))
+            .OrderByDescending(a => a.CreatedAt)
+            .ThenByDescending(a => a.Id);
         return Results.Ok(applications);
     }
 

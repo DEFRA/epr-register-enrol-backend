@@ -661,6 +661,100 @@ public class AccreditationApplicationEndpointsTests
         body.Should().HaveCount(1);
     }
 
+    // RA-357: the list is now one-to-many per (registrationId, materialType, year), so its order
+    // is a contract. Ids come from the raw JSON — `applicationId` cannot round-trip into the model.
+    private static async Task<List<string?>> ReadApplicationIds(HttpResponseMessage response)
+    {
+        var raw = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        return JsonDocument
+            .Parse(raw)
+            .RootElement.EnumerateArray()
+            .Select(e => e.GetProperty("applicationId").GetString())
+            .ToList();
+    }
+
+    private Task<HttpResponseMessage> GetList() =>
+        _client.GetAsync(
+            "/api/v1/accreditation-applications/org-123",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+    [Fact]
+    public async Task GetList_OrdersByCreatedAtDescending()
+    {
+        Reset();
+        // Seeded oldest-first so a pass cannot come from incidental insertion order.
+        var oldest = SeedApplication(configure: a =>
+            a.CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+        var middle = SeedApplication(configure: a =>
+            a.CreatedAt = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+        var newest = SeedApplication(configure: a =>
+            a.CreatedAt = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+
+        var response = await GetList();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplicationIds(response))
+            .Should()
+            .ContainInOrder(newest.ApplicationId, middle.ApplicationId, oldest.ApplicationId);
+    }
+
+    [Fact]
+    public async Task GetList_WithEqualCreatedAt_BreaksTheTieByIdDescending()
+    {
+        Reset();
+        var createdAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+        var idA = ObjectId.GenerateNewId();
+        var idB = ObjectId.GenerateNewId();
+
+        foreach (var id in new[] { idA, idB })
+        {
+            SeedApplication(configure: a =>
+            {
+                a.Id = id;
+                a.CreatedAt = createdAt;
+            });
+        }
+
+        var response = await GetList();
+
+        var expected = new[] { idA, idB }
+            .OrderByDescending(id => id)
+            .Select(id => id.ToString())
+            .ToArray();
+        (await ReadApplicationIds(response)).Should().ContainInOrder(expected);
+    }
+
+    [Fact]
+    public async Task GetList_IncludesWithdrawnApplications()
+    {
+        Reset();
+        var withdrawn = SeedApplication(
+            status: ApplicationStatus.Withdrawn,
+            configure: a => a.CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+        var live = SeedApplication(configure: a =>
+            a.CreatedAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+
+        var response = await GetList();
+
+        // Withdrawn records must stay visible — consumers need to render them.
+        (await ReadApplicationIds(response))
+            .Should()
+            .ContainInOrder(live.ApplicationId, withdrawn.ApplicationId);
+        var body = await response.Content.ReadFromJsonAsync<List<AccreditationApplicationModel>>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Select(a => a.ApplicationStatus)
+            .Should()
+            .BeEquivalentTo([ApplicationStatus.Saved, ApplicationStatus.Withdrawn]);
+    }
+
     // --- GetById ---
 
     [Fact]
