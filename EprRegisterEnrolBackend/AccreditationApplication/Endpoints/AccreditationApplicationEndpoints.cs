@@ -115,12 +115,22 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
 
         // Idempotency check before the ReEx call — duplicate seeds return the existing document.
-        var existing = (await persistence.GetByOrganisationAsync(organisationId)).FirstOrDefault(
-            a =>
+        // RA-357: only a *live* application short-circuits the seed. A withdrawn one must not block
+        // starting again for the same accreditation year, so withdrawn records are excluded here;
+        // they are retained untouched for audit (RA-252 keeps them read-only), and the restart falls
+        // through to create a brand new application exactly as a first-time seed would.
+        // GetByOrganisationAsync applies no server-side sort, so order the candidates explicitly
+        // rather than relying on incidental storage order to decide which one is "the live one".
+        var existing = (await persistence.GetByOrganisationAsync(organisationId))
+            .Where(a =>
                 a.RegistrationId == registrationId
                 && a.MaterialType == materialTypeEnum
                 && a.Year == request.Year
-        );
+                && a.ApplicationStatus != ApplicationStatus.Withdrawn
+            )
+            .OrderByDescending(a => a.CreatedAt)
+            .ThenByDescending(a => a.Id)
+            .FirstOrDefault();
         if (existing is not null)
             return Results.Ok(existing);
 
