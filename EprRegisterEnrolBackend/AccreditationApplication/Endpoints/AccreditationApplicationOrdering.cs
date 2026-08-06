@@ -14,10 +14,12 @@ internal static class AccreditationApplicationOrdering
     // about which record is "the live one". Defined once here so the two call sites cannot drift.
     //
     // Deliberately an in-memory sort, NOT a Mongo-side Sort(): index creation is disabled
-    // service-wide (MongoService.EnsureIndexes has Collection.Indexes.CreateMany commented out —
-    // see epr-hsjp), so a server-side sort on CreatedAt would be unindexed and would throw once a
-    // result set exceeded Mongo's 32MB in-memory sort limit. Do not "optimise" this down into
-    // AccreditationApplicationPersistence until epr-hsjp is fixed and a supporting index exists.
+    // service-wide — MongoService.EnsureIndexes (Utils/Mongo/MongoService.cs) builds its index
+    // models and then has the Collection.Indexes.CreateMany call commented out, so no index in
+    // this service is ever created. A server-side sort on CreatedAt would therefore be unindexed,
+    // and an unindexed sort throws once the result set exceeds Mongo's 32MB in-memory sort limit.
+    // Do not "optimise" this down into AccreditationApplicationPersistence until index creation
+    // is re-enabled and a supporting index on CreatedAt actually exists.
     //
     // CreatedAt descending, then Id descending as a tiebreak. Id is an ObjectId, whose ordering is
     // byte-wise (timestamp, then random, then counter), which matches a plain lexicographic

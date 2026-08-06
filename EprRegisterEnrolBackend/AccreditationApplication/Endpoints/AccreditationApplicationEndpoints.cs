@@ -124,15 +124,18 @@ public static class AccreditationApplicationEndpoints
         // storage order to decide which one is "the live one".
         //
         // At most one live application per (org, registrationId, materialType, year) is
-        // BEST-EFFORT, not an invariant. This is a read-then-create with no transaction, and
-        // "Start new accreditation application" is now a user-triggered create, so concurrent
-        // seeds can both pass this check and both create — leaving a second live record that
-        // still shows up in GET /{organisationId}. Consumers must therefore tolerate duplicates
-        // and apply this same newest-first rule rather than assuming uniqueness. See epr-zdhg.
-        // A unique partial index would be the real fix but is not available today: index
-        // creation is disabled service-wide (MongoService.EnsureIndexes has CreateMany commented
-        // out, see epr-hsjp), so adding one would be silently inert — worse than none, because it
-        // would read as a guarantee that does not exist.
+        // BEST-EFFORT, not an invariant: this is a read-then-create with no transaction and no
+        // unique index, and "Start new accreditation application" is now a user-triggered create,
+        // so two concurrent seeds can both pass this check and both create — leaving a second
+        // live record that still shows up in GET /{organisationId}. Consumers must therefore
+        // tolerate duplicates and apply this same newest-first rule rather than assuming
+        // uniqueness.
+        // A unique partial index would be the real fix, but it is not available today:
+        // MongoService.EnsureIndexes (Utils/Mongo/MongoService.cs) builds its index models, logs
+        // that it is ensuring them, and then has the Collection.Indexes.CreateMany call commented
+        // out — so no index in this service is ever created, in any environment. A unique index
+        // added here would be silently inert: worse than none, because it would read as a
+        // guarantee that is not enforced at runtime.
         var existing = (await persistence.GetByOrganisationAsync(organisationId))
             .Where(a =>
                 a.RegistrationId == registrationId
