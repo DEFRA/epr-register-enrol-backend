@@ -454,6 +454,7 @@ public class HttpCaseWorkingApiAdapter(
                         {
                             fullName = a.FullName,
                             email = a.Email,
+                            addedForAuthorityToIssue = a.AddedForAuthorityToIssue,
                         })
                         .ToArray(),
                 },
@@ -561,7 +562,12 @@ public class HttpCaseWorkingApiAdapter(
             {
                 plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
                 authorisers = application
-                    .Prns.Authorisers.Select(a => new { fullName = a.FullName, email = a.Email })
+                    .Prns.Authorisers.Select(a => new
+                    {
+                        fullName = a.FullName,
+                        email = a.Email,
+                        addedForAuthorityToIssue = a.AddedForAuthorityToIssue,
+                    })
                     .ToArray(),
             },
             businessPlan = new

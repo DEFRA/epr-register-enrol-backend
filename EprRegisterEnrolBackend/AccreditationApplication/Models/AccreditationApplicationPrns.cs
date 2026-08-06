@@ -26,6 +26,10 @@ public class PrnsAuthoriser
 {
     public required string FullName { get; set; }
     public required string Email { get; set; }
+
+    // RA-290 AC03: set true when this authoriser was added via the tonnage-authority
+    // "add new authoriser" form, so downstream case management can flag them for review.
+    public bool AddedForAuthorityToIssue { get; set; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -34,5 +38,5 @@ public enum PlannedTonnageBand
     UpTo500,
     UpTo1000,
     UpTo10000,
-    Over10000
+    Over10000,
 }

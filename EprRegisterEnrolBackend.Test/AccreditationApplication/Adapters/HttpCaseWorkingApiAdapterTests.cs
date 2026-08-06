@@ -284,6 +284,39 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
+    public async Task SubmitApplicationAsync_ForwardsAddedForAuthorityToIssueFlagOnAuthorisers()
+    {
+        var application = CreateTestApplication();
+        application.Prns.Authorisers =
+        [
+            new PrnsAuthoriser
+            {
+                FullName = "Existing Authoriser",
+                Email = "existing@example.com",
+                AddedForAuthorityToIssue = false,
+            },
+            new PrnsAuthoriser
+            {
+                FullName = "New Authoriser",
+                Email = "new@example.com",
+                AddedForAuthorityToIssue = true,
+            },
+        ];
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var authorisers = doc
+            .RootElement.GetProperty("payload")
+            .GetProperty("prns")
+            .GetProperty("authorisers");
+
+        authorisers[0].GetProperty("addedForAuthorityToIssue").GetBoolean().Should().BeFalse();
+        authorisers[1].GetProperty("addedForAuthorityToIssue").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
     public async Task SubmitApplicationAsync_GlassMaterial_IncludesGlassRecyclingProcessInPayload()
     {
         var application = CreateTestApplication();

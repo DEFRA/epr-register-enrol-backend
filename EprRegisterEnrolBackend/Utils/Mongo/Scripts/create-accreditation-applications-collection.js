@@ -131,6 +131,9 @@ export async function createAccreditationApplicationsCollection(
                                                 bsonType: "string",
                                                 minLength: 1,
                                             },
+                                            addedForAuthorityToIssue: {
+                                                bsonType: "bool",
+                                            },
                                         },
                                     },
                                 },
