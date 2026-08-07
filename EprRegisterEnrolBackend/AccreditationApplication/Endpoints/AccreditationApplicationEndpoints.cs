@@ -115,12 +115,36 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
 
         // Idempotency check before the ReEx call — duplicate seeds return the existing document.
-        var existing = (await persistence.GetByOrganisationAsync(organisationId)).FirstOrDefault(
-            a =>
+        // RA-357: only a *live* application short-circuits the seed. A withdrawn one must not block
+        // starting again for the same accreditation year, so withdrawn records are excluded here;
+        // they are retained untouched for audit (RA-252 keeps them read-only), and the restart falls
+        // through to create a brand new application exactly as a first-time seed would.
+        // GetByOrganisationAsync applies no server-side sort, so order the candidates explicitly
+        // (NewestFirst — the shared rule, also used by GetList) rather than relying on incidental
+        // storage order to decide which one is "the live one".
+        //
+        // At most one live application per (org, registrationId, materialType, year) is
+        // BEST-EFFORT, not an invariant: this is a read-then-create with no transaction and no
+        // unique index, and "Start new accreditation application" is now a user-triggered create,
+        // so two concurrent seeds can both pass this check and both create — leaving a second
+        // live record that still shows up in GET /{organisationId}. Consumers must therefore
+        // tolerate duplicates and apply this same newest-first rule rather than assuming
+        // uniqueness.
+        // A unique partial index would be the real fix, but it is not available today:
+        // MongoService.EnsureIndexes (Utils/Mongo/MongoService.cs) builds its index models, logs
+        // that it is ensuring them, and then has the Collection.Indexes.CreateMany call commented
+        // out — so no index in this service is ever created, in any environment. A unique index
+        // added here would be silently inert: worse than none, because it would read as a
+        // guarantee that is not enforced at runtime.
+        var existing = (await persistence.GetByOrganisationAsync(organisationId))
+            .Where(a =>
                 a.RegistrationId == registrationId
                 && a.MaterialType == materialTypeEnum
                 && a.Year == request.Year
-        );
+                && a.ApplicationStatus != ApplicationStatus.Withdrawn
+            )
+            .NewestFirst()
+            .FirstOrDefault();
         if (existing is not null)
             return Results.Ok(existing);
 
@@ -199,7 +223,15 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence
     )
     {
-        var applications = await persistence.GetByOrganisationAsync(organisationId);
+        // RA-357: (organisationId, registrationId, materialType, year) is now one-to-many — a
+        // restart after a withdrawal adds a second record for the same key. GetByOrganisationAsync
+        // applies no server-side sort, so order here with NewestFirst — the same shared rule Seed
+        // uses to pick the live application. That gives every consumer a stable list and makes a
+        // naive "first match wins" client land on the newest record rather than an arbitrary one;
+        // FE #204 relies on exactly that. Withdrawn records are deliberately NOT filtered out —
+        // consumers legitimately need to display them; choosing the live one is the caller's
+        // decision.
+        var applications = (await persistence.GetByOrganisationAsync(organisationId)).NewestFirst();
         return Results.Ok(applications);
     }
 
