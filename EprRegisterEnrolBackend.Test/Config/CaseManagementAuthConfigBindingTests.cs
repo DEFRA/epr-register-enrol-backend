@@ -9,19 +9,23 @@ using Microsoft.Extensions.Options;
 namespace EprRegisterEnrolBackend.Test.Config;
 
 // Naming-convention fix: CaseManagementAuthConfig.SharedSecret must be sourced
-// from the flat OPERATOR_BACKEND_SHARED_SECRET env var (CDP's secrets naming
+// from the flat AUTH_SHARED_SECRET__MANAGEMENT_BE env var (CDP's secrets naming
 // convention — flat UPPER_SNAKE_CASE, not the nested CaseManagementAuth__*
 // form ExpectedCognitoClientId uses), rather than CaseManagementAuth:SharedSecret.
 // See Program.cs and CaseManagementAuthConfig.cs.
 public class CaseManagementAuthConfigBindingTests
 {
     [Fact]
-    public async Task SharedSecret_BindsFromFlatOperatorBackendSharedSecretEnvVar()
+    public async Task SharedSecret_BindsFromAuthSharedSecretManagementBeConfigKey()
     {
+        // Config-key (colon) form — proves the lookup key itself is right.
+        // ClientSecrets_bind_from_real_double_underscore_environment_variable
+        // (below) proves the real, double-underscore-named env var reaches
+        // this same config key via EnvironmentVariablesConfigurationProvider.
         await using var factory = new BindingTestFactory(
             new Dictionary<string, string?>
             {
-                ["OPERATOR_BACKEND_SHARED_SECRET"] = "test-secret",
+                ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "test-secret",
                 ["CaseManagementAuth:ExpectedCognitoClientId"] = "epr-register-enrol-management-be",
             }
         );
@@ -67,6 +71,52 @@ public class CaseManagementAuthConfigBindingTests
             builder.ConfigureAppConfiguration(
                 (_, config) => config.AddInMemoryCollection(configOverrides)
             );
+        }
+    }
+}
+
+/// <summary>
+/// Collection that disables parallelization for tests that mutate
+/// process-global environment variables.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class CaseManagementAuthEnvVarMutationCollection
+{
+    public const string Name = "case-management-auth-env-var-mutation";
+}
+
+// Regression test for the exact bug class an external review caught once
+// already in this project (see ManagementBe's CognitoClientIdAuthentication
+// BuildClientSecrets fix): EnvironmentVariablesConfigurationProvider rewrites
+// "__" to ":" only for REAL OS environment variables, not for config injected
+// via AddInMemoryCollection/UseSetting — so a config-key-level test alone
+// cannot prove the real env var actually binds. This sets and reads a real
+// process environment variable to prove it does.
+[Collection(CaseManagementAuthEnvVarMutationCollection.Name)]
+public class CaseManagementAuthConfigEnvVarBindingTests
+{
+    [Fact]
+    public async Task SharedSecret_binds_from_the_real_double_underscore_environment_variable()
+    {
+        const string envVarName = "AUTH_SHARED_SECRET__MANAGEMENT_BE";
+        var previous = Environment.GetEnvironmentVariable(envVarName);
+        try
+        {
+            Environment.SetEnvironmentVariable(envVarName, "real-env-var-secret");
+            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(
+                builder => builder.UseEnvironment("Development")
+            );
+            using var scope = factory.Services.CreateScope();
+
+            var config = scope
+                .ServiceProvider.GetRequiredService<IOptions<CaseManagementAuthConfig>>()
+                .Value;
+
+            config.SharedSecret.Should().Be("real-env-var-secret");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVarName, previous);
         }
     }
 }
