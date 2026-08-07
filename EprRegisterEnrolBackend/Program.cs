@@ -128,10 +128,19 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<IPendingUploadService, PendingUploadService>();
 
     // CaseManagement inbound auth: verifies pushes from ManagementBe (RA-311 OBE-2).
+    // SharedSecret is deliberately NOT part of the CaseManagementAuth__* section —
+    // CDP's secrets naming convention is a flat UPPER_SNAKE_CASE name, not the
+    // nested Section__Property form non-secret config uses — so it's sourced from
+    // OPERATOR_BACKEND_SHARED_SECRET instead (same flat name ManagementBe's
+    // OperatorBackendApi integration signs its outbound pushes with).
     builder.Services.AddMemoryCache();
-    builder.Services.Configure<CaseManagementAuthConfig>(
-        builder.Configuration.GetSection("CaseManagementAuth")
-    );
+    builder.Services.Configure<CaseManagementAuthConfig>(config =>
+    {
+        builder.Configuration.GetSection("CaseManagementAuth").Bind(config);
+        config.SharedSecret = builder.Configuration.GetValue<string>(
+            "OPERATOR_BACKEND_SHARED_SECRET"
+        );
+    });
     builder
         .Services.AddAuthentication()
         .AddScheme<CaseManagementAuthenticationOptions, CaseManagementAuthenticationHandler>(
