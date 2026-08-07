@@ -128,10 +128,29 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<IPendingUploadService, PendingUploadService>();
 
     // CaseManagement inbound auth: verifies pushes from ManagementBe (RA-311 OBE-2).
+    // SharedSecret is deliberately NOT part of the CaseManagementAuth__* section —
+    // CDP's secrets naming convention is a flat UPPER_SNAKE_CASE name, not the
+    // nested Section__Property form non-secret config uses — so it's sourced from
+    // AUTH_SHARED_SECRET__MANAGEMENT_BE instead, extending the same AUTH_SHARED_SECRET__*
+    // per-caller family ManagementBe itself uses for its own inbound callers
+    // (AUTH_SHARED_SECRET__MANAGEMENT_FE / AUTH_SHARED_SECRET__BACKEND) — this service
+    // has exactly one known caller (ManagementBe) today, but naming by caller rather
+    // than by feature keeps room to add another without renaming this one.
+    //
+    // Config-key form, NOT the literal env var name: EnvironmentVariablesConfigurationProvider
+    // rewrites "__" to ":" while loading, so the real env var
+    // AUTH_SHARED_SECRET__MANAGEMENT_BE is stored under config key
+    // "AUTH_SHARED_SECRET:MANAGEMENT_BE" — a GetValue call using the literal
+    // double-underscore string never matches it (see ManagementBe's own
+    // CognitoClientIdAuthentication BuildClientSecrets for the same gotcha).
     builder.Services.AddMemoryCache();
-    builder.Services.Configure<CaseManagementAuthConfig>(
-        builder.Configuration.GetSection("CaseManagementAuth")
-    );
+    builder.Services.Configure<CaseManagementAuthConfig>(config =>
+    {
+        builder.Configuration.GetSection("CaseManagementAuth").Bind(config);
+        config.SharedSecret = builder.Configuration.GetValue<string>(
+            "AUTH_SHARED_SECRET:MANAGEMENT_BE"
+        );
+    });
     builder
         .Services.AddAuthentication()
         .AddScheme<CaseManagementAuthenticationOptions, CaseManagementAuthenticationHandler>(
