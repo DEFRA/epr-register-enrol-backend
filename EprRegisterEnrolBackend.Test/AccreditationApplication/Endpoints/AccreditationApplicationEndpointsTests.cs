@@ -750,7 +750,8 @@ public class AccreditationApplicationEndpointsTests
             JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.Select(a => a.ApplicationStatus)
+        body!
+            .Select(a => a.ApplicationStatus)
             .Should()
             .BeEquivalentTo([ApplicationStatus.Saved, ApplicationStatus.Withdrawn]);
     }
@@ -990,6 +991,221 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchTonnage_ClientOmitsAddedForAuthorityToIssueOnExistingAuthoriser_PreservesPersistedTrue()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Saved,
+            configure: a =>
+                a.Prns.Authorisers = [
+                    new PrnsAuthoriser
+                    {
+                        FullName = "Jane Smith",
+                        Email = "jane@example.com",
+                        AddedForAuthorityToIssue = true,
+                    },
+                ]
+        );
+
+        // Simulates a caller (e.g. the plain tonnage-band save) round-tripping the authorisers
+        // list without setting the flag — JSON deserialization defaults the omitted bool to false.
+        var request = new PatchTonnageRequest
+        {
+            Authorisers =
+            [
+                new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" },
+            ],
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!
+            .Prns.Authorisers.Should()
+            .ContainSingle(a => a.Email == "jane@example.com" && a.AddedForAuthorityToIssue);
+    }
+
+    [Fact]
+    public async Task PatchTonnage_ClientSendsTrueOnExistingAuthoriser_DoesNotResurrectFlagServerConsidersFalse()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Saved,
+            configure: a =>
+                a.Prns.Authorisers = [
+                    new PrnsAuthoriser
+                    {
+                        FullName = "Jane Smith",
+                        Email = "jane@example.com",
+                        AddedForAuthorityToIssue = false,
+                    },
+                ]
+        );
+
+        var request = new PatchTonnageRequest
+        {
+            Authorisers =
+            [
+                new PrnsAuthoriser
+                {
+                    FullName = "Jane Smith",
+                    Email = "jane@example.com",
+                    AddedForAuthorityToIssue = true,
+                },
+            ],
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!
+            .Prns.Authorisers.Should()
+            .ContainSingle(a => a.Email == "jane@example.com" && !a.AddedForAuthorityToIssue);
+    }
+
+    [Fact]
+    public async Task PatchTonnage_NewAuthoriserEmail_AddedForAuthorityToIssueDefaultsTrue()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Saved);
+
+        // Client value is ignored entirely for a brand-new email — the only way a new authoriser
+        // can appear is via the "add new authoriser" form, so it is always flagged true.
+        var request = new PatchTonnageRequest
+        {
+            Authorisers =
+            [
+                new PrnsAuthoriser
+                {
+                    FullName = "Bob Jones",
+                    Email = "bob@example.com",
+                    AddedForAuthorityToIssue = false,
+                },
+            ],
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!
+            .Prns.Authorisers.Should()
+            .ContainSingle(a => a.Email == "bob@example.com" && a.AddedForAuthorityToIssue);
+    }
+
+    [Fact]
+    public async Task PatchPrns_ClientOmitsAddedForAuthorityToIssueOnExistingAuthoriser_PreservesPersistedTrue()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Saved,
+            configure: a =>
+                a.Prns.Authorisers = [
+                    new PrnsAuthoriser
+                    {
+                        FullName = "Jane Smith",
+                        Email = "jane@example.com",
+                        AddedForAuthorityToIssue = true,
+                    },
+                ]
+        );
+
+        var request = new PatchPrnsRequest
+        {
+            Authorisers =
+            [
+                new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" },
+            ],
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/prns",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!
+            .Prns.Authorisers.Should()
+            .ContainSingle(a => a.Email == "jane@example.com" && a.AddedForAuthorityToIssue);
+    }
+
+    [Fact]
+    public async Task PatchTonnage_AuthoriserFlagRoundTripsThroughPatchThenGet_DefaultsTrueForUnseenEmail()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Saved);
+
+        // Client omits the flag entirely on a brand-new email — the round trip through GET must
+        // reflect what PATCH actually persisted (true, per AC03), not silently re-default to false.
+        var patchRequest = new PatchTonnageRequest
+        {
+            Authorisers =
+            [
+                new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" },
+            ],
+        };
+        var patchResponse = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            patchRequest,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        patchResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var getResponse = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        getResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await getResponse.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!
+            .Prns.Authorisers.Should()
+            .ContainSingle(a => a.Email == "jane@example.com" && a.AddedForAuthorityToIssue);
+
+        // A second PATCH omitting the flag again must preserve what GET just confirmed was
+        // persisted, not re-derive it from the (still-omitted) client value.
+        var secondPatchResponse = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            patchRequest,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var secondBody =
+            await secondPatchResponse.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+                JsonOptions,
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+        secondBody!
+            .Prns.Authorisers.Should()
+            .ContainSingle(a => a.Email == "jane@example.com" && a.AddedForAuthorityToIssue);
     }
 
     // --- PatchBusinessPlan ---
@@ -3515,7 +3731,10 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var workItemId = Guid.NewGuid();
-        SeedApplication(status: fromStatus, configure: a => a.CaseManagementWorkItemId = workItemId);
+        SeedApplication(
+            status: fromStatus,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
 
         var request = new StatusChangedFromCaseManagementRequest
         {
@@ -3702,7 +3921,10 @@ public class AccreditationApplicationEndpointsTests
         // withdrawn application's withdraw/query/approve paths (RA-368 review).
         Reset();
         var workItemId = Guid.NewGuid();
-        SeedApplication(status: fromStatus, configure: a => a.CaseManagementWorkItemId = workItemId);
+        SeedApplication(
+            status: fromStatus,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
 
         var request = new StatusChangedFromCaseManagementRequest
         {

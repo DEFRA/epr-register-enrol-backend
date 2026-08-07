@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -824,6 +825,52 @@ public class HttpCaseWorkingApiAdapterTests
             .GetInt32()
             .Should()
             .Be(40);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_ForwardsAddedForAuthorityToIssueFlagOnAuthorisers()
+    {
+        // RA-290 backend PR#67: SubmitApplicationAsync_ForwardsAddedForAuthorityToIssueFlagOnAuthorisers
+        // only covers the initial-submit payload builder — the resume-from-query section builder
+        // (BuildResumeFromQueryPayload) maps authorisers independently and needs its own coverage.
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+        app.Prns.Authorisers =
+        [
+            new PrnsAuthoriser
+            {
+                FullName = "Existing Authoriser",
+                Email = "existing@example.com",
+                AddedForAuthorityToIssue = false,
+            },
+            new PrnsAuthoriser
+            {
+                FullName = "New Authoriser",
+                Email = "new@example.com",
+                AddedForAuthorityToIssue = true,
+            },
+        ];
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            [AccreditationApplicationSections.AuthorityToIssueKey]
+        );
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var authorisers = doc
+            .RootElement.GetProperty("sections")
+            .GetProperty("Prns")
+            .GetProperty("authorisers");
+
+        authorisers[0].GetProperty("addedForAuthorityToIssue").GetBoolean().Should().BeFalse();
+        authorisers[1].GetProperty("addedForAuthorityToIssue").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

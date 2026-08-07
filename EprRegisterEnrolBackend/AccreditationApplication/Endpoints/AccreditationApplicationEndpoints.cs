@@ -310,7 +310,10 @@ public static class AccreditationApplicationEndpoints
             application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
 
         if (request.Authorisers != null)
-            application.Prns.Authorisers = request.Authorisers;
+            application.Prns.Authorisers = MergeAuthorisers(
+                application.Prns.Authorisers,
+                request.Authorisers
+            );
 
         if (application.Prns.SectionStatus != SectionStatus.Queried)
             application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
@@ -323,6 +326,39 @@ public static class AccreditationApplicationEndpoints
         return updated is null
             ? Results.Problem("Failed to update PRNs section.")
             : Results.Ok(updated);
+    }
+
+    // RA-290 AC03: AddedForAuthorityToIssue must never be trusted from the client — PrnsAuthoriser
+    // is reused as both the persisted model and the inbound PATCH DTO, and separate pages
+    // (tonnage, authority-to-issue) both round-trip this list through PatchPrns/PatchTonnage, so an
+    // omitted or stale client value would otherwise silently overwrite a previously-persisted true.
+    // Derive it server-side instead: an authoriser already present (by email) keeps whatever was
+    // already persisted for them; anyone new was only added via the "add new authoriser" form, so
+    // is always true.
+    private static List<PrnsAuthoriser> MergeAuthorisers(
+        List<PrnsAuthoriser> persistedAuthorisers,
+        List<PrnsAuthoriser> incomingAuthorisers
+    )
+    {
+        var previouslyPersisted = persistedAuthorisers.ToDictionary(
+            a => a.Email,
+            a => a.AddedForAuthorityToIssue,
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        return incomingAuthorisers
+            .Select(a => new PrnsAuthoriser
+            {
+                FullName = a.FullName,
+                Email = a.Email,
+                AddedForAuthorityToIssue = previouslyPersisted.TryGetValue(
+                    a.Email,
+                    out var wasAddedForAuthorityToIssue
+                )
+                    ? wasAddedForAuthorityToIssue
+                    : true,
+            })
+            .ToList();
     }
 
     private static async Task<IResult> PatchTonnage(
@@ -357,7 +393,10 @@ public static class AccreditationApplicationEndpoints
             application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
 
         if (request.Authorisers != null)
-            application.Prns.Authorisers = request.Authorisers;
+            application.Prns.Authorisers = MergeAuthorisers(
+                application.Prns.Authorisers,
+                request.Authorisers
+            );
 
         if (application.Prns.SectionStatus != SectionStatus.Queried)
             application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
@@ -1538,9 +1577,7 @@ public static class AccreditationApplicationEndpoints
     // deliberate no-op for ApplicationStatus — the push still updates CaseManagementStatusUpdatedAt
     // for ordering purposes. "queried"/"withdrawn" are never sent here: query keeps its own richer
     // /query endpoint, and withdrawal is entirely out of scope for this plan (§4.1, §4.5).
-    private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(
-        string toStateId
-    ) =>
+    private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(string toStateId) =>
         toStateId switch
         {
             "submitted" => ApplicationStatus.Submitted,
