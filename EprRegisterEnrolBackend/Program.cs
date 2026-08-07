@@ -140,13 +140,23 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         );
     builder.Services.AddAuthorization();
 
-    // CaseWorking: config-driven stub/real switch (default: stub).
-    builder.Services.Configure<CaseWorkingApiConfig>(
-        builder.Configuration.GetSection("CaseWorking")
+    // CaseWorking: config-driven stub/real switch (default: stub). SharedSecret
+    // is deliberately NOT part of the CaseWorking__* section — CDP's secrets
+    // naming convention is a flat UPPER_SNAKE_CASE name (e.g. AUTH_SHARED_SECRET,
+    // NOTIFY_API_KEY), not the nested Section__Property form non-secret config
+    // uses, so it's sourced from CASE_MANAGEMENT_API_SHARED_SECRET instead.
+    builder.Services.Configure<CaseWorkingApiConfig>(config =>
+    {
+        builder.Configuration.GetSection("CaseWorking").Bind(config);
+        config.SharedSecret = builder.Configuration.GetValue<string>(
+            "CASE_MANAGEMENT_API_SHARED_SECRET"
+        );
+    });
+    var caseWorkingConfig = new CaseWorkingApiConfig();
+    builder.Configuration.GetSection("CaseWorking").Bind(caseWorkingConfig);
+    caseWorkingConfig.SharedSecret = builder.Configuration.GetValue<string>(
+        "CASE_MANAGEMENT_API_SHARED_SECRET"
     );
-    var caseWorkingConfig =
-        builder.Configuration.GetSection("CaseWorking").Get<CaseWorkingApiConfig>()
-        ?? new CaseWorkingApiConfig();
     if (caseWorkingConfig.UseStub)
         builder.Services.AddSingleton<ICaseWorkingApiAdapter, StubCaseWorkingApiAdapter>();
     else
