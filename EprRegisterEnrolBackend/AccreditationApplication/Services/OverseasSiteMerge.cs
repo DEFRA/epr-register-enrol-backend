@@ -4,7 +4,14 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
 /// <summary>
 /// Protects the server-owned fields on an overseas site from a wholesale client-supplied
-/// replacement (RA-292 AC01/AC02).
+/// replacement (RA-292 AC01/AC02, plus epr-zgrb).
+///
+/// Three fields are restored from the persisted site: <see cref="OverseasSiteModel.IsNewSite"/>
+/// (and its interim-site counterpart), <see cref="OverseasSiteModel.RegisteredNowAccredited"/>,
+/// and <see cref="OverseasSiteModel.PreviousSites"/>. They differ in how exposed they were —
+/// `PreviousSites` could never survive a round-trip, `RegisteredNowAccredited` survived only
+/// while the client happened to echo it — but the rule is one rule: if the server owns the field,
+/// the server derives it.
 ///
 /// <c>PATCH .../overseas-sites</c> replaces the whole site list with the request body, so any
 /// field the client does not echo back is lost. That is harmless for operator-entered data — the
@@ -62,6 +69,13 @@ public static class OverseasSiteMerge
             {
                 site.IsNewSite = knownSite.IsNewSite;
 
+                // Set only by PromoteOverseasSite/RevertOverseasSite, never by the operator. It is
+                // serialised (unlike PreviousSites below), so it round-trips whenever the client
+                // happens to echo it back — but a body that simply omits the key deserialises to
+                // false and silently un-promotes the site, after which revert fails on the
+                // promote-flag guard. Deriving it here removes that dependence on the client.
+                site.RegisteredNowAccredited = knownSite.RegisteredNowAccredited;
+
                 // The promote/revert undo stack is [JsonIgnore], so it is never sent to the
                 // frontend and can never come back on a PATCH. Carrying it across keeps a save of
                 // the site list from silently destroying a promoted site's revert target.
@@ -69,7 +83,13 @@ public static class OverseasSiteMerge
             }
             else
             {
+                // Same rule as the known branch — derive from persisted state — which lands on the
+                // opposite literal because the ground state of each concept differs. A site the
+                // server has never seen is by definition new, and equally cannot have been
+                // promoted: promotion only ever happens via PromoteOverseasSite against a site
+                // that is already persisted.
                 site.IsNewSite = true;
+                site.RegisteredNowAccredited = false;
             }
 
             if (site.InterimSite is not null)

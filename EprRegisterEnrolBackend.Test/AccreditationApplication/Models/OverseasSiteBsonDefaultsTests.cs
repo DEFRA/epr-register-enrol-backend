@@ -85,6 +85,33 @@ public class OverseasSiteBsonDefaultsTests
     }
 
     [Fact]
+    public void OverseasSite_StoredWithoutRegisteredNowAccredited_IsNotPromoted()
+    {
+        // epr-zgrb: confirmed rather than assumed. The initializer is already `= false`, so unlike
+        // IsNewSite this one never had the hazard — but it is the same class of thing, so it is
+        // pinned here so a future edit to a truthy default fails loudly.
+        var deserialised = BsonSerializer.Deserialize<OverseasSiteModel>(
+            DocumentWithoutIsNewSite()
+        );
+
+        deserialised.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
+    public void OverseasSite_StoredWithoutSelected_DefaultsToSelected()
+    {
+        // Documents the one remaining `= true` initializer on this model. Unlike IsNewSite this is
+        // NOT a defect: Selected is operator-owned journey state, not regulator-facing, and the
+        // frontend legitimately sets it. Pinned so the asymmetry is a recorded decision rather
+        // than something a later reader "fixes" for consistency and changes journey behaviour.
+        var deserialised = BsonSerializer.Deserialize<OverseasSiteModel>(
+            DocumentWithoutIsNewSite()
+        );
+
+        deserialised.Selected.Should().BeTrue();
+    }
+
+    [Fact]
     public void StoredValuesAreStillHonoured()
     {
         var document = new BsonDocument

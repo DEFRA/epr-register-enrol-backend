@@ -254,4 +254,57 @@ public class OverseasSiteMergeTests
     {
         OverseasSiteMerge.Merge([Site(1)], [Site(99)])[0].PreviousSites.Should().BeEmpty();
     }
+
+    // --- RegisteredNowAccredited (epr-zgrb) ---
+
+    [Fact]
+    public void Merge_KnownSite_KeepsPersistedRegisteredNowAccredited()
+    {
+        var persisted = Site(1);
+        persisted.RegisteredNowAccredited = true;
+
+        var result = OverseasSiteMerge.Merge([persisted], [Site(1)]);
+
+        result[0].RegisteredNowAccredited.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Merge_ClientOmitsRegisteredNowAccredited_DoesNotUnPromote()
+    {
+        // Omission deserialises to false, which silently cleared the promotion and then broke
+        // revert. The incoming site here carries the default false, standing in for that body.
+        var persisted = Site(1);
+        persisted.RegisteredNowAccredited = true;
+
+        var incoming = Site(1);
+        incoming.RegisteredNowAccredited.Should().BeFalse("precondition: the omitted-key state");
+
+        OverseasSiteMerge.Merge([persisted], [incoming])[0]
+            .RegisteredNowAccredited.Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public void Merge_ClientClaimsPromotedForUnpromotedSite_CannotSetTheFlag()
+    {
+        var incoming = Site(1);
+        incoming.RegisteredNowAccredited = true;
+
+        OverseasSiteMerge.Merge([Site(1)], [incoming])[0]
+            .RegisteredNowAccredited.Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public void Merge_UnknownSite_CannotArrivePromoted()
+    {
+        // Promotion only ever happens via PromoteOverseasSite against an already-persisted site,
+        // so a site the server has never seen cannot be promoted regardless of what is sent.
+        var incoming = Site(99);
+        incoming.RegisteredNowAccredited = true;
+
+        OverseasSiteMerge.Merge([Site(1)], [incoming])[0]
+            .RegisteredNowAccredited.Should()
+            .BeFalse();
+    }
 }

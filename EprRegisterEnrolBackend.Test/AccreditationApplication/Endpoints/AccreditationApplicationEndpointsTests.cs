@@ -1383,12 +1383,8 @@ public class AccreditationApplicationEndpointsTests
         );
         promoted.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // A perfectly ordinary save of the site list, as the frontend issues it. registeredNowAccredited
-        // is included because the frontend spreads sites straight off the GET and it is a
-        // serialised field, so it genuinely does come back — unlike PreviousSites, which is
-        // [JsonIgnore] and cannot. Carrying it here keeps this test isolating the undo stack
-        // rather than incidentally re-testing the promote flag. (That the flag is only preserved
-        // by that same accidental spread is tracked separately as epr-zgrb.)
+        // An ordinary save of the site list. registeredNowAccredited is included here so this test
+        // stays focused on the undo stack; the sibling test below omits it deliberately.
         await PatchSites(
             app,
             new
@@ -1418,6 +1414,79 @@ public class AccreditationApplicationEndpointsTests
         );
         site!.SiteName.Should().Be("Registered Only Site", "the pre-promotion values are restored");
         site.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_OmittingRegisteredNowAccredited_DoesNotUnPromoteTheSite()
+    {
+        // epr-zgrb, found empirically while writing the sibling test above: registeredNowAccredited
+        // is serialised, so it survived only while the frontend happened to echo it back. A body
+        // that omits the key deserialised it to false, silently clearing the promotion — and the
+        // revert then failed on the promote-flag guard rather than the undo-stack guard, i.e. a
+        // user-visible broken journey rather than a stale flag.
+        Reset();
+        var app = SeedApplicationWithSites(RegisteredOnlySite());
+
+        var promoted = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        promoted.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Deliberately omits registeredNowAccredited — this is the exact body that used to break it.
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new { siteId = 900001, siteName = "Promoted Recycling GmbH" },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.RegisteredNowAccredited.Should().BeTrue();
+
+        // And the journey still works end to end, which is what the operator would actually notice.
+        var reverted = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/revert",
+            content: null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        reverted.StatusCode.Should().Be(HttpStatusCode.OK);
+        var site = await reverted.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteName.Should().Be("Registered Only Site");
+        site.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_ClientClaimsPromotedForAnUnpromotedSite_CannotSetTheFlag()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(RegisteredOnlySite());
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 900001,
+                        siteName = "Registered Only Site",
+                        registeredNowAccredited = true,
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.RegisteredNowAccredited.Should().BeFalse();
     }
 
     [Fact]
