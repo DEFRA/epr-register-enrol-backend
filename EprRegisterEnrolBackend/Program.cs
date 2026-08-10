@@ -1,10 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
-using EprRegisterEnrolBackend.Auth;
-using EprRegisterEnrolBackend.ReEx;
-using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
@@ -13,6 +11,8 @@ using EprRegisterEnrolBackend.FileUpload.Endpoints;
 using EprRegisterEnrolBackend.FileUpload.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.ReEx;
+using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.StubPersistence.Endpoints;
 using EprRegisterEnrolBackend.StubPersistence.Services;
 using EprRegisterEnrolBackend.Utils;
@@ -33,6 +33,11 @@ static WebApplication CreateWebApplication(string[] args)
 {
     var builder = WebApplication.CreateBuilder(args);
     ConfigureBuilder(builder);
+
+    // Suppress the "Server: Kestrel" response header. It's a minor
+    // fingerprinting aid with no direct exploit path, but there's no
+    // reason to advertise the server stack (pentest 2026-08-08, L4).
+    builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
     var app = builder.Build();
     return SetupApplication(app);
