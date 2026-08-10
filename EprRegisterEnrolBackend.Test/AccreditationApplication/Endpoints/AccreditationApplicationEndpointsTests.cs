@@ -1367,6 +1367,60 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
+    public async Task PatchOverseasSites_PromotedSite_KeepsItsRevertTargetIntact()
+    {
+        // Distinct from the isNewSite work: PreviousSites is [JsonIgnore], so the undo stack never
+        // reaches the frontend and cannot come back on a PATCH. Before OverseasSiteMerge carried
+        // it across, any save of the site list destroyed a promoted site's revert target and the
+        // subsequent revert failed with a 409.
+        Reset();
+        var app = SeedApplicationWithSites(RegisteredOnlySite());
+
+        var promoted = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        promoted.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // A perfectly ordinary save of the site list, as the frontend issues it. registeredNowAccredited
+        // is included because the frontend spreads sites straight off the GET and it is a
+        // serialised field, so it genuinely does come back — unlike PreviousSites, which is
+        // [JsonIgnore] and cannot. Carrying it here keeps this test isolating the undo stack
+        // rather than incidentally re-testing the promote flag. (That the flag is only preserved
+        // by that same accidental spread is tracked separately as epr-zgrb.)
+        await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 900001,
+                        siteName = "Promoted Recycling GmbH",
+                        registeredNowAccredited = true,
+                    },
+                },
+            }
+        );
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/revert",
+            content: null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteName.Should().Be("Registered Only Site", "the pre-promotion values are restored");
+        site.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task AddOverseasSite_FlagsTheSiteAsNew()
     {
         Reset();
