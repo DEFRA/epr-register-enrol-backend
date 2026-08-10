@@ -260,7 +260,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseRouting();
     app.UseAuthentication();
     app.UseAuthorization();
-    app.MapHealthChecks("/health");
+    app.MapHealthChecks("/health")
+        .WithMetadata(new HttpMethodMetadata(new[] { HttpMethods.Get, HttpMethods.Head }));
 
     // Enable Swagger UI so the API can be explored in the browser
     app.UseSwagger();
