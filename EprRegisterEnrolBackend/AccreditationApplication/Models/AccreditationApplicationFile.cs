@@ -8,6 +8,7 @@ public class AccreditationApplicationFile
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
     public required string UploadedByUserId { get; set; }
     public FileScanStatus ScanStatus { get; set; } = FileScanStatus.Pending;
+    public AccreditationFileDocumentType? DocumentType { get; set; }
     public required string S3Key { get; set; }
     public string? S3Bucket { get; set; }
 }
@@ -16,5 +17,11 @@ public enum FileScanStatus
 {
     Pending,
     Clean,
-    Infected
+    Infected,
+}
+
+public enum AccreditationFileDocumentType
+{
+    SamplingPlan,
+    SupportingEvidence,
 }

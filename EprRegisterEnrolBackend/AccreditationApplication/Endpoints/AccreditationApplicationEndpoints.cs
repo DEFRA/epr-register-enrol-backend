@@ -1488,6 +1488,7 @@ public static class AccreditationApplicationEndpoints
             ContentType = request.ContentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
             ScanStatus = request.ScanStatus ?? FileScanStatus.Pending,
+            DocumentType = request.DocumentType,
             S3Key = request.S3Key,
             S3Bucket = request.S3Bucket,
         };

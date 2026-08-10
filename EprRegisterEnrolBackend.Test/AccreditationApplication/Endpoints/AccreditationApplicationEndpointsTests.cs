@@ -1544,6 +1544,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-001",
             Filename = "plan.pdf",
             ContentType = "application/pdf",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
             S3Key = "sampling-plans/file-001",
         };
         var response = await _client.PostAsJsonAsync(
@@ -1566,6 +1567,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-004",
             Filename = "plan.pdf",
             ContentType = "application/pdf",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
             S3Key = "sampling-plans/file-004",
         };
         var response = await _client.PostAsJsonAsync(
@@ -1588,6 +1590,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-002",
             Filename = "../../etc/passwd",
             ContentType = "application/pdf",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
             S3Key = "sampling-plans/file-002",
         };
         var response = await _client.PostAsJsonAsync(
@@ -1610,6 +1613,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-003",
             Filename = "script.js",
             ContentType = "text/javascript",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
             S3Key = "sampling-plans/file-003",
         };
         var response = await _client.PostAsJsonAsync(
@@ -1645,6 +1649,7 @@ public class AccreditationApplicationEndpointsTests
             FileId = "file-new",
             Filename = "new.pdf",
             ContentType = "application/pdf",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
             S3Key = "sampling-plans/file-new",
         };
         var response = await _client.PostAsJsonAsync(
@@ -1654,6 +1659,84 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    [Fact]
+    public async Task AddFile_MissingDocumentType_Returns400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new FileUploadRequest
+        {
+            FileId = "file-005",
+            Filename = "plan.pdf",
+            ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-005",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddFile_SamplingPlanDocumentType_Returns201AndPersistsValue()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new FileUploadRequest
+        {
+            FileId = "file-006",
+            Filename = "plan.pdf",
+            ContentType = "application/pdf",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
+            S3Key = "sampling-plans/file-006",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationFile>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.DocumentType.Should().Be(AccreditationFileDocumentType.SamplingPlan);
+    }
+
+    [Fact]
+    public async Task AddFile_SupportingEvidenceDocumentType_Returns201AndPersistsValue()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new FileUploadRequest
+        {
+            FileId = "file-007",
+            Filename = "evidence.pdf",
+            ContentType = "application/pdf",
+            DocumentType = AccreditationFileDocumentType.SupportingEvidence,
+            S3Key = "sampling-plans/file-007",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationFile>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.DocumentType.Should().Be(AccreditationFileDocumentType.SupportingEvidence);
     }
 
     // --- DeleteFile ---
