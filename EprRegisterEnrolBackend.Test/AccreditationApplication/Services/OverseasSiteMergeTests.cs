@@ -255,6 +255,57 @@ public class OverseasSiteMergeTests
         OverseasSiteMerge.Merge([Site(1)], [Site(99)])[0].PreviousSites.Should().BeEmpty();
     }
 
+    // --- OrsId: the epr-2uxy remediation discriminator ---
+
+    [Fact]
+    public void Merge_ClientOmitsOrsId_PreservesThePersistedOne()
+    {
+        var persisted = Site(1);
+        persisted.OrsId = "001";
+
+        var result = OverseasSiteMerge.Merge([persisted], [Site(1)]);
+
+        result[0].OrsId.Should().Be("001");
+    }
+
+    [Fact]
+    public void Merge_ClientChangesOrsId_CannotAlterIt()
+    {
+        var persisted = Site(1);
+        persisted.OrsId = "001";
+
+        var incoming = Site(1);
+        incoming.OrsId = "999";
+
+        OverseasSiteMerge.Merge([persisted], [incoming])[0].OrsId.Should().Be("001");
+    }
+
+    [Fact]
+    public void Merge_ReExSourcedSiteHasNoOrsId_ClientCannotInventOne()
+    {
+        // The load-bearing case. A null OrsId is what marks a site as ReEx-sourced, which is how
+        // the epr-2uxy remediation tells a defaulted isNewSite=true from a genuine one. If a
+        // client could supply one, an affected site would stop looking affected.
+        var reExSourced = Site(1);
+        reExSourced.OrsId.Should().BeNull("precondition: ReEx never sets OrsId");
+
+        var incoming = Site(1);
+        incoming.OrsId = "001";
+
+        OverseasSiteMerge.Merge([reExSourced], [incoming])[0].OrsId.Should().BeNull();
+    }
+
+    [Fact]
+    public void Merge_UnknownSite_KeepsTheSuppliedOrsId()
+    {
+        // No persisted value to restore. Forcing null would destroy data and, worse, make the site
+        // masquerade as ReEx-sourced under the remediation discriminator.
+        var incoming = Site(99);
+        incoming.OrsId = "007";
+
+        OverseasSiteMerge.Merge([Site(1)], [incoming])[0].OrsId.Should().Be("007");
+    }
+
     // --- RegisteredNowAccredited (epr-zgrb) ---
 
     [Fact]

@@ -6,12 +6,16 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// Protects the server-owned fields on an overseas site from a wholesale client-supplied
 /// replacement (RA-292 AC01/AC02, plus epr-zgrb).
 ///
-/// Three fields are restored from the persisted site: <see cref="OverseasSiteModel.IsNewSite"/>
+/// Four fields are restored from the persisted site: <see cref="OverseasSiteModel.IsNewSite"/>
 /// (and its interim-site counterpart), <see cref="OverseasSiteModel.RegisteredNowAccredited"/>,
-/// and <see cref="OverseasSiteModel.PreviousSites"/>. They differ in how exposed they were —
-/// `PreviousSites` could never survive a round-trip, `RegisteredNowAccredited` survived only
-/// while the client happened to echo it — but the rule is one rule: if the server owns the field,
-/// the server derives it.
+/// <see cref="OverseasSiteModel.PreviousSites"/>, and <see cref="OverseasSiteModel.OrsId"/>.
+///
+/// They differ only in how exposed they were, not in principle. `PreviousSites` could never
+/// survive a round-trip at all, being `[JsonIgnore]`. `RegisteredNowAccredited` and `OrsId`
+/// survived precisely as long as the client happened to echo them back. `IsNewSite` had a
+/// defaulting hazard on top. The rule is one rule: if the server owns the field, the server
+/// derives it — because "the client currently happens to preserve it" is not a guarantee, and
+/// each of these was found the hard way.
 ///
 /// <c>PATCH .../overseas-sites</c> replaces the whole site list with the request body, so any
 /// field the client does not echo back is lost. That is harmless for operator-entered data — the
@@ -67,6 +71,20 @@ public static class OverseasSiteMerge
         {
             if (persistedSites.TryGetValue(site.SiteId, out var knownSite))
             {
+                // Fixed at creation and never changed by any journey: AddOverseasSite sets it,
+                // PromoteOverseasSiteRequest has no OrsId field, ApplyPromotedFields doesn't touch
+                // it, and RestoreSnapshotFields doesn't restore it. So a PATCH altering it is
+                // always wrong.
+                //
+                // This one is load-bearing beyond the operator journey. A null OrsId is the marker
+                // that a site came from ReEx rather than the operator (HttpReExApiAdapter has
+                // never set it), which is the discriminator the epr-2uxy remediation uses to tell
+                // a defaulted isNewSite=true from a genuine one. Leaving it clobberable would mean
+                // the remediation's correctness rested on the same accidental round-trip this
+                // whole story exists to eliminate. Restoring it also protects the OrsId-uniqueness
+                // invariant that AddOverseasSite enforces at line ~570.
+                site.OrsId = knownSite.OrsId;
+
                 site.IsNewSite = knownSite.IsNewSite;
 
                 // Set only by PromoteOverseasSite/RevertOverseasSite, never by the operator. It is
@@ -90,6 +108,11 @@ public static class OverseasSiteMerge
                 // that is already persisted.
                 site.IsNewSite = true;
                 site.RegisteredNowAccredited = false;
+
+                // OrsId is deliberately left as supplied here. There is no persisted value to
+                // restore, and forcing it to null would not only destroy data but would make the
+                // site masquerade as ReEx-sourced under the epr-2uxy discriminator — turning a
+                // defensive measure into the exact false-negative it exists to prevent.
             }
 
             if (site.InterimSite is not null)

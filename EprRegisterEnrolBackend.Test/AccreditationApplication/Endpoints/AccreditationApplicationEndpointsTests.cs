@@ -1465,6 +1465,57 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
+    public async Task PatchOverseasSites_OmittingOrsId_PreservesIt()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Operator Added",
+                OrsId = "001",
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new { sites = new[] { new { siteId = 1, siteName = "Operator Added" } } }
+        );
+
+        sites.Should().ContainSingle().Which.OrsId.Should().Be("001");
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_ReExSourcedSite_ClientCannotInventAnOrsId()
+    {
+        // A null OrsId marks a site as ReEx-sourced, which is the discriminator the epr-2uxy
+        // remediation relies on to identify wrongly-defaulted isNewSite values. A client that
+        // could supply one would make an affected site stop looking affected.
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel { SiteId = 1, SiteName = "ReEx Registered Site" }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 1,
+                        siteName = "ReEx Registered Site",
+                        orsId = "001",
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.OrsId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PatchOverseasSites_ClientClaimsPromotedForAnUnpromotedSite_CannotSetTheFlag()
     {
         Reset();
