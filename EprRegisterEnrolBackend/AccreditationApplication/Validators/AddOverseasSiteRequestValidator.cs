@@ -48,11 +48,19 @@ public class AddOverseasSiteRequestValidator : AbstractValidator<AddOverseasSite
             .Matches(EmailRegex)
             .WithMessage("ContactEmail must be a valid email address.");
         RuleFor(r => r.ContactPhone).MaximumLength(30);
-        RuleFor(r => r.OperationCode)
-            .NotEmpty()
+        RuleFor(r => r.OperationCodes).NotEmpty().WithMessage("OperationCodes must not be empty.");
+        RuleForEach(r => r.OperationCodes)
             .Must(c => ValidOperationCodes.Contains(c))
             .WithMessage(
-                $"OperationCode must be one of: {string.Join(", ", ValidOperationCodes)}."
+                $"OperationCodes must each be one of: {string.Join(", ", ValidOperationCodes)}."
+            );
+        RuleFor(r => r.OperationCodes)
+            .Must(codes =>
+                !(codes.Contains("R12") || codes.Contains("R13"))
+                || codes.Any(c => c != "R12" && c != "R13")
+            )
+            .WithMessage(
+                "R12 and R13 cannot be selected in isolation and must be accompanied by at least one other applicable R code."
             );
         RuleFor(r => r.Code1)
             .NotEmpty()
