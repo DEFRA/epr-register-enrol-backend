@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using FluentAssertions;
@@ -390,6 +391,376 @@ public class HttpCaseWorkingApiAdapterTests
         interimSite.GetProperty("townOrCity").GetString().Should().Be("Paris");
         interimSite.GetProperty("contactPhone").GetString().Should().Be("+33 1 23 45 67 89");
     }
+
+    #region RA-292 — ORS / interim / authority-to-issue wire contract
+
+    // RA-292 AC01/AC02/AC04. ManagementBe can only show the regulator what we send, so the
+    // serialised shape is pinned in full rather than field-by-field: a silently dropped key is
+    // exactly the failure this ticket exists to fix.
+
+    private static OverseasSiteModel FullyPopulatedSite() =>
+        new()
+        {
+            SiteId = 1,
+            OrsId = "001",
+            SiteName = "Overseas Recycling Co",
+            SiteAddress = "1 Rue Example, Paris, 75001",
+            AddressLine1 = "1 Rue Example",
+            AddressLine2 = "Zone Industrielle",
+            TownOrCity = "Paris",
+            Country = "France",
+            Coordinates = "48.8566,2.3522",
+            ContactName = "Pierre Dupont",
+            ContactEmail = "pierre@example.com",
+            ContactPhone = "+33 1 23 45 67 89",
+            OperationCode = "R3",
+            Code1 = "B3011",
+            Code2 = "B3020",
+            Code3 = "GH013",
+            RepatriatedLoads = "12",
+            ConditionsOfExport = true,
+            IsEu = true,
+            IsOecd = true,
+            IsNewSite = true,
+            RegisteredNowAccredited = true,
+            BesEvidence = new BesEvidenceModel
+            {
+                BesEvidenceUploads =
+                [
+                    new BesEvidenceFileModel
+                    {
+                        FileId = "file-1",
+                        Filename = "bes.pdf",
+                        ContentType = "application/pdf",
+                        ScanStatus = "complete",
+                        BesEvidenceValidFromDate = "2026-01-01",
+                        BesEvidenceExpiryDate = "2027-01-01",
+                        UploadedAt = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc),
+                        S3Key = "key-1",
+                        S3Bucket = "bucket-1",
+                    },
+                ],
+            },
+            InterimSite = new InterimSiteModel
+            {
+                SiteId = 2,
+                SiteNumber = "SN-0002",
+                Country = "France",
+                SiteName = "Interim Recycling Site",
+                AddressLine1 = "9 Rue Interim",
+                AddressLine2 = "Batiment B",
+                TownOrCity = "Lyon",
+                StateOrRegion = "Auvergne",
+                Postcode = "69001",
+                ContactName = "Marie Curie",
+                ContactEmail = "marie@example.com",
+                ContactPhone = "+33 4 11 22 33 44",
+                IsNewSite = true,
+            },
+        };
+
+    // Only the two properties the model makes mandatory. Stands in for a work item whose site
+    // data predates RA-292 or was never captured.
+    private static OverseasSiteModel BareSite() => new() { SiteId = 3, SiteName = "Sparse Site" };
+
+    private const string ExpectedOverseasSitesJson = """
+        {
+          "sites": [
+            {
+              "siteId": 1,
+              "orsId": "001",
+              "siteName": "Overseas Recycling Co",
+              "siteAddress": "1 Rue Example, Paris, 75001",
+              "addressLine1": "1 Rue Example",
+              "addressLine2": "Zone Industrielle",
+              "townOrCity": "Paris",
+              "country": "France",
+              "coordinates": "48.8566,2.3522",
+              "contactName": "Pierre Dupont",
+              "contactEmail": "pierre@example.com",
+              "contactPhone": "+33 1 23 45 67 89",
+              "operationCode": "R3",
+              "code1": "B3011",
+              "code2": "B3020",
+              "code3": "GH013",
+              "repatriatedLoads": "12",
+              "conditionsOfExport": true,
+              "isEu": true,
+              "isOecd": true,
+              "isNewSite": true,
+              "registeredNowAccredited": true,
+              "interimSite": {
+                "siteId": 2,
+                "siteNumber": "SN-0002",
+                "isNewSite": true,
+                "country": "France",
+                "siteName": "Interim Recycling Site",
+                "addressLine1": "9 Rue Interim",
+                "addressLine2": "Batiment B",
+                "townOrCity": "Lyon",
+                "stateOrRegion": "Auvergne",
+                "postcode": "69001",
+                "contactName": "Marie Curie",
+                "contactEmail": "marie@example.com",
+                "contactPhone": "+33 4 11 22 33 44"
+              },
+              "besEvidence": {
+                "files": [
+                  {
+                    "fileId": "file-1",
+                    "filename": "bes.pdf",
+                    "contentType": "application/pdf",
+                    "uploadedAt": "2026-01-02T03:04:05Z",
+                    "scanStatus": "complete",
+                    "besEvidenceValidFromDate": "2026-01-01",
+                    "besEvidenceExpiryDate": "2027-01-01",
+                    "s3Key": "key-1",
+                    "s3Bucket": "bucket-1"
+                  }
+                ]
+              }
+            },
+            {
+              "siteId": 3,
+              "siteName": "Sparse Site",
+              "isEu": false,
+              "isOecd": false,
+              "isNewSite": true,
+              "registeredNowAccredited": false,
+              "besEvidence": {
+                "files": []
+              }
+            }
+          ]
+        }
+        """;
+
+    private const string ExpectedPrnsJson = """
+        {
+          "plannedTonnageBand": "UpTo1000",
+          "authorisers": [
+            {
+              "fullName": "Old Hand",
+              "email": "old@example.com",
+              "isNew": false
+            },
+            {
+              "fullName": "Fresh Face",
+              "email": "fresh@example.com",
+              "isNew": true
+            }
+          ]
+        }
+        """;
+
+    // Compares field names, field order and values exactly, while letting the expected literal
+    // above stay readable. JsonNode preserves object member order on both sides.
+    private static string Canonical(string json) => JsonNode.Parse(json)!.ToJsonString();
+
+    private static AccreditationApplicationModel ApplicationWithRa292Data()
+    {
+        var application = CreateTestApplication();
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000;
+        application.Prns.Authorisers =
+        [
+            new PrnsAuthoriser
+            {
+                FullName = "Old Hand",
+                Email = "old@example.com",
+                IsNew = false,
+            },
+            new PrnsAuthoriser
+            {
+                FullName = "Fresh Face",
+                Email = "fresh@example.com",
+                IsNew = true,
+            },
+        ];
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [FullyPopulatedSite(), BareSite()],
+        };
+        return application;
+    }
+
+    private static async Task<JsonElement> CapturedSubmitPayload(
+        AccreditationApplicationModel application
+    )
+    {
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+        return JsonDocument.Parse(handler.CapturedRequestBody!).RootElement.GetProperty("payload");
+    }
+
+    private static async Task<JsonElement> CapturedResumeSections(
+        AccreditationApplicationModel application,
+        params string[] sectionKeys
+    )
+    {
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            application,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            sectionKeys
+        );
+        return JsonDocument.Parse(handler.CapturedRequestBody!).RootElement.GetProperty("sections");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_EmitsFullOverseasSitesContract()
+    {
+        var payload = await CapturedSubmitPayload(ApplicationWithRa292Data());
+
+        Canonical(payload.GetProperty("overseasSites").GetRawText())
+            .Should()
+            .Be(Canonical(ExpectedOverseasSitesJson));
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_EmitsAuthorisersWithIsNewFlag()
+    {
+        var payload = await CapturedSubmitPayload(ApplicationWithRa292Data());
+
+        Canonical(payload.GetProperty("prns").GetRawText()).Should().Be(Canonical(ExpectedPrnsJson));
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_OverseasSitesSection_EmitsFullOverseasSitesContract()
+    {
+        // RA-292 (D): this projection used to be a weaker copy of the submit one — no orsId, no
+        // isNewSite, no interimSite at all — so resubmitting a queried ORS section wiped the
+        // interim site data ManagementBe held.
+        var sections = await CapturedResumeSections(
+            ApplicationWithRa292Data(),
+            "overseas-reprocessing-sites"
+        );
+
+        Canonical(sections.GetProperty("OverseasSites").GetRawText())
+            .Should()
+            .Be(Canonical(ExpectedOverseasSitesJson));
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_PrnsSection_EmitsAuthorisersWithIsNewFlag()
+    {
+        var sections = await CapturedResumeSections(
+            ApplicationWithRa292Data(),
+            "authority-to-issue"
+        );
+
+        Canonical(sections.GetProperty("Prns").GetRawText()).Should().Be(Canonical(ExpectedPrnsJson));
+    }
+
+    [Theory]
+    [InlineData("overseas-reprocessing-sites", "OverseasSites", "overseasSites")]
+    [InlineData("authority-to-issue", "Prns", "prns")]
+    [InlineData("prn-tonnage", "Prns", "prns")]
+    public async Task ResumeFromQueryAsync_SectionMatchesSubmitPayloadByteForByte(
+        string sectionKey,
+        string sectionName,
+        string payloadName
+    )
+    {
+        // Belt and braces on top of the literals above: whatever the submit payload says, the
+        // resubmit payload must say the same, so the two can never drift apart again.
+        var application = ApplicationWithRa292Data();
+
+        var payload = await CapturedSubmitPayload(application);
+        var sections = await CapturedResumeSections(application, sectionKey);
+
+        Canonical(sections.GetProperty(sectionName).GetRawText())
+            .Should()
+            .Be(Canonical(payload.GetProperty(payloadName).GetRawText()));
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_SiteWithNoOptionalValues_OmitsThoseKeysEntirely()
+    {
+        // RA-292 (E): absent must stay safe for ManagementBe. Nulls are dropped rather than sent
+        // as explicit nulls, and no new field is ever mandatory on the consumer side.
+        var application = CreateTestApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [BareSite()],
+        };
+
+        var payload = await CapturedSubmitPayload(application);
+        var site = payload.GetProperty("overseasSites").GetProperty("sites")[0];
+
+        foreach (
+            var absentKey in new[]
+            {
+                "orsId",
+                "siteAddress",
+                "addressLine1",
+                "addressLine2",
+                "townOrCity",
+                "country",
+                "coordinates",
+                "contactName",
+                "contactEmail",
+                "contactPhone",
+                "operationCode",
+                "code1",
+                "code2",
+                "code3",
+                "repatriatedLoads",
+                "conditionsOfExport",
+                "interimSite",
+            }
+        )
+        {
+            site.TryGetProperty(absentKey, out _)
+                .Should()
+                .BeFalse($"'{absentKey}' is null and must be omitted, not sent as null");
+        }
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_NoOverseasSites_SendsEmptySiteArray()
+    {
+        var payload = await CapturedSubmitPayload(CreateTestApplication());
+
+        payload
+            .GetProperty("overseasSites")
+            .GetProperty("sites")
+            .EnumerateArray()
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_NoAuthorisers_SendsEmptyAuthoriserArray()
+    {
+        var payload = await CapturedSubmitPayload(CreateTestApplication());
+
+        payload.GetProperty("prns").GetProperty("authorisers").EnumerateArray().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_NoOverseasSites_SendsEmptySiteArray()
+    {
+        var application = CreateTestApplication();
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.OverseasSites = null;
+
+        var sections = await CapturedResumeSections(application, "overseas-reprocessing-sites");
+
+        sections
+            .GetProperty("OverseasSites")
+            .GetProperty("sites")
+            .EnumerateArray()
+            .Should()
+            .BeEmpty();
+    }
+
+    #endregion
 
     [Fact]
     public async Task SubmitApplicationAsync_SetsAuthHeaders()

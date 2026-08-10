@@ -878,6 +878,279 @@ public class AccreditationApplicationEndpointsTests
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
     }
 
+    // --- RA-292 AC03: authority-to-issue isNew derivation ---
+
+    private static PrnsAuthoriser Authoriser(string fullName, string email, bool isNew = false) =>
+        new()
+        {
+            FullName = fullName,
+            Email = email,
+            IsNew = isNew,
+        };
+
+    private async Task<List<PrnsAuthoriser>> PatchAuthorisers(string url, object request)
+    {
+        var response = await _client.PatchAsJsonAsync(
+            url,
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        return body!.Prns.Authorisers;
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_NewEmail_IsFlaggedNewAndKnownEmailIsNot(string route)
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a =>
+                a.Prns.Authorisers = [Authoriser("Prior Year Person", "prior@example.com")]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[]
+                {
+                    new { fullName = "Prior Year Person", email = "prior@example.com" },
+                    new { fullName = "Added Now", email = "added@example.com" },
+                },
+            }
+        );
+
+        authorisers.Should().HaveCount(2);
+        authorisers[0].IsNew.Should().BeFalse();
+        authorisers[1].IsNew.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_ClientSendsNoIsNewKey_ServerStillDerivesIt(string route)
+    {
+        // The operator frontend is not required to send isNew at all — the flag the regulator
+        // sees must be right regardless of what the client does with the field.
+        Reset();
+        var app = SeedApplication();
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new { authorisers = new[] { new { fullName = "Added Now", email = "a@example.com" } } }
+        );
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_ClientSendsIsNewFalse_CannotClearTheFlag(string route)
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[]
+                {
+                    new
+                    {
+                        fullName = "Added Now",
+                        email = "a@example.com",
+                        isNew = false,
+                    },
+                },
+            }
+        );
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_ClientSendsIsNewTrueForKnownEmail_CannotSetTheFlag(
+        string route
+    )
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com")]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[]
+                {
+                    new
+                    {
+                        fullName = "Known",
+                        email = "known@example.com",
+                        isNew = true,
+                    },
+                },
+            }
+        );
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_EmailDiffersByCaseAndWhitespace_StaysNotNew(string route)
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com")]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[]
+                {
+                    new { fullName = "Known", email = "  KNOWN@Example.COM " },
+                },
+            }
+        );
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_AlreadyFlaggedNew_StaysNewAcrossRepeatedSaves(string route)
+    {
+        Reset();
+        var app = SeedApplication();
+        var url = $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}";
+        var body = new
+        {
+            authorisers = new[] { new { fullName = "Added Now", email = "a@example.com" } },
+        };
+
+        await PatchAuthorisers(url, body);
+        var authorisers = await PatchAuthorisers(url, body);
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_OmittedAuthoriser_IsRemovedNotResurrected(string route)
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a =>
+                a.Prns.Authorisers =
+                [
+                    Authoriser("Kept", "kept@example.com"),
+                    Authoriser("Removed", "removed@example.com"),
+                ]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[] { new { fullName = "Kept", email = "kept@example.com" } },
+            }
+        );
+
+        authorisers.Should().ContainSingle().Which.Email.Should().Be("kept@example.com");
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_RequestOmitsAuthorisers_LeavesPersistedListUntouched(
+        string route
+    )
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com", true)]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new { plannedTonnageBand = "UpTo500" }
+        );
+
+        authorisers.Should().ContainSingle();
+        authorisers[0].Email.Should().Be("known@example.com");
+        authorisers[0].IsNew.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Seed_PriorYearAuthorisers_AreNotFlaggedNew()
+    {
+        // AC03 hinges on this: contacts carried over from last year's accreditation existed
+        // before the application, so the regulator must not see them badged as new.
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync("org-123", "reg-1", MaterialType.Steel, 2025)
+            .Returns(
+                Task.FromResult(
+                    ReExResult<ReExAccreditationDto>.Success(
+                        new ReExAccreditationDto
+                        {
+                            AccreditationId = "reex-abc",
+                            OrganisationId = "org-123",
+                            MaterialType = MaterialType.Steel,
+                            Year = 2025,
+                            IsExporter = false,
+                            OverseasSites = [],
+                            Prns = new ReExPrnsDto
+                            {
+                                PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+                                Authorisers =
+                                [
+                                    // isNew: true here stands in for a stray value arriving from
+                                    // ReEx — carrying it over would misinform the regulator.
+                                    Authoriser("Prior Year Person", "prior@example.com", true),
+                                ],
+                            },
+                        },
+                        200
+                    )
+                )
+            );
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            new SeedRequest { Year = 2026 },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!
+            .Prns.Authorisers.Should()
+            .ContainSingle()
+            .Which.Should()
+            .Match<PrnsAuthoriser>(a => a.Email == "prior@example.com" && !a.IsNew);
+    }
+
     // --- PatchTonnage ---
 
     [Fact]

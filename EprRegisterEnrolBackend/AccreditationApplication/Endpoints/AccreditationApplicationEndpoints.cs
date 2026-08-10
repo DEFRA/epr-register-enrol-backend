@@ -187,7 +187,9 @@ public static class AccreditationApplicationEndpoints
             application.Prns = new AccreditationApplicationPrns
             {
                 PlannedTonnageBand = priorYearData.Prns.PlannedTonnageBand,
-                Authorisers = priorYearData.Prns.Authorisers,
+                // RA-292 AC03: prior-year contacts carried over from ReEx existed before this
+                // application, so they are never flagged new to the regulator.
+                Authorisers = PrnsAuthoriserMerge.MarkAsExisting(priorYearData.Prns.Authorisers),
                 SectionStatus = SectionStatus.NotStarted,
             };
         }
@@ -309,8 +311,13 @@ public static class AccreditationApplicationEndpoints
         if (request.PlannedTonnageBand.HasValue)
             application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
 
+        // RA-292 AC03: IsNew is re-derived server-side against the persisted list; whatever the
+        // client sent on each authoriser is discarded.
         if (request.Authorisers != null)
-            application.Prns.Authorisers = request.Authorisers;
+            application.Prns.Authorisers = PrnsAuthoriserMerge.Merge(
+                application.Prns.Authorisers,
+                request.Authorisers
+            );
 
         if (application.Prns.SectionStatus != SectionStatus.Queried)
             application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
@@ -356,8 +363,13 @@ public static class AccreditationApplicationEndpoints
         if (request.PlannedTonnageBand.HasValue)
             application.Prns.PlannedTonnageBand = request.PlannedTonnageBand;
 
+        // RA-292 AC03: same server-side derivation as PatchPrns — the tonnage-authority journey
+        // PATCHes the whole authoriser list through here.
         if (request.Authorisers != null)
-            application.Prns.Authorisers = request.Authorisers;
+            application.Prns.Authorisers = PrnsAuthoriserMerge.Merge(
+                application.Prns.Authorisers,
+                request.Authorisers
+            );
 
         if (application.Prns.SectionStatus != SectionStatus.Queried)
             application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
