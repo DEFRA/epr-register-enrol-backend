@@ -517,8 +517,13 @@ public static class AccreditationApplicationEndpoints
         if (application.OverseasSites is null)
             application.OverseasSites = new AccreditationApplicationOverseasSites();
 
+        // RA-292 AC01/AC02: isNewSite (site and interim) is re-derived server-side against the
+        // persisted list; whatever the client sent for it is discarded.
         if (request.Sites != null)
-            application.OverseasSites.Sites = request.Sites;
+            application.OverseasSites.Sites = OverseasSiteMerge.Merge(
+                application.OverseasSites.Sites,
+                request.Sites
+            );
 
         RecomputeOverseasSitesSectionStatus(application.OverseasSites);
 
@@ -596,6 +601,10 @@ public static class AccreditationApplicationEndpoints
             ConditionsOfExport = request.ConditionsOfExport,
             IsEu = CountryClassifications.IsEu(request.Country),
             IsOecd = CountryClassifications.IsOecd(request.Country),
+            // The one place an ORS is genuinely created by the operator, so the one place the
+            // regulator's "new" badge is switched on (RA-292 AC01). Sites arriving from ReEx are
+            // pre-existing and stay false.
+            IsNewSite = true,
         };
 
         application.OverseasSites.Sites.Add(newSite);

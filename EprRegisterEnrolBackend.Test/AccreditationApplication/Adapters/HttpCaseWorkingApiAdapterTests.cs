@@ -370,6 +370,9 @@ public class HttpCaseWorkingApiAdapterTests
                         ContactName = "Jane Smith",
                         ContactEmail = "jane.smith@example.com",
                         ContactPhone = "+33 1 23 45 67 89",
+                        // Set explicitly: IsNewSite defaults to false (RA-292), so relying on the
+                        // default here would assert nothing about forwarding.
+                        IsNewSite = true,
                     },
                 },
             ],
@@ -460,7 +463,8 @@ public class HttpCaseWorkingApiAdapterTests
         };
 
     // Only the two properties the model makes mandatory. Stands in for a work item whose site
-    // data predates RA-292 or was never captured.
+    // data predates RA-292 or was never captured — note it serialises with isNewSite false, since
+    // a site with no stored newness must not arrive at the regulator wearing a "new" badge.
     private static OverseasSiteModel BareSite() => new() { SiteId = 3, SiteName = "Sparse Site" };
 
     private const string ExpectedOverseasSitesJson = """
@@ -525,7 +529,7 @@ public class HttpCaseWorkingApiAdapterTests
               "siteName": "Sparse Site",
               "isEu": false,
               "isOecd": false,
-              "isNewSite": true,
+              "isNewSite": false,
               "registeredNowAccredited": false,
               "besEvidence": {
                 "files": []

@@ -1151,6 +1151,241 @@ public class AccreditationApplicationEndpointsTests
             .Match<PrnsAuthoriser>(a => a.Email == "prior@example.com" && !a.IsNew);
     }
 
+    // --- RA-292 AC01/AC02: isNewSite is server-owned across PatchOverseasSites ---
+
+    private async Task<List<OverseasSiteModel>> PatchSites(
+        AccreditationApplicationModel app,
+        object request
+    )
+    {
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        return body!.OverseasSites!.Sites;
+    }
+
+    private AccreditationApplicationModel SeedApplicationWithSites(params OverseasSiteModel[] sites)
+        => SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites { Sites = [.. sites] }
+        );
+
+    [Fact]
+    public async Task PatchOverseasSites_ClientOmitsIsNewSite_DoesNotFlipRegisteredSiteToNew()
+    {
+        // The live risk: the frontend builds the PATCH body by spreading sites off the GET, so a
+        // single dropped key used to relabel every site as new.
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "ReEx Registered Site",
+                IsNewSite = false,
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new { sites = new[] { new { siteId = 1, siteName = "ReEx Registered Site" } } }
+        );
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_ClientClaimsNewForKnownSite_CannotSetTheFlag()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Registered",
+                IsNewSite = false,
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 1,
+                        siteName = "Registered",
+                        isNewSite = true,
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_ClientClaimsNotNewForGenuinelyNewSite_CannotClearTheFlag()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Operator Added",
+                IsNewSite = true,
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 1,
+                        siteName = "Operator Added",
+                        isNewSite = false,
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_GenuinelyNewSiteSurvivesRepeatedSaves()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Operator Added",
+                IsNewSite = true,
+            }
+        );
+        var body = new { sites = new[] { new { siteId = 1, siteName = "Operator Added" } } };
+
+        await PatchSites(app, body);
+        var sites = await PatchSites(app, body);
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_PreservesInterimSiteIsNewSite()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Site",
+                IsNewSite = false,
+                InterimSite = new InterimSiteModel
+                {
+                    SiteId = 2,
+                    SiteNumber = "SN-0002",
+                    Country = "France",
+                    SiteName = "Interim",
+                    AddressLine1 = "1 Rue Example",
+                    TownOrCity = "Paris",
+                    ContactName = "Marie Curie",
+                    ContactEmail = "marie@example.com",
+                    ContactPhone = "0033111222333",
+                    IsNewSite = true,
+                },
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 1,
+                        siteName = "Site",
+                        isNewSite = true,
+                        interimSite = new
+                        {
+                            siteId = 2,
+                            siteNumber = "SN-0002",
+                            country = "France",
+                            siteName = "Interim",
+                            addressLine1 = "1 Rue Example",
+                            townOrCity = "Paris",
+                            contactName = "Marie Curie",
+                            contactEmail = "marie@example.com",
+                            contactPhone = "0033111222333",
+                            isNewSite = false,
+                        },
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle();
+        sites[0].IsNewSite.Should().BeFalse("the ORS flag is server-owned");
+        sites[0].InterimSite!.IsNewSite.Should().BeTrue("the interim flag is server-owned too");
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_ThenPatch_SiteStaysFlaggedNew()
+    {
+        // End to end over the two endpoints that actually matter for AC01: the add endpoint is the
+        // only place newness is switched on, and a later save must not undo it.
+        Reset();
+        var app = SeedApplication();
+
+        var added = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        added.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var sites = await PatchSites(
+            app,
+            new { sites = new[] { new { siteId = 1, siteName = "Test Recycling GmbH" } } }
+        );
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_FlagsTheSiteAsNew()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.IsNewSite.Should().BeTrue();
+    }
+
     // --- PatchTonnage ---
 
     [Fact]
