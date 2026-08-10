@@ -576,7 +576,7 @@ public static class AccreditationApplicationEndpoints
             ContactName = request.ContactName,
             ContactEmail = request.ContactEmail,
             ContactPhone = request.ContactPhone,
-            OperationCode = request.OperationCode,
+            OperationCodes = request.OperationCodes,
             Code1 = request.Code1,
             Code2 = request.Code2,
             Code3 = request.Code3,
@@ -677,7 +677,7 @@ public static class AccreditationApplicationEndpoints
         site.ContactName = request.ContactName;
         site.ContactEmail = request.ContactEmail;
         site.ContactPhone = request.ContactPhone;
-        site.OperationCode = request.OperationCode;
+        site.OperationCodes = request.OperationCodes;
         site.Code1 = request.Code1;
         site.Code2 = request.Code2;
         site.Code3 = request.Code3;
@@ -699,7 +699,7 @@ public static class AccreditationApplicationEndpoints
         site.ContactName = snapshot.ContactName;
         site.ContactEmail = snapshot.ContactEmail;
         site.ContactPhone = snapshot.ContactPhone;
-        site.OperationCode = snapshot.OperationCode;
+        site.OperationCodes = snapshot.OperationCodes;
         site.Code1 = snapshot.Code1;
         site.Code2 = snapshot.Code2;
         site.Code3 = snapshot.Code3;
@@ -759,7 +759,7 @@ public static class AccreditationApplicationEndpoints
                 ContactName = site.ContactName,
                 ContactEmail = site.ContactEmail,
                 ContactPhone = site.ContactPhone,
-                OperationCode = site.OperationCode,
+                OperationCodes = site.OperationCodes,
                 Code1 = site.Code1,
                 Code2 = site.Code2,
                 Code3 = site.Code3,
@@ -1538,9 +1538,7 @@ public static class AccreditationApplicationEndpoints
     // deliberate no-op for ApplicationStatus — the push still updates CaseManagementStatusUpdatedAt
     // for ordering purposes. "queried"/"withdrawn" are never sent here: query keeps its own richer
     // /query endpoint, and withdrawal is entirely out of scope for this plan (§4.1, §4.5).
-    private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(
-        string toStateId
-    ) =>
+    private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(string toStateId) =>
         toStateId switch
         {
             "submitted" => ApplicationStatus.Submitted,

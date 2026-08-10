@@ -59,7 +59,7 @@ public record AddOverseasSiteRequest
     public required string ContactName { get; set; }
     public required string ContactEmail { get; set; }
     public string? ContactPhone { get; set; }
-    public required string OperationCode { get; set; }
+    public required List<string> OperationCodes { get; set; }
     public required string Code1 { get; set; }
     public string? Code2 { get; set; }
     public string? Code3 { get; set; }
@@ -78,7 +78,7 @@ public record PromoteOverseasSiteRequest
     public required string ContactName { get; set; }
     public required string ContactEmail { get; set; }
     public string? ContactPhone { get; set; }
-    public required string OperationCode { get; set; }
+    public required List<string> OperationCodes { get; set; }
     public required string Code1 { get; set; }
     public string? Code2 { get; set; }
     public string? Code3 { get; set; }

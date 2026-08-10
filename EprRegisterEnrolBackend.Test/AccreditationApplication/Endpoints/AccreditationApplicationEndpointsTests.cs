@@ -750,7 +750,8 @@ public class AccreditationApplicationEndpointsTests
             JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.Select(a => a.ApplicationStatus)
+        body!
+            .Select(a => a.ApplicationStatus)
             .Should()
             .BeEquivalentTo([ApplicationStatus.Saved, ApplicationStatus.Withdrawn]);
     }
@@ -1782,7 +1783,7 @@ public class AccreditationApplicationEndpointsTests
             Country = "Germany",
             ContactName = "Hans Müller",
             ContactEmail = "hans@testrecycling.de",
-            OperationCode = "R3",
+            OperationCodes = ["R3"],
             Code1 = "A1181",
             RepatriatedLoads = "Rejected loads returned within 30 days at our expense.",
         };
@@ -1888,7 +1889,7 @@ public class AccreditationApplicationEndpointsTests
             Country = "Germany",
             ContactName = "Hans",
             ContactEmail = "hans@test.de",
-            OperationCode = "R3",
+            OperationCodes = ["R3"],
             Code1 = "A1181",
             RepatriatedLoads = "Details here.",
         };
@@ -1942,7 +1943,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var request = ValidAddOrsRequest() with { OperationCode = "R99" };
+        var request = ValidAddOrsRequest() with { OperationCodes = ["R99"] };
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
@@ -1951,6 +1952,32 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Theory]
+    [InlineData(new[] { "R12" }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R13" }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R12", "R13" }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R3", "R12" }, HttpStatusCode.Created)]
+    [InlineData(new[] { "R4", "R13" }, HttpStatusCode.Created)]
+    [InlineData(new[] { "R3", "R4", "R5", "R12", "R13" }, HttpStatusCode.Created)]
+    public async Task AddOverseasSite_R12R13AccompanyingCodeRule_MatchesAc07Table(
+        string[] operationCodes,
+        HttpStatusCode expectedStatus
+    )
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { OperationCodes = [.. operationCodes] };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(expectedStatus);
     }
 
     [Fact]
@@ -2061,7 +2088,7 @@ public class AccreditationApplicationEndpointsTests
             Country = "Germany",
             ContactName = "Greta Schmidt",
             ContactEmail = "greta@promotedrecycling.de",
-            OperationCode = "R3",
+            OperationCodes = ["R3"],
             Code1 = "A1181",
             RepatriatedLoads = "Rejected loads returned within 30 days at our expense.",
         };
@@ -2157,6 +2184,36 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Theory]
+    [InlineData(new[] { "R12" }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R13" }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R12", "R13" }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R3", "R12" }, HttpStatusCode.OK)]
+    [InlineData(new[] { "R4", "R13" }, HttpStatusCode.OK)]
+    [InlineData(new[] { "R3", "R4", "R5", "R12", "R13" }, HttpStatusCode.OK)]
+    public async Task PromoteOverseasSite_R12R13AccompanyingCodeRule_MatchesAc07Table(
+        string[] operationCodes,
+        HttpStatusCode expectedStatus
+    )
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var request = ValidPromoteRequest() with { OperationCodes = [.. operationCodes] };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(expectedStatus);
     }
 
     [Fact]
@@ -3515,7 +3572,10 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var workItemId = Guid.NewGuid();
-        SeedApplication(status: fromStatus, configure: a => a.CaseManagementWorkItemId = workItemId);
+        SeedApplication(
+            status: fromStatus,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
 
         var request = new StatusChangedFromCaseManagementRequest
         {
@@ -3702,7 +3762,10 @@ public class AccreditationApplicationEndpointsTests
         // withdrawn application's withdraw/query/approve paths (RA-368 review).
         Reset();
         var workItemId = Guid.NewGuid();
-        SeedApplication(status: fromStatus, configure: a => a.CaseManagementWorkItemId = workItemId);
+        SeedApplication(
+            status: fromStatus,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
 
         var request = new StatusChangedFromCaseManagementRequest
         {
