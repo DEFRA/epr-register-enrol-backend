@@ -1662,7 +1662,7 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task AddFile_MissingDocumentType_Returns400()
+    public async Task AddFile_MissingDocumentType_Returns201AndPersistsNull()
     {
         Reset();
         var app = SeedApplication();
@@ -1673,6 +1673,37 @@ public class AccreditationApplicationEndpointsTests
             Filename = "plan.pdf",
             ContentType = "application/pdf",
             S3Key = "sampling-plans/file-005",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!
+            .SamplingPlan.Files.Single(f => f.FileId == "file-005")
+            .DocumentType.Should()
+            .BeNull();
+    }
+
+    [Fact]
+    public async Task AddFile_InvalidDocumentType_Returns400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new
+        {
+            FileId = "file-008",
+            Filename = "plan.pdf",
+            ContentType = "application/pdf",
+            S3Key = "sampling-plans/file-008",
+            DocumentType = 99,
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -1704,11 +1735,14 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationFile>(
-            JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
         );
-        body!.DocumentType.Should().Be(AccreditationFileDocumentType.SamplingPlan);
+        stored!
+            .SamplingPlan.Files.Single(f => f.FileId == "file-006")
+            .DocumentType.Should()
+            .Be(AccreditationFileDocumentType.SamplingPlan);
     }
 
     [Fact]
@@ -1732,11 +1766,14 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationFile>(
-            JsonOptions,
-            cancellationToken: TestContext.Current.CancellationToken
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
         );
-        body!.DocumentType.Should().Be(AccreditationFileDocumentType.SupportingEvidence);
+        stored!
+            .SamplingPlan.Files.Single(f => f.FileId == "file-007")
+            .DocumentType.Should()
+            .Be(AccreditationFileDocumentType.SupportingEvidence);
     }
 
     // --- DeleteFile ---

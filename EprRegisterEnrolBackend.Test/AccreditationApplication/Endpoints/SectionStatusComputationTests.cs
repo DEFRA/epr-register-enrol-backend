@@ -16,7 +16,10 @@ public class SectionStatusComputationTests
     [Fact]
     public void Prns_TonnageBandOnly_IsInProgress()
     {
-        var prns = new AccreditationApplicationPrns { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
+        var prns = new AccreditationApplicationPrns
+        {
+            PlannedTonnageBand = PlannedTonnageBand.UpTo500,
+        };
         SectionStatusService.ComputePrns(prns).Should().Be(SectionStatus.InProgress);
     }
 
@@ -25,7 +28,7 @@ public class SectionStatusComputationTests
     {
         var prns = new AccreditationApplicationPrns
         {
-            Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@x.com" }]
+            Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@x.com" }],
         };
         SectionStatusService.ComputePrns(prns).Should().Be(SectionStatus.InProgress);
     }
@@ -36,7 +39,7 @@ public class SectionStatusComputationTests
         var prns = new AccreditationApplicationPrns
         {
             PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
-            Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@x.com" }]
+            Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@x.com" }],
         };
         SectionStatusService.ComputePrns(prns).Should().Be(SectionStatus.Completed);
     }
@@ -67,7 +70,7 @@ public class SectionStatusComputationTests
             BusinessCollectionsPercent = 20,
             CommunicationsPercent = 20,
             NewMarketsPercent = 10,
-            NewUsesPercent = 10
+            NewUsesPercent = 10,
         };
         SectionStatusService.ComputeBusinessPlan(bp).Should().Be(SectionStatus.Completed);
     }
@@ -82,7 +85,7 @@ public class SectionStatusComputationTests
             BusinessCollectionsPercent = 10,
             CommunicationsPercent = 10,
             NewMarketsPercent = 10,
-            NewUsesPercent = 10
+            NewUsesPercent = 10,
         };
         SectionStatusService.ComputeBusinessPlan(bp).Should().Be(SectionStatus.InProgress);
     }
@@ -105,10 +108,14 @@ public class SectionStatusComputationTests
             [
                 new AccreditationApplicationFile
                 {
-                    FileId = "f1", Filename = "plan.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Pending, S3Key = "sampling-plans/f1"
-                }
-            ]
+                    FileId = "f1",
+                    Filename = "plan.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Pending,
+                    S3Key = "sampling-plans/f1",
+                },
+            ],
         };
         SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.InProgress);
     }
@@ -122,10 +129,14 @@ public class SectionStatusComputationTests
             [
                 new AccreditationApplicationFile
                 {
-                    FileId = "f1", Filename = "plan.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f1"
-                }
-            ]
+                    FileId = "f1",
+                    Filename = "plan.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f1",
+                },
+            ],
         };
         SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.Completed);
     }
@@ -139,10 +150,14 @@ public class SectionStatusComputationTests
             [
                 new AccreditationApplicationFile
                 {
-                    FileId = "f1", Filename = "bad.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Infected, S3Key = "sampling-plans/f1"
-                }
-            ]
+                    FileId = "f1",
+                    Filename = "bad.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Infected,
+                    S3Key = "sampling-plans/f1",
+                },
+            ],
         };
         SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.InProgress);
     }
@@ -156,15 +171,23 @@ public class SectionStatusComputationTests
             [
                 new AccreditationApplicationFile
                 {
-                    FileId = "f1", Filename = "good.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f1"
+                    FileId = "f1",
+                    Filename = "good.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f1",
                 },
                 new AccreditationApplicationFile
                 {
-                    FileId = "f2", Filename = "bad.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Infected, S3Key = "sampling-plans/f2"
-                }
-            ]
+                    FileId = "f2",
+                    Filename = "bad.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Infected,
+                    S3Key = "sampling-plans/f2",
+                },
+            ],
         };
         SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.InProgress);
     }
@@ -178,15 +201,23 @@ public class SectionStatusComputationTests
             [
                 new AccreditationApplicationFile
                 {
-                    FileId = "f1", Filename = "good.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f1"
+                    FileId = "f1",
+                    Filename = "good.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f1",
                 },
                 new AccreditationApplicationFile
                 {
-                    FileId = "f2", Filename = "pending.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Pending, S3Key = "sampling-plans/f2"
-                }
-            ]
+                    FileId = "f2",
+                    Filename = "pending.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Pending,
+                    S3Key = "sampling-plans/f2",
+                },
+            ],
         };
         SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.InProgress);
     }
@@ -200,15 +231,99 @@ public class SectionStatusComputationTests
             [
                 new AccreditationApplicationFile
                 {
-                    FileId = "f1", Filename = "doc1.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f1"
+                    FileId = "f1",
+                    Filename = "doc1.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f1",
                 },
                 new AccreditationApplicationFile
                 {
-                    FileId = "f2", Filename = "doc2.pdf", ContentType = "application/pdf",
-                    UploadedByUserId = "u1", ScanStatus = FileScanStatus.Clean, S3Key = "sampling-plans/f2"
-                }
-            ]
+                    FileId = "f2",
+                    Filename = "doc2.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f2",
+                },
+            ],
+        };
+        SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public void SamplingPlan_SupportingEvidenceOnly_IsNotStarted()
+    {
+        var sp = new AccreditationApplicationSamplingPlan
+        {
+            Files =
+            [
+                new AccreditationApplicationFile
+                {
+                    FileId = "f1",
+                    Filename = "evidence.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f1",
+                    DocumentType = AccreditationFileDocumentType.SupportingEvidence,
+                },
+            ],
+        };
+        SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.NotStarted);
+    }
+
+    [Fact]
+    public void SamplingPlan_CleanSamplingPlanAndCleanSupportingEvidence_IsCompleted()
+    {
+        var sp = new AccreditationApplicationSamplingPlan
+        {
+            Files =
+            [
+                new AccreditationApplicationFile
+                {
+                    FileId = "f1",
+                    Filename = "plan.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f1",
+                    DocumentType = AccreditationFileDocumentType.SamplingPlan,
+                },
+                new AccreditationApplicationFile
+                {
+                    FileId = "f2",
+                    Filename = "evidence.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f2",
+                    DocumentType = AccreditationFileDocumentType.SupportingEvidence,
+                },
+            ],
+        };
+        SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public void SamplingPlan_LegacyFileWithNoDocumentType_StillCounts()
+    {
+        var sp = new AccreditationApplicationSamplingPlan
+        {
+            Files =
+            [
+                new AccreditationApplicationFile
+                {
+                    FileId = "f1",
+                    Filename = "legacy.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "u1",
+                    ScanStatus = FileScanStatus.Clean,
+                    S3Key = "sampling-plans/f1",
+                    DocumentType = null,
+                },
+            ],
         };
         SectionStatusService.ComputeSamplingPlan(sp).Should().Be(SectionStatus.Completed);
     }
