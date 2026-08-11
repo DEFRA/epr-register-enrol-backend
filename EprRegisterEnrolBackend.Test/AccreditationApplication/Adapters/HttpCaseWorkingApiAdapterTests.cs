@@ -954,7 +954,8 @@ public class HttpCaseWorkingApiAdapterTests
 
         var result = await adapter.GetNotificationStatusAsync(app);
 
-        result.Should().BeNull();
+        result.NotificationStatus.Should().BeNull();
+        result.SlaDueDate.Should().BeNull();
         handler.CapturedRequest.Should().BeNull();
     }
 
@@ -995,12 +996,39 @@ public class HttpCaseWorkingApiAdapterTests
 
         var result = await adapter.GetNotificationStatusAsync(app);
 
-        result.Should().Be("sent");
+        result.NotificationStatus.Should().Be("sent");
         handler
             .CapturedRequest!.RequestUri!.ToString()
             .Should()
             .Be($"{TestUrl}/work-items/{workItemId}");
         handler.CapturedRequest!.Method.Should().Be(HttpMethod.Get);
+    }
+
+    [Fact]
+    public async Task GetNotificationStatusAsync_ParsesSlaDueDate()
+    {
+        var workItemId = Guid.NewGuid();
+        var slaDueDate = new DateTime(2026, 3, 15, 0, 0, 0, DateTimeKind.Utc);
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, ClientId = TestClientId }
+        );
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.OK,
+            new { auditLog = Array.Empty<object>(), slaDueDate }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = workItemId;
+
+        var result = await adapter.GetNotificationStatusAsync(app);
+
+        result.SlaDueDate.Should().Be(slaDueDate);
     }
 
     [Fact]
@@ -1023,7 +1051,8 @@ public class HttpCaseWorkingApiAdapterTests
 
         var result = await adapter.GetNotificationStatusAsync(app);
 
-        result.Should().BeNull();
+        result.NotificationStatus.Should().BeNull();
+        result.SlaDueDate.Should().BeNull();
     }
 
     [Fact]
@@ -1044,7 +1073,8 @@ public class HttpCaseWorkingApiAdapterTests
 
         var result = await adapter.GetNotificationStatusAsync(app);
 
-        result.Should().BeNull();
+        result.NotificationStatus.Should().BeNull();
+        result.SlaDueDate.Should().BeNull();
     }
 
     [Fact]
@@ -1056,7 +1086,8 @@ public class HttpCaseWorkingApiAdapterTests
 
         var result = await adapter.GetNotificationStatusAsync(app);
 
-        result.Should().BeNull();
+        result.NotificationStatus.Should().BeNull();
+        result.SlaDueDate.Should().BeNull();
     }
 
     // --- ResumeFromQueryAsync ---

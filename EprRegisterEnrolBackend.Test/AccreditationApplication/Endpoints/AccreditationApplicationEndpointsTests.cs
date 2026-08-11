@@ -824,7 +824,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult<string?>("failed"));
+            .Returns(Task.FromResult(new NotificationStatusResult("failed", null)));
 
         var response = await _client.GetAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
@@ -840,7 +840,33 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task GetById_NoLinkedWorkItem_NotificationStatusIsNull()
+    public async Task GetById_LinkedWorkItem_ReturnsAdapterSlaDueDate()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = Guid.NewGuid());
+        var slaDueDate = new DateTime(2026, 3, 15, 0, 0, 0, DateTimeKind.Utc);
+        _factory
+            .MockCaseWorkingAdapter.GetNotificationStatusAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new NotificationStatusResult(null, slaDueDate)));
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.DueDate.Should().Be(slaDueDate);
+    }
+
+    [Fact]
+    public async Task GetById_NoLinkedWorkItem_NotificationStatusAndDueDateAreNull()
     {
         Reset();
         var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = null);
@@ -856,6 +882,7 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.NotificationStatus.Should().BeNull();
+        body.DueDate.Should().BeNull();
         await _factory
             .MockCaseWorkingAdapter.DidNotReceive()
             .GetNotificationStatusAsync(
@@ -865,7 +892,7 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task GetById_AdapterThrows_Returns200WithNullNotificationStatus()
+    public async Task GetById_AdapterThrows_Returns200WithNullNotificationStatusAndDueDate()
     {
         Reset();
         var app = SeedApplication(configure: a => a.CaseManagementWorkItemId = Guid.NewGuid());
@@ -874,7 +901,11 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromException<string?>(new HttpRequestException("unreachable")));
+            .Returns(
+                Task.FromException<NotificationStatusResult>(
+                    new HttpRequestException("unreachable")
+                )
+            );
 
         var response = await _client.GetAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
@@ -887,6 +918,7 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.NotificationStatus.Should().BeNull();
+        body.DueDate.Should().BeNull();
     }
 
     // --- PatchPrns ---
@@ -910,6 +942,25 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task PatchPrns_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var request = new PatchPrnsRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/prns",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
     // --- RA-292 AC03: authority-to-issue isNew derivation ---
@@ -1692,11 +1743,14 @@ public class AccreditationApplicationEndpointsTests
         body!.Prns.SectionStatus.Should().Be(SectionStatus.Queried);
     }
 
-    [Fact]
-    public async Task PatchTonnage_WhenWithdrawn_Returns409()
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task PatchTonnage_WhenTerminal_Returns409(ApplicationStatus status)
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Withdrawn);
+        var app = SeedApplication(status: status);
 
         var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
         var response = await _client.PatchAsJsonAsync(
@@ -1733,6 +1787,67 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task PatchBusinessPlan_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var request = new PatchBusinessPlanRequest();
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/business-plan",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // --- PatchSamplingPlan ---
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task PatchSamplingPlan_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var request = new PatchSamplingPlanRequest();
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/sampling-plan",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // --- PatchOverseasSites ---
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task PatchOverseasSites_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var request = new PatchOverseasSitesRequest();
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
     // --- Submit ---
@@ -2271,11 +2386,14 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
-    [Fact]
-    public async Task AddFile_WhenWithdrawn_Returns409()
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task AddFile_WhenTerminal_Returns409(ApplicationStatus status)
     {
         Reset();
-        var app = SeedApplication(status: ApplicationStatus.Withdrawn);
+        var app = SeedApplication(status: status);
 
         var request = new FileUploadRequest
         {
@@ -2288,6 +2406,23 @@ public class AccreditationApplicationEndpointsTests
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
             request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task DeleteFile_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var response = await _client.DeleteAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/file-001",
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2709,6 +2844,24 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task AddOverseasSite_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
     [Fact]
     public async Task AddOverseasSite_MissingSiteName_Returns400()
     {
@@ -3076,12 +3229,15 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
-    [Fact]
-    public async Task PromoteOverseasSite_Withdrawn_Returns409()
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task PromoteOverseasSite_WhenTerminal_Returns409(ApplicationStatus status)
     {
         Reset();
         var app = SeedApplication(
-            status: ApplicationStatus.Withdrawn,
+            status: status,
             configure: a =>
                 a.OverseasSites = new AccreditationApplicationOverseasSites
                 {
@@ -3169,12 +3325,15 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
-    [Fact]
-    public async Task RevertOverseasSite_Withdrawn_Returns409()
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task RevertOverseasSite_WhenTerminal_Returns409(ApplicationStatus status)
     {
         Reset();
         var app = SeedApplication(
-            status: ApplicationStatus.Withdrawn,
+            status: status,
             configure: a =>
                 a.OverseasSites = new AccreditationApplicationOverseasSites
                 {
@@ -3301,6 +3460,31 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task AddInterimSite_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(
+            status: status,
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "Test Site" }],
+                }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
     [Fact]
@@ -3974,6 +4158,37 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task AddBesEvidenceFile_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(
+            status: status,
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "Test Site" }],
+                }
+        );
+
+        var request = new AddBesEvidenceFileRequest
+        {
+            FileId = "bes-file-002",
+            Filename = "evidence.pdf",
+            S3Key = "bes-evidence/bes-file-002",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
     [Fact]
     public async Task InitiateUpload_WhenQueriedAndSamplingPlanSectionNotQueried_Returns409()
     {
@@ -4093,6 +4308,25 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task PatchBesEvidence_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var request = new PatchBesEvidenceRequest { DoYouWantToUploadMoreEvidence = true };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
     [Fact]
     public async Task DeleteBesEvidenceFile_WhenQueriedAndBesEvidenceSectionNotQueried_Returns409()
     {
@@ -4101,6 +4335,23 @@ public class AccreditationApplicationEndpointsTests
             status: ApplicationStatus.Queried,
             configure: a => a.Prns.SectionStatus = SectionStatus.Queried
         );
+
+        var response = await _client.DeleteAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/bes-file-001",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task DeleteBesEvidenceFile_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
 
         var response = await _client.DeleteAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/bes-file-001",
@@ -4146,6 +4397,28 @@ public class AccreditationApplicationEndpointsTests
         // Completed (not Queried) so this clears the validator and reaches the gate check itself —
         // distinct from PatchBesEvidenceSection_SettingQueriedDirectly_Returns400 above, which
         // never gets past the validator.
+        var request = new PatchBesEvidenceSectionRequest
+        {
+            SectionStatus = SectionStatus.Completed,
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/bes-evidence",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task PatchBesEvidenceSection_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
         var request = new PatchBesEvidenceSectionRequest
         {
             SectionStatus = SectionStatus.Completed,

@@ -225,10 +225,11 @@ public static class AccreditationApplicationSections
     }
 
     // The only new restriction RA-311 adds: while an application is Queried, only the sections
-    // CM actually queried may be edited — every other application status keeps its existing
-    // behaviour completely unchanged (including the pre-existing wide-open PATCH gap in
-    // Submitted/Approved/Rejected/Updated, which is a separate, deliberately out-of-scope
-    // follow-up — see RA-311 §9).
+    // CM actually queried may be edited — every other non-terminal application status keeps its
+    // existing behaviour completely unchanged. Approved/Rejected/Withdrawn no longer reach this
+    // check at all: AccreditationApplicationEndpoints.RejectIfTerminal rejects writes to those
+    // three statuses up front (RA-415, closing the RA-311 §9 follow-up), so this method only
+    // ever sees a non-terminal status.
     public static bool IsSectionEditable(ApplicationStatus appStatus, SectionStatus sectionStatus) =>
         appStatus != ApplicationStatus.Queried || sectionStatus == SectionStatus.Queried;
 }

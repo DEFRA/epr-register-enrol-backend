@@ -9,10 +9,13 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
-    // Returns null | "sent" | "failed", derived from the linked work item's audit log.
+    // NotificationStatus is null | "sent" | "failed", derived from the linked work item's audit
+    // log; SlaDueDate (RA-415) comes straight off the same work item response — CM's SLA due
+    // date is OJ's single source of truth for "Due date", so no separate lookup is needed.
     // Must never throw: a missing link, an unreachable ManagementBe, or a malformed response
-    // all degrade to null rather than failing the caller's GetById response (RA102-j7s).
-    Task<string?> GetNotificationStatusAsync(
+    // all degrade to an all-null result rather than failing the caller's GetById response
+    // (RA102-j7s).
+    Task<NotificationStatusResult> GetNotificationStatusAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
     );
@@ -56,6 +59,8 @@ public interface ICaseWorkingApiAdapter
 // WorkItemId is null when ManagementBe's response didn't carry a usable id (e.g. unparseable
 // body) — that must not fail the submission, since ApplicationReference is already known locally.
 public sealed record CaseWorkingSubmissionResult(string ApplicationReference, Guid? WorkItemId);
+
+public sealed record NotificationStatusResult(string? NotificationStatus, DateTime? SlaDueDate);
 
 public sealed record ResumeFromQueryResult(bool IsSuccess);
 

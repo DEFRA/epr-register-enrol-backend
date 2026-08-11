@@ -1,10 +1,12 @@
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
 // Wire shape for the subset of ManagementBe's GET /work-items/{id} response this adapter
-// needs — just enough of the audit log to derive a notification status, not the full contract.
+// needs — the audit log to derive a notification status, plus the SLA due date (RA-415) — not
+// the full contract.
 internal sealed class WorkItemDetailResponseDto
 {
     public List<WorkItemAuditEntryDto>? AuditLog { get; init; }
+    public DateTime? SlaDueDate { get; init; }
 }
 
 internal sealed class WorkItemAuditEntryDto

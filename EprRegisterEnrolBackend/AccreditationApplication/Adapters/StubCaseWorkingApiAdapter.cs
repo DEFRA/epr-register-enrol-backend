@@ -63,7 +63,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new CaseWorkingSubmissionResult(applicationReference, workItemId));
     }
 
-    public Task<string?> GetNotificationStatusAsync(
+    public Task<NotificationStatusResult> GetNotificationStatusAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
     )
@@ -74,7 +74,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
             application.CaseManagementWorkItemId
         );
 
-        return Task.FromResult<string?>(null);
+        return Task.FromResult(new NotificationStatusResult(null, null));
     }
 
     public Task<ResumeFromQueryResult> ResumeFromQueryAsync(

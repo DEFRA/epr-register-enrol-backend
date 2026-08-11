@@ -152,14 +152,16 @@ public class HttpCaseWorkingApiAdapter(
         return new CaseWorkingSubmissionResult(result.ApplicationReference, workItemId);
     }
 
-    public async Task<string?> GetNotificationStatusAsync(
+    private static readonly NotificationStatusResult s_emptyNotificationStatus = new(null, null);
+
+    public async Task<NotificationStatusResult> GetNotificationStatusAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
     )
     {
         if (application.CaseManagementWorkItemId is not { } workItemId)
         {
-            return null;
+            return s_emptyNotificationStatus;
         }
 
         var url = _config.Url;
@@ -169,7 +171,7 @@ public class HttpCaseWorkingApiAdapter(
                 "CaseWorking API URL is not configured. Cannot look up notification status for workItemId={WorkItemId}.",
                 workItemId
             );
-            return null;
+            return s_emptyNotificationStatus;
         }
 
         var endpoint = $"{url.TrimEnd('/')}/work-items/{workItemId}";
@@ -194,14 +196,17 @@ public class HttpCaseWorkingApiAdapter(
                     (int)response.StatusCode,
                     endpoint
                 );
-                return null;
+                return s_emptyNotificationStatus;
             }
 
             var detail = await response.Content.ReadFromJsonAsync<WorkItemDetailResponseDto>(
                 JsonOptions,
                 cancellationToken
             );
-            return NotificationStatusResolver.Resolve(detail?.AuditLog);
+            return new NotificationStatusResult(
+                NotificationStatusResolver.Resolve(detail?.AuditLog),
+                detail?.SlaDueDate
+            );
         }
         catch (Exception ex)
         {
@@ -212,7 +217,7 @@ public class HttpCaseWorkingApiAdapter(
                 "Failed to look up notification status from ManagementBe at {Endpoint}",
                 endpoint
             );
-            return null;
+            return s_emptyNotificationStatus;
         }
     }
 
