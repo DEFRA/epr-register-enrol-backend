@@ -106,6 +106,7 @@ public enum ApplicationStatus
     DulyMade,
     Queried,
     Updated,
+    AwaitingDecision,
     Approved,
     Rejected,
     Withdrawn,
