@@ -3785,12 +3785,15 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Theory]
-    [InlineData("assessment-in-progress")]
-    [InlineData("awaiting-decision")]
-    public async Task StatusChangedFromCaseManagement_UnmappedState_LeavesApplicationStatusUnchanged(
-        string toStateId
+    [InlineData("assessment-in-progress", ApplicationStatus.Updated)]
+    [InlineData("awaiting-decision", ApplicationStatus.AwaitingDecision)]
+    public async Task StatusChangedFromCaseManagement_MapsPaymentReceivedAndSubmitForDecisionStates(
+        string toStateId,
+        ApplicationStatus expectedStatus
     )
     {
+        // RA-368: these two states used to have no mapping arm and were silently dropped,
+        // leaving OJ pinned at 'DulyMade' while CM had already moved on.
         Reset();
         var workItemId = Guid.NewGuid();
         SeedApplication(
@@ -3815,7 +3818,7 @@ public class AccreditationApplicationEndpointsTests
             JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.ApplicationStatus.Should().Be(ApplicationStatus.DulyMade);
+        body!.ApplicationStatus.Should().Be(expectedStatus);
     }
 
     [Fact]
@@ -3883,6 +3886,82 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var app = SeedApplication(status: ApplicationStatus.DulyMade);
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new WithdrawResult(true)));
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // --- RA-368: AwaitingDecision legality gates (approve/reject, query, withdraw) ---
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_ApprovedFromAwaitingDecision_Succeeds()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.AwaitingDecision,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "approved",
+            ActionId = "approve",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
+    }
+
+    [Fact]
+    public async Task QueryFromCaseManagement_AwaitingDecisionStatus_Succeeds()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        SeedApplication(
+            status: ApplicationStatus.AwaitingDecision,
+            configure: a => a.CaseManagementWorkItemId = workItemId
+        );
+
+        var request = new { queryNote = "note", sectionKeys = new[] { "business-plan" } };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/query",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Withdraw_FromAwaitingDecision_Succeeds()
+    {
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.AwaitingDecision);
         _factory
             .MockCaseWorkingAdapter.WithdrawApplicationAsync(
                 Arg.Any<AccreditationApplicationModel>(),

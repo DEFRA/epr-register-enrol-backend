@@ -1377,6 +1377,7 @@ public static class AccreditationApplicationEndpoints
                 ApplicationStatus.Submitted
                 or ApplicationStatus.DulyMade
                 or ApplicationStatus.Updated
+                or ApplicationStatus.AwaitingDecision
             )
         )
         {
@@ -1388,7 +1389,7 @@ public static class AccreditationApplicationEndpoints
                 correlationId ?? "(absent)"
             );
             return Results.Conflict(
-                "Application must be in 'Submitted', 'DulyMade' or 'Updated' status to raise a query."
+                "Application must be in 'Submitted', 'DulyMade', 'Updated' or 'AwaitingDecision' status to raise a query."
             );
         }
 
@@ -1534,16 +1535,18 @@ public static class AccreditationApplicationEndpoints
     }
 
     // Raw CM state id -> the ApplicationStatus it projects onto in OJ (RA-368 §4.3). States with
-    // no entry (assessment-in-progress, awaiting-decision, or anything CM adds in future) are a
-    // deliberate no-op for ApplicationStatus — the push still updates CaseManagementStatusUpdatedAt
-    // for ordering purposes. "queried"/"withdrawn" are never sent here: query keeps its own richer
-    // /query endpoint, and withdrawal is entirely out of scope for this plan (§4.1, §4.5).
+    // no entry (anything CM adds in future) are a deliberate no-op for ApplicationStatus — the
+    // push still updates CaseManagementStatusUpdatedAt for ordering purposes. "queried"/"withdrawn"
+    // are never sent here: query keeps its own richer /query endpoint, and withdrawal is entirely
+    // out of scope for this plan (§4.1, §4.5).
     private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(string toStateId) =>
         toStateId switch
         {
             "submitted" => ApplicationStatus.Submitted,
             "duly-made" => ApplicationStatus.DulyMade,
+            "assessment-in-progress" => ApplicationStatus.Updated,
             "updated" => ApplicationStatus.Updated,
+            "awaiting-decision" => ApplicationStatus.AwaitingDecision,
             "approved" => ApplicationStatus.Approved,
             "rejected" => ApplicationStatus.Rejected,
             _ => null,
@@ -1610,8 +1613,8 @@ public static class AccreditationApplicationEndpoints
         // Terminal-status guard: once OJ has recorded a CM push as Approved, Rejected or
         // Withdrawn, no later mapped push may move the application again — a withdrawn
         // application re-opening as DulyMade (or an approved one flipping to Rejected) would
-        // undo the very gates the terminal statuses exist to enforce. Unmapped pushes
-        // (assessment-in-progress, awaiting-decision, ...) are exempt: they only update the
+        // undo the very gates the terminal statuses exist to enforce. Unmapped pushes (anything
+        // CM adds in future with no arm in the switch above) are exempt: they only update the
         // ordering watermark below, never ApplicationStatus.
         if (
             mappedStatus is not null
@@ -1646,6 +1649,7 @@ public static class AccreditationApplicationEndpoints
                     ApplicationStatus.Submitted
                     or ApplicationStatus.Updated
                     or ApplicationStatus.DulyMade
+                    or ApplicationStatus.AwaitingDecision
                 )
         )
         {
@@ -1658,7 +1662,7 @@ public static class AccreditationApplicationEndpoints
                 correlationId ?? "(absent)"
             );
             return Results.Conflict(
-                "Application must be in 'Submitted', 'Updated' or 'DulyMade' status to approve or reject."
+                "Application must be in 'Submitted', 'Updated', 'DulyMade' or 'AwaitingDecision' status to approve or reject."
             );
         }
 
@@ -1718,6 +1722,7 @@ public static class AccreditationApplicationEndpoints
                 or ApplicationStatus.DulyMade
                 or ApplicationStatus.Queried
                 or ApplicationStatus.Updated
+                or ApplicationStatus.AwaitingDecision
             )
         )
             return Results.Conflict("Only applications not yet decided can be withdrawn.");
