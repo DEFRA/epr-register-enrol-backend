@@ -100,7 +100,7 @@ public static class AccreditationApplicationEndpoints
         IValidator<SeedRequest> validator
     )
     {
-        if (!Enum.TryParse<MaterialType>(materialType, out var materialTypeEnum))
+        if (!Enum.TryParse<MaterialType>(materialType, ignoreCase: true, out var materialTypeEnum))
             return Results.BadRequest("Invalid material type.");
 
         if (

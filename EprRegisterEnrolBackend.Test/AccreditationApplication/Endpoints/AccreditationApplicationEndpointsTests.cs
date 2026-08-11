@@ -170,6 +170,39 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Theory]
+    [InlineData("plastic")]
+    [InlineData("PLASTIC")]
+    [InlineData("PlAsTiC")]
+    public async Task Seed_MaterialTypeCasingVariant_Returns201WithApplication(
+        string materialTypeSegment
+    )
+    {
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(MinimalAdapterSuccess(material: MaterialType.Plastic)));
+
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/reg-1/{materialTypeSegment}/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.MaterialType.Should().Be(MaterialType.Plastic);
+    }
+
     [Fact]
     public async Task Seed_InvalidMaterialType_Returns400()
     {
