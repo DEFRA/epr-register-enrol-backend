@@ -195,6 +195,32 @@ public class FileUploadEndpointsTests : IClassFixture<FileUploadTestFactory>
         body[0].Material.Should().Be(MaterialType.Steel);
     }
 
+    [Theory]
+    [InlineData("steel")]
+    [InlineData("STEEL")]
+    [InlineData("StEeL")]
+    public async Task GetList_WithMaterialFilterCasingVariant_ReturnsFilteredFiles(
+        string materialQueryValue
+    )
+    {
+        Reset();
+        SeedFileUpload("org-filter-case", MaterialType.Steel, DateTime.UtcNow.Year);
+        SeedFileUpload("org-filter-case", MaterialType.Glass, DateTime.UtcNow.Year);
+
+        var response = await _client.GetAsync(
+            $"/api/v1/file-uploads?organisationId=org-filter-case&material={materialQueryValue}&year={DateTime.UtcNow.Year}",
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<List<FileUploadModel>>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Should().HaveCount(1);
+        body[0].Material.Should().Be(MaterialType.Steel);
+    }
+
     [Fact]
     public async Task GetList_UnknownOrg_Returns200WithEmptyList()
     {

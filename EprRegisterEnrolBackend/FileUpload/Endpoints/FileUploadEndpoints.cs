@@ -68,7 +68,7 @@ public static class FileUploadEndpoints
 
         if (!string.IsNullOrWhiteSpace(material))
         {
-            if (!Enum.TryParse<MaterialType>(material, out var materialType))
+            if (!Enum.TryParse<MaterialType>(material, ignoreCase: true, out var materialType))
                 return Results.BadRequest($"Invalid material value: '{material}'.");
 
             if (year.HasValue)
