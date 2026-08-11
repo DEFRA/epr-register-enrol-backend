@@ -43,7 +43,13 @@ public class OverseasSiteModel
     public bool IsOecd { get; set; }
     public bool Selected { get; set; } = true;
     public BesEvidenceModel? BesEvidence { get; set; }
-    public bool IsNewSite { get; set; } = true;
+
+    // RA-292 AC01: drives the regulator's "new" badge, so it defaults to false and is set
+    // explicitly where a site is genuinely created (AddOverseasSite). Defaulting to true made
+    // every site with no stored value — a legacy document, or a PATCH body that omitted the key —
+    // arrive flagged, which is indistinguishable from the badge being broken. Server-owned:
+    // OverseasSiteMerge re-derives it on PATCH so a client can neither set nor clear it.
+    public bool IsNewSite { get; set; }
     public bool RegisteredNowAccredited { get; set; } = false;
 
     // Undo stack for promote/revert (RA-298/RA-300): promoting a registered site pushes its
@@ -68,7 +74,10 @@ public class InterimSiteModel
     public required string ContactName { get; set; }
     public required string ContactEmail { get; set; }
     public required string ContactPhone { get; set; }
-    public bool IsNewSite { get; set; } = true;
+
+    // RA-292 AC02 — same reasoning as OverseasSiteModel.IsNewSite above. Set explicitly by
+    // AddInterimSite, preserved across PATCH by OverseasSiteMerge.
+    public bool IsNewSite { get; set; }
 }
 
 public class BesEvidenceModel

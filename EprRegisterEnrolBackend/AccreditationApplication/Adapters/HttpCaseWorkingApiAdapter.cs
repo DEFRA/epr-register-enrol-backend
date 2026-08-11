@@ -446,17 +446,7 @@ public class HttpCaseWorkingApiAdapter(
         {
             payload[section.ToString()] = section switch
             {
-                OperatorSection.Prns => new
-                {
-                    plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
-                    authorisers = application
-                        .Prns.Authorisers.Select(a => new
-                        {
-                            fullName = a.FullName,
-                            email = a.Email,
-                        })
-                        .ToArray(),
-                },
+                OperatorSection.Prns => BuildPrnsSection(application),
                 OperatorSection.BusinessPlan => new
                 {
                     newInfrastructurePercent = application.BusinessPlan.NewInfrastructurePercent,
@@ -489,35 +479,11 @@ public class HttpCaseWorkingApiAdapter(
                         })
                         .ToArray(),
                 },
-                OperatorSection.OverseasSites => new
-                {
-                    sites = (application.OverseasSites?.Sites ?? [])
-                        .Select(s => new
-                        {
-                            siteId = s.SiteId,
-                            siteName = s.SiteName,
-                            siteAddress = s.SiteAddress,
-                            country = s.Country,
-                            besEvidence = new
-                            {
-                                files = (s.BesEvidence?.BesEvidenceUploads ?? [])
-                                    .Select(f => new
-                                    {
-                                        fileId = f.FileId,
-                                        filename = f.Filename,
-                                        contentType = f.ContentType,
-                                        uploadedAt = f.UploadedAt,
-                                        scanStatus = f.ScanStatus,
-                                        besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
-                                        besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
-                                        s3Key = f.S3Key,
-                                        s3Bucket = f.S3Bucket,
-                                    })
-                                    .ToArray(),
-                            },
-                        })
-                        .ToArray(),
-                },
+                // RA-292 AC04: must be the identical projection BuildPayload sends. This used to
+                // be a weaker copy that dropped orsId, isNewSite and the whole interimSite, so a
+                // resubmit after a query silently destroyed the interim site data ManagementBe
+                // already held.
+                OperatorSection.OverseasSites => BuildOverseasSitesSection(application),
                 OperatorSection.BesEvidence => new
                 {
                     sectionStatus = application.BesEvidence?.SectionStatus.ToString(),
@@ -557,13 +523,7 @@ public class HttpCaseWorkingApiAdapter(
                     jobTitle = application.SubmittedBy.JobTitle,
                     email = application.SubmittedBy.Email,
                 },
-            prns = new
-            {
-                plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
-                authorisers = application
-                    .Prns.Authorisers.Select(a => new { fullName = a.FullName, email = a.Email })
-                    .ToArray(),
-            },
+            prns = BuildPrnsSection(application),
             businessPlan = new
             {
                 newInfrastructurePercent = application.BusinessPlan.NewInfrastructurePercent,
@@ -594,57 +554,102 @@ public class HttpCaseWorkingApiAdapter(
                     })
                     .ToArray(),
             },
-            overseasSites = new
-            {
-                sites = (application.OverseasSites?.Sites ?? [])
-                    .Select(s => new
-                    {
-                        siteId = s.SiteId,
-                        orsId = s.OrsId,
-                        siteName = s.SiteName,
-                        siteAddress = s.SiteAddress,
-                        country = s.Country,
-                        isNewSite = s.IsNewSite,
-                        interimSite = s.InterimSite is null
-                            ? null
-                            : new
-                            {
-                                siteId = s.InterimSite.SiteId,
-                                siteNumber = s.InterimSite.SiteNumber,
-                                isNewSite = s.InterimSite.IsNewSite,
-                                country = s.InterimSite.Country,
-                                siteName = s.InterimSite.SiteName,
-                                addressLine1 = s.InterimSite.AddressLine1,
-                                addressLine2 = s.InterimSite.AddressLine2,
-                                townOrCity = s.InterimSite.TownOrCity,
-                                stateOrRegion = s.InterimSite.StateOrRegion,
-                                postcode = s.InterimSite.Postcode,
-                                contactName = s.InterimSite.ContactName,
-                                contactEmail = s.InterimSite.ContactEmail,
-                                contactPhone = s.InterimSite.ContactPhone,
-                            },
-                        besEvidence = new
-                        {
-                            files = (s.BesEvidence?.BesEvidenceUploads ?? [])
-                                .Select(f => new
-                                {
-                                    fileId = f.FileId,
-                                    filename = f.Filename,
-                                    contentType = f.ContentType,
-                                    uploadedAt = f.UploadedAt,
-                                    scanStatus = f.ScanStatus,
-                                    besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
-                                    besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
-                                    s3Key = f.S3Key,
-                                    s3Bucket = f.S3Bucket,
-                                })
-                                .ToArray(),
-                        },
-                    })
-                    .ToArray(),
-            },
+            overseasSites = BuildOverseasSitesSection(application),
         };
     }
+
+    // Single source of truth for the overseas-sites projection, shared by BuildPayload (initial
+    // submit) and BuildSectionsPayload (resubmit after query) so the two can never drift.
+    //
+    // RA-292 AC01/AC02/AC04: carries the full ORS detail the regulator reviews, the isNewSite
+    // flags behind the "new" markers, and the nested interim site. Every field added here is
+    // optional on the consumer side — work items created before RA-292 simply do not have them,
+    // and null-valued fields are dropped entirely by JsonOptions' WhenWritingNull.
+    private static object BuildOverseasSitesSection(AccreditationApplicationModel application) =>
+        new
+        {
+            sites = (application.OverseasSites?.Sites ?? [])
+                .Select(s => new
+                {
+                    siteId = s.SiteId,
+                    orsId = s.OrsId,
+                    siteName = s.SiteName,
+                    siteAddress = s.SiteAddress,
+                    addressLine1 = s.AddressLine1,
+                    addressLine2 = s.AddressLine2,
+                    townOrCity = s.TownOrCity,
+                    country = s.Country,
+                    coordinates = s.Coordinates,
+                    contactName = s.ContactName,
+                    contactEmail = s.ContactEmail,
+                    contactPhone = s.ContactPhone,
+                    operationCode = s.OperationCode,
+                    code1 = s.Code1,
+                    code2 = s.Code2,
+                    code3 = s.Code3,
+                    repatriatedLoads = s.RepatriatedLoads,
+                    conditionsOfExport = s.ConditionsOfExport,
+                    isEu = s.IsEu,
+                    isOecd = s.IsOecd,
+                    isNewSite = s.IsNewSite,
+                    registeredNowAccredited = s.RegisteredNowAccredited,
+                    interimSite = s.InterimSite is null
+                        ? null
+                        : new
+                        {
+                            siteId = s.InterimSite.SiteId,
+                            siteNumber = s.InterimSite.SiteNumber,
+                            isNewSite = s.InterimSite.IsNewSite,
+                            country = s.InterimSite.Country,
+                            siteName = s.InterimSite.SiteName,
+                            addressLine1 = s.InterimSite.AddressLine1,
+                            addressLine2 = s.InterimSite.AddressLine2,
+                            townOrCity = s.InterimSite.TownOrCity,
+                            stateOrRegion = s.InterimSite.StateOrRegion,
+                            postcode = s.InterimSite.Postcode,
+                            contactName = s.InterimSite.ContactName,
+                            contactEmail = s.InterimSite.ContactEmail,
+                            contactPhone = s.InterimSite.ContactPhone,
+                        },
+                    besEvidence = new
+                    {
+                        files = (s.BesEvidence?.BesEvidenceUploads ?? [])
+                            .Select(f => new
+                            {
+                                fileId = f.FileId,
+                                filename = f.Filename,
+                                contentType = f.ContentType,
+                                uploadedAt = f.UploadedAt,
+                                scanStatus = f.ScanStatus,
+                                besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
+                                besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
+                                s3Key = f.S3Key,
+                                s3Bucket = f.S3Bucket,
+                            })
+                            .ToArray(),
+                    },
+                })
+                .ToArray(),
+        };
+
+    // Shared by BuildPayload and BuildSectionsPayload, as above.
+    //
+    // RA-292 AC03: isNew marks an authority-to-issue contact introduced during this application.
+    // It is derived server-side by PrnsAuthoriserMerge when the section is written, never taken
+    // from the client, so what ships here is always the server's own view.
+    private static object BuildPrnsSection(AccreditationApplicationModel application) =>
+        new
+        {
+            plannedTonnageBand = application.Prns.PlannedTonnageBand?.ToString(),
+            authorisers = application
+                .Prns.Authorisers.Select(a => new
+                {
+                    fullName = a.FullName,
+                    email = a.Email,
+                    isNew = a.IsNew,
+                })
+                .ToArray(),
+        };
 
     internal static string? ExtractPostcode(string? siteAddress)
     {

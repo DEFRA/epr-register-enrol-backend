@@ -912,6 +912,688 @@ public class AccreditationApplicationEndpointsTests
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
     }
 
+    // --- RA-292 AC03: authority-to-issue isNew derivation ---
+
+    private static PrnsAuthoriser Authoriser(string fullName, string email, bool isNew = false) =>
+        new()
+        {
+            FullName = fullName,
+            Email = email,
+            IsNew = isNew,
+        };
+
+    private async Task<List<PrnsAuthoriser>> PatchAuthorisers(string url, object request)
+    {
+        var response = await _client.PatchAsJsonAsync(
+            url,
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        return body!.Prns.Authorisers;
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_NewEmail_IsFlaggedNewAndKnownEmailIsNot(string route)
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a =>
+                a.Prns.Authorisers = [Authoriser("Prior Year Person", "prior@example.com")]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[]
+                {
+                    new { fullName = "Prior Year Person", email = "prior@example.com" },
+                    new { fullName = "Added Now", email = "added@example.com" },
+                },
+            }
+        );
+
+        authorisers.Should().HaveCount(2);
+        authorisers[0].IsNew.Should().BeFalse();
+        authorisers[1].IsNew.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_ClientSendsNoIsNewKey_ServerStillDerivesIt(string route)
+    {
+        // The operator frontend is not required to send isNew at all — the flag the regulator
+        // sees must be right regardless of what the client does with the field.
+        Reset();
+        var app = SeedApplication();
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new { authorisers = new[] { new { fullName = "Added Now", email = "a@example.com" } } }
+        );
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_ClientSendsIsNewFalse_CannotClearTheFlag(string route)
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[]
+                {
+                    new
+                    {
+                        fullName = "Added Now",
+                        email = "a@example.com",
+                        isNew = false,
+                    },
+                },
+            }
+        );
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_ClientSendsIsNewTrueForKnownEmail_CannotSetTheFlag(
+        string route
+    )
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com")]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[]
+                {
+                    new
+                    {
+                        fullName = "Known",
+                        email = "known@example.com",
+                        isNew = true,
+                    },
+                },
+            }
+        );
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_EmailDiffersByCaseAndWhitespace_StaysNotNew(string route)
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com")]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[]
+                {
+                    new { fullName = "Known", email = "  KNOWN@Example.COM " },
+                },
+            }
+        );
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_AlreadyFlaggedNew_StaysNewAcrossRepeatedSaves(string route)
+    {
+        Reset();
+        var app = SeedApplication();
+        var url = $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}";
+        var body = new
+        {
+            authorisers = new[] { new { fullName = "Added Now", email = "a@example.com" } },
+        };
+
+        await PatchAuthorisers(url, body);
+        var authorisers = await PatchAuthorisers(url, body);
+
+        authorisers.Should().ContainSingle().Which.IsNew.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_OmittedAuthoriser_IsRemovedNotResurrected(string route)
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a =>
+                a.Prns.Authorisers =
+                [
+                    Authoriser("Kept", "kept@example.com"),
+                    Authoriser("Removed", "removed@example.com"),
+                ]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new
+            {
+                authorisers = new[] { new { fullName = "Kept", email = "kept@example.com" } },
+            }
+        );
+
+        authorisers.Should().ContainSingle().Which.Email.Should().Be("kept@example.com");
+    }
+
+    [Theory]
+    [InlineData("prns")]
+    [InlineData("tonnage")]
+    public async Task PatchAuthorisers_RequestOmitsAuthorisers_LeavesPersistedListUntouched(
+        string route
+    )
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com", true)]
+        );
+
+        var authorisers = await PatchAuthorisers(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
+            new { plannedTonnageBand = "UpTo500" }
+        );
+
+        authorisers.Should().ContainSingle();
+        authorisers[0].Email.Should().Be("known@example.com");
+        authorisers[0].IsNew.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Seed_PriorYearAuthorisers_AreNotFlaggedNew()
+    {
+        // AC03 hinges on this: contacts carried over from last year's accreditation existed
+        // before the application, so the regulator must not see them badged as new.
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync("org-123", "reg-1", MaterialType.Steel, 2025)
+            .Returns(
+                Task.FromResult(
+                    ReExResult<ReExAccreditationDto>.Success(
+                        new ReExAccreditationDto
+                        {
+                            AccreditationId = "reex-abc",
+                            OrganisationId = "org-123",
+                            MaterialType = MaterialType.Steel,
+                            Year = 2025,
+                            IsExporter = false,
+                            OverseasSites = [],
+                            Prns = new ReExPrnsDto
+                            {
+                                PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+                                Authorisers =
+                                [
+                                    // isNew: true here stands in for a stray value arriving from
+                                    // ReEx — carrying it over would misinform the regulator.
+                                    Authoriser("Prior Year Person", "prior@example.com", true),
+                                ],
+                            },
+                        },
+                        200
+                    )
+                )
+            );
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            new SeedRequest { Year = 2026 },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!
+            .Prns.Authorisers.Should()
+            .ContainSingle()
+            .Which.Should()
+            .Match<PrnsAuthoriser>(a => a.Email == "prior@example.com" && !a.IsNew);
+    }
+
+    // --- RA-292 AC01/AC02: isNewSite is server-owned across PatchOverseasSites ---
+
+    private async Task<List<OverseasSiteModel>> PatchSites(
+        AccreditationApplicationModel app,
+        object request
+    )
+    {
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        return body!.OverseasSites!.Sites;
+    }
+
+    private AccreditationApplicationModel SeedApplicationWithSites(params OverseasSiteModel[] sites)
+        => SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites { Sites = [.. sites] }
+        );
+
+    [Fact]
+    public async Task PatchOverseasSites_ClientOmitsIsNewSite_DoesNotFlipRegisteredSiteToNew()
+    {
+        // The live risk: the frontend builds the PATCH body by spreading sites off the GET, so a
+        // single dropped key used to relabel every site as new.
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "ReEx Registered Site",
+                IsNewSite = false,
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new { sites = new[] { new { siteId = 1, siteName = "ReEx Registered Site" } } }
+        );
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_ClientClaimsNewForKnownSite_CannotSetTheFlag()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Registered",
+                IsNewSite = false,
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 1,
+                        siteName = "Registered",
+                        isNewSite = true,
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_ClientClaimsNotNewForGenuinelyNewSite_CannotClearTheFlag()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Operator Added",
+                IsNewSite = true,
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 1,
+                        siteName = "Operator Added",
+                        isNewSite = false,
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_GenuinelyNewSiteSurvivesRepeatedSaves()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Operator Added",
+                IsNewSite = true,
+            }
+        );
+        var body = new { sites = new[] { new { siteId = 1, siteName = "Operator Added" } } };
+
+        await PatchSites(app, body);
+        var sites = await PatchSites(app, body);
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_PreservesInterimSiteIsNewSite()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Site",
+                IsNewSite = false,
+                InterimSite = new InterimSiteModel
+                {
+                    SiteId = 2,
+                    SiteNumber = "SN-0002",
+                    Country = "France",
+                    SiteName = "Interim",
+                    AddressLine1 = "1 Rue Example",
+                    TownOrCity = "Paris",
+                    ContactName = "Marie Curie",
+                    ContactEmail = "marie@example.com",
+                    ContactPhone = "0033111222333",
+                    IsNewSite = true,
+                },
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 1,
+                        siteName = "Site",
+                        isNewSite = true,
+                        interimSite = new
+                        {
+                            siteId = 2,
+                            siteNumber = "SN-0002",
+                            country = "France",
+                            siteName = "Interim",
+                            addressLine1 = "1 Rue Example",
+                            townOrCity = "Paris",
+                            contactName = "Marie Curie",
+                            contactEmail = "marie@example.com",
+                            contactPhone = "0033111222333",
+                            isNewSite = false,
+                        },
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle();
+        sites[0].IsNewSite.Should().BeFalse("the ORS flag is server-owned");
+        sites[0].InterimSite!.IsNewSite.Should().BeTrue("the interim flag is server-owned too");
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_ThenPatch_SiteStaysFlaggedNew()
+    {
+        // End to end over the two endpoints that actually matter for AC01: the add endpoint is the
+        // only place newness is switched on, and a later save must not undo it.
+        Reset();
+        var app = SeedApplication();
+
+        var added = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        added.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var sites = await PatchSites(
+            app,
+            new { sites = new[] { new { siteId = 1, siteName = "Test Recycling GmbH" } } }
+        );
+
+        sites.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_PromotedSite_KeepsItsRevertTargetIntact()
+    {
+        // Distinct from the isNewSite work: PreviousSites is [JsonIgnore], so the undo stack never
+        // reaches the frontend and cannot come back on a PATCH. Before OverseasSiteMerge carried
+        // it across, any save of the site list destroyed a promoted site's revert target and the
+        // subsequent revert failed with a 409.
+        Reset();
+        var app = SeedApplicationWithSites(RegisteredOnlySite());
+
+        var promoted = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        promoted.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // An ordinary save of the site list. registeredNowAccredited is included here so this test
+        // stays focused on the undo stack; the sibling test below omits it deliberately.
+        await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 900001,
+                        siteName = "Promoted Recycling GmbH",
+                        registeredNowAccredited = true,
+                    },
+                },
+            }
+        );
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/revert",
+            content: null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteName.Should().Be("Registered Only Site", "the pre-promotion values are restored");
+        site.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_OmittingRegisteredNowAccredited_DoesNotUnPromoteTheSite()
+    {
+        // epr-zgrb, found empirically while writing the sibling test above: registeredNowAccredited
+        // is serialised, so it survived only while the frontend happened to echo it back. A body
+        // that omits the key deserialised it to false, silently clearing the promotion — and the
+        // revert then failed on the promote-flag guard rather than the undo-stack guard, i.e. a
+        // user-visible broken journey rather than a stale flag.
+        Reset();
+        var app = SeedApplicationWithSites(RegisteredOnlySite());
+
+        var promoted = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            ValidPromoteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        promoted.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Deliberately omits registeredNowAccredited — this is the exact body that used to break it.
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new { siteId = 900001, siteName = "Promoted Recycling GmbH" },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.RegisteredNowAccredited.Should().BeTrue();
+
+        // And the journey still works end to end, which is what the operator would actually notice.
+        var reverted = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/revert",
+            content: null,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        reverted.StatusCode.Should().Be(HttpStatusCode.OK);
+        var site = await reverted.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteName.Should().Be("Registered Only Site");
+        site.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_OmittingOrsId_PreservesIt()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel
+            {
+                SiteId = 1,
+                SiteName = "Operator Added",
+                OrsId = "001",
+            }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new { sites = new[] { new { siteId = 1, siteName = "Operator Added" } } }
+        );
+
+        sites.Should().ContainSingle().Which.OrsId.Should().Be("001");
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_ReExSourcedSite_ClientCannotInventAnOrsId()
+    {
+        // A null OrsId marks a site as ReEx-sourced, which is the discriminator the epr-2uxy
+        // remediation relies on to identify wrongly-defaulted isNewSite values. A client that
+        // could supply one would make an affected site stop looking affected.
+        Reset();
+        var app = SeedApplicationWithSites(
+            new OverseasSiteModel { SiteId = 1, SiteName = "ReEx Registered Site" }
+        );
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 1,
+                        siteName = "ReEx Registered Site",
+                        orsId = "001",
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.OrsId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_ClientClaimsPromotedForAnUnpromotedSite_CannotSetTheFlag()
+    {
+        Reset();
+        var app = SeedApplicationWithSites(RegisteredOnlySite());
+
+        var sites = await PatchSites(
+            app,
+            new
+            {
+                sites = new[]
+                {
+                    new
+                    {
+                        siteId = 900001,
+                        siteName = "Registered Only Site",
+                        registeredNowAccredited = true,
+                    },
+                },
+            }
+        );
+
+        sites.Should().ContainSingle().Which.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_FlagsTheSiteAsNew()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.IsNewSite.Should().BeTrue();
+    }
+
     // --- PatchTonnage ---
 
     [Fact]
