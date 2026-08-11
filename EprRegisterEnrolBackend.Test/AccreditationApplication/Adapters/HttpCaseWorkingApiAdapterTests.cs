@@ -416,7 +416,7 @@ public class HttpCaseWorkingApiAdapterTests
             ContactName = "Pierre Dupont",
             ContactEmail = "pierre@example.com",
             ContactPhone = "+33 1 23 45 67 89",
-            OperationCode = "R3",
+            OperationCodes = ["R3"],
             Code1 = "B3011",
             Code2 = "B3020",
             Code3 = "GH013",
@@ -483,7 +483,7 @@ public class HttpCaseWorkingApiAdapterTests
               "contactName": "Pierre Dupont",
               "contactEmail": "pierre@example.com",
               "contactPhone": "+33 1 23 45 67 89",
-              "operationCode": "R3",
+              "operationCodes": ["R3"],
               "code1": "B3011",
               "code2": "B3020",
               "code3": "GH013",
@@ -527,6 +527,7 @@ public class HttpCaseWorkingApiAdapterTests
             {
               "siteId": 3,
               "siteName": "Sparse Site",
+              "operationCodes": [],
               "isEu": false,
               "isOecd": false,
               "isNewSite": false,
@@ -710,7 +711,6 @@ public class HttpCaseWorkingApiAdapterTests
                 "contactName",
                 "contactEmail",
                 "contactPhone",
-                "operationCode",
                 "code1",
                 "code2",
                 "code3",
@@ -724,6 +724,10 @@ public class HttpCaseWorkingApiAdapterTests
                 .Should()
                 .BeFalse($"'{absentKey}' is null and must be omitted, not sent as null");
         }
+
+        // OperationCodes is a list, not a nullable scalar — an unset value serialises as an
+        // empty array rather than being dropped by JsonOptions' WhenWritingNull.
+        site.GetProperty("operationCodes").EnumerateArray().Should().BeEmpty();
     }
 
     [Fact]

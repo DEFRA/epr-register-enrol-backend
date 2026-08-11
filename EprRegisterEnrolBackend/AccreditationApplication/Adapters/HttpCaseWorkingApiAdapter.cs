@@ -583,7 +583,7 @@ public class HttpCaseWorkingApiAdapter(
                     contactName = s.ContactName,
                     contactEmail = s.ContactEmail,
                     contactPhone = s.ContactPhone,
-                    operationCode = s.OperationCode,
+                    operationCodes = s.OperationCodes,
                     code1 = s.Code1,
                     code2 = s.Code2,
                     code3 = s.Code3,
