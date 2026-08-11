@@ -252,6 +252,20 @@ public class HttpCaseWorkingApiAdapter(
             },
             SectionKeys = sectionKeys,
             Sections = BuildSectionsPayload(application, sectionKeys),
+            // RA-316: recomputed from the application as it stands now, not frozen at submit.
+            // Answering a query can change the planned tonnage band or the overseas-site count,
+            // and duly making happens after the query is answered — so a charge frozen at the
+            // original submit would put a stale number in front of the regulator at exactly the
+            // moment they act on it. Sent unconditionally (rather than only when it differs from
+            // last time) because this adapter holds no memory of what it last sent; resending an
+            // unchanged value is idempotent on the consumer.
+            //
+            // These are siblings of sectionKeys/sections, NOT entries in the sections dictionary:
+            // the sections dictionary is keyed by section name and its projections must stay
+            // identical to BuildPayload's (RA-292 AC04), so a pseudo-section here would break
+            // that contract. The charge is a whole-application value, not a section.
+            ChargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
+            PaymentReference = application.ApplicationReference,
         };
 
         var endpoint =
@@ -515,6 +529,22 @@ public class HttpCaseWorkingApiAdapter(
             operatorOrganisationId = application.OrganisationId,
             operatorRegistrationId = application.RegistrationId,
             operatorEmail = application.SubmittedBy?.Email,
+            // RA-316: the charge the operator was shown on the payment-details page, echoed so
+            // Case Management's duly-making page displays that same number instead of recomputing
+            // it and drifting. Null (band unset) is dropped entirely by JsonOptions'
+            // WhenWritingNull, and ManagementBe renders a blank rather than rejecting.
+            chargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
+            // RA-316: this is the accreditation reference the operator sees (the legacy FE's
+            // application.accreditationReference, which resolves to ApplicationReference), sent
+            // under an explicit name so the consumer is not guessing which field to use.
+            //
+            // Always null on INITIAL submit and therefore omitted: ManagementBe generates the
+            // application reference and we only learn it from the response to this very request
+            // (see SubmitApplicationAsync, where ApplicationReference is assigned afterwards).
+            // That is intended — ManagementBe falls back to its own generated reference when the
+            // field is absent. Deliberately not substituted with RegistrationReference: a
+            // wrong-but-plausible reference on a payment screen is worse than a blank one.
+            paymentReference = application.ApplicationReference,
             submittedBy = application.SubmittedBy is null
                 ? null
                 : new
@@ -758,6 +788,10 @@ public class HttpCaseWorkingApiAdapter(
         public required object ResponderContactDetails { get; init; }
         public required IReadOnlyList<string> SectionKeys { get; init; }
         public required Dictionary<string, object?> Sections { get; init; }
+
+        // RA-316. Both optional on the consumer; nulls are dropped by JsonOptions.
+        public int? ChargeAmountPence { get; init; }
+        public string? PaymentReference { get; init; }
     }
 
     internal sealed class WithdrawWorkItemRequest
