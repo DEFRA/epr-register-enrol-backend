@@ -126,6 +126,44 @@ public class AccreditationApplicationModelTests
     }
 
     [Fact]
+    public void AccreditationApplicationFile_LegacyDocumentMissingDocumentType_DeserializesToNull()
+    {
+        var model = CreateModel(null);
+        model.SamplingPlan.Files.Add(
+            new AccreditationApplicationFile
+            {
+                FileId = "legacy-1",
+                Filename = "legacy.pdf",
+                ContentType = "application/pdf",
+                UploadedByUserId = "u1",
+                S3Key = "sampling-plans/legacy-1",
+                DocumentType = AccreditationFileDocumentType.SamplingPlan,
+            }
+        );
+        var document = model.ToBsonDocument();
+
+        // Simulate a Mongo sub-document written before DocumentType existed by stripping the
+        // field entirely, rather than just setting it null — proves deserialization tolerates
+        // the field being absent, not merely present-and-null.
+        var samplingPlanDoc = document
+            .Elements.Single(e => e.Name.Equals("SamplingPlan", StringComparison.OrdinalIgnoreCase))
+            .Value.AsBsonDocument;
+        var fileDoc = samplingPlanDoc
+            .Elements.Single(e => e.Name.Equals("Files", StringComparison.OrdinalIgnoreCase))
+            .Value.AsBsonArray[0]
+            .AsBsonDocument;
+        var documentTypeElementName = fileDoc
+            .Elements.Single(e => e.Name.Equals("DocumentType", StringComparison.OrdinalIgnoreCase))
+            .Name;
+        fileDoc.Remove(documentTypeElementName);
+
+        var act = () => BsonSerializer.Deserialize<AccreditationApplicationModel>(document);
+
+        act.Should().NotThrow();
+        act().SamplingPlan.Files.Single().DocumentType.Should().BeNull();
+    }
+
+    [Fact]
     public void SectionVersions_RoundTripThroughBson_ButAreNotSerializedToJson()
     {
         var model = CreateModel(null);

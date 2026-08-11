@@ -16,7 +16,7 @@ public class FileUploadRequestValidator : AbstractValidator<FileUploadRequest>
         "image/jpeg",
         "image/png",
         "image/tiff",
-        "application/vnd.ms-outlook"
+        "application/vnd.ms-outlook",
     ];
 
     public FileUploadRequestValidator()
@@ -32,5 +32,15 @@ public class FileUploadRequestValidator : AbstractValidator<FileUploadRequest>
             .Must(ct => PermittedContentTypes.Contains(ct))
             .WithMessage("Content type is not permitted.");
         RuleFor(r => r.S3Key).NotEmpty().MaximumLength(1024);
+
+        When(
+            r => r.DocumentType.HasValue,
+            () =>
+            {
+                RuleFor(r => r.DocumentType)
+                    .IsInEnum()
+                    .WithMessage("DocumentType must be a valid document type.");
+            }
+        );
     }
 }

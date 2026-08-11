@@ -184,6 +184,7 @@ public class FileUploadRequest
     public required string Filename { get; set; }
     public required string ContentType { get; set; }
     public FileScanStatus? ScanStatus { get; set; }
+    public AccreditationFileDocumentType? DocumentType { get; set; }
     public required string S3Key { get; set; }
     public string? S3Bucket { get; set; }
 }
