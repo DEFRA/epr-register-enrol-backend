@@ -1638,4 +1638,219 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     #endregion
+
+    #region RA-316 — charge amount / payment reference wire contract
+
+    // ManagementBe displays whatever integer we send on the duly-making page and does NOT
+    // recompute it, so these tests pin the exact names, JSON types and units it agreed to
+    // consume: `chargeAmountPence` (integer, minor units) and `paymentReference` (string), both
+    // at the TOP LEVEL of `payload`. A rename or a unit slip here shows the regulator a charge
+    // that is silently 100x wrong, which no other test in this file would catch.
+
+    private static AccreditationApplicationModel ApplicationWithCharge(
+        PlannedTonnageBand? band,
+        int selectedSites = 0
+    )
+    {
+        var application = CreateTestApplication();
+        application.Prns.PlannedTonnageBand = band;
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = Enumerable
+                .Range(1, selectedSites)
+                .Select(i => new OverseasSiteModel { SiteId = i, SiteName = $"Site {i}" })
+                .ToList(),
+        };
+        return application;
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_SendsChargeAmountAsIntegerPenceAtPayloadTopLevel()
+    {
+        // £3,276 tonnage + £328 x 2 sites = £3,932 -> 393200 pence.
+        var payload = await CapturedSubmitPayload(
+            ApplicationWithCharge(PlannedTonnageBand.UpTo10000, selectedSites: 2)
+        );
+
+        var charge = payload.GetProperty("chargeAmountPence");
+        charge.ValueKind.Should().Be(JsonValueKind.Number, "the contract is a JSON number");
+        charge.GetInt32().Should().Be(393_200);
+
+        // Pin the unit explicitly: pounds would serialise as 3932 and look superficially sane.
+        charge.GetInt32().Should().NotBe(3_932);
+    }
+
+    [Theory]
+    [InlineData(PlannedTonnageBand.UpTo500, 54_600)]
+    [InlineData(PlannedTonnageBand.UpTo1000, 218_400)]
+    [InlineData(PlannedTonnageBand.UpTo10000, 327_600)]
+    [InlineData(PlannedTonnageBand.Over10000, 396_500)]
+    public async Task SubmitApplicationAsync_EveryTonnageBand_ReachesTheWireInPence(
+        PlannedTonnageBand band,
+        int expectedPence
+    )
+    {
+        var payload = await CapturedSubmitPayload(ApplicationWithCharge(band));
+
+        payload.GetProperty("chargeAmountPence").GetInt32().Should().Be(expectedPence);
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_NoTonnageBand_OmitsChargeRatherThanFailingTheSubmission()
+    {
+        // The chosen missing-band behaviour: omit the field, never throw. The submission itself
+        // must still succeed — a display-only field must not be able to block accreditation.
+        var (adapter, handler) = CreateAdapter();
+        var result = await adapter.SubmitApplicationAsync(ApplicationWithCharge(null, 2));
+
+        result.ApplicationReference.Should().Be(TestApplicationReference);
+
+        var payload = JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload");
+        payload
+            .TryGetProperty("chargeAmountPence", out _)
+            .Should()
+            .BeFalse("a null charge is dropped by WhenWritingNull, not sent as null or zero");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_InitialSubmit_OmitsPaymentReferenceBecauseItDoesNotExistYet()
+    {
+        // ManagementBe generates the application reference and we only learn it from the response
+        // to this very request, so there is genuinely nothing to send on create. It must be
+        // ABSENT rather than an empty string or a stand-in such as registrationReference.
+        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
+        application.ApplicationReference = null;
+
+        var payload = await CapturedSubmitPayload(application);
+
+        payload.TryGetProperty("paymentReference", out _).Should().BeFalse();
+        payload.GetProperty("registrationNumber").GetString().Should().Be("EPR-100023");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_WithApplicationReference_SendsItAsPaymentReferenceString()
+    {
+        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
+        application.ApplicationReference = TestApplicationReference;
+
+        var payload = await CapturedSubmitPayload(application);
+
+        var reference = payload.GetProperty("paymentReference");
+        reference.ValueKind.Should().Be(JsonValueKind.String);
+        reference.GetString().Should().Be(TestApplicationReference);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_SendsRecomputedChargeAlongsideSectionsNotInsideThem()
+    {
+        // Answering a query can change the band or the site count, and duly making happens after
+        // the query is answered — so the charge must be recomputed here, not frozen at submit.
+        var application = ApplicationWithCharge(PlannedTonnageBand.Over10000, selectedSites: 1);
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.ApplicationReference = TestApplicationReference;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            application,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["prn-tonnage"]
+        );
+
+        var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+
+        // £3,965 + £328 = £4,293 -> 429300 pence.
+        root.GetProperty("chargeAmountPence").GetInt32().Should().Be(429_300);
+        root.GetProperty("paymentReference").GetString().Should().Be(TestApplicationReference);
+
+        // Siblings of sections, never entries within it: the sections dictionary is keyed by
+        // section name and its projections must stay identical to BuildPayload's (RA-292 AC04).
+        var sections = root.GetProperty("sections");
+        sections
+            .TryGetProperty("Prns", out _)
+            .Should()
+            .BeTrue("otherwise the absence assertions below would pass vacuously");
+        sections.TryGetProperty("chargeAmountPence", out _).Should().BeFalse();
+        sections.TryGetProperty("paymentReference", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_NoTonnageBand_OmitsChargeAndStillSucceeds()
+    {
+        var application = ApplicationWithCharge(null, selectedSites: 3);
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.ApplicationReference = null;
+
+        var (adapter, handler) = CreateAdapter();
+        var result = await adapter.ResumeFromQueryAsync(
+            application,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["prn-tonnage"]
+        );
+
+        result.IsSuccess.Should().BeTrue();
+
+        var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+        root.TryGetProperty("chargeAmountPence", out _).Should().BeFalse();
+        root.TryGetProperty("paymentReference", out _).Should().BeFalse();
+        root.GetProperty("sections").TryGetProperty("Prns", out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_DeselectedSitesDoNotAddToTheChargeOnTheWire()
+    {
+        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo1000, selectedSites: 3);
+        application.OverseasSites!.Sites[1].Selected = false;
+
+        var payload = await CapturedSubmitPayload(application);
+
+        // £2,184 + £328 x 2 still-selected = £2,840 -> 284000 pence.
+        payload.GetProperty("chargeAmountPence").GetInt32().Should().Be(284_000);
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_ChargeFieldsDoNotDisturbTheHmacSignature()
+    {
+        // The v3 canonical payload covers clientId/userId/userName/timestamp/nonce only — the
+        // body is NOT signed — so adding body fields cannot invalidate the signature. Pinned
+        // because the opposite assumption would make every payload change a breaking auth change.
+        const string secret = "test-secret-key";
+        var (adapter, handler) = CreateAdapter(sharedSecret: secret);
+        await adapter.SubmitApplicationAsync(
+            ApplicationWithCharge(PlannedTonnageBand.Over10000, selectedSites: 4)
+        );
+
+        var request = handler.CapturedRequest!;
+        var expected = HttpCaseWorkingApiAdapter.ComputeSignature(
+            secret,
+            TestClientId,
+            "jane@example.com",
+            "Jane Smith",
+            request.Headers.GetValues("x-cdp-auth-timestamp").Single(),
+            request.Headers.GetValues("x-cdp-auth-nonce").Single()
+        );
+
+        request.Headers.GetValues("x-cdp-auth-signature").Single().Should().Be(expected);
+
+        JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload")
+            .GetProperty("chargeAmountPence")
+            .GetInt32()
+            .Should()
+            .Be(527_700);
+    }
+
+    #endregion
 }
