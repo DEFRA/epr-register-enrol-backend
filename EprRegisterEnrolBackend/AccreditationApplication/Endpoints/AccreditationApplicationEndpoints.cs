@@ -1925,6 +1925,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(

@@ -4455,6 +4455,30 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task InitiateUpload_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
+
+        var request = new
+        {
+            redirectUrl = "http://frontend/redirect",
+            s3Bucket = "test-bucket",
+            s3Path = "uploads/test.csv",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/initiate",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
     [Fact]
     public async Task PatchBesEvidenceSection_SettingQueriedDirectly_Returns400()
     {
@@ -4614,6 +4638,30 @@ public class AccreditationApplicationEndpointsTests
             status: ApplicationStatus.Queried,
             configure: a => a.Prns.SectionStatus = SectionStatus.Queried
         );
+
+        var request = new
+        {
+            redirectUrl = "http://frontend/redirect",
+            s3Bucket = "test-bucket",
+            s3Path = "uploads/test.pdf",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/bes-evidence/initiate",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task InitiateBesEvidenceUpload_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(status: status);
 
         var request = new
         {
