@@ -88,6 +88,13 @@ public class AccreditationApplicationModel
     // never persisted, so BsonIgnore keeps a transient read-time value out of Mongo writes.
     [BsonIgnore]
     public string? NotificationStatus { get; set; }
+
+    // RA-415: live-derived on GetById from the linked ManagementBe work item's SLA due date —
+    // OJ has no due date of its own, CM's work item is the single source of truth. Never
+    // persisted (same rationale as NotificationStatus above); null when there is no linked
+    // work item yet.
+    [BsonIgnore]
+    public DateTime? DueDate { get; set; }
 }
 
 public class SubmittedByModel

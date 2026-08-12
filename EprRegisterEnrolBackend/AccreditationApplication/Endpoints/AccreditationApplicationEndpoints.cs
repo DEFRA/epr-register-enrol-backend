@@ -83,11 +83,17 @@ public static class AccreditationApplicationEndpoints
         );
     }
 
-    // RA-252: a withdrawn application's data must not be editable through any of the ordinary
-    // write endpoints, even if the frontend's own session guard fails open or is bypassed.
-    private static IResult? RejectIfWithdrawn(AccreditationApplicationModel application) =>
-        application.ApplicationStatus == ApplicationStatus.Withdrawn
-            ? Results.Conflict("Application has been withdrawn and can no longer be edited.")
+    // RA-252 / RA-415: an application in a terminal status (Withdrawn, Approved or Rejected)
+    // must not be editable through any of the ordinary write endpoints, even if the frontend's
+    // own session guard fails open or is bypassed.
+    private static IResult? RejectIfTerminal(AccreditationApplicationModel application) =>
+        application.ApplicationStatus
+            is ApplicationStatus.Withdrawn
+                or ApplicationStatus.Approved
+                or ApplicationStatus.Rejected
+            ? Results.Conflict(
+                "Application is Approved, Rejected or Withdrawn and can no longer be edited."
+            )
             : null;
 
     private static async Task<IResult> Seed(
@@ -259,11 +265,12 @@ public static class AccreditationApplicationEndpoints
         {
             try
             {
-                application.NotificationStatus =
-                    await caseWorkingAdapter.GetNotificationStatusAsync(
-                        application,
-                        cancellationToken
-                    );
+                var notificationStatus = await caseWorkingAdapter.GetNotificationStatusAsync(
+                    application,
+                    cancellationToken
+                );
+                application.NotificationStatus = notificationStatus.NotificationStatus;
+                application.DueDate = notificationStatus.SlaDueDate;
             }
             catch (Exception ex)
             {
@@ -295,7 +302,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -347,7 +354,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -397,7 +404,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -460,7 +467,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -501,7 +508,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -556,8 +563,18 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
 
         application.OverseasSites ??= new AccreditationApplicationOverseasSites();
 
@@ -608,7 +625,7 @@ public static class AccreditationApplicationEndpoints
         };
 
         application.OverseasSites.Sites.Add(newSite);
-        application.OverseasSites.SectionStatus = SectionStatus.InProgress;
+        RecomputeOverseasSitesSectionStatus(application.OverseasSites);
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -665,8 +682,15 @@ public static class AccreditationApplicationEndpoints
         return maxSiteId + 1;
     }
 
-    // Shared by PatchOverseasSites/PromoteOverseasSite/RevertOverseasSite so the three don't
-    // each duplicate the Queried guard.
+    // Shared by AddOverseasSite/PatchOverseasSites/PromoteOverseasSite/RevertOverseasSite so
+    // the four don't each duplicate the Queried guard.
+    //
+    // Deliberately binary (Completed/NotStarted only, no InProgress): this section has no
+    // partial-completion concept like BusinessPlan/SamplingPlan do — a selected site means the
+    // section is done, matching AccreditationApplicationSections.ComputeCurrentStatus, which the
+    // resubmit-after-query flow uses as the source of truth for this section. So AddOverseasSite
+    // reporting Completed on the very first site (rather than the InProgress it used to report
+    // before it was routed through this helper) is intended, not a regression.
     private static void RecomputeOverseasSitesSectionStatus(
         AccreditationApplicationOverseasSites overseasSites
     )
@@ -746,7 +770,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -820,7 +844,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -877,8 +901,18 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -961,7 +995,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -1011,7 +1045,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -1052,7 +1086,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -1095,7 +1129,7 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
         if (
@@ -1497,8 +1531,18 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.SamplingPlan.SectionStatus
+            )
+        )
+            return Results.Conflict(
+                "Sampling plan section is not editable in the application's current status."
+            );
 
         if (application.SamplingPlan.Files.Count >= 10)
             return Results.UnprocessableEntity("Maximum of 10 files permitted per application.");
@@ -1516,9 +1560,10 @@ public static class AccreditationApplicationEndpoints
         };
 
         application.SamplingPlan.Files.Add(file);
-        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
-            application.SamplingPlan
-        );
+        if (application.SamplingPlan.SectionStatus != SectionStatus.Queried)
+            application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
+                application.SamplingPlan
+            );
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -1540,17 +1585,31 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
-        if (RejectIfWithdrawn(application) is { } conflict)
+        if (RejectIfTerminal(application) is { } conflict)
             return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.SamplingPlan.SectionStatus
+            )
+        )
+            return Results.Conflict(
+                "Sampling plan section is not editable in the application's current status."
+            );
 
         var removed = application.SamplingPlan.Files.RemoveAll(f => f.FileId == fileId);
         if (removed == 0)
             return Results.NotFound();
 
-        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
-            application.SamplingPlan
-        );
+        if (application.SamplingPlan.SectionStatus != SectionStatus.Queried)
+            application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
+                application.SamplingPlan
+            );
         application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null ? Results.Problem("Failed to delete file.") : Results.Ok();
@@ -1638,15 +1697,7 @@ public static class AccreditationApplicationEndpoints
         // undo the very gates the terminal statuses exist to enforce. Unmapped pushes (anything
         // CM adds in future with no arm in the switch above) are exempt: they only update the
         // ordering watermark below, never ApplicationStatus.
-        if (
-            mappedStatus is not null
-            && (
-                RejectIfWithdrawn(application) is not null
-                || application.ApplicationStatus
-                    is ApplicationStatus.Approved
-                        or ApplicationStatus.Rejected
-            )
-        )
+        if (mappedStatus is not null && RejectIfTerminal(application) is not null)
         {
             logger.LogWarning(
                 "StatusChangedFromCaseManagement: application status {Status} is terminal and cannot accept toStateId={ToStateId} for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
@@ -1874,6 +1925,8 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
 
         if (
             !AccreditationApplicationSections.IsSectionEditable(
