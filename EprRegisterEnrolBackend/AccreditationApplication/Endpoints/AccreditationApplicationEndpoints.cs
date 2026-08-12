@@ -566,6 +566,16 @@ public static class AccreditationApplicationEndpoints
         if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
+
         application.OverseasSites ??= new AccreditationApplicationOverseasSites();
 
         const int maxSitesPerApplication = 500;
@@ -615,7 +625,7 @@ public static class AccreditationApplicationEndpoints
         };
 
         application.OverseasSites.Sites.Add(newSite);
-        application.OverseasSites.SectionStatus = SectionStatus.InProgress;
+        RecomputeOverseasSitesSectionStatus(application.OverseasSites);
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -886,6 +896,16 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
             return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -1507,6 +1527,16 @@ public static class AccreditationApplicationEndpoints
         if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.SamplingPlan.SectionStatus
+            )
+        )
+            return Results.Conflict(
+                "Sampling plan section is not editable in the application's current status."
+            );
+
         if (application.SamplingPlan.Files.Count >= 10)
             return Results.UnprocessableEntity("Maximum of 10 files permitted per application.");
 
@@ -1523,9 +1553,10 @@ public static class AccreditationApplicationEndpoints
         };
 
         application.SamplingPlan.Files.Add(file);
-        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
-            application.SamplingPlan
-        );
+        if (application.SamplingPlan.SectionStatus != SectionStatus.Queried)
+            application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
+                application.SamplingPlan
+            );
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -1550,14 +1581,28 @@ public static class AccreditationApplicationEndpoints
         if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.SamplingPlan.SectionStatus
+            )
+        )
+            return Results.Conflict(
+                "Sampling plan section is not editable in the application's current status."
+            );
+
         var removed = application.SamplingPlan.Files.RemoveAll(f => f.FileId == fileId);
         if (removed == 0)
             return Results.NotFound();
 
-        application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
-            application.SamplingPlan
-        );
+        if (application.SamplingPlan.SectionStatus != SectionStatus.Queried)
+            application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
+                application.SamplingPlan
+            );
         application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null ? Results.Problem("Failed to delete file.") : Results.Ok();

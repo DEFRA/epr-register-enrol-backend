@@ -2626,6 +2626,63 @@ public class AccreditationApplicationEndpointsTests
             .Be(AccreditationFileDocumentType.SupportingEvidence);
     }
 
+    [Fact]
+    public async Task AddFile_WhenQueriedAndSamplingPlanSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new FileUploadRequest
+        {
+            FileId = "file-009",
+            Filename = "plan.pdf",
+            ContentType = "application/pdf",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
+            S3Key = "sampling-plans/file-009",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddFile_WhenSamplingPlanSectionQueried_LeavesSectionStatusQueried()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.SamplingPlan.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new FileUploadRequest
+        {
+            FileId = "file-010",
+            Filename = "plan.pdf",
+            ContentType = "application/pdf",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
+            S3Key = "sampling-plans/file-010",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.SamplingPlan.SectionStatus.Should().Be(SectionStatus.Queried);
+    }
+
     // --- DeleteFile ---
 
     [Fact]
@@ -2651,6 +2708,101 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task DeleteFile_WhenSaved_BumpsApplicationStatusToStarted()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.SamplingPlan.Files.Add(
+                new AccreditationApplicationFile
+                {
+                    FileId = "file-001",
+                    Filename = "plan.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = string.Empty,
+                    S3Key = "sampling-plans/file-001",
+                }
+            )
+        );
+
+        var response = await _client.DeleteAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/file-001",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
+    }
+
+    [Fact]
+    public async Task DeleteFile_WhenQueriedAndSamplingPlanSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Queried;
+                a.SamplingPlan.Files.Add(
+                    new AccreditationApplicationFile
+                    {
+                        FileId = "file-001",
+                        Filename = "plan.pdf",
+                        ContentType = "application/pdf",
+                        UploadedByUserId = string.Empty,
+                        S3Key = "sampling-plans/file-001",
+                    }
+                );
+            }
+        );
+
+        var response = await _client.DeleteAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/file-001",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task DeleteFile_WhenSamplingPlanSectionQueried_LeavesSectionStatusQueried()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.SamplingPlan.SectionStatus = SectionStatus.Queried;
+                a.SamplingPlan.Files.Add(
+                    new AccreditationApplicationFile
+                    {
+                        FileId = "file-001",
+                        Filename = "plan.pdf",
+                        ContentType = "application/pdf",
+                        UploadedByUserId = string.Empty,
+                        S3Key = "sampling-plans/file-001",
+                    }
+                );
+            }
+        );
+
+        var response = await _client.DeleteAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/file-001",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.SamplingPlan.SectionStatus.Should().Be(SectionStatus.Queried);
     }
 
     // --- CDP Upload ---
@@ -2860,6 +3012,51 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_WhenQueriedAndOverseasSitesSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_WhenOverseasSitesSectionQueried_LeavesSectionStatusQueried()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    SectionStatus = SectionStatus.Queried,
+                }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.OverseasSites!.SectionStatus.Should().Be(SectionStatus.Queried);
     }
 
     [Fact]
@@ -3476,6 +3673,31 @@ public class AccreditationApplicationEndpointsTests
                 {
                     Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "Test Site" }],
                 }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            ValidAddInterimSiteRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddInterimSite_WhenQueriedAndOverseasSitesSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Queried;
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "Test Site" }],
+                };
+            }
         );
 
         var response = await _client.PostAsJsonAsync(
