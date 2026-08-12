@@ -3060,6 +3060,29 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
+    public async Task AddOverseasSite_FirstSiteOnApplication_SectionStatusIsCompleted()
+    {
+        // OverseasSites has no InProgress concept: a selected site means the section is done,
+        // matching AccreditationApplicationSections.ComputeCurrentStatus. So the very first site
+        // added completes the section immediately rather than passing through InProgress.
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.OverseasSites!.SectionStatus.Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
     public async Task AddOverseasSite_MissingSiteName_Returns400()
     {
         Reset();

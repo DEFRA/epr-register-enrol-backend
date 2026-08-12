@@ -682,8 +682,15 @@ public static class AccreditationApplicationEndpoints
         return maxSiteId + 1;
     }
 
-    // Shared by PatchOverseasSites/PromoteOverseasSite/RevertOverseasSite so the three don't
-    // each duplicate the Queried guard.
+    // Shared by AddOverseasSite/PatchOverseasSites/PromoteOverseasSite/RevertOverseasSite so
+    // the four don't each duplicate the Queried guard.
+    //
+    // Deliberately binary (Completed/NotStarted only, no InProgress): this section has no
+    // partial-completion concept like BusinessPlan/SamplingPlan do — a selected site means the
+    // section is done, matching AccreditationApplicationSections.ComputeCurrentStatus, which the
+    // resubmit-after-query flow uses as the source of truth for this section. So AddOverseasSite
+    // reporting Completed on the very first site (rather than the InProgress it used to report
+    // before it was routed through this helper) is intended, not a regression.
     private static void RecomputeOverseasSitesSectionStatus(
         AccreditationApplicationOverseasSites overseasSites
     )
