@@ -166,7 +166,7 @@ public class AccreditationApplicationSectionsTests
     public void SnapshotSection_Prns_AppendsCurrentValues()
     {
         var application = CreateApplication();
-        application.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000;
+        application.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo5000;
         application.Prns.Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "j@x.com" }];
         var versionedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -174,7 +174,7 @@ public class AccreditationApplicationSectionsTests
 
         application.Prns.Versions.Should().ContainSingle();
         var snapshot = application.Prns.Versions[0];
-        snapshot.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo1000);
+        snapshot.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo5000);
         snapshot.Authorisers.Should().ContainSingle(a => a.FullName == "Jane");
         snapshot.VersionedAt.Should().Be(versionedAt);
     }

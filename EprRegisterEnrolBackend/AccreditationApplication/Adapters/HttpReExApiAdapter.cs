@@ -13,7 +13,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
     )
     {
         ["up_to_500"] = PlannedTonnageBand.UpTo500,
-        ["up_to_1000"] = PlannedTonnageBand.UpTo1000,
+        ["up_to_5000"] = PlannedTonnageBand.UpTo5000,
         ["up_to_10000"] = PlannedTonnageBand.UpTo10000,
         ["over_10000"] = PlannedTonnageBand.Over10000,
     };
@@ -101,6 +101,8 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         string? siteAddress = registration is ReprocessorRegistrationDto reprocessor
             ? FormatAddress(reprocessor.Site?.Address)
             : null;
+
+        var companyRegisteredAddress = FormatAddress(org.CompanyDetails?.Address);
 
         // Find the accreditation linked to this registration
         var accreditationId = registration.AccreditationId;
@@ -249,6 +251,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 SiteAddress = siteAddress,
                 IsExporter = isExporter,
                 CompanyRegisterAddressPostcode = org.CompanyDetails?.Address?.Postcode,
+                CompanyRegisteredAddress = companyRegisteredAddress,
                 WasteProcessingType = isExporter ? "exporter" : "reprocessor",
                 OverseasSites = overseasSites,
                 Prns = new ReExPrnsDto
@@ -326,6 +329,16 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 ", ",
                 new[] { addr.Line1, addr.Town, addr.Postcode }.Where(s =>
                     !string.IsNullOrWhiteSpace(s)
+                )
+            );
+
+    private static string? FormatAddress(RegisteredAddressDto? addr) =>
+        addr is null
+            ? null
+            : string.Join(
+                ", ",
+                new[] { addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode }.Where(
+                    s => !string.IsNullOrWhiteSpace(s)
                 )
             );
 }

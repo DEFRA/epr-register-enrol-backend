@@ -542,7 +542,7 @@ public class HttpCaseWorkingApiAdapterTests
 
     private const string ExpectedPrnsJson = """
         {
-          "plannedTonnageBand": "UpTo1000",
+          "plannedTonnageBand": "UpTo5000",
           "authorisers": [
             {
               "fullName": "Old Hand",
@@ -566,7 +566,7 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var application = CreateTestApplication();
         application.CaseManagementWorkItemId = Guid.NewGuid();
-        application.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000;
+        application.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo5000;
         application.Prns.Authorisers =
         [
             new PrnsAuthoriser
@@ -1682,7 +1682,7 @@ public class HttpCaseWorkingApiAdapterTests
 
     [Theory]
     [InlineData(PlannedTonnageBand.UpTo500, 54_600)]
-    [InlineData(PlannedTonnageBand.UpTo1000, 218_400)]
+    [InlineData(PlannedTonnageBand.UpTo5000, 218_400)]
     [InlineData(PlannedTonnageBand.UpTo10000, 327_600)]
     [InlineData(PlannedTonnageBand.Over10000, 396_500)]
     public async Task SubmitApplicationAsync_EveryTonnageBand_ReachesTheWireInPence(
@@ -1810,7 +1810,7 @@ public class HttpCaseWorkingApiAdapterTests
     [Fact]
     public async Task SubmitApplicationAsync_DeselectedSitesDoNotAddToTheChargeOnTheWire()
     {
-        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo1000, selectedSites: 3);
+        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo5000, selectedSites: 3);
         application.OverseasSites!.Sites[1].Selected = false;
 
         var payload = await CapturedSubmitPayload(application);

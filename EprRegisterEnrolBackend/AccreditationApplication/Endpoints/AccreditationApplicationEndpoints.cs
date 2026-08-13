@@ -177,6 +177,7 @@ public static class AccreditationApplicationEndpoints
             IsExporter = priorYearData.IsExporter,
             SiteAddress = priorYearData.SiteAddress,
             CompanyRegisterAddressPostcode = priorYearData.CompanyRegisterAddressPostcode,
+            CompanyRegisteredAddress = priorYearData.CompanyRegisteredAddress,
             WasteProcessingType = priorYearData.WasteProcessingType,
             RegistrationReference = priorYearData.RegistrationReference,
             MaterialType = materialTypeEnum,

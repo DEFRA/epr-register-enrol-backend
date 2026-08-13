@@ -47,7 +47,7 @@ public class AccreditationChargeCalculatorTests
     // Every band in the table, with no overseas sites: the tonnage fee alone, in pence.
     [Theory]
     [InlineData(PlannedTonnageBand.UpTo500, 54_600)]
-    [InlineData(PlannedTonnageBand.UpTo1000, 218_400)]
+    [InlineData(PlannedTonnageBand.UpTo5000, 218_400)]
     [InlineData(PlannedTonnageBand.UpTo10000, 327_600)]
     [InlineData(PlannedTonnageBand.Over10000, 396_500)]
     public void EveryTonnageBand_NoSites_ReturnsBandFeeInPence(
