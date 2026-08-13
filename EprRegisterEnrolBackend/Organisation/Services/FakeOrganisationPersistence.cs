@@ -198,6 +198,9 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                         SiteId = "REG002",
                         Status = "created",
                         Material = "glass",
+                        // RA-307: local-dev/e2e coverage for the "Glass - Remelt"
+                        // display suffix, mapped to the enum by StubReExApiAdapter.
+                        GlassRecyclingProcess = "glass_re_melt",
                         WasteProcessingType = "reprocessor",
                         SiteAddress = new SiteAddressModel
                         {

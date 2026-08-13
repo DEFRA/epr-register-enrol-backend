@@ -18,6 +18,17 @@ public class StubReExApiAdapter(
         ("Vietnam", false, false),
     ];
 
+    // Mirrors HttpReExApiAdapter.GlassRecyclingProcessMap — the stub reads the
+    // same wire-value string from FakeOrganisationPersistence's seed data that
+    // the real ReEx API would return, so local dev/e2e exercises the same
+    // mapping the production adapter does.
+    private static readonly Dictionary<string, GlassRecyclingProcess> GlassRecyclingProcessMap =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["glass_re_melt"] = GlassRecyclingProcess.Remelt,
+            ["glass_other"] = GlassRecyclingProcess.Other,
+        };
+
     public async Task<ReExResult<ReExAccreditationDto>> GetAccreditationAsync(
         string organisationId,
         string registrationId,
@@ -39,6 +50,7 @@ public class StubReExApiAdapter(
         string? companyRegisterAddressPostcode = null;
         string? wasteProcessingType = null;
         var isExporter = false;
+        GlassRecyclingProcess? glassRecyclingProcess = null;
         List<OverseasSiteModel> overseasSites = [];
 
         if (int.TryParse(organisationId, out var orgIdInt))
@@ -52,6 +64,14 @@ public class StubReExApiAdapter(
                 r.Id.ToString() == registrationId
             );
             wasteProcessingType = registration?.WasteProcessingType;
+            if (
+                registration?.GlassRecyclingProcess is { } rawGlassRecyclingProcess
+                && GlassRecyclingProcessMap.TryGetValue(
+                    rawGlassRecyclingProcess,
+                    out var mappedGlassRecyclingProcess
+                )
+            )
+                glassRecyclingProcess = mappedGlassRecyclingProcess;
             isExporter =
                 wasteProcessingType?.Equals("exporter", StringComparison.OrdinalIgnoreCase) == true;
             siteAddress = registration?.SiteAddress is { } addr
@@ -96,6 +116,7 @@ public class StubReExApiAdapter(
             IsExporter = isExporter,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
             WasteProcessingType = wasteProcessingType ?? (isExporter ? "exporter" : "reprocessor"),
+            GlassRecyclingProcess = glassRecyclingProcess,
             OverseasSites = overseasSites,
             Prns = new ReExPrnsDto
             {
