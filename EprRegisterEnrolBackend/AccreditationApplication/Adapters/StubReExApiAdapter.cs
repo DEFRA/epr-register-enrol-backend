@@ -109,7 +109,8 @@ public class StubReExApiAdapter(
             SiteAddress = siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
             IsExporter = isExporter,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
-            CompanyRegisteredAddress = companyRegisteredAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
+            CompanyRegisteredAddress = companyRegisteredAddress
+                ?? "1 Stub Registered Office, Stubton, ST1 1AB",
             WasteProcessingType = wasteProcessingType ?? (isExporter ? "exporter" : "reprocessor"),
             OverseasSites = overseasSites,
             Prns = new ReExPrnsDto
