@@ -37,6 +37,7 @@ public class StubReExApiAdapter(
         string? registrationReference = null;
         string? siteAddress = null;
         string? companyRegisterAddressPostcode = null;
+        string? companyRegisteredAddress = null;
         string? wasteProcessingType = null;
         var isExporter = false;
         List<OverseasSiteModel> overseasSites = [];
@@ -47,6 +48,19 @@ public class StubReExApiAdapter(
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
             companyRegisterAddressPostcode = org?.CompanyDetails?.RegisteredAddress?.Postcode;
+            companyRegisteredAddress = org?.CompanyDetails?.RegisteredAddress is { } regAddr
+                ? string.Join(
+                    ", ",
+                    new[]
+                    {
+                        regAddr.Line1,
+                        regAddr.Line2,
+                        regAddr.Town,
+                        regAddr.County,
+                        regAddr.Postcode,
+                    }.Where(s => !string.IsNullOrWhiteSpace(s))
+                )
+                : null;
 
             var registration = org?.Registrations?.FirstOrDefault(r =>
                 r.Id.ToString() == registrationId
@@ -95,11 +109,13 @@ public class StubReExApiAdapter(
             SiteAddress = siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
             IsExporter = isExporter,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
+            CompanyRegisteredAddress = companyRegisteredAddress
+                ?? "1 Stub Registered Office, Stubton, ST1 1AB",
             WasteProcessingType = wasteProcessingType ?? (isExporter ? "exporter" : "reprocessor"),
             OverseasSites = overseasSites,
             Prns = new ReExPrnsDto
             {
-                PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+                PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
                 Authorisers =
                 [
                     new PrnsAuthoriser { FullName = "Stub Authoriser", Email = "stub@example.com" },

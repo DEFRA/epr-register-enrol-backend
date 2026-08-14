@@ -13,7 +13,7 @@ public class PatchPrnsRequestValidatorTests
     {
         var request = new PatchPrnsRequest
         {
-            PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+            PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
             Authorisers = [new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" }]
         };
         var result = _validator.TestValidate(request);

@@ -98,6 +98,44 @@ public class HttpReExApiAdapterTests
         result.Value!.CompanyRegisterAddressPostcode.Should().Be("AB1 2CD");
     }
 
+    // RA-424: the frontend shows this in place of the (non-existent) overseas site address on
+    // the exporter's accreditation application header/landing page.
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsCompanyRegisteredAddress()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.CompanyRegisteredAddress.Should().Be("1 Example Hill, Exampleton, AB1 2CD");
+    }
+
+    // Regression test for RA-424: the real ReEx API sends "up_to_5000" (confirmed by commit
+    // c5bdf46, which set this fixture's tonnageBand to "up_to_5000" against a captured
+    // production payload), but TonnageBandMap only recognised "up_to_1000" — every real exporter
+    // accreditation with this band silently dropped to a null PlannedTonnageBand.
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsUpTo5000TonnageBand()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.Prns!.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo5000);
+    }
+
     [Fact]
     public async Task GetAccreditationAsync_ExporterRegistration_MapsSeededSitesWithIsNewSiteFalse()
     {

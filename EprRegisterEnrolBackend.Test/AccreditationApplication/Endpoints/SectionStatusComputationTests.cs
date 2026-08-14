@@ -38,7 +38,7 @@ public class SectionStatusComputationTests
     {
         var prns = new AccreditationApplicationPrns
         {
-            PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+            PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
             Authorisers = [new PrnsAuthoriser { FullName = "Jane", Email = "jane@x.com" }],
         };
         SectionStatusService.ComputePrns(prns).Should().Be(SectionStatus.Completed);
