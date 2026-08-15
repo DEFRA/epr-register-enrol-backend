@@ -1,6 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.CdpUploader.Config;
-using EprRegisterEnrolBackend.FileUpload.Config;
 using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.Utils.Health;
 using FluentAssertions;
@@ -16,89 +15,110 @@ public class RequiredConfigHealthCheckTests
     [Fact]
     public async Task CheckHealthAsync_Healthy_WhenAllRequiredConfigPresent()
     {
-        var check = MakeCheck(caseWorkingUrl: "http://case-working.test", useStub: false);
+        var check = MakeCheck();
 
-        var result = await check.CheckHealthAsync(
-            new HealthCheckContext(),
-            TestContext.Current.CancellationToken
-        );
+        var result = await CheckHealth(check);
 
         result.Status.Should().Be(HealthStatus.Healthy);
+        result.Description.Should().BeNullOrEmpty();
     }
 
-    [Fact]
-    public async Task CheckHealthAsync_Unhealthy_WhenReExApiBaseUrlMissing()
-    {
-        var check = MakeCheck(reExBaseUrl: "", isDevelopment: false);
+    public static TheoryData<string, Action<Builder>> IndividuallyMissingKeys() =>
+        new()
+        {
+            { "ReExApi__BaseUrl", b => b.ReExBaseUrl = "" },
+            { "REEX_API_BASIC_AUTH_USERNAME", b => b.ReExUsername = "" },
+            { "REEX_API_BASIC_AUTH_PASSWORD", b => b.ReExPassword = "" },
+            { "App__BaseUrl", b => b.AppBaseUrl = "" },
+            { "CdpUploader__Url", b => b.CdpUploaderUrl = "" },
+            { "CaseWorking__Url", b => b.CaseWorkingUrl = "" },
+            { "CASE_MANAGEMENT_API_SHARED_SECRET", b => b.CaseWorkingSharedSecret = "" },
+            { "AUTH_SHARED_SECRET__MANAGEMENT_BE", b => b.CaseManagementAuthSharedSecret = "" }
+        };
 
-        var result = await check.CheckHealthAsync(
-            new HealthCheckContext(),
-            TestContext.Current.CancellationToken
-        );
+    [Theory]
+    [MemberData(nameof(IndividuallyMissingKeys))]
+    public async Task CheckHealthAsync_Unhealthy_WhenSingleKeyMissing(
+        string expectedKey,
+        Action<Builder> makeBlank
+    )
+    {
+        var builder = new Builder();
+        makeBlank(builder);
+        var check = MakeCheck(builder);
+
+        var result = await CheckHealth(check);
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
-        result.Description.Should().Contain("ReExApi__BaseUrl");
+        result.Description.Should().Contain(expectedKey);
     }
 
     [Fact]
-    public async Task CheckHealthAsync_Healthy_WhenReExApiBaseUrlMissingInDevelopment()
+    public async Task CheckHealthAsync_Healthy_WhenReExAndCaseManagementAuthMissingInDevelopment()
     {
-        var check = MakeCheck(reExBaseUrl: "", reExUsername: "", reExPassword: "", isDevelopment: true);
-
-        var result = await check.CheckHealthAsync(
-            new HealthCheckContext(),
-            TestContext.Current.CancellationToken
+        var check = MakeCheck(
+            new Builder
+            {
+                ReExBaseUrl = "",
+                ReExUsername = "",
+                ReExPassword = "",
+                CaseManagementAuthSharedSecret = "",
+                IsDevelopment = true
+            }
         );
+
+        var result = await CheckHealth(check);
 
         result.Status.Should().Be(HealthStatus.Healthy);
     }
 
     [Fact]
-    public async Task CheckHealthAsync_Unhealthy_WhenCaseWorkingUrlMissingAndNotUsingStub()
+    public async Task CheckHealthAsync_Healthy_WhenUsingStubInDevelopment_EvenWithNoUrlOrSecret()
     {
-        var check = MakeCheck(caseWorkingUrl: "", useStub: false);
-
-        var result = await check.CheckHealthAsync(
-            new HealthCheckContext(),
-            TestContext.Current.CancellationToken
+        var check = MakeCheck(
+            new Builder
+            {
+                UseStub = true,
+                CaseWorkingUrl = "",
+                CaseWorkingSharedSecret = "",
+                IsDevelopment = true
+            }
         );
+
+        var result = await CheckHealth(check);
+
+        result.Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public async Task CheckHealthAsync_Unhealthy_WhenStillUsingStubOutsideDevelopment()
+    {
+        var check = MakeCheck(new Builder { UseStub = true, IsDevelopment = false });
+
+        var result = await CheckHealth(check);
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
-        result.Description.Should().Contain("CaseWorking__Url");
-    }
-
-    [Fact]
-    public async Task CheckHealthAsync_Healthy_WhenCaseWorkingUrlMissingButUsingStub()
-    {
-        var check = MakeCheck(caseWorkingUrl: "", useStub: true);
-
-        var result = await check.CheckHealthAsync(
-            new HealthCheckContext(),
-            TestContext.Current.CancellationToken
-        );
-
-        result.Status.Should().Be(HealthStatus.Healthy);
+        result.Description.Should().Contain("CaseWorking__UseStub");
     }
 
     [Fact]
     public async Task CheckHealthAsync_ListsEveryMissingKey()
     {
         var check = MakeCheck(
-            reExBaseUrl: "",
-            reExUsername: "",
-            reExPassword: "",
-            appBaseUrl: "",
-            cdpUploaderUrl: "",
-            s3Region: "",
-            caseWorkingUrl: "",
-            useStub: false,
-            isDevelopment: false
+            new Builder
+            {
+                ReExBaseUrl = "",
+                ReExUsername = "",
+                ReExPassword = "",
+                AppBaseUrl = "",
+                CdpUploaderUrl = "",
+                CaseWorkingUrl = "",
+                CaseWorkingSharedSecret = "",
+                CaseManagementAuthSharedSecret = ""
+            }
         );
 
-        var result = await check.CheckHealthAsync(
-            new HealthCheckContext(),
-            TestContext.Current.CancellationToken
-        );
+        var result = await CheckHealth(check);
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
         result.Description.Should()
@@ -107,34 +127,57 @@ public class RequiredConfigHealthCheckTests
             .And.Contain("REEX_API_BASIC_AUTH_PASSWORD")
             .And.Contain("App__BaseUrl")
             .And.Contain("CdpUploader__Url")
-            .And.Contain("S3__Region")
-            .And.Contain("CaseWorking__Url");
+            .And.Contain("CaseWorking__Url")
+            .And.Contain("CASE_MANAGEMENT_API_SHARED_SECRET")
+            .And.Contain("AUTH_SHARED_SECRET__MANAGEMENT_BE");
     }
 
-    private static RequiredConfigHealthCheck MakeCheck(
-        string reExBaseUrl = "http://reex.test",
-        string reExUsername = "user",
-        string reExPassword = "pass",
-        string appBaseUrl = "http://app.test",
-        string cdpUploaderUrl = "http://uploader.test",
-        string s3Region = "eu-west-2",
-        string caseWorkingUrl = "http://case-working.test",
-        bool useStub = true,
-        bool isDevelopment = false
-    )
+    private static Task<HealthCheckResult> CheckHealth(RequiredConfigHealthCheck check) =>
+        check.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken);
+
+    // All fields default to a valid, present value — an all-healthy config — so each test
+    // only needs to say which field(s) it's blanking out.
+    public sealed class Builder
     {
+        public string ReExBaseUrl { get; set; } = "http://reex.test";
+        public string ReExUsername { get; set; } = "user";
+        public string ReExPassword { get; set; } = "pass";
+        public string AppBaseUrl { get; set; } = "http://app.test";
+        public string CdpUploaderUrl { get; set; } = "http://uploader.test";
+        public string CaseWorkingUrl { get; set; } = "http://case-working.test";
+        public string CaseWorkingSharedSecret { get; set; } = "case-working-secret";
+        public string CaseManagementAuthSharedSecret { get; set; } = "case-management-secret";
+        public bool UseStub { get; set; } = false;
+        public bool IsDevelopment { get; set; } = false;
+    }
+
+    private static RequiredConfigHealthCheck MakeCheck(Builder? builder = null)
+    {
+        builder ??= new Builder();
+
         var environment = Substitute.For<IHostEnvironment>();
-        environment.EnvironmentName = isDevelopment
+        environment.EnvironmentName = builder.IsDevelopment
             ? Environments.Development
             : Environments.Production;
 
         return new RequiredConfigHealthCheck(
-            Options.Create(new ReExConfig { BaseUrl = reExBaseUrl }),
-            Options.Create(new ReExCredentials { Username = reExUsername, Password = reExPassword }),
-            Options.Create(new AppConfig { BaseUrl = appBaseUrl }),
-            Options.Create(new CdpUploaderConfig { Url = cdpUploaderUrl }),
-            Options.Create(new S3Config { Region = s3Region }),
-            Options.Create(new CaseWorkingApiConfig { Url = caseWorkingUrl, UseStub = useStub }),
+            Options.Create(new ReExConfig { BaseUrl = builder.ReExBaseUrl }),
+            Options.Create(
+                new ReExCredentials { Username = builder.ReExUsername, Password = builder.ReExPassword }
+            ),
+            Options.Create(new AppConfig { BaseUrl = builder.AppBaseUrl }),
+            Options.Create(new CdpUploaderConfig { Url = builder.CdpUploaderUrl }),
+            Options.Create(
+                new CaseWorkingApiConfig
+                {
+                    Url = builder.CaseWorkingUrl,
+                    SharedSecret = builder.CaseWorkingSharedSecret,
+                    UseStub = builder.UseStub
+                }
+            ),
+            Options.Create(
+                new CaseManagementAuthConfig { SharedSecret = builder.CaseManagementAuthSharedSecret }
+            ),
             environment
         );
     }
