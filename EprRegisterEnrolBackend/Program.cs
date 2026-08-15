@@ -100,7 +100,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddProblemDetails();
 
     // Add healthcheck, this is required for the platform to know your service is alive.
-    builder.Services.AddHealthChecks();
+    // Also fails the check when required config (env vars CDP is expected to provision
+    // per environment) is missing, so a broken deploy is caught at rollout rather than
+    // surfacing later as an unexplained runtime error (RA-441).
+    builder
+        .Services.AddHealthChecks()
+        .AddCheck<EprRegisterEnrolBackend.Utils.Health.RequiredConfigHealthCheck>(
+            "required-config"
+        );
     // Swagger/OpenAPI
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
@@ -253,6 +260,16 @@ static WebApplication SetupApplication(WebApplication app)
     if (string.IsNullOrWhiteSpace(reExCreds.Password))
         startupLogger.LogWarning(
             "REEX_API_BASIC_AUTH_PASSWORD is not configured — ReEx API calls will be unauthenticated."
+        );
+
+    var caseWorkingCfg = app
+        .Services.GetRequiredService<
+            Microsoft.Extensions.Options.IOptions<CaseWorkingApiConfig>
+        >()
+        .Value;
+    if (!caseWorkingCfg.UseStub && string.IsNullOrWhiteSpace(caseWorkingCfg.Url))
+        startupLogger.LogWarning(
+            "CaseWorking__Url is not configured — case working API calls will fail at runtime."
         );
 
     app.UseExceptionHandler();
