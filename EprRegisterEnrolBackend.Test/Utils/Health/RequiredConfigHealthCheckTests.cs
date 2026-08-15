@@ -18,7 +18,10 @@ public class RequiredConfigHealthCheckTests
     {
         var check = MakeCheck(caseWorkingUrl: "http://case-working.test", useStub: false);
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken
+        );
 
         result.Status.Should().Be(HealthStatus.Healthy);
     }
@@ -28,7 +31,10 @@ public class RequiredConfigHealthCheckTests
     {
         var check = MakeCheck(reExBaseUrl: "", isDevelopment: false);
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken
+        );
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
         result.Description.Should().Contain("ReExApi__BaseUrl");
@@ -39,7 +45,10 @@ public class RequiredConfigHealthCheckTests
     {
         var check = MakeCheck(reExBaseUrl: "", reExUsername: "", reExPassword: "", isDevelopment: true);
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken
+        );
 
         result.Status.Should().Be(HealthStatus.Healthy);
     }
@@ -49,7 +58,10 @@ public class RequiredConfigHealthCheckTests
     {
         var check = MakeCheck(caseWorkingUrl: "", useStub: false);
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken
+        );
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
         result.Description.Should().Contain("CaseWorking__Url");
@@ -60,7 +72,10 @@ public class RequiredConfigHealthCheckTests
     {
         var check = MakeCheck(caseWorkingUrl: "", useStub: true);
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken
+        );
 
         result.Status.Should().Be(HealthStatus.Healthy);
     }
@@ -80,7 +95,10 @@ public class RequiredConfigHealthCheckTests
             isDevelopment: false
         );
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken
+        );
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
         result.Description.Should()
