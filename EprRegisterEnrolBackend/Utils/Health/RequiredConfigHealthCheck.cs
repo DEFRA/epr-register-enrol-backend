@@ -56,7 +56,15 @@ public class RequiredConfigHealthCheck(
         {
             if (string.IsNullOrWhiteSpace(caseWorkingConfig.Value.Url))
                 missing.Add("CaseWorking__Url");
-            if (string.IsNullOrWhiteSpace(caseWorkingConfig.Value.SharedSecret))
+            // HttpCaseWorkingApiAdapter tolerates a blank secret by sending unsigned
+            // (no environment gate on the adapter side), and appsettings.Development.json
+            // runs the real adapter (UseStub: false) without ever providing this secret —
+            // so demanding it in Development would make /health/ready unhealthy on a
+            // vanilla local run for a condition that's working exactly as designed.
+            if (
+                !environment.IsDevelopment()
+                && string.IsNullOrWhiteSpace(caseWorkingConfig.Value.SharedSecret)
+            )
                 missing.Add("CASE_MANAGEMENT_API_SHARED_SECRET");
         }
         else if (!environment.IsDevelopment())

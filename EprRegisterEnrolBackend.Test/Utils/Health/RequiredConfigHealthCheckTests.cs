@@ -91,6 +91,29 @@ public class RequiredConfigHealthCheckTests
     }
 
     [Fact]
+    public async Task CheckHealthAsync_Healthy_WhenRealAdapterInDevelopment_EvenWithNoSharedSecret()
+    {
+        // appsettings.Development.json sets CaseWorking:UseStub=false (the real adapter runs
+        // locally) but never provides CASE_MANAGEMENT_API_SHARED_SECRET — HttpCaseWorkingApiAdapter
+        // tolerates that by sending unsigned, so this must not report unhealthy on a vanilla
+        // local run. Url is still required even in Development, since the real adapter needs
+        // somewhere to call.
+        var check = MakeCheck(
+            new Builder
+            {
+                UseStub = false,
+                CaseWorkingUrl = "http://localhost:8085",
+                CaseWorkingSharedSecret = "",
+                IsDevelopment = true
+            }
+        );
+
+        var result = await CheckHealth(check);
+
+        result.Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
     public async Task CheckHealthAsync_Unhealthy_WhenStillUsingStubOutsideDevelopment()
     {
         var check = MakeCheck(new Builder { UseStub = true, IsDevelopment = false });

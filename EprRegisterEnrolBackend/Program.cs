@@ -273,7 +273,11 @@ static WebApplication SetupApplication(WebApplication app)
         startupLogger.LogWarning(
             "CaseWorking__Url is not configured — case working API calls will fail at runtime."
         );
-    if (!caseWorkingCfg.UseStub && string.IsNullOrWhiteSpace(caseWorkingCfg.SharedSecret))
+    if (
+        !app.Environment.IsDevelopment()
+        && !caseWorkingCfg.UseStub
+        && string.IsNullOrWhiteSpace(caseWorkingCfg.SharedSecret)
+    )
         startupLogger.LogWarning(
             "CASE_MANAGEMENT_API_SHARED_SECRET is not configured — outbound case working API calls will be unsigned."
         );
@@ -338,7 +342,9 @@ static WebApplication SetupApplication(WebApplication app)
 // Surfaces which config keys are missing (names only — RequiredConfigHealthCheck never
 // puts secret values in a description) instead of the framework default's bare "Unhealthy"
 // body, which hid the whole point of the check from anyone curling /health/ready (RA-441).
-[ExcludeFromCodeCoverage]
+// Suppresses the description on any entry that threw — HealthCheckService puts the
+// exception message there, and this endpoint is unauthenticated, so a future check
+// throwing must never turn into exception details being exposed on it.
 static Task WriteReadinessResponse(HttpContext context, HealthReport report)
 {
     context.Response.ContentType = "application/json";
@@ -349,7 +355,7 @@ static Task WriteReadinessResponse(HttpContext context, HealthReport report)
         {
             name = entry.Key,
             status = entry.Value.Status.ToString(),
-            description = entry.Value.Description
+            description = entry.Value.Exception is null ? entry.Value.Description : null
         })
     };
     return context.Response.WriteAsync(JsonSerializer.Serialize(payload));
