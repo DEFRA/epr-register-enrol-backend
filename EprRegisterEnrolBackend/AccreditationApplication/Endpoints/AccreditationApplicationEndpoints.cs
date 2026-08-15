@@ -178,6 +178,8 @@ public static class AccreditationApplicationEndpoints
             SiteAddress = priorYearData.SiteAddress,
             CompanyRegisterAddressPostcode = priorYearData.CompanyRegisterAddressPostcode,
             CompanyRegisteredAddress = priorYearData.CompanyRegisteredAddress,
+            CompaniesHouseNumber = priorYearData.CompaniesHouseNumber,
+            PermitNumbers = priorYearData.PermitNumbers,
             WasteProcessingType = priorYearData.WasteProcessingType,
             RegistrationReference = priorYearData.RegistrationReference,
             MaterialType = materialTypeEnum,

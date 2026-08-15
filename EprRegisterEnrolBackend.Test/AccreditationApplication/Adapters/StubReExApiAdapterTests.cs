@@ -62,6 +62,46 @@ public class StubReExApiAdapterTests
         result.Value!.CompanyRegisteredAddress.Should().Be("Export House, Southampton, SO14 2AQ");
     }
 
+    // RA-434
+    [Fact]
+    public async Task GetAccreditationAsync_MapsCompaniesHouseNumberFromFakeOrg()
+    {
+        var sut = new StubReExApiAdapter(
+            new FakeOrganisationPersistence(),
+            NullLogger<StubReExApiAdapter>.Instance
+        );
+
+        var result = await sut.GetAccreditationAsync(
+            "50005",
+            FakeOrganisationPersistence.Reg50005.ToString(),
+            MaterialType.Plastic,
+            2027
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.CompaniesHouseNumber.Should().Be("12345005");
+    }
+
+    // RA-434
+    [Fact]
+    public async Task GetAccreditationAsync_MapsPermitNumbersFromFakeOrg()
+    {
+        var sut = new StubReExApiAdapter(
+            new FakeOrganisationPersistence(),
+            NullLogger<StubReExApiAdapter>.Instance
+        );
+
+        var result = await sut.GetAccreditationAsync(
+            "50006",
+            FakeOrganisationPersistence.Reg50006.ToString(),
+            MaterialType.Glass,
+            2027
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.PermitNumbers.Should().BeEquivalentTo(["WML50006A", "WML50006B"]);
+    }
+
     [Fact]
     public async Task GetAccreditationAsync_UnknownOrganisationId_FallsBackToStubRegisteredAddress()
     {

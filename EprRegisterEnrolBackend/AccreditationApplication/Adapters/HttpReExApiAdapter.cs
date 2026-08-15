@@ -104,6 +104,12 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
 
         var companyRegisteredAddress = FormatAddress(org.CompanyDetails?.Address);
 
+        var permitNumbers = registration
+            .WasteManagementPermits.Select(p => p.PermitNumber)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!)
+            .ToList();
+
         // Find the accreditation linked to this registration
         var accreditationId = registration.AccreditationId;
         var matches = org.Accreditations.Where(a => a.Id == accreditationId).ToList();
@@ -252,6 +258,8 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 IsExporter = isExporter,
                 CompanyRegisterAddressPostcode = org.CompanyDetails?.Address?.Postcode,
                 CompanyRegisteredAddress = companyRegisteredAddress,
+                CompaniesHouseNumber = org.CompanyDetails?.CompaniesHouseNumber,
+                PermitNumbers = permitNumbers,
                 WasteProcessingType = isExporter ? "exporter" : "reprocessor",
                 OverseasSites = overseasSites,
                 Prns = new ReExPrnsDto

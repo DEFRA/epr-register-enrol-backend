@@ -36,6 +36,7 @@ public class CompanyDetailsDto
     public string? Name { get; init; }
     public string? TradingName { get; init; }
     public string? RegistrationNumber { get; init; }
+    public string? CompaniesHouseNumber { get; init; }
     public RegisteredAddressDto? Address { get; init; }
 }
 
