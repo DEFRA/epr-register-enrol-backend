@@ -98,6 +98,27 @@ public class HttpReExApiAdapterTests
         result.Value!.CompanyRegisterAddressPostcode.Should().Be("AB1 2CD");
     }
 
+    // RA-444: exporters have no UK processing site, so SiteAddress must stay null — the
+    // frontend's nation resolution falls back to England whenever it sees a populated
+    // siteAddress with no postcode, so it must instead read CompanyRegisterAddressPostcode
+    // (asserted above) for exporters. Pins the exact contract that was silently broken.
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_SiteAddressIsNull()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.SiteAddress.Should().BeNull();
+        result.Value!.CompanyRegisterAddressPostcode.Should().NotBeNullOrEmpty();
+    }
+
     // RA-424: the frontend shows this in place of the (non-existent) overseas site address on
     // the exporter's accreditation application header/landing page.
     [Fact]

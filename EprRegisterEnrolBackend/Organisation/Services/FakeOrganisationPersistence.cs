@@ -247,12 +247,6 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                         Status = "created",
                         Material = "plastic",
                         WasteProcessingType = "exporter",
-                        SiteAddress = new SiteAddressModel
-                        {
-                            Line1 = "Export House",
-                            Town = "Southampton",
-                            Postcode = "SO14 2AQ",
-                        },
                         OverseasSites = ["900010", "900011"],
                     },
                 ],
@@ -267,7 +261,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                 Version = 1,
                 BusinessType = "unincorporated",
                 WasteProcessingTypes = ["exporter"],
-                ReprocessingNations = ["england"],
+                ReprocessingNations = ["scotland"],
                 CompanyDetails = new CompanyDetailsModel
                 {
                     Name = "Global Glass Exports",
@@ -276,8 +270,9 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "Harbour View",
-                        Town = "Bristol",
-                        Postcode = "BS1 4DJ",
+                        Town = "Wick",
+                        Postcode = "KW2 7LZ",
+                        Country = "Scotland",
                     },
                 },
                 ContactDetails = new ContactDetailsModel
@@ -296,12 +291,6 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                         Status = "created",
                         Material = "glass",
                         WasteProcessingType = "exporter",
-                        SiteAddress = new SiteAddressModel
-                        {
-                            Line1 = "Harbour View",
-                            Town = "Bristol",
-                            Postcode = "BS1 4DJ",
-                        },
                         OverseasSites = ["900001", "900002", "900003", "900004"],
                     },
                 ],
