@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
@@ -16,10 +17,13 @@ using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.StubPersistence.Endpoints;
 using EprRegisterEnrolBackend.StubPersistence.Services;
 using EprRegisterEnrolBackend.Utils;
+using EprRegisterEnrolBackend.Utils.Health;
 using EprRegisterEnrolBackend.Utils.Http;
 using EprRegisterEnrolBackend.Utils.Logging;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentValidation;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MongoDB.Driver;
 using MongoDB.Driver.Authentication.AWS;
 using Serilog;
@@ -100,7 +104,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddProblemDetails();
 
     // Add healthcheck, this is required for the platform to know your service is alive.
-    builder.Services.AddHealthChecks();
+    // "ready" is a separate tag/endpoint (see SetupApplication) — required config gaps
+    // (RA-441) degrade readiness, not liveness, so a broken deploy is visible without
+    // making ECS crash-loop a task that would otherwise serve its working endpoints fine.
+    builder
+        .Services.AddHealthChecks()
+        .AddCheck<RequiredConfigHealthCheck>("required-config", tags: ["ready"]);
     // Swagger/OpenAPI
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
@@ -255,12 +264,58 @@ static WebApplication SetupApplication(WebApplication app)
             "REEX_API_BASIC_AUTH_PASSWORD is not configured — ReEx API calls will be unauthenticated."
         );
 
+    var caseWorkingCfg = app
+        .Services.GetRequiredService<
+            Microsoft.Extensions.Options.IOptions<CaseWorkingApiConfig>
+        >()
+        .Value;
+    if (!caseWorkingCfg.UseStub && string.IsNullOrWhiteSpace(caseWorkingCfg.Url))
+        startupLogger.LogWarning(
+            "CaseWorking__Url is not configured — case working API calls will fail at runtime."
+        );
+    if (
+        !app.Environment.IsDevelopment()
+        && !caseWorkingCfg.UseStub
+        && string.IsNullOrWhiteSpace(caseWorkingCfg.SharedSecret)
+    )
+        startupLogger.LogWarning(
+            "CASE_MANAGEMENT_API_SHARED_SECRET is not configured — outbound case working API calls will be unsigned."
+        );
+    if (!app.Environment.IsDevelopment() && caseWorkingCfg.UseStub)
+        startupLogger.LogWarning(
+            "CaseWorking__UseStub is still true outside Development — case working submissions will be stubbed, not sent."
+        );
+
+    var caseManagementAuthCfg = app
+        .Services.GetRequiredService<
+            Microsoft.Extensions.Options.IOptions<CaseManagementAuthConfig>
+        >()
+        .Value;
+    if (!app.Environment.IsDevelopment() && string.IsNullOrWhiteSpace(caseManagementAuthCfg.SharedSecret))
+        startupLogger.LogWarning(
+            "AUTH_SHARED_SECRET__MANAGEMENT_BE is not configured — inbound CaseManagement-authenticated requests will be rejected."
+        );
+
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
     app.UseAuthentication();
     app.UseAuthorization();
-    app.MapHealthChecks("/health")
+
+    // Plain liveness probe — this is the CDP/ECS-facing endpoint (see Dockerfile), so it
+    // must reflect only "is the process up", never application config state. A config gap
+    // belongs on /health/ready instead: failing liveness on it would crash-loop a task that
+    // would otherwise serve its working endpoints fine (RA-441).
+    app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false })
+        .WithMetadata(new HttpMethodMetadata(new[] { HttpMethods.Get, HttpMethods.Head }));
+    app.MapHealthChecks(
+            "/health/ready",
+            new HealthCheckOptions
+            {
+                Predicate = check => check.Tags.Contains("ready"),
+                ResponseWriter = WriteReadinessResponse
+            }
+        )
         .WithMetadata(new HttpMethodMetadata(new[] { HttpMethods.Get, HttpMethods.Head }));
 
     // Enable Swagger UI so the API can be explored in the browser
@@ -282,4 +337,26 @@ static WebApplication SetupApplication(WebApplication app)
     }
 
     return app;
+}
+
+// Surfaces which config keys are missing (names only — RequiredConfigHealthCheck never
+// puts secret values in a description) instead of the framework default's bare "Unhealthy"
+// body, which hid the whole point of the check from anyone curling /health/ready (RA-441).
+// Suppresses the description on any entry that threw — HealthCheckService puts the
+// exception message there, and this endpoint is unauthenticated, so a future check
+// throwing must never turn into exception details being exposed on it.
+static Task WriteReadinessResponse(HttpContext context, HealthReport report)
+{
+    context.Response.ContentType = "application/json";
+    var payload = new
+    {
+        status = report.Status.ToString(),
+        checks = report.Entries.Select(entry => new
+        {
+            name = entry.Key,
+            status = entry.Value.Status.ToString(),
+            description = entry.Value.Exception is null ? entry.Value.Description : null
+        })
+    };
+    return context.Response.WriteAsync(JsonSerializer.Serialize(payload));
 }
