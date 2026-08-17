@@ -38,6 +38,8 @@ public class StubReExApiAdapter(
         string? siteAddress = null;
         string? companyRegisterAddressPostcode = null;
         string? companyRegisteredAddress = null;
+        string? companiesHouseNumber = null;
+        List<string> permitNumbers = [];
         string? wasteProcessingType = null;
         var isExporter = false;
         List<OverseasSiteModel> overseasSites = [];
@@ -48,6 +50,7 @@ public class StubReExApiAdapter(
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
             companyRegisterAddressPostcode = org?.CompanyDetails?.RegisteredAddress?.Postcode;
+            companiesHouseNumber = org?.CompanyDetails?.CompaniesHouseNumber;
             companyRegisteredAddress = org?.CompanyDetails?.RegisteredAddress is { } regAddr
                 ? string.Join(
                     ", ",
@@ -73,6 +76,12 @@ public class StubReExApiAdapter(
             siteAddress = !isExporter && registration?.SiteAddress is { } addr
                 ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
                 : null;
+
+            permitNumbers = (registration?.WasteManagementPermits ?? [])
+                .Select(p => p.PermitNumber)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => p!)
+                .ToList();
 
             if (registration?.OverseasSites is { Count: > 0 } siteIds)
             {
@@ -113,6 +122,8 @@ public class StubReExApiAdapter(
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
             CompanyRegisteredAddress = companyRegisteredAddress
                 ?? "1 Stub Registered Office, Stubton, ST1 1AB",
+            CompaniesHouseNumber = companiesHouseNumber ?? "00000001",
+            PermitNumbers = permitNumbers,
             WasteProcessingType = wasteProcessingType ?? (isExporter ? "exporter" : "reprocessor"),
             OverseasSites = overseasSites,
             Prns = new ReExPrnsDto

@@ -128,6 +128,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                     Name = "NEWDEV RECYCLING LIMITED",
                     TradingName = "NEWDEV RECYCLING LIMITED",
                     RegistrationNumber = "R26ER5000390068PL",
+                    CompaniesHouseNumber = "12345001",
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "UNIT 5",
@@ -157,6 +158,10 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                             Town = "Bolton",
                             Postcode = "BL4 7AQ",
                         },
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50001" },
+                        ],
                     },
                 ],
             }
@@ -176,6 +181,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                     Name = "Beta Recycling Co",
                     TradingName = "Beta Recycling Co",
                     RegistrationNumber = "R26ER5000390068PL",
+                    CompaniesHouseNumber = "12345002",
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "Site Lane 002",
@@ -205,6 +211,10 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                             Town = "Siteville",
                             Postcode = "SIT3 OO2",
                         },
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50002" },
+                        ],
                     },
                 ],
             }
@@ -224,6 +234,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                     Name = "Export Plastics Ltd",
                     TradingName = "Export Plastics",
                     RegistrationNumber = "EXP-50005",
+                    CompaniesHouseNumber = "12345005",
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "Export House",
@@ -248,6 +259,10 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                         Material = "plastic",
                         WasteProcessingType = "exporter",
                         OverseasSites = ["900010", "900011"],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50005" },
+                        ],
                     },
                 ],
             }
@@ -267,6 +282,7 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                     Name = "Global Glass Exports",
                     TradingName = "Global Glass",
                     RegistrationNumber = "EXP-50006",
+                    CompaniesHouseNumber = "12345006",
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "Harbour View",
@@ -292,6 +308,11 @@ public class FakeOrganisationPersistence : IOrganisationPersistence
                         Material = "glass",
                         WasteProcessingType = "exporter",
                         OverseasSites = ["900001", "900002", "900003", "900004"],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50006A" },
+                            new WasteManagementPermitModel { PermitNumber = "WML50006B" },
+                        ],
                     },
                 ],
             }
