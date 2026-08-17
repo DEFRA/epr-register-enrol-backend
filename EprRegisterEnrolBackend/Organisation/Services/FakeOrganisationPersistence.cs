@@ -3,7 +3,8 @@ using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Organisation.Services;
 
-public class FakeOrganisationPersistence : IOrganisationPersistence
+// In-memory ReEx organisation fixtures for StubReExApiAdapter's dev-mode responses.
+public class FakeOrganisationPersistence
 {
     public static readonly ObjectId Reg50001 = ObjectId.Parse("aaa000000000000000050001");
     public static readonly ObjectId Reg50002 = ObjectId.Parse("aaa000000000000000050002");

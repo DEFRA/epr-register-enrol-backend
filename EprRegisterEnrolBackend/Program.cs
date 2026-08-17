@@ -7,9 +7,6 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
-using EprRegisterEnrolBackend.FileUpload.Config;
-using EprRegisterEnrolBackend.FileUpload.Endpoints;
-using EprRegisterEnrolBackend.FileUpload.Services;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx;
@@ -130,11 +127,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IAccreditationApplicationPersistence,
         AccreditationApplicationPersistence
     >();
-    // File Uploads
-    builder.Services.AddSingleton<IFileUploadPersistence, FileUploadPersistence>();
-    builder.Services.Configure<S3Config>(builder.Configuration.GetSection("S3"));
-    builder.Services.AddSingleton<IS3Service, S3Service>();
-
     // CDP Uploader
     builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
     builder.Services.Configure<AppConfig>(builder.Configuration.GetSection("App"));
@@ -205,15 +197,13 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
-        builder.Services.AddSingleton<OrganisationPersistence>();
+        // Fixtures for StubReExApiAdapter's dev-mode responses — not tied to
+        // any persistence interface, this is the only place it's used.
         builder.Services.AddSingleton<FakeOrganisationPersistence>();
-        builder.Services.AddSingleton<IOrganisationPersistence, FallbackOrganisationPersistence>();
     }
     else
     {
         builder.Services.AddSingleton<IReExApiAdapter, HttpReExApiAdapter>();
-
-        builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
     }
 }
 
@@ -227,9 +217,6 @@ static WebApplication SetupApplication(WebApplication app)
     var appCfg = app
         .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<AppConfig>>()
         .Value;
-    var s3Cfg = app
-        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<S3Config>>()
-        .Value;
 
     if (string.IsNullOrWhiteSpace(cdpConfig.Url))
         startupLogger.LogWarning(
@@ -238,10 +225,6 @@ static WebApplication SetupApplication(WebApplication app)
     if (string.IsNullOrWhiteSpace(appCfg.BaseUrl))
         startupLogger.LogWarning(
             "APP_BASE_URL (App:BaseUrl) is not configured — CDP callback and status URLs will be incorrect."
-        );
-    if (string.IsNullOrWhiteSpace(s3Cfg.Region))
-        startupLogger.LogWarning(
-            "S3_REGION (S3:Region) is not configured — file downloads may fail at runtime."
         );
 
     var reExConfig = app
@@ -322,14 +305,10 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseSwagger();
     app.UseSwaggerUI();
 
-    // Organisation endpoints
-    app.UseOrganisationEndpoints();
     // ReEx-backed organisation endpoints (live ReEx lookups, e.g. Defra org link)
     app.UseReExOrganisationEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
-    // File upload endpoints
-    app.UseFileUploadEndpoints();
 
     if (app.Environment.IsDevelopment())
     {
