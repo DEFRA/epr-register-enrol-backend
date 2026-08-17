@@ -198,13 +198,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
         // Fixtures for StubReExApiAdapter's dev-mode responses — not tied to
-        // any persistence interface, this is the only place it's used directly.
-        // OrganisationPersistence/FallbackOrganisationPersistence back OrganisationEndpoints,
-        // itself Development-only (see UseOrganisationEndpoints call below) — IOrganisationPersistence
-        // has no consumer outside Development, so it's registered here only.
+        // any persistence interface, this is the only place it's used.
         builder.Services.AddSingleton<FakeOrganisationPersistence>();
-        builder.Services.AddSingleton<OrganisationPersistence>();
-        builder.Services.AddSingleton<IOrganisationPersistence, FallbackOrganisationPersistence>();
     }
     else
     {
@@ -318,14 +313,6 @@ static WebApplication SetupApplication(WebApplication app)
     if (app.Environment.IsDevelopment())
     {
         app.UseStubApplicationEndpoints();
-
-        // Mongo-backed organisation endpoints — no caller in a deployed environment.
-        // The only live caller is the frontend's persistentStubApiClient write-through
-        // path (see OrganisationEndpoints header comment), which only ever targets a
-        // Development-environment backend (local docker-compose, fe-tests CI —
-        // ASPNETCORE_ENVIRONMENT=Development there). Gated here rather than
-        // authenticated, so it simply doesn't exist outside that context.
-        app.UseOrganisationEndpoints();
     }
 
     return app;
