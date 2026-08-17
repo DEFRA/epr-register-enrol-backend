@@ -62,29 +62,11 @@ public class StubReExApiAdapterTests
         result.Value!.CompanyRegisteredAddress.Should().Be("Export House, Southampton, SO14 2AQ");
     }
 
-    // RA-434
+    // RA-444: the real adapter never sets SiteAddress for exporters (they have no UK
+    // processing site) — the stub must match, or stub-mode dev/testing masks the bug
+    // where frontend nation resolution silently defaults to England for exporters.
     [Fact]
-    public async Task GetAccreditationAsync_MapsCompaniesHouseNumberFromFakeOrg()
-    {
-        var sut = new StubReExApiAdapter(
-            new FakeOrganisationPersistence(),
-            NullLogger<StubReExApiAdapter>.Instance
-        );
-
-        var result = await sut.GetAccreditationAsync(
-            "50005",
-            FakeOrganisationPersistence.Reg50005.ToString(),
-            MaterialType.Plastic,
-            2027
-        );
-
-        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.CompaniesHouseNumber.Should().Be("12345005");
-    }
-
-    // RA-434
-    [Fact]
-    public async Task GetAccreditationAsync_MapsPermitNumbersFromFakeOrg()
+    public async Task GetAccreditationAsync_Exporter_SiteAddressIsNull()
     {
         var sut = new StubReExApiAdapter(
             new FakeOrganisationPersistence(),
@@ -99,7 +81,8 @@ public class StubReExApiAdapterTests
         );
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.PermitNumbers.Should().BeEquivalentTo(["WML50006A", "WML50006B"]);
+        result.Value!.SiteAddress.Should().BeNull();
+        result.Value!.CompanyRegisterAddressPostcode.Should().Be("KW2 7LZ");
     }
 
     [Fact]

@@ -71,7 +71,9 @@ public class StubReExApiAdapter(
             wasteProcessingType = registration?.WasteProcessingType;
             isExporter =
                 wasteProcessingType?.Equals("exporter", StringComparison.OrdinalIgnoreCase) == true;
-            siteAddress = registration?.SiteAddress is { } addr
+            // Mirrors HttpReExApiAdapter: only reprocessors have a UK processing
+            // site, so exporters always get a null SiteAddress from the real API.
+            siteAddress = !isExporter && registration?.SiteAddress is { } addr
                 ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
                 : null;
 
@@ -115,7 +117,7 @@ public class StubReExApiAdapter(
             Year = year,
             OrganisationName = organisationName ?? "Stub Reprocessing Ltd",
             RegistrationReference = registrationReference ?? "STUB-REG-001",
-            SiteAddress = siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
+            SiteAddress = isExporter ? null : siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
             IsExporter = isExporter,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
             CompanyRegisteredAddress = companyRegisteredAddress
