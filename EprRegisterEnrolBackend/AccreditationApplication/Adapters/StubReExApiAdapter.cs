@@ -18,6 +18,17 @@ public class StubReExApiAdapter(
         ("Vietnam", false, false),
     ];
 
+    // Mirrors HttpReExApiAdapter.GlassRecyclingProcessMap — the stub reads the
+    // same wire-value string from FakeOrganisationPersistence's seed data that
+    // the real ReEx API would return, so local dev/e2e exercises the same
+    // mapping the production adapter does.
+    private static readonly Dictionary<string, GlassRecyclingProcess> GlassRecyclingProcessMap =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["glass_re_melt"] = GlassRecyclingProcess.Remelt,
+            ["glass_other"] = GlassRecyclingProcess.Other,
+        };
+
     public async Task<ReExResult<ReExAccreditationDto>> GetAccreditationAsync(
         string organisationId,
         string registrationId,
@@ -38,8 +49,11 @@ public class StubReExApiAdapter(
         string? siteAddress = null;
         string? companyRegisterAddressPostcode = null;
         string? companyRegisteredAddress = null;
+        string? companiesHouseNumber = null;
+        List<string> permitNumbers = [];
         string? wasteProcessingType = null;
         var isExporter = false;
+        GlassRecyclingProcess? glassRecyclingProcess = null;
         List<OverseasSiteModel> overseasSites = [];
 
         if (int.TryParse(organisationId, out var orgIdInt))
@@ -48,6 +62,7 @@ public class StubReExApiAdapter(
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
             companyRegisterAddressPostcode = org?.CompanyDetails?.RegisteredAddress?.Postcode;
+            companiesHouseNumber = org?.CompanyDetails?.CompaniesHouseNumber;
             companyRegisteredAddress = org?.CompanyDetails?.RegisteredAddress is { } regAddr
                 ? string.Join(
                     ", ",
@@ -66,11 +81,27 @@ public class StubReExApiAdapter(
                 r.Id.ToString() == registrationId
             );
             wasteProcessingType = registration?.WasteProcessingType;
+            if (
+                registration?.GlassRecyclingProcess is { } rawGlassRecyclingProcess
+                && GlassRecyclingProcessMap.TryGetValue(
+                    rawGlassRecyclingProcess,
+                    out var mappedGlassRecyclingProcess
+                )
+            )
+                glassRecyclingProcess = mappedGlassRecyclingProcess;
             isExporter =
                 wasteProcessingType?.Equals("exporter", StringComparison.OrdinalIgnoreCase) == true;
-            siteAddress = registration?.SiteAddress is { } addr
+            // Mirrors HttpReExApiAdapter: only reprocessors have a UK processing
+            // site, so exporters always get a null SiteAddress from the real API.
+            siteAddress = !isExporter && registration?.SiteAddress is { } addr
                 ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
                 : null;
+
+            permitNumbers = (registration?.WasteManagementPermits ?? [])
+                .Select(p => p.PermitNumber)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => p!)
+                .ToList();
 
             if (registration?.OverseasSites is { Count: > 0 } siteIds)
             {
@@ -106,12 +137,15 @@ public class StubReExApiAdapter(
             Year = year,
             OrganisationName = organisationName ?? "Stub Reprocessing Ltd",
             RegistrationReference = registrationReference ?? "STUB-REG-001",
-            SiteAddress = siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
+            SiteAddress = isExporter ? null : siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
             IsExporter = isExporter,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
             CompanyRegisteredAddress = companyRegisteredAddress
                 ?? "1 Stub Registered Office, Stubton, ST1 1AB",
+            CompaniesHouseNumber = companiesHouseNumber ?? "00000001",
+            PermitNumbers = permitNumbers,
             WasteProcessingType = wasteProcessingType ?? (isExporter ? "exporter" : "reprocessor"),
+            GlassRecyclingProcess = glassRecyclingProcess,
             OverseasSites = overseasSites,
             Prns = new ReExPrnsDto
             {

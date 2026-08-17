@@ -18,6 +18,13 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         ["over_10000"] = PlannedTonnageBand.Over10000,
     };
 
+    private static readonly Dictionary<string, GlassRecyclingProcess> GlassRecyclingProcessMap =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["glass_re_melt"] = GlassRecyclingProcess.Remelt,
+            ["glass_other"] = GlassRecyclingProcess.Other,
+        };
+
     private static readonly Dictionary<string, Action<ReExBusinessPlanDto, int>> BusinessPlanMap =
         new(StringComparer.Ordinal)
         {
@@ -102,7 +109,33 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             ? FormatAddress(reprocessor.Site?.Address)
             : null;
 
+        // ReEx returns glassRecyclingProcess as an array of 0 or 1 elements; take the first
+        // element defensively if ReEx ever returns more than one.
+        GlassRecyclingProcess? glassRecyclingProcess = null;
+        if (registration.GlassRecyclingProcess.Count > 0)
+        {
+            var rawGlassRecyclingProcess = registration.GlassRecyclingProcess[0];
+            if (
+                !GlassRecyclingProcessMap.TryGetValue(
+                    rawGlassRecyclingProcess,
+                    out var mappedGlassRecyclingProcess
+                )
+            )
+                logger.LogWarning(
+                    "Unrecognised GlassRecyclingProcess value: {Value}",
+                    rawGlassRecyclingProcess
+                );
+            else
+                glassRecyclingProcess = mappedGlassRecyclingProcess;
+        }
+
         var companyRegisteredAddress = FormatAddress(org.CompanyDetails?.Address);
+
+        var permitNumbers = registration
+            .WasteManagementPermits.Select(p => p.PermitNumber)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!)
+            .ToList();
 
         // Find the accreditation linked to this registration
         var accreditationId = registration.AccreditationId;
@@ -252,7 +285,10 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 IsExporter = isExporter,
                 CompanyRegisterAddressPostcode = org.CompanyDetails?.Address?.Postcode,
                 CompanyRegisteredAddress = companyRegisteredAddress,
+                CompaniesHouseNumber = org.CompanyDetails?.CompaniesHouseNumber,
+                PermitNumbers = permitNumbers,
                 WasteProcessingType = isExporter ? "exporter" : "reprocessor",
+                GlassRecyclingProcess = glassRecyclingProcess,
                 OverseasSites = overseasSites,
                 Prns = new ReExPrnsDto
                 {

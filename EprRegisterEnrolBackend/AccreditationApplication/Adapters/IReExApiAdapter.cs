@@ -40,7 +40,10 @@ public class ReExAccreditationDto
     public bool IsExporter { get; set; }
     public string? CompanyRegisterAddressPostcode { get; set; }
     public string? CompanyRegisteredAddress { get; set; }
+    public string? CompaniesHouseNumber { get; set; }
+    public List<string> PermitNumbers { get; set; } = [];
     public string? WasteProcessingType { get; set; }
+    public GlassRecyclingProcess? GlassRecyclingProcess { get; set; }
     public List<OverseasSiteModel> OverseasSites { get; set; } = [];
 
     public ReExPrnsDto? Prns { get; set; }

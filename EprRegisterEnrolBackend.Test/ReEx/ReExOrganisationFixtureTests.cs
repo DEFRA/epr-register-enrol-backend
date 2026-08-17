@@ -50,6 +50,7 @@ public class ReExOrganisationFixtureTests
         org.LinkedDefraOrganisation!.OrgId.Should().Be("67b9e8fc-2235-431a-a7b9-80663c81b6ff");
 
         org.CompanyDetails!.Name.Should().Be("Test Recycling Solutions Ltd");
+        org.CompanyDetails.CompaniesHouseNumber.Should().Be("09876543");
         org.CompanyDetails.Address!.Line1.Should().Be("1 Example Hill");
         org.CompanyDetails.Address.Postcode.Should().Be("AB1 2CD");
 
@@ -153,6 +154,7 @@ public class ReExOrganisationFixtureTests
           "companyDetails": {
             "name": "Test Recycling Solutions Ltd",
             "tradingName": "Test Recycling Solutions Ltd",
+            "companiesHouseNumber": "09876543",
             "address": {
               "line1": "1 Example Hill",
               "postcode": "AB1 2CD",

@@ -33,6 +33,10 @@ public class AccreditationApplicationModel
     // application header/landing page.
     public string? CompanyRegisteredAddress { get; set; }
 
+    public string? CompaniesHouseNumber { get; set; }
+
+    public List<string> PermitNumbers { get; set; } = [];
+
     public string? WasteProcessingType { get; set; }
 
     [BsonRepresentation(BsonType.String)]
