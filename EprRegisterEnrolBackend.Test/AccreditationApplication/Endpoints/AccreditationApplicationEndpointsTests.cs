@@ -35,7 +35,6 @@ public class AccreditationApplicationEndpointsTests
         _factory.FakePersistence.Clear();
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
-        _factory.MockOrganisationPersistence.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
     }
 
