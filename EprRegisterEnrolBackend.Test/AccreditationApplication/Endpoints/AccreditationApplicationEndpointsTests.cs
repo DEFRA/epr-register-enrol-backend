@@ -125,10 +125,11 @@ public class AccreditationApplicationEndpointsTests
                             MaterialType = MaterialType.Steel,
                             Year = 2025,
                             IsExporter = false,
+                            CompanyRegisteredAddress = "29 Acacia Road, London, SW1A 1AA",
                             OverseasSites = [],
                             Prns = new ReExPrnsDto
                             {
-                                PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+                                PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
                             },
                             BusinessPlan = new ReExBusinessPlanDto
                             {
@@ -154,7 +155,8 @@ public class AccreditationApplicationEndpointsTests
         );
         body!.SourceReExAccreditationId.Should().Be("reex-abc");
         body.SourceYear.Should().Be(2025);
-        body.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo1000);
+        body.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo5000);
+        body.CompanyRegisteredAddress.Should().Be("29 Acacia Road, London, SW1A 1AA");
     }
 
     [Fact]
@@ -291,6 +293,8 @@ public class AccreditationApplicationEndpointsTests
                             SiteAddress = "1 Factory Lane, Manchester, M1 1AA",
                             IsExporter = false,
                             CompanyRegisterAddressPostcode = "EC1A 1BB",
+                            CompaniesHouseNumber = "01234567",
+                            PermitNumbers = ["WML123456", "PPC456789"],
                             WasteProcessingType = "reprocessor",
                             OverseasSites = [],
                         },
@@ -314,6 +318,8 @@ public class AccreditationApplicationEndpointsTests
         body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
         body.RegistrationReference.Should().Be("REP-001");
         body.CompanyRegisterAddressPostcode.Should().Be("EC1A 1BB");
+        body.CompaniesHouseNumber.Should().Be("01234567");
+        body.PermitNumbers.Should().BeEquivalentTo(["WML123456", "PPC456789"]);
         body.WasteProcessingType.Should().Be("reprocessor");
     }
 
@@ -1204,7 +1210,7 @@ public class AccreditationApplicationEndpointsTests
                             OverseasSites = [],
                             Prns = new ReExPrnsDto
                             {
-                                PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+                                PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
                                 Authorisers =
                                 [
                                     // isNew: true here stands in for a stray value arriving from
@@ -1653,7 +1659,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication(
             status: ApplicationStatus.Saved,
-            configure: a => a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000
+            configure: a => a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo5000
         );
 
         var request = new PatchTonnageRequest
@@ -1674,7 +1680,7 @@ public class AccreditationApplicationEndpointsTests
             JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo1000);
+        body!.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo5000);
         body.Prns.Authorisers.Should().ContainSingle(a => a.FullName == "Jane Smith");
     }
 
@@ -1719,7 +1725,7 @@ public class AccreditationApplicationEndpointsTests
                 // Both fields already populated from an earlier submission — reproduces the
                 // resume-a-query scenario where a same-band re-save of tonnage alone must not
                 // flip SectionStatus to Completed before the operator reaches the authorisers page.
-                a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000;
+                a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo5000;
                 a.Prns.Authorisers =
                 [
                     new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" },
@@ -1728,7 +1734,7 @@ public class AccreditationApplicationEndpointsTests
             }
         );
 
-        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo1000 };
+        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo5000 };
         var response = await _client.PatchAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
             request,

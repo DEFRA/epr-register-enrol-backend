@@ -39,7 +39,7 @@ public class PrnsAuthoriser
 public enum PlannedTonnageBand
 {
     UpTo500,
-    UpTo1000,
+    UpTo5000,
     UpTo10000,
     Over10000
 }

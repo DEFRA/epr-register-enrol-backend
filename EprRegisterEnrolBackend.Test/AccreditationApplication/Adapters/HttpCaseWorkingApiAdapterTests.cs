@@ -30,6 +30,9 @@ public class HttpCaseWorkingApiAdapterTests
             ApplicationStatus = ApplicationStatus.Started,
             SiteAddress = "123 High Street, London, SW1A 1AA",
             CompanyRegisterAddressPostcode = "EC1A 1BB",
+            CompanyRegisteredAddress = "1 Acme House, London, EC1A 1BB",
+            CompaniesHouseNumber = "01234567",
+            PermitNumbers = ["WML123456", "PPC456789"],
             WasteProcessingType = "reprocessor",
             SubmittedBy = new SubmittedByModel
             {
@@ -281,7 +284,35 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("operatorEmail").GetString().Should().Be("jane@example.com");
         payload.GetProperty("siteAddressPostcode").GetString().Should().Be("SW1A 1AA");
         payload.GetProperty("companyRegisterAddressPostcode").GetString().Should().Be("EC1A 1BB");
+        payload
+            .GetProperty("companyRegisteredAddress")
+            .GetString()
+            .Should()
+            .Be("1 Acme House, London, EC1A 1BB");
+        payload.GetProperty("companiesHouseNumber").GetString().Should().Be("01234567");
+        payload
+            .GetProperty("permitNumbers")
+            .EnumerateArray()
+            .Select(e => e.GetString())
+            .Should()
+            .BeEquivalentTo(["WML123456", "PPC456789"]);
         payload.GetProperty("wasteProcessingType").GetString().Should().Be("reprocessor");
+    }
+
+    // RA-434
+    [Fact]
+    public async Task SubmitApplicationAsync_NoPermitNumbers_SendsEmptyPermitNumbersArray()
+    {
+        var application = CreateTestApplication();
+        application.PermitNumbers = [];
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var payload = doc.RootElement.GetProperty("payload");
+
+        payload.GetProperty("permitNumbers").EnumerateArray().Should().BeEmpty();
     }
 
     [Fact]
@@ -542,7 +573,7 @@ public class HttpCaseWorkingApiAdapterTests
 
     private const string ExpectedPrnsJson = """
         {
-          "plannedTonnageBand": "UpTo1000",
+          "plannedTonnageBand": "UpTo5000",
           "authorisers": [
             {
               "fullName": "Old Hand",
@@ -566,7 +597,7 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var application = CreateTestApplication();
         application.CaseManagementWorkItemId = Guid.NewGuid();
-        application.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo1000;
+        application.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo5000;
         application.Prns.Authorisers =
         [
             new PrnsAuthoriser
@@ -1682,7 +1713,7 @@ public class HttpCaseWorkingApiAdapterTests
 
     [Theory]
     [InlineData(PlannedTonnageBand.UpTo500, 54_600)]
-    [InlineData(PlannedTonnageBand.UpTo1000, 218_400)]
+    [InlineData(PlannedTonnageBand.UpTo5000, 218_400)]
     [InlineData(PlannedTonnageBand.UpTo10000, 327_600)]
     [InlineData(PlannedTonnageBand.Over10000, 396_500)]
     public async Task SubmitApplicationAsync_EveryTonnageBand_ReachesTheWireInPence(
@@ -1810,7 +1841,7 @@ public class HttpCaseWorkingApiAdapterTests
     [Fact]
     public async Task SubmitApplicationAsync_DeselectedSitesDoNotAddToTheChargeOnTheWire()
     {
-        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo1000, selectedSites: 3);
+        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo5000, selectedSites: 3);
         application.OverseasSites!.Sites[1].Selected = false;
 
         var payload = await CapturedSubmitPayload(application);

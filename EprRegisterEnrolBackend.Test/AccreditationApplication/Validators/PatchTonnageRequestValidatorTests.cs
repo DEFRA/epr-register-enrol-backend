@@ -29,7 +29,7 @@ public class PatchTonnageRequestValidatorTests
     [Fact]
     public void PlannedTonnageBandOnly_NoAuthorisers_PassesValidation()
     {
-        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo1000 };
+        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo5000 };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveAnyValidationErrors();
     }
@@ -39,7 +39,7 @@ public class PatchTonnageRequestValidatorTests
     {
         var request = new PatchTonnageRequest
         {
-            PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+            PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
             Authorisers = [new PrnsAuthoriser { FullName = "Jane Smith", Email = "jane@example.com" }]
         };
         var result = _validator.TestValidate(request);

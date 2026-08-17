@@ -32,7 +32,7 @@ internal static class AccreditationChargeCalculator
     > TonnageFeesPounds = new Dictionary<PlannedTonnageBand, int>
     {
         [PlannedTonnageBand.UpTo500] = 546,
-        [PlannedTonnageBand.UpTo1000] = 2184,
+        [PlannedTonnageBand.UpTo5000] = 2184,
         [PlannedTonnageBand.UpTo10000] = 3276,
         [PlannedTonnageBand.Over10000] = 3965,
     };

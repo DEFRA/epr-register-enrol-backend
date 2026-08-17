@@ -28,6 +28,15 @@ public class AccreditationApplicationModel
 
     public string? CompanyRegisterAddressPostcode { get; set; }
 
+    // RA-424: full formatted UK registered address, used by the frontend to show the exporter's
+    // registered office in place of the (non-existent) overseas site address on the accreditation
+    // application header/landing page.
+    public string? CompanyRegisteredAddress { get; set; }
+
+    public string? CompaniesHouseNumber { get; set; }
+
+    public List<string> PermitNumbers { get; set; } = [];
+
     public string? WasteProcessingType { get; set; }
 
     [BsonRepresentation(BsonType.String)]

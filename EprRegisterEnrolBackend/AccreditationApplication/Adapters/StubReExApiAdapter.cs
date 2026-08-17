@@ -48,6 +48,9 @@ public class StubReExApiAdapter(
         string? registrationReference = null;
         string? siteAddress = null;
         string? companyRegisterAddressPostcode = null;
+        string? companyRegisteredAddress = null;
+        string? companiesHouseNumber = null;
+        List<string> permitNumbers = [];
         string? wasteProcessingType = null;
         var isExporter = false;
         GlassRecyclingProcess? glassRecyclingProcess = null;
@@ -59,6 +62,20 @@ public class StubReExApiAdapter(
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
             companyRegisterAddressPostcode = org?.CompanyDetails?.RegisteredAddress?.Postcode;
+            companiesHouseNumber = org?.CompanyDetails?.CompaniesHouseNumber;
+            companyRegisteredAddress = org?.CompanyDetails?.RegisteredAddress is { } regAddr
+                ? string.Join(
+                    ", ",
+                    new[]
+                    {
+                        regAddr.Line1,
+                        regAddr.Line2,
+                        regAddr.Town,
+                        regAddr.County,
+                        regAddr.Postcode,
+                    }.Where(s => !string.IsNullOrWhiteSpace(s))
+                )
+                : null;
 
             var registration = org?.Registrations?.FirstOrDefault(r =>
                 r.Id.ToString() == registrationId
@@ -74,9 +91,17 @@ public class StubReExApiAdapter(
                 glassRecyclingProcess = mappedGlassRecyclingProcess;
             isExporter =
                 wasteProcessingType?.Equals("exporter", StringComparison.OrdinalIgnoreCase) == true;
-            siteAddress = registration?.SiteAddress is { } addr
+            // Mirrors HttpReExApiAdapter: only reprocessors have a UK processing
+            // site, so exporters always get a null SiteAddress from the real API.
+            siteAddress = !isExporter && registration?.SiteAddress is { } addr
                 ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
                 : null;
+
+            permitNumbers = (registration?.WasteManagementPermits ?? [])
+                .Select(p => p.PermitNumber)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => p!)
+                .ToList();
 
             if (registration?.OverseasSites is { Count: > 0 } siteIds)
             {
@@ -112,15 +137,19 @@ public class StubReExApiAdapter(
             Year = year,
             OrganisationName = organisationName ?? "Stub Reprocessing Ltd",
             RegistrationReference = registrationReference ?? "STUB-REG-001",
-            SiteAddress = siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
+            SiteAddress = isExporter ? null : siteAddress ?? "1 Stub Lane, Stubton, ST1 1AB",
             IsExporter = isExporter,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
+            CompanyRegisteredAddress = companyRegisteredAddress
+                ?? "1 Stub Registered Office, Stubton, ST1 1AB",
+            CompaniesHouseNumber = companiesHouseNumber ?? "00000001",
+            PermitNumbers = permitNumbers,
             WasteProcessingType = wasteProcessingType ?? (isExporter ? "exporter" : "reprocessor"),
             GlassRecyclingProcess = glassRecyclingProcess,
             OverseasSites = overseasSites,
             Prns = new ReExPrnsDto
             {
-                PlannedTonnageBand = PlannedTonnageBand.UpTo1000,
+                PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
                 Authorisers =
                 [
                     new PrnsAuthoriser { FullName = "Stub Authoriser", Email = "stub@example.com" },
