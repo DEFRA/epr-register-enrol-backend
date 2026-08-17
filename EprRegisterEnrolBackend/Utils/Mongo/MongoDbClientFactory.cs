@@ -51,7 +51,15 @@ public class MongoDbClientFactory : IMongoDbClientFactory
         _mongoDatabase = _client.GetDatabase(databaseName);
     }
 
-    private static void EnsureConventionRegistered()
+    // Internal rather than private so tests whose correctness depends on this convention
+    // being active (e.g. OverseasSiteBsonDefaultsTests, which deserialises BsonDocuments by
+    // hand) can call it deterministically from a static constructor, rather than relying on
+    // some other test class's WebApplicationFactory happening to have run first. Whether a
+    // hand-built BsonDocument's elements even need to be camelCase — and whether an unmatched
+    // element throws or is silently ignored — depends entirely on whether this convention is
+    // registered yet, so "did some other test already trigger this" must never be left to
+    // xUnit's test-ordering/parallelisation to decide.
+    internal static void EnsureConventionRegistered()
     {
         if (_conventionRegistered)
             return;
