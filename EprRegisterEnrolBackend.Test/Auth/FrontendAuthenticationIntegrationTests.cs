@@ -2,9 +2,12 @@ using System.Net;
 using System.Net.Http.Json;
 using EprRegisterEnrolBackend.Auth;
 using FluentAssertions;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace EprRegisterEnrolBackend.Test.Auth;
@@ -18,10 +21,12 @@ namespace EprRegisterEnrolBackend.Test.Auth;
 public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFactory>
 {
     private const string ValidSecret = "integration-test-frontend-secret";
+    private readonly ProductionFactory _factory;
     private readonly HttpClient _client;
 
     public FrontendAuthenticationIntegrationTests(ProductionFactory factory)
     {
+        _factory = factory;
         _client = factory.CreateClient();
     }
 
@@ -113,6 +118,47 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
         );
 
         response.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized);
+    }
+
+    // Route-specific 401 tests above only cover 3 of the ~20 routes FrontendOnly(...) wraps in
+    // AccreditationApplicationEndpoints — a single accidental removal of one FrontendOnly(...)
+    // wrap on any of the untested routes would silently reopen the vulnerability this PR closes,
+    // with nothing else in the suite catching it. This enumerates every mapped route under
+    // api/v1/accreditation-applications directly from routing metadata and asserts each one
+    // (other than the two case-management/* routes and the CDP webhook, which use different
+    // auth) requires the Frontend authentication scheme — so removing a wrap fails this test
+    // regardless of which route it was on.
+    [Fact]
+    public void AllAccreditationApplicationRoutes_ExceptCaseManagementAndUploadWebhook_RequireFrontendScheme()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var endpointDataSource = scope.ServiceProvider.GetRequiredService<EndpointDataSource>();
+
+        var routes = endpointDataSource
+            .Endpoints.OfType<RouteEndpoint>()
+            .Where(e =>
+                e.RoutePattern.RawText?.StartsWith(
+                    "api/v1/accreditation-applications",
+                    StringComparison.Ordinal
+                ) == true
+            )
+            .Where(e => !e.RoutePattern.RawText!.Contains("case-management"))
+            .Where(e => e.RoutePattern.RawText != "api/v1/accreditation-applications/files/upload-completed")
+            .ToList();
+
+        routes.Should().NotBeEmpty();
+
+        foreach (var route in routes)
+        {
+            var policy = route.Metadata.GetMetadata<AuthorizationPolicy>();
+            policy.Should().NotBeNull($"route '{route.RoutePattern.RawText}' should require authorization");
+            policy!
+                .AuthenticationSchemes.Should()
+                .Contain(
+                    FrontendAuthenticationHandler.SchemeName,
+                    $"route '{route.RoutePattern.RawText}' should require the Frontend scheme"
+                );
+        }
     }
 }
 
