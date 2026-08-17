@@ -282,7 +282,13 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
-    app.UseAuthentication();
+    // No app.UseAuthentication(): CaseManagement is the only scheme registered, so ASP.NET Core
+    // treats it as the implicit default and this middleware would eagerly run
+    // CaseManagementAuthenticationHandler against every request — including /health — logging a
+    // "Missing x-cdp-client-id header" warning on every liveness probe. Nothing reads
+    // HttpContext.User outside the two case-management endpoints below, and their authorization
+    // policy already names the scheme explicitly via AddAuthenticationSchemes, so
+    // UseAuthorization() authenticates them directly without needing the default-scheme pass.
     app.UseAuthorization();
 
     // Plain liveness probe — this is the CDP/ECS-facing endpoint (see Dockerfile), so it
