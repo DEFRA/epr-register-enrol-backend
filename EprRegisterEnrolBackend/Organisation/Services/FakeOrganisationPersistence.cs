@@ -11,6 +11,7 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50003 = ObjectId.Parse("aaa000000000000000050003");
     public static readonly ObjectId Reg50005 = ObjectId.Parse("aaa000000000000000050005");
     public static readonly ObjectId Reg50006 = ObjectId.Parse("aaa000000000000000050006");
+    public static readonly ObjectId Reg50013 = ObjectId.Parse("aaa000000000000000050013");
 
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
@@ -316,6 +317,69 @@ public class FakeOrganisationPersistence
                         [
                             new WasteManagementPermitModel { PermitNumber = "WML50006A" },
                             new WasteManagementPermitModel { PermitNumber = "WML50006B" },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        // RA-297 regression-guard org: exists only so interim-site.e2e.js has a Plastic
+        // exporter fixture it doesn't share with exporter-accreditation.e2e.js. Both specs
+        // used to target org 50005's "Exporter accreditation — Plastic" journey; when run
+        // concurrently under wdio, both could hit AccreditationApplicationEndpoints.Seed's
+        // read-then-create check before either had written its result, each pass the "no
+        // existing application" check, and both create a live application for the same
+        // (org, registrationId, materialType, year) — Seed has no transaction and no unique
+        // index (MongoService.EnsureIndexes never actually runs — see its commented-out
+        // Collection.Indexes.CreateMany call). Whichever duplicate a later
+        // resolveLandingApplication() list-and-pick call landed on then depended on Mongo's
+        // ObjectId tiebreak, not on which one the test had actually progressed — causing
+        // exporter-accreditation.e2e.js's later tests to read back a fresh, untouched
+        // duplicate instead of the one it had submitted. Giving interim-site.e2e.js its own
+        // org removes the only other caller of that Seed path for 50005, without touching
+        // Seed's own concurrency behaviour.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50013,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = "unincorporated",
+                WasteProcessingTypes = ["exporter"],
+                ReprocessingNations = ["england"],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "Interim Site Test Exports Ltd",
+                    TradingName = "Interim Site Test Exports",
+                    RegistrationNumber = "EXP-50013",
+                    CompaniesHouseNumber = "12345013",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "Export House",
+                        Town = "Southampton",
+                        Postcode = "SO14 2AQ",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Export Manager",
+                    Email = "info@interimsitetestexports.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50013,
+                        SiteId = "REG013",
+                        Status = "created",
+                        Material = "plastic",
+                        WasteProcessingType = "exporter",
+                        OverseasSites = ["900010", "900011"],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50013" },
                         ],
                     },
                 ],
