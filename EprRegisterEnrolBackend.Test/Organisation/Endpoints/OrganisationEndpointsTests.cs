@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using EprRegisterEnrolBackend.Organisation.Models;
 using EprRegisterEnrolBackend.Organisation.Services;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -11,6 +12,9 @@ namespace EprRegisterEnrolBackend.Test.Organisation.Endpoints;
 
 // Covers only the three routes with a live caller — see OrganisationEndpoints'
 // header comment (the frontend's persistentStubApiClient write-through path).
+// UseOrganisationEndpoints is gated behind IsDevelopment() (Program.cs), so this
+// factory must explicitly select Development — WebApplicationFactory doesn't
+// default to it, and these routes 404 under any other environment.
 public class OrganisationEndpointsTests : IClassFixture<WebApplicationFactory<Program>>
 {
     private readonly IOrganisationPersistence _mockPersistence =
@@ -22,6 +26,7 @@ public class OrganisationEndpointsTests : IClassFixture<WebApplicationFactory<Pr
         _client = factory
             .WithWebHostBuilder(builder =>
             {
+                builder.UseEnvironment("Development");
                 builder.ConfigureServices(services =>
                 {
                     services.AddSingleton(_mockPersistence);
@@ -100,5 +105,23 @@ public class OrganisationEndpointsTests : IClassFixture<WebApplicationFactory<Pr
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+}
+
+// Proves the IsDevelopment() gate in Program.cs actually removes these routes
+// outside Development, rather than just relying on nobody calling them.
+public class OrganisationEndpointsProductionTests
+{
+    [Fact]
+    public async Task GetAll_Returns404_OutsideDevelopment()
+    {
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(
+            builder => builder.UseEnvironment("Production")
+        );
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/organisation");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 }

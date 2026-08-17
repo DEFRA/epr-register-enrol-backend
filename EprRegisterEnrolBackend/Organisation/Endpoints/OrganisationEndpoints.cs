@@ -10,6 +10,13 @@ namespace EprRegisterEnrolBackend.Organisation.Endpoints;
 // across requests. Create/Update/Delete were removed alongside FileUploadEndpoints
 // as genuinely dead code — restored these three after a PR review caught that the
 // stub write-through path depends on them (see PR #107 review).
+//
+// Only registered in Development (see UseOrganisationEndpoints call in Program.cs) —
+// persistentStubApiClient's write-through only ever targets a Development-environment
+// backend (local docker-compose, fe-tests CI), so there's no legitimate caller in any
+// deployed environment. Gating it out entirely is safer than authenticating it: it
+// simply doesn't exist as attack surface outside that context, rather than existing
+// but locked.
 public static class OrganisationEndpoints
 {
     public static void UseOrganisationEndpoints(this IEndpointRouteBuilder app)
