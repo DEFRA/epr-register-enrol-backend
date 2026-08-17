@@ -273,6 +273,115 @@ public class HttpReExApiAdapterTests
             );
     }
 
+    [Fact]
+    public async Task GetAccreditationAsync_NoGlassRecyclingProcessKey_MapsToNull()
+    {
+        // OrganisationJson's registrations carry no glassRecyclingProcess key at all, matching
+        // non-glass materials in the real ReEx API.
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.GlassRecyclingProcess.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_EmptyGlassRecyclingProcessArray_MapsToNull()
+    {
+        var sut = BuildSut(GlassOrganisationJson("[]"));
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Glass,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result
+            .Value!.GlassRecyclingProcess.Should()
+            .BeNull(because: "an empty array means no recycling process was specified");
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_GlassRecyclingProcessReMelt_MapsToRemeltEnum()
+    {
+        var sut = BuildSut(GlassOrganisationJson("""["glass_re_melt"]"""));
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Glass,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.GlassRecyclingProcess.Should().Be(GlassRecyclingProcess.Remelt);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_GlassRecyclingProcessOther_MapsToOtherEnum()
+    {
+        var sut = BuildSut(GlassOrganisationJson("""["glass_other"]"""));
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Glass,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.GlassRecyclingProcess.Should().Be(GlassRecyclingProcess.Other);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_MoreThanOneGlassRecyclingProcessElement_TakesFirstElement()
+    {
+        var sut = BuildSut(GlassOrganisationJson("""["glass_other", "glass_re_melt"]"""));
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Glass,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result
+            .Value!.GlassRecyclingProcess.Should()
+            .Be(
+                GlassRecyclingProcess.Other,
+                because: "ReEx should only ever send 0 or 1 elements, but the first element is used defensively if it ever sends more"
+            );
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_UnrecognisedGlassRecyclingProcessValue_MapsToNull()
+    {
+        var sut = BuildSut(GlassOrganisationJson("""["glass_pulverise"]"""));
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Glass,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result
+            .Value!.GlassRecyclingProcess.Should()
+            .BeNull(
+                because: "an unrecognised wire value should not fail the whole accreditation lookup"
+            );
+    }
+
     // Realistic redacted ReEx organisation payload — companyDetails deliberately has no
     // registrationNumber key, matching the real API. Mirrors the fixture used in
     // ReExOrganisationFixtureTests.cs.
@@ -494,6 +603,80 @@ public class HttpReExApiAdapterTests
           ]
         }
         """;
+
+    // Minimal single-registration glass organisation payload, with the glassRecyclingProcess
+    // array substituted in — used to cover RA-307's array-parsing/enum-mapping cases without
+    // duplicating the full dual-registration OrganisationJson fixture above.
+    private static string GlassOrganisationJson(string glassRecyclingProcessArrayJson) =>
+        $$"""
+            {
+              "id": "6a2fcd74e16883c137d01188",
+              "schemaVersion": 3,
+              "orgId": 509193,
+              "wasteProcessingTypes": ["reprocessor"],
+              "reprocessingNations": ["england"],
+              "businessType": "individual",
+              "companyDetails": {
+                "name": "Test Glass Recycling Ltd",
+                "tradingName": "Test Glass Recycling Ltd",
+                "address": {
+                  "line1": "1 Example Hill",
+                  "postcode": "AB1 2CD",
+                  "country": "UK",
+                  "town": "Exampleton"
+                }
+              },
+              "submittedToRegulator": "ea",
+              "registrations": [
+                {
+                  "id": "reg-reprocessor-1",
+                  "submittedToRegulator": "ea",
+                  "orgName": "Test Glass Recycling Ltd",
+                  "site": {
+                    "address": {
+                      "line1": "Reprocessor Site Road",
+                      "postcode": "HU7 7BX",
+                      "country": "UK",
+                      "town": "Exampleton"
+                    },
+                    "gridReference": "TQ 132 546"
+                  },
+                  "cbduNumber": "CBDU663848",
+                  "material": "glass",
+                  "wasteProcessingType": "reprocessor",
+                  "accreditationId": "acc-reprocessor-1",
+                  "registrationNumber": "R25SR500000912GL",
+                  "validFrom": "2026-01-01",
+                  "validTo": "2027-01-01",
+                  "reprocessingType": "input",
+                  "status": "approved",
+                  "glassRecyclingProcess": {{glassRecyclingProcessArrayJson}},
+                  "accreditation": null
+                }
+              ],
+              "accreditations": [
+                {
+                  "id": "acc-reprocessor-1",
+                  "submittedToRegulator": "ea",
+                  "wasteProcessingType": "reprocessor",
+                  "material": "glass",
+                  "orgName": "Test Glass Recycling Ltd",
+                  "prnIssuance": {
+                    "tonnageBand": "over_10000",
+                    "signatories": [
+                      { "fullName": "Test Signatory", "email": "signatory@example.test", "phone": "0111 000 0002", "jobTitle": "Director" }
+                    ],
+                    "incomeBusinessPlan": []
+                  },
+                  "validFrom": "2026-01-01",
+                  "validTo": "2027-01-01",
+                  "accreditationNumber": "R-ACC12045GL",
+                  "reprocessingType": "input",
+                  "status": "approved"
+                }
+              ]
+            }
+            """;
 
     // Returns the organisation payload for the organisations endpoint, and an empty
     // overseas-sites dictionary for the overseas-sites endpoint the adapter calls for
