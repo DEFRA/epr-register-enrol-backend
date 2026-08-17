@@ -116,6 +116,57 @@ public class HttpReExApiAdapterTests
         result.Value!.CompanyRegisteredAddress.Should().Be("1 Example Hill, Exampleton, AB1 2CD");
     }
 
+    // RA-434: companiesHouseNumber lives on companyDetails and is org-wide, not per-registration.
+    [Fact]
+    public async Task GetAccreditationAsync_MapsCompaniesHouseNumber()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.CompaniesHouseNumber.Should().Be("09876543");
+    }
+
+    // RA-434: only the PermitNumber strings are extracted — a permit with no permitNumber (e.g.
+    // a waste exemption) must be dropped rather than surfaced as a null/blank entry.
+    [Fact]
+    public async Task GetAccreditationAsync_MapsPermitNumbersFromRegistrationOnly()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.PermitNumbers.Should().BeEquivalentTo(["WML123456"]);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_RegistrationWithNoPermits_ReturnsEmptyPermitNumbers()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.PermitNumbers.Should().BeEmpty();
+    }
+
     // Regression test for RA-424: the real ReEx API sends "up_to_5000" (confirmed by commit
     // c5bdf46, which set this fixture's tonnageBand to "up_to_5000" against a captured
     // production payload), but TonnageBandMap only recognised "up_to_1000" — every real exporter
@@ -215,6 +266,7 @@ public class HttpReExApiAdapterTests
           "companyDetails": {
             "name": "Test Recycling Solutions Ltd",
             "tradingName": "Test Recycling Solutions Ltd",
+            "companiesHouseNumber": "09876543",
             "address": {
               "line1": "1 Example Hill",
               "postcode": "AB1 2CD",
@@ -240,6 +292,10 @@ public class HttpReExApiAdapterTests
               "cbduNumber": "CBDU663848",
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
+              "wasteManagementPermits": [
+                { "type": "environmental_permit", "permitNumber": "WML123456" },
+                { "type": "waste_exemption" }
+              ],
               "accreditationId": "acc-reprocessor-1",
               "registrationNumber": "R25SR500000912AL",
               "validFrom": "2026-01-01",

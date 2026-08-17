@@ -63,6 +63,7 @@ public class CompanyDetailsModel
     public string? Name { get; set; }
     public string? TradingName { get; set; }
     public string? RegistrationNumber { get; set; }
+    public string? CompaniesHouseNumber { get; set; }
     public RegisteredAddressModel? RegisteredAddress { get; set; }
 }
 

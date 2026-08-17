@@ -293,6 +293,8 @@ public class AccreditationApplicationEndpointsTests
                             SiteAddress = "1 Factory Lane, Manchester, M1 1AA",
                             IsExporter = false,
                             CompanyRegisterAddressPostcode = "EC1A 1BB",
+                            CompaniesHouseNumber = "01234567",
+                            PermitNumbers = ["WML123456", "PPC456789"],
                             WasteProcessingType = "reprocessor",
                             OverseasSites = [],
                         },
@@ -316,6 +318,8 @@ public class AccreditationApplicationEndpointsTests
         body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
         body.RegistrationReference.Should().Be("REP-001");
         body.CompanyRegisterAddressPostcode.Should().Be("EC1A 1BB");
+        body.CompaniesHouseNumber.Should().Be("01234567");
+        body.PermitNumbers.Should().BeEquivalentTo(["WML123456", "PPC456789"]);
         body.WasteProcessingType.Should().Be("reprocessor");
     }
 

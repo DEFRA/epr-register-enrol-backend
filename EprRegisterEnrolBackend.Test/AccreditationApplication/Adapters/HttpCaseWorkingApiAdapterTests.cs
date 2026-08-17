@@ -30,6 +30,9 @@ public class HttpCaseWorkingApiAdapterTests
             ApplicationStatus = ApplicationStatus.Started,
             SiteAddress = "123 High Street, London, SW1A 1AA",
             CompanyRegisterAddressPostcode = "EC1A 1BB",
+            CompanyRegisteredAddress = "1 Acme House, London, EC1A 1BB",
+            CompaniesHouseNumber = "01234567",
+            PermitNumbers = ["WML123456", "PPC456789"],
             WasteProcessingType = "reprocessor",
             SubmittedBy = new SubmittedByModel
             {
@@ -281,7 +284,35 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("operatorEmail").GetString().Should().Be("jane@example.com");
         payload.GetProperty("siteAddressPostcode").GetString().Should().Be("SW1A 1AA");
         payload.GetProperty("companyRegisterAddressPostcode").GetString().Should().Be("EC1A 1BB");
+        payload
+            .GetProperty("companyRegisteredAddress")
+            .GetString()
+            .Should()
+            .Be("1 Acme House, London, EC1A 1BB");
+        payload.GetProperty("companiesHouseNumber").GetString().Should().Be("01234567");
+        payload
+            .GetProperty("permitNumbers")
+            .EnumerateArray()
+            .Select(e => e.GetString())
+            .Should()
+            .BeEquivalentTo(["WML123456", "PPC456789"]);
         payload.GetProperty("wasteProcessingType").GetString().Should().Be("reprocessor");
+    }
+
+    // RA-434
+    [Fact]
+    public async Task SubmitApplicationAsync_NoPermitNumbers_SendsEmptyPermitNumbersArray()
+    {
+        var application = CreateTestApplication();
+        application.PermitNumbers = [];
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var payload = doc.RootElement.GetProperty("payload");
+
+        payload.GetProperty("permitNumbers").EnumerateArray().Should().BeEmpty();
     }
 
     [Fact]
