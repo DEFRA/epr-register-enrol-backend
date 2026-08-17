@@ -48,7 +48,7 @@ public class DevScanAutoCompleteService(
         }
     }
 
-    private async Task TryCompleteFromCdpStatus(
+    internal async Task TryCompleteFromCdpStatus(
         string fileUploadId,
         CancellationToken cancellationToken
     )
@@ -82,7 +82,12 @@ public class DevScanAutoCompleteService(
         if (file is null)
             return;
 
-        var fileStatus = cdpStatus.ProcessingStatus == "validated" ? "complete" : "rejected";
+        // Use CDP's own per-file scan outcome, not cdpStatus.ProcessingStatus — that field
+        // only ever gets populated by this backend's *own* status endpoint (see
+        // PendingUploadService.GetStatus), never by the real CDP uploader response this
+        // is deserialised from, so comparing it here always evaluated as "rejected" and
+        // could race the real webhook callback into clobbering a clean scan result.
+        var fileStatus = file.FileStatus ?? "rejected";
         var s3Key =
             details.S3Path is not null && details.CdpUploadId is not null
                 ? $"{details.S3Path.TrimEnd('/')}/{details.CdpUploadId}/{file.FileId}"
