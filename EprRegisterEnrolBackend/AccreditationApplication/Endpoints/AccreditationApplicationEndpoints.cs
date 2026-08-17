@@ -183,6 +183,7 @@ public static class AccreditationApplicationEndpoints
             WasteProcessingType = priorYearData.WasteProcessingType,
             RegistrationReference = priorYearData.RegistrationReference,
             MaterialType = materialTypeEnum,
+            GlassRecyclingProcess = priorYearData.GlassRecyclingProcess,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData.AccreditationId,
             SourceYear = request.Year - 1,

@@ -43,6 +43,7 @@ public class ReExAccreditationDto
     public string? CompaniesHouseNumber { get; set; }
     public List<string> PermitNumbers { get; set; } = [];
     public string? WasteProcessingType { get; set; }
+    public GlassRecyclingProcess? GlassRecyclingProcess { get; set; }
     public List<OverseasSiteModel> OverseasSites { get; set; } = [];
 
     public ReExPrnsDto? Prns { get; set; }
