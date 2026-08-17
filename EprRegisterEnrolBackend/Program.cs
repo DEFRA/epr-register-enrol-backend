@@ -198,12 +198,16 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
         // Fixtures for StubReExApiAdapter's dev-mode responses — not tied to
-        // any persistence interface, this is the only place it's used.
+        // any persistence interface, this is the only place it's used directly.
         builder.Services.AddSingleton<FakeOrganisationPersistence>();
+        builder.Services.AddSingleton<OrganisationPersistence>();
+        builder.Services.AddSingleton<IOrganisationPersistence, FallbackOrganisationPersistence>();
     }
     else
     {
         builder.Services.AddSingleton<IReExApiAdapter, HttpReExApiAdapter>();
+
+        builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
     }
 }
 
@@ -305,6 +309,9 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseSwagger();
     app.UseSwaggerUI();
 
+    // Mongo-backed organisation endpoints — only the stub write-through path
+    // (persistentStubApiClient) still calls these; see OrganisationEndpoints header comment.
+    app.UseOrganisationEndpoints();
     // ReEx-backed organisation endpoints (live ReEx lookups, e.g. Defra org link)
     app.UseReExOrganisationEndpoints();
     // Accreditation application endpoints
