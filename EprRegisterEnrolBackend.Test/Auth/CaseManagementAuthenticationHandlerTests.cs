@@ -305,6 +305,52 @@ public class CaseManagementAuthenticationHandlerTests
     }
 
     [Fact]
+    public async Task MissingSharedSecret_OutsideDevelopment_WithCorrelationId_LogsIt()
+    {
+        // The misconfigured-secret error log has its own `correlationId ?? "(absent)"`
+        // call site, separate from the one in Fail(); every other missing-shared-secret
+        // test uses a context with no X-Correlation-Id header, so only the "(absent)"
+        // side of this particular call site has been exercised until now.
+        var loggerFactory = new CapturingLoggerFactory();
+        var context = new DefaultHttpContext();
+        context.Request.Headers["X-Correlation-Id"] = "corr-misconfigured-789";
+
+        var result = await AuthenticateAsync(
+            context,
+            sharedSecret: null,
+            isDevelopment: false,
+            loggerFactory: loggerFactory
+        );
+
+        result.Succeeded.Should().BeFalse();
+        loggerFactory
+            .Logger.Entries.Should()
+            .Contain(e => e.Message.Contains("corr-misconfigured-789"));
+    }
+
+    [Fact]
+    public async Task MissingSharedSecret_InDevelopment_WithCorrelationId_LogsIt()
+    {
+        // Same as above, but for the development header-trust bypass's own
+        // `correlationId ?? "(absent)"` call site.
+        var loggerFactory = new CapturingLoggerFactory();
+        var context = new DefaultHttpContext();
+        context.Request.Headers["X-Correlation-Id"] = "corr-devbypass-321";
+
+        var result = await AuthenticateAsync(
+            context,
+            sharedSecret: null,
+            isDevelopment: true,
+            loggerFactory: loggerFactory
+        );
+
+        result.Succeeded.Should().BeTrue();
+        loggerFactory
+            .Logger.Entries.Should()
+            .Contain(e => e.Message.Contains("corr-devbypass-321"));
+    }
+
+    [Fact]
     public async Task ValidSignature_LogsCorrelationIdOnSuccess()
     {
         var loggerFactory = new CapturingLoggerFactory();

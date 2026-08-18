@@ -143,4 +143,61 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
                 )
             );
     }
+
+    [Fact]
+    public async Task Upsert_MaterialTypePropertyPresentButJsonNull_DefaultsToEmptyString()
+    {
+        // Exercises the `materialType.GetString() ?? string.Empty` right-hand branch —
+        // distinct from the "property absent" case above, which never reaches GetString()
+        // at all because TryGetProperty itself returns false.
+        using var content = new StringContent(
+            """{"siteId":"SITE-6","materialType":null,"year":2026}""",
+            System.Text.Encoding.UTF8,
+            "application/json"
+        );
+
+        var response = await _client.PutAsync(
+            "/api/v1/stub/accreditation-applications/org-5/app-6",
+            content
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await _factory
+            .MockPersistence.Received(1)
+            .UpsertAsync(
+                Arg.Is<StubApplicationDocument>(d =>
+                    d.OrganisationId == "org-5"
+                    && d.StubApplicationId == "app-6"
+                    && d.SiteId == "SITE-6"
+                    && d.MaterialType == string.Empty
+                    && d.Year == 2026
+                )
+            );
+    }
+
+    [Fact]
+    public async Task Upsert_YearPropertyPresentButNotAnInteger_DefaultsToZero()
+    {
+        // Exercises the `year.TryGetInt32(out yearValue)` false branch — year is present as a
+        // genuine JSON number (so the first TryGetProperty succeeds and JsonElement.TryGetInt32
+        // doesn't throw InvalidOperationException, which it would for a non-numeric ValueKind
+        // such as a JSON string), but it isn't representable as an Int32 (fractional value).
+        var response = await _client.PutAsJsonAsync(
+            "/api/v1/stub/accreditation-applications/org-6/app-7",
+            new { siteId = "SITE-7", materialType = "glass", year = 2026.5 }
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await _factory
+            .MockPersistence.Received(1)
+            .UpsertAsync(
+                Arg.Is<StubApplicationDocument>(d =>
+                    d.OrganisationId == "org-6"
+                    && d.StubApplicationId == "app-7"
+                    && d.SiteId == "SITE-7"
+                    && d.MaterialType == "glass"
+                    && d.Year == 0
+                )
+            );
+    }
 }

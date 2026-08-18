@@ -258,4 +258,65 @@ public class FakeOrganisationPersistenceTests
         stored.Should().NotBeNull();
         stored!.CompanyDetails!.Name.Should().Be("Inserted via Upsert");
     }
+
+    [Fact]
+    public async Task SearchByValueAsync_OrgWithNullCompanyAndContactDetails_IsExcludedAndDoesNotThrow()
+    {
+        // Exercises the outer o.CompanyDetails?.* / o.ContactDetails?.* null-conditional
+        // branches — every seeded fixture and NewOrg() always sets both, so nothing else
+        // reaches the case where the whole CompanyDetails/ContactDetails object is null
+        // (as opposed to just one of its string properties being null).
+        var sut = new FakeOrganisationPersistence();
+        await sut.CreateAsync(
+            new OrganisationModel
+            {
+                OrgId = 999007,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = "individual",
+                WasteProcessingTypes = ["reprocessor"],
+                ReprocessingNations = ["england"],
+                CompanyDetails = null,
+                ContactDetails = null,
+                Users = [],
+            }
+        );
+
+        var act = () => sut.SearchByValueAsync("some-term-that-matches-nothing");
+        await act.Should().NotThrowAsync();
+
+        var result = (await act()).ToList();
+        result.Should().NotContain(o => o.OrgId == 999007);
+    }
+
+    [Fact]
+    public async Task SearchByValueAsync_MatchesEmail_WhenCompanyDetailsIsNull()
+    {
+        // Company-detail conditions (Name/TradingName/RegistrationNumber) must all
+        // short-circuit to false via the null-conditional when CompanyDetails itself is
+        // null, falling through to the ContactDetails.Email match later in the OR chain.
+        var sut = new FakeOrganisationPersistence();
+        await sut.CreateAsync(
+            new OrganisationModel
+            {
+                OrgId = 999008,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = "individual",
+                WasteProcessingTypes = ["reprocessor"],
+                ReprocessingNations = ["england"],
+                CompanyDetails = null,
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "No Company Details",
+                    Email = "no-company-details@example.test",
+                },
+                Users = [],
+            }
+        );
+
+        var result = (await sut.SearchByValueAsync("no-company-details@example.test")).ToList();
+
+        result.Should().ContainSingle(o => o.OrgId == 999008);
+    }
 }

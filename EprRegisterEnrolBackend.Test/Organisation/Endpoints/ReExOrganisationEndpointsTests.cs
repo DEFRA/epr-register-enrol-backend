@@ -109,4 +109,40 @@ public class ReExOrganisationEndpointsTests
 
         ((int)response.StatusCode).Should().Be(502);
     }
+
+    [Fact]
+    public async Task GetDefraLink_ReturnsDefaultProblemMessage_WhenErrorMessageIsNull()
+    {
+        _factory.MockReExAdapter
+            .GetLinkedDefraOrganisationAsync("50002", Arg.Any<CancellationToken>())
+            .Returns(
+                ReExResult<LinkedDefraOrganisationResult>.Fail(
+                    new ReExError(ReExErrorKind.ServerError),
+                    502
+                )
+            );
+
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+
+        ((int)response.StatusCode).Should().Be(502);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("Failed to resolve linked Defra organisation");
+    }
+
+    [Fact]
+    public async Task GetDefraLink_DefaultsStatusCodeTo502_WhenResultHasNoStatusCode()
+    {
+        _factory.MockReExAdapter
+            .GetLinkedDefraOrganisationAsync("50002", Arg.Any<CancellationToken>())
+            .Returns(
+                ReExResult<LinkedDefraOrganisationResult>.Fail(
+                    new ReExError(ReExErrorKind.ServerError, "boom"),
+                    null
+                )
+            );
+
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+
+        ((int)response.StatusCode).Should().Be(502);
+    }
 }
