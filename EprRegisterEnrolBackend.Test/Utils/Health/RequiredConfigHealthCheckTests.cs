@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.Utils.Health;
@@ -33,7 +34,8 @@ public class RequiredConfigHealthCheckTests
             { "CdpUploader__Url", b => b.CdpUploaderUrl = "" },
             { "CaseWorking__Url", b => b.CaseWorkingUrl = "" },
             { "CASE_MANAGEMENT_API_SHARED_SECRET", b => b.CaseWorkingSharedSecret = "" },
-            { "AUTH_SHARED_SECRET__MANAGEMENT_BE", b => b.CaseManagementAuthSharedSecret = "" }
+            { "AUTH_SHARED_SECRET__MANAGEMENT_BE", b => b.CaseManagementAuthSharedSecret = "" },
+            { "AUTH_SHARED_SECRET__FRONTEND", b => b.FrontendAuthSharedSecret = "" }
         };
 
     [Theory]
@@ -137,7 +139,8 @@ public class RequiredConfigHealthCheckTests
                 CdpUploaderUrl = "",
                 CaseWorkingUrl = "",
                 CaseWorkingSharedSecret = "",
-                CaseManagementAuthSharedSecret = ""
+                CaseManagementAuthSharedSecret = "",
+                FrontendAuthSharedSecret = ""
             }
         );
 
@@ -152,7 +155,8 @@ public class RequiredConfigHealthCheckTests
             .And.Contain("CdpUploader__Url")
             .And.Contain("CaseWorking__Url")
             .And.Contain("CASE_MANAGEMENT_API_SHARED_SECRET")
-            .And.Contain("AUTH_SHARED_SECRET__MANAGEMENT_BE");
+            .And.Contain("AUTH_SHARED_SECRET__MANAGEMENT_BE")
+            .And.Contain("AUTH_SHARED_SECRET__FRONTEND");
     }
 
     private static Task<HealthCheckResult> CheckHealth(RequiredConfigHealthCheck check) =>
@@ -170,6 +174,7 @@ public class RequiredConfigHealthCheckTests
         public string CaseWorkingUrl { get; set; } = "http://case-working.test";
         public string CaseWorkingSharedSecret { get; set; } = "case-working-secret";
         public string CaseManagementAuthSharedSecret { get; set; } = "case-management-secret";
+        public string FrontendAuthSharedSecret { get; set; } = "frontend-secret";
         public bool UseStub { get; set; } = false;
         public bool IsDevelopment { get; set; } = false;
     }
@@ -201,6 +206,7 @@ public class RequiredConfigHealthCheckTests
             Options.Create(
                 new CaseManagementAuthConfig { SharedSecret = builder.CaseManagementAuthSharedSecret }
             ),
+            Options.Create(new FrontendAuthConfig { SharedSecret = builder.FrontendAuthSharedSecret }),
             environment
         );
     }
