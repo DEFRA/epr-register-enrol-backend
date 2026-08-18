@@ -26,6 +26,7 @@ public class ReadinessHealthCheckEndpointTests
             ["CaseWorking:Url"] = "http://case-working.test",
             ["CASE_MANAGEMENT_API_SHARED_SECRET"] = "case-working-secret",
             ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "case-management-secret",
+            ["AUTH_SHARED_SECRET:FRONTEND"] = "frontend-secret",
         };
 
     [Fact]

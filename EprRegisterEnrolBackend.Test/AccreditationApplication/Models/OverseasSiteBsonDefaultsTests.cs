@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentAssertions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -14,6 +15,18 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Models;
 /// </summary>
 public class OverseasSiteBsonDefaultsTests
 {
+    // Whether a hand-built BsonDocument's element names need to be camelCase, and whether an
+    // unmatched element throws or is silently ignored, depends entirely on whether
+    // MongoDbClientFactory's CamelCaseElementNameConvention has been registered yet —
+    // registration is process-global and normally only happens as a side effect of some other
+    // test constructing a WebApplicationFactory. Calling it explicitly here makes every test in
+    // this class deterministic regardless of xUnit's test-class ordering/parallelisation,
+    // instead of depending on which other test class happened to run first.
+    static OverseasSiteBsonDefaultsTests()
+    {
+        MongoDbClientFactory.EnsureConventionRegistered();
+    }
+
     // The pre-RA-292 model shape, kept as a local type so the hazard stays demonstrable after the
     // real model was fixed.
     private class LegacyShapedSite
@@ -24,7 +37,7 @@ public class OverseasSiteBsonDefaultsTests
     }
 
     private static BsonDocument DocumentWithoutIsNewSite() =>
-        new() { { "SiteId", 1 }, { "SiteName", "Legacy Site" } };
+        new() { { "siteId", 1 }, { "siteName", "Legacy Site" } };
 
     [Fact]
     public void FieldInitializerSurvivesDeserialisation_WhichIsWhyTheDefaultMatters()
@@ -54,15 +67,15 @@ public class OverseasSiteBsonDefaultsTests
     {
         var document = new BsonDocument
         {
-            { "SiteId", 2 },
-            { "SiteNumber", "SN-0002" },
-            { "Country", "France" },
-            { "SiteName", "Interim" },
-            { "AddressLine1", "1 Rue Example" },
-            { "TownOrCity", "Paris" },
-            { "ContactName", "Marie Curie" },
-            { "ContactEmail", "marie@example.com" },
-            { "ContactPhone", "0033111222333" },
+            { "siteId", 2 },
+            { "siteNumber", "SN-0002" },
+            { "country", "France" },
+            { "siteName", "Interim" },
+            { "addressLine1", "1 Rue Example" },
+            { "townOrCity", "Paris" },
+            { "contactName", "Marie Curie" },
+            { "contactEmail", "marie@example.com" },
+            { "contactPhone", "0033111222333" },
         };
 
         var deserialised = BsonSerializer.Deserialize<InterimSiteModel>(document);
@@ -75,8 +88,8 @@ public class OverseasSiteBsonDefaultsTests
     {
         var document = new BsonDocument
         {
-            { "FullName", "Old Hand" },
-            { "Email", "old@example.com" },
+            { "fullName", "Old Hand" },
+            { "email", "old@example.com" },
         };
 
         var deserialised = BsonSerializer.Deserialize<PrnsAuthoriser>(document);
@@ -114,11 +127,21 @@ public class OverseasSiteBsonDefaultsTests
     [Fact]
     public void StoredValuesAreStillHonoured()
     {
+        // Element names must be camelCase, matching MongoDbClientFactory's
+        // CamelCaseElementNameConvention (real stored documents are camelCase). Every other
+        // test in this file only checks a *missing*-element default, so casing doesn't affect
+        // them either way — this is the one test that reads a present element back, and a
+        // PascalCase name here silently fails to match the class map once that convention is
+        // registered (IgnoreExtraElementsConvention swallows the mismatch rather than
+        // erroring), leaving IsNewSite at its unrelated default instead of the stored value.
+        // That made this test's pass/fail depend on whether it happened to run before or after
+        // any test that constructs MongoDbClientFactory — not a race, but an ordering bug with
+        // the same symptom.
         var document = new BsonDocument
         {
-            { "SiteId", 1 },
-            { "SiteName", "Genuinely New Site" },
-            { "IsNewSite", true },
+            { "siteId", 1 },
+            { "siteName", "Genuinely New Site" },
+            { "isNewSite", true },
         };
 
         BsonSerializer.Deserialize<OverseasSiteModel>(document).IsNewSite.Should().BeTrue();

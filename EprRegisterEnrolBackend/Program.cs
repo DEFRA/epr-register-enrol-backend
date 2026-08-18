@@ -157,10 +157,25 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
             "AUTH_SHARED_SECRET:MANAGEMENT_BE"
         );
     });
+    // Frontend inbound auth: verifies calls from epr-register-enrol-frontend, the only
+    // caller of the ReEx-backed organisation endpoints. Same flat-env-var convention as
+    // CaseManagementAuth above — sourced from AUTH_SHARED_SECRET__FRONTEND, not a nested
+    // FrontendAuth__* key.
+    builder.Services.Configure<FrontendAuthConfig>(config =>
+    {
+        config.SharedSecret = builder.Configuration.GetValue<string>(
+            "AUTH_SHARED_SECRET:FRONTEND"
+        );
+    });
+
     builder
         .Services.AddAuthentication()
         .AddScheme<CaseManagementAuthenticationOptions, CaseManagementAuthenticationHandler>(
             CaseManagementAuthenticationHandler.SchemeName,
+            _ => { }
+        )
+        .AddScheme<FrontendAuthenticationOptions, FrontendAuthenticationHandler>(
+            FrontendAuthenticationHandler.SchemeName,
             _ => { }
         );
     builder.Services.AddAuthorization();
@@ -277,6 +292,14 @@ static WebApplication SetupApplication(WebApplication app)
     if (!app.Environment.IsDevelopment() && string.IsNullOrWhiteSpace(caseManagementAuthCfg.SharedSecret))
         startupLogger.LogWarning(
             "AUTH_SHARED_SECRET__MANAGEMENT_BE is not configured — inbound CaseManagement-authenticated requests will be rejected."
+        );
+
+    var frontendAuthCfg = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<FrontendAuthConfig>>()
+        .Value;
+    if (!app.Environment.IsDevelopment() && string.IsNullOrWhiteSpace(frontendAuthCfg.SharedSecret))
+        startupLogger.LogWarning(
+            "AUTH_SHARED_SECRET__FRONTEND is not configured — inbound Frontend-authenticated requests will be rejected."
         );
 
     app.UseExceptionHandler();

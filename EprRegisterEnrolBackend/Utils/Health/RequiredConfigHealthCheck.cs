@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.ReEx.Config;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -20,6 +21,7 @@ public class RequiredConfigHealthCheck(
     IOptions<CdpUploaderConfig> cdpUploaderConfig,
     IOptions<CaseWorkingApiConfig> caseWorkingConfig,
     IOptions<CaseManagementAuthConfig> caseManagementAuthConfig,
+    IOptions<FrontendAuthConfig> frontendAuthConfig,
     IHostEnvironment environment
 ) : IHealthCheck
 {
@@ -80,6 +82,15 @@ public class RequiredConfigHealthCheck(
             && string.IsNullOrWhiteSpace(caseManagementAuthConfig.Value.SharedSecret)
         )
             missing.Add("AUTH_SHARED_SECRET__MANAGEMENT_BE");
+
+        // FrontendAuthenticationHandler fails closed on every inbound request when this is
+        // blank outside Development — an empty secret here is a live auth gap on the
+        // ReEx-backed organisation endpoints (e.g. defra-link).
+        if (
+            !environment.IsDevelopment()
+            && string.IsNullOrWhiteSpace(frontendAuthConfig.Value.SharedSecret)
+        )
+            missing.Add("AUTH_SHARED_SECRET__FRONTEND");
 
         return Task.FromResult(
             missing.Count == 0

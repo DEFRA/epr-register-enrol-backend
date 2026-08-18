@@ -14,47 +14,84 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 
 public static class AccreditationApplicationEndpoints
 {
+    // Every route here is called only by epr-register-enrol-frontend, except the two
+    // case-management/* routes (ManagementBe, its own CaseManagement scheme below) and
+    // files/upload-completed (the CDP Uploader webhook callback — a third caller with no
+    // shared-secret scheme established in this codebase; applying Frontend auth to it
+    // would break real uploads, since CDP has no way to send that secret).
+    private static void FrontendOnly(IEndpointConventionBuilder endpoint) =>
+        endpoint.RequireAuthorization(policy =>
+            policy
+                .AddAuthenticationSchemes(FrontendAuthenticationHandler.SchemeName)
+                .RequireAuthenticatedUser()
+        );
+
     public static void UseAccreditationApplicationEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("api/v1/accreditation-applications");
 
-        group.MapPost("{organisationId}/{registrationId}/{materialType}/seed", Seed);
-        group.MapGet("{organisationId}", GetList);
-        group.MapGet("{organisationId}/{applicationId}", GetById);
-        group.MapPatch("{organisationId}/{applicationId}/prns", PatchPrns);
-        group.MapPatch("{organisationId}/{applicationId}/tonnage", PatchTonnage);
-        group.MapPatch("{organisationId}/{applicationId}/business-plan", PatchBusinessPlan);
-        group.MapPatch("{organisationId}/{applicationId}/sampling-plan", PatchSamplingPlan);
-        group.MapPatch("{organisationId}/{applicationId}/overseas-sites", PatchOverseasSites);
-        group.MapPost("{organisationId}/{applicationId}/overseas-sites", AddOverseasSite);
-        group.MapPost(
-            "{organisationId}/{applicationId}/overseas-sites/{siteId}/promote",
-            PromoteOverseasSite
+        FrontendOnly(group.MapPost("{organisationId}/{registrationId}/{materialType}/seed", Seed));
+        FrontendOnly(group.MapGet("{organisationId}", GetList));
+        FrontendOnly(group.MapGet("{organisationId}/{applicationId}", GetById));
+        FrontendOnly(group.MapPatch("{organisationId}/{applicationId}/prns", PatchPrns));
+        FrontendOnly(group.MapPatch("{organisationId}/{applicationId}/tonnage", PatchTonnage));
+        FrontendOnly(
+            group.MapPatch("{organisationId}/{applicationId}/business-plan", PatchBusinessPlan)
         );
-        group.MapPost(
-            "{organisationId}/{applicationId}/overseas-sites/{siteId}/revert",
-            RevertOverseasSite
+        FrontendOnly(
+            group.MapPatch("{organisationId}/{applicationId}/sampling-plan", PatchSamplingPlan)
         );
-        group.MapPost(
-            "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-site",
-            AddInterimSite
+        FrontendOnly(
+            group.MapPatch("{organisationId}/{applicationId}/overseas-sites", PatchOverseasSites)
         );
-        group.MapPost(
-            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files",
-            AddBesEvidenceFile
+        FrontendOnly(
+            group.MapPost("{organisationId}/{applicationId}/overseas-sites", AddOverseasSite)
         );
-        group.MapPatch(
-            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence",
-            PatchBesEvidence
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/promote",
+                PromoteOverseasSite
+            )
         );
-        group.MapDelete(
-            "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files/{fileId}",
-            DeleteBesEvidenceFile
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/revert",
+                RevertOverseasSite
+            )
         );
-        group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection);
-        group.MapPost("{organisationId}/{applicationId}/submit", Submit);
-        group.MapPost("{organisationId}/{applicationId}/resubmit", Resubmit);
-        group.MapPost("{organisationId}/{applicationId}/withdraw", Withdraw);
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-site",
+                AddInterimSite
+            )
+        );
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files",
+                AddBesEvidenceFile
+            )
+        );
+        FrontendOnly(
+            group.MapPatch(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence",
+                PatchBesEvidence
+            )
+        );
+        FrontendOnly(
+            group.MapDelete(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files/{fileId}",
+                DeleteBesEvidenceFile
+            )
+        );
+        FrontendOnly(
+            group.MapPatch(
+                "{organisationId}/{applicationId}/bes-evidence",
+                PatchBesEvidenceSection
+            )
+        );
+        FrontendOnly(group.MapPost("{organisationId}/{applicationId}/submit", Submit));
+        FrontendOnly(group.MapPost("{organisationId}/{applicationId}/resubmit", Resubmit));
+        FrontendOnly(group.MapPost("{organisationId}/{applicationId}/withdraw", Withdraw));
         group
             .MapPost("case-management/{workItemId}/query", QueryFromCaseManagement)
             .RequireAuthorization(policy =>
@@ -69,17 +106,24 @@ public static class AccreditationApplicationEndpoints
                     .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
-        group.MapPost("{organisationId}/{applicationId}/files", AddFile);
-        group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile);
-        group.MapPost("{organisationId}/{applicationId}/files/initiate", InitiateUpload);
-        group.MapPost(
-            "{organisationId}/{applicationId}/files/bes-evidence/initiate",
-            InitiateBesEvidenceUpload
+        FrontendOnly(group.MapPost("{organisationId}/{applicationId}/files", AddFile));
+        FrontendOnly(group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile));
+        FrontendOnly(
+            group.MapPost("{organisationId}/{applicationId}/files/initiate", InitiateUpload)
         );
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/files/bes-evidence/initiate",
+                InitiateBesEvidenceUpload
+            )
+        );
+        // CDP Uploader webhook callback — not frontend-authenticated, see FrontendOnly above.
         group.MapPost("files/upload-completed", UploadCompleted);
-        group.MapGet(
-            "{organisationId}/{applicationId}/files/{fileUploadId}/status",
-            GetUploadStatus
+        FrontendOnly(
+            group.MapGet(
+                "{organisationId}/{applicationId}/files/{fileUploadId}/status",
+                GetUploadStatus
+            )
         );
     }
 

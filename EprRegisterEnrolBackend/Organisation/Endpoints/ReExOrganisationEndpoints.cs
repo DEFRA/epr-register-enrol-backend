@@ -1,4 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.Auth;
+using Microsoft.AspNetCore.Authorization;
 
 namespace EprRegisterEnrolBackend.Organisation.Endpoints;
 
@@ -14,7 +16,15 @@ public static class ReExOrganisationEndpoints
 
         // Returns the Defra organisation an operator must be related to in order to
         // access this ReEx organisation. Consumed by the frontend authorisation guard.
-        group.MapGet("{organisationId}/defra-link", GetDefraLink);
+        // The organisation-linkage mapping this reveals is itself sensitive (it's the
+        // authorisation guard's own data source), so only the frontend may call it.
+        group
+            .MapGet("{organisationId}/defra-link", GetDefraLink)
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(FrontendAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
     }
 
     private static async Task<IResult> GetDefraLink(
