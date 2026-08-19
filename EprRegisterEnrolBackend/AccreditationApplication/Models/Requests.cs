@@ -100,16 +100,15 @@ public record AddInterimSiteRequest
     public required string ContactPhone { get; set; }
 }
 
+// FileId/Filename/ContentType/ScanStatus/S3Key/S3Bucket are deliberately NOT here:
+// they must come from the server-held PendingUploadService record for FileUploadId
+// (populated only by the real CDP-uploader webhook callback), never from the client
+// directly — see H6 in the 2026-08-08 pentest report.
 public class AddBesEvidenceFileRequest
 {
-    public required string FileId { get; set; }
-    public required string Filename { get; set; }
-    public string? ContentType { get; set; }
-    public string? ScanStatus { get; set; }
+    public required string FileUploadId { get; set; }
     public string? BesEvidenceValidFromDate { get; set; }
     public string? BesEvidenceExpiryDate { get; set; }
-    public required string S3Key { get; set; }
-    public string? S3Bucket { get; set; }
 }
 
 public class PatchBesEvidenceRequest
@@ -178,13 +177,12 @@ public record SubmitResponse
     public string? CaseManagementReference { get; init; }
 }
 
+// FileId/Filename/ContentType/ScanStatus/S3Key/S3Bucket are deliberately NOT here:
+// they must come from the server-held PendingUploadService record for FileUploadId
+// (populated only by the real CDP-uploader webhook callback), never from the client
+// directly — see H6 in the 2026-08-08 pentest report.
 public class FileUploadRequest
 {
-    public required string FileId { get; set; }
-    public required string Filename { get; set; }
-    public required string ContentType { get; set; }
-    public FileScanStatus? ScanStatus { get; set; }
+    public required string FileUploadId { get; set; }
     public AccreditationFileDocumentType? DocumentType { get; set; }
-    public required string S3Key { get; set; }
-    public string? S3Bucket { get; set; }
 }

@@ -5,7 +5,10 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Validators;
 
 public class FileUploadRequestValidator : AbstractValidator<FileUploadRequest>
 {
-    private static readonly string[] PermittedContentTypes =
+    // Content type on the real uploaded file is checked against this list server-side
+    // (in AccreditationApplicationEndpoints.AddFile) once resolved from PendingUploadService —
+    // exposed here so both places share one list.
+    public static readonly string[] PermittedContentTypes =
     [
         "application/pdf",
         "application/msword",
@@ -21,17 +24,7 @@ public class FileUploadRequestValidator : AbstractValidator<FileUploadRequest>
 
     public FileUploadRequestValidator()
     {
-        RuleFor(r => r.FileId).NotEmpty().MaximumLength(100);
-        RuleFor(r => r.Filename)
-            .NotEmpty()
-            .MaximumLength(255)
-            .Matches(@"^[^\x00-\x1f<>:""/\\|?*]+$")
-            .WithMessage("Filename contains invalid characters.");
-        RuleFor(r => r.ContentType)
-            .NotEmpty()
-            .Must(ct => PermittedContentTypes.Contains(ct))
-            .WithMessage("Content type is not permitted.");
-        RuleFor(r => r.S3Key).NotEmpty().MaximumLength(1024);
+        RuleFor(r => r.FileUploadId).NotEmpty().MaximumLength(100);
 
         When(
             r => r.DocumentType.HasValue,
