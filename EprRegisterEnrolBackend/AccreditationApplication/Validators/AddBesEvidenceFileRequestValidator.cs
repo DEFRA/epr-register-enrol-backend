@@ -7,12 +7,6 @@ public class AddBesEvidenceFileRequestValidator : AbstractValidator<AddBesEviden
 {
     public AddBesEvidenceFileRequestValidator()
     {
-        RuleFor(r => r.FileId).NotEmpty().MaximumLength(100);
-        RuleFor(r => r.Filename)
-            .NotEmpty()
-            .MaximumLength(255)
-            .Matches(@"^[^\x00-\x1f<>:""/\\|?*]+$")
-            .WithMessage("Filename contains invalid characters.");
-        RuleFor(r => r.S3Key).NotEmpty().MaximumLength(1024);
+        RuleFor(r => r.FileUploadId).NotEmpty().MaximumLength(100);
     }
 }
