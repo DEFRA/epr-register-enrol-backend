@@ -16,6 +16,12 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // degrades readiness gracefully instead of crashing. ExecuteAsync's own
 // try/catch means a failure here logs and gives up gracefully instead.
 //
+// Being non-blocking opens a real window where Kestrel is already accepting
+// traffic before the seed finishes - RegulatoryNumberBackfillHealthCheck closes
+// it by keeping /health/ready unhealthy (status.IsComplete stays false) until
+// SeedAllAsync actually finishes, so the platform doesn't route real traffic to
+// the number-generation endpoints during that window.
+//
 // SEED VALUES BELOW ARE A POINT-IN-TIME SNAPSHOT (observed max + 50 buffer, from
 // the 13 August 2026 public register export) - NOT a live feed. Re-derive these
 // from the live production data / most recent register export before this goes
@@ -24,6 +30,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // section for the full derivation).
 public class RegulatoryNumberSequenceBackfillService(
     IRegulatoryNumberSequenceCounterPersistence counters,
+    IRegulatoryNumberBackfillStatus status,
     ILogger<RegulatoryNumberSequenceBackfillService> logger
 ) : BackgroundService
 {
@@ -80,6 +87,7 @@ public class RegulatoryNumberSequenceBackfillService(
             await counters.SeedIfHigherAsync(key, value, ct);
         }
 
+        status.MarkComplete();
         logger.LogInformation("RegulatoryNumberSequenceBackfillService: seed complete");
     }
 }

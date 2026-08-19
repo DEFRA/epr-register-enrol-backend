@@ -27,14 +27,26 @@ public class RegulatoryNumberSequenceBackfillServiceTests
         "A-WX",
     ];
 
+    private static (
+        RegulatoryNumberSequenceBackfillService Service,
+        FakeRegulatoryNumberSequenceCounterPersistence Store,
+        RegulatoryNumberBackfillStatus Status
+    ) Create()
+    {
+        var store = new FakeRegulatoryNumberSequenceCounterPersistence();
+        var status = new RegulatoryNumberBackfillStatus();
+        var service = new RegulatoryNumberSequenceBackfillService(
+            store,
+            status,
+            NullLogger<RegulatoryNumberSequenceBackfillService>.Instance
+        );
+        return (service, store, status);
+    }
+
     [Fact]
     public async Task SeedAllAsync_seeds_all_16_pool_keys()
     {
-        var store = new FakeRegulatoryNumberSequenceCounterPersistence();
-        var service = new RegulatoryNumberSequenceBackfillService(
-            store,
-            NullLogger<RegulatoryNumberSequenceBackfillService>.Instance
-        );
+        var (service, store, _) = Create();
 
         await service.SeedAllAsync(CancellationToken.None);
 
@@ -49,11 +61,7 @@ public class RegulatoryNumberSequenceBackfillServiceTests
     [Fact]
     public async Task SeedAllAsync_run_twice_never_lowers_an_already_seeded_value()
     {
-        var store = new FakeRegulatoryNumberSequenceCounterPersistence();
-        var service = new RegulatoryNumberSequenceBackfillService(
-            store,
-            NullLogger<RegulatoryNumberSequenceBackfillService>.Instance
-        );
+        var (service, store, _) = Create();
         // Simulates a real number already having been issued between the snapshot
         // and this seed step running - the backfill must never regress it.
         store.Seed("R-ER", 9999);
@@ -67,15 +75,22 @@ public class RegulatoryNumberSequenceBackfillServiceTests
     [Fact]
     public async Task SeedAllAsync_raises_a_key_below_the_seed_value()
     {
-        var store = new FakeRegulatoryNumberSequenceCounterPersistence();
-        var service = new RegulatoryNumberSequenceBackfillService(
-            store,
-            NullLogger<RegulatoryNumberSequenceBackfillService>.Instance
-        );
+        var (service, store, _) = Create();
         store.Seed("R-ER", 1);
 
         await service.SeedAllAsync(CancellationToken.None);
 
         (await store.GetCurrentMaxAsync("R-ER")).Should().Be(337);
+    }
+
+    [Fact]
+    public async Task SeedAllAsync_marks_the_shared_status_complete()
+    {
+        var (service, _, status) = Create();
+        status.IsComplete.Should().BeFalse("nothing has been seeded yet");
+
+        await service.SeedAllAsync(CancellationToken.None);
+
+        status.IsComplete.Should().BeTrue();
     }
 }

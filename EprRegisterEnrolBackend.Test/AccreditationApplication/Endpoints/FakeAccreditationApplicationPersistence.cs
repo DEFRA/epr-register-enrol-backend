@@ -82,9 +82,14 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             // GetByCaseManagementWorkItemIdAsync silently dropped RegistrationReference
             // on every read through this fake.
             RegistrationReference = src.RegistrationReference,
-            PreviousRegistrationNumbers = src.PreviousRegistrationNumbers,
+            // .ToList() genuinely copies the list - assigning the reference directly
+            // would alias the stored record's own list, contradicting this method's
+            // isolation contract (mutating a "copy" via .Add() would corrupt the
+            // persisted record directly, and every GetByIdAsync caller would share
+            // one non-thread-safe List instance).
+            PreviousRegistrationNumbers = src.PreviousRegistrationNumbers.ToList(),
             AccreditationReference = src.AccreditationReference,
-            PreviousAccreditationNumbers = src.PreviousAccreditationNumbers,
+            PreviousAccreditationNumbers = src.PreviousAccreditationNumbers.ToList(),
             SubmittedBy = src.SubmittedBy,
             WithdrawalReason = src.WithdrawalReason,
             DateSent = src.DateSent,

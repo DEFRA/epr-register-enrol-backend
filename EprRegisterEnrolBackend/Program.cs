@@ -107,7 +107,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // making ECS crash-loop a task that would otherwise serve its working endpoints fine.
     builder
         .Services.AddHealthChecks()
-        .AddCheck<RequiredConfigHealthCheck>("required-config", tags: ["ready"]);
+        .AddCheck<RequiredConfigHealthCheck>("required-config", tags: ["ready"])
+        // RA-448: keeps /health/ready unhealthy until the counter backfill completes,
+        // so the platform doesn't route real traffic to the number-generation
+        // endpoints before the 16 pools are seeded (see RegulatoryNumberSequenceBackfillService).
+        .AddCheck<RegulatoryNumberBackfillHealthCheck>(
+            "regulatory-number-backfill",
+            tags: ["ready"]
+        );
     // Swagger/OpenAPI
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
@@ -135,6 +142,10 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         RegulatoryNumberSequenceCounterPersistence
     >();
     builder.Services.AddSingleton<IRegulatoryNumberGenerator, RegulatoryNumberGenerator>();
+    builder.Services.AddSingleton<
+        IRegulatoryNumberBackfillStatus,
+        RegulatoryNumberBackfillStatus
+    >();
     // Launch blocker (AC4): must run in every environment, not just Development -
     // seeds the counters so the first number this endpoint issues doesn't collide
     // with one already in the real register. Idempotent, safe on every startup.
