@@ -64,6 +64,12 @@ public class AccreditationApplicationModel
 
     public string? RegistrationReference { get; set; }
 
+    // RA-448: regenerated registration numbers only - RegistrationReference may
+    // already be populated at Seed time from ReEx's own RegistrationNumber (see
+    // AccreditationApplicationEndpoints.Seed), which is not itself a "regenerate"
+    // and does not go through this list.
+    public List<string> PreviousRegistrationNumbers { get; set; } = [];
+
     public SubmittedByModel? SubmittedBy { get; set; }
 
     public string? WithdrawalReason { get; set; }

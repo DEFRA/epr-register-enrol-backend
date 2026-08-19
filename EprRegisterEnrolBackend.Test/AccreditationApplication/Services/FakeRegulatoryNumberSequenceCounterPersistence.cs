@@ -15,6 +15,8 @@ public class FakeRegulatoryNumberSequenceCounterPersistence
 
     public void Seed(string key, int currentMax) => _store[key] = currentMax;
 
+    public void Clear() => _store.Clear();
+
     public Task<int> IncrementAsync(string key, CancellationToken ct = default)
     {
         var next = _store.AddOrUpdate(key, 1, (_, current) => current + 1);

@@ -68,12 +68,21 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             RegistrationId = src.RegistrationId,
             IsExporter = src.IsExporter,
             MaterialType = src.MaterialType,
+            // RA-448: another pre-existing gap - GlassRecyclingProcess was silently
+            // dropped on every read through this fake, latent until a Glass-typed
+            // application needed it back (RegulatoryNumberGenerator requires it).
+            GlassRecyclingProcess = src.GlassRecyclingProcess,
             ApplicationStatus = src.ApplicationStatus,
             SourceReExAccreditationId = src.SourceReExAccreditationId,
             SourceYear = src.SourceYear,
             ApplicationReference = src.ApplicationReference,
             CaseManagementReference = src.CaseManagementReference,
             CaseManagementWorkItemId = src.CaseManagementWorkItemId,
+            // RA-448: was missing entirely before this feature - GetByIdAsync/
+            // GetByCaseManagementWorkItemIdAsync silently dropped RegistrationReference
+            // on every read through this fake.
+            RegistrationReference = src.RegistrationReference,
+            PreviousRegistrationNumbers = src.PreviousRegistrationNumbers,
             SubmittedBy = src.SubmittedBy,
             WithdrawalReason = src.WithdrawalReason,
             DateSent = src.DateSent,

@@ -85,10 +85,7 @@ public static class AccreditationApplicationEndpoints
             )
         );
         FrontendOnly(
-            group.MapPatch(
-                "{organisationId}/{applicationId}/bes-evidence",
-                PatchBesEvidenceSection
-            )
+            group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection)
         );
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/submit", Submit));
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/resubmit", Resubmit));
@@ -107,8 +104,22 @@ public static class AccreditationApplicationEndpoints
                     .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
+        // RA-448: regulator/caseworker actions, same CaseManagement caller identity as the
+        // two routes above - not something the operator-facing frontend calls (AC7).
+        group
+            .MapPost(
+                "{organisationId}/{applicationId}/registration-number",
+                GenerateOrUpdateRegistrationNumber
+            )
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/files", AddFile));
-        FrontendOnly(group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile));
+        FrontendOnly(
+            group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile)
+        );
         FrontendOnly(
             group.MapPost("{organisationId}/{applicationId}/files/initiate", InitiateUpload)
         );
@@ -140,6 +151,68 @@ public static class AccreditationApplicationEndpoints
                 "Application is Approved, Rejected or Withdrawn and can no longer be edited."
             )
             : null;
+
+    // RA-448 AC1/AC5/AC6/AC7/AC9. Nation/OrgId are caller-supplied (see
+    // GenerateOrUpdateRegulatoryNumberRequest) - this backend has no reliable
+    // real organisation data source to derive them from.
+    private static async Task<IResult> GenerateOrUpdateRegistrationNumber(
+        string organisationId,
+        string applicationId,
+        GenerateOrUpdateRegulatoryNumberRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IRegulatoryNumberGenerator generator,
+        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+
+        // AC5: idempotent - an existing number is returned unchanged unless the
+        // caller explicitly asks to regenerate, so a retry never burns a sequence
+        // value. Covers both a number this endpoint issued previously and one
+        // already populated from ReEx at Seed time (AccreditationApplicationEndpoints.Seed).
+        if (application.RegistrationReference is not null && !request.Regenerate)
+            return Results.Ok(application);
+
+        if (
+            request.Nation is not { } nationValue
+            || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
+            || request.OrgId is not { } orgId
+        )
+            return Results.BadRequest(
+                "Nation and OrgId are required to generate a registration number."
+            );
+
+        var newNumber = await generator.GenerateAsync(
+            NumberType.Registration,
+            nation,
+            application.IsExporter,
+            orgId,
+            application.MaterialType,
+            application.GlassRecyclingProcess,
+            DateTime.UtcNow.Year
+        );
+
+        // Regenerate: keep the prior number in the audit trail, never reuse/reissue it
+        // (AC5). A first-ever generate has no prior number to preserve.
+        if (application.RegistrationReference is { } previousNumber)
+            application.PreviousRegistrationNumbers.Add(previousNumber);
+
+        application.RegistrationReference = newNumber;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update registration number.")
+            : Results.Ok(updated);
+    }
 
     private static readonly System.Text.RegularExpressions.Regex FilenameIsSafe = new(
         @"^[^\x00-\x1f<>:""/\\|?*]+$"
@@ -1078,8 +1151,12 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
 
         if (
-            TryResolveScannedFile(request.FileUploadId, pendingUploadService, out var scannedFile)
-            is { } uploadError
+            TryResolveScannedFile(
+                request.FileUploadId,
+                pendingUploadService,
+                out var scannedFile
+            ) is
+            { } uploadError
         )
             return uploadError;
 
@@ -1623,8 +1700,12 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
 
         if (
-            TryResolveScannedFile(request.FileUploadId, pendingUploadService, out var scannedFile)
-            is { } uploadError
+            TryResolveScannedFile(
+                request.FileUploadId,
+                pendingUploadService,
+                out var scannedFile
+            ) is
+            { } uploadError
         )
             return uploadError;
 
@@ -1660,9 +1741,10 @@ public static class AccreditationApplicationEndpoints
             Filename = scannedFile.Filename,
             ContentType = contentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus = scannedFile.FileStatus == "complete"
-                ? FileScanStatus.Clean
-                : FileScanStatus.Infected,
+            ScanStatus =
+                scannedFile.FileStatus == "complete"
+                    ? FileScanStatus.Clean
+                    : FileScanStatus.Infected,
             DocumentType = request.DocumentType,
             S3Key = scannedFile.S3Key,
             S3Bucket = scannedFile.S3Bucket,

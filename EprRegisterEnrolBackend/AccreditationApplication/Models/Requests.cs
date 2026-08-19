@@ -147,6 +147,25 @@ public class StatusChangedFromCaseManagementRequest
     public DateTime OccurredAt { get; set; }
 }
 
+// RA-448: shared by both GenerateOrUpdateRegistrationNumber and
+// GenerateOrUpdateAccreditationNumber. Nation and OrgId are caller-supplied
+// rather than derived internally - this backend has no reliable real
+// organisation data source (see the RA-448 design notes). Regenerate is
+// ignored (treated as false) on a first-ever generate; it only changes
+// behaviour when a number already exists (AC5).
+//
+// Nation is a raw string, not the Nation enum, deliberately: Minimal API's
+// default JSON body binding throws (surfacing as an unhandled 500, not a
+// clean 400) when an enum-typed property can't parse the supplied string -
+// that would fail AC6's "unknown/invalid ... returns 400" requirement before
+// the request ever reaches the validator. Parsed explicitly after validation.
+public class GenerateOrUpdateRegulatoryNumberRequest
+{
+    public string? Nation { get; set; }
+    public int? OrgId { get; set; }
+    public bool Regenerate { get; set; }
+}
+
 // Submitter contact details captured on the query-declaration page. No completeness validation —
 // explicit in the ticket (RA-311 §6).
 public class ResubmitRequest
