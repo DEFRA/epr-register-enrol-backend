@@ -22,10 +22,17 @@ public class HttpReExApiAdapterTests
 {
     private static HttpReExApiAdapter BuildSut(
         string organisationJson,
-        string overseasSitesJson = "{}"
+        string overseasSitesJson = "{}",
+        HttpStatusCode organisationStatusCode = HttpStatusCode.OK,
+        HttpStatusCode overseasSitesStatusCode = HttpStatusCode.OK
     )
     {
-        var handler = new RoutingHandler(organisationJson, overseasSitesJson);
+        var handler = new RoutingHandler(
+            organisationJson,
+            overseasSitesJson,
+            organisationStatusCode,
+            overseasSitesStatusCode
+        );
         var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExConfig { BaseUrl = "http://localhost:5000/" });
         var reExClient = new ReExClient(httpClient, config, NullLogger<ReExClient>.Instance);
@@ -382,6 +389,279 @@ public class HttpReExApiAdapterTests
             );
     }
 
+    [Fact]
+    public async Task GetAccreditationAsync_OrganisationNotFound_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut(
+            "{}",
+            organisationStatusCode: HttpStatusCode.NotFound
+        );
+
+        var result = await sut.GetAccreditationAsync(
+            "does-not-exist",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_OrganisationServerError_ReturnsFailureWithUpstreamStatusCode()
+    {
+        var sut = BuildSut(
+            "{}",
+            organisationStatusCode: HttpStatusCode.InternalServerError
+        );
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_RegistrationIdNotFoundOnOrganisation_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-does-not-exist",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+        result.Error!.Message.Should().Contain("reg-does-not-exist");
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_NoAccreditationMatchesAccreditationId_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut(OrganisationJsonNoMatchingAccreditation);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_DuplicateAccreditationIds_ReturnsClientErrorFailure()
+    {
+        var sut = BuildSut(OrganisationJsonDuplicateAccreditations);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result
+            .StatusCode.Should()
+            .Be(500, because: "duplicate accreditation IDs are a data integrity violation");
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_UnparseableValidFrom_ReturnsFailure()
+    {
+        var sut = BuildSut(OrganisationJsonBadValidFrom);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_YearDoesNotMatchValidFrom_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2099
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterOverseasSitesCallFails_ReturnsFailureFromUpstream()
+    {
+        var sut = BuildSut(
+            OrganisationJson,
+            overseasSitesStatusCode: HttpStatusCode.InternalServerError
+        );
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_MapsBusinessPlanEntries()
+    {
+        var sut = BuildSut(OrganisationJsonWithBusinessPlan);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.BusinessPlan.Should().NotBeNull();
+        result.Value!.BusinessPlan!.NewInfrastructurePercent.Should().Be(10);
+        result.Value!.BusinessPlan!.PriceSupportPercent.Should().Be(20);
+        result.Value!.BusinessPlan!.BusinessCollectionsPercent.Should().Be(5);
+        result.Value!.BusinessPlan!.CommunicationsPercent.Should().Be(5);
+        result.Value!.BusinessPlan!.NewMarketsPercent.Should().Be(5);
+        result.Value!.BusinessPlan!.NewUsesPercent.Should().Be(5);
+        result.Value!.BusinessPlan!.OtherPercent.Should().Be(50);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_UnrecognisedBusinessPlanEntry_IsIgnored()
+    {
+        var sut = BuildSut(OrganisationJsonWithUnrecognisedBusinessPlanEntry);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.BusinessPlan!.NewInfrastructurePercent.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_BusinessPlanEntryWithNullUsageDescription_IsSkipped()
+    {
+        var sut = BuildSut(OrganisationJsonWithNullBusinessPlanFields);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.BusinessPlan!.NewInfrastructurePercent.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_NoPrnIssuance_MapsEmptyAuthorisersAndNullTonnageBand()
+    {
+        var sut = BuildSut(OrganisationJsonNoPrnIssuance);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.Prns!.PlannedTonnageBand.Should().BeNull();
+        result.Value!.Prns!.Authorisers.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_UnrecognisedTonnageBand_MapsToNull()
+    {
+        var sut = BuildSut(OrganisationJsonUnrecognisedTonnageBand);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.Prns!.PlannedTonnageBand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetLinkedDefraOrganisationAsync_Success_ReturnsLinkedOrgId()
+    {
+        var sut = BuildSut(OrganisationJsonWithLinkedDefraOrganisation);
+
+        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188");
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OrganisationId.Should().Be("6a2fcd74e16883c137d01188");
+        result.Value!.LinkedDefraOrganisationId.Should().Be("defra-org-123");
+    }
+
+    [Fact]
+    public async Task GetLinkedDefraOrganisationAsync_NoLinkedOrganisation_ReturnsSuccessWithNullId()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188");
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.LinkedDefraOrganisationId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetLinkedDefraOrganisationAsync_OrganisationNotFound_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.NotFound);
+
+        var result = await sut.GetLinkedDefraOrganisationAsync("does-not-exist");
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetLinkedDefraOrganisationAsync_OrganisationServerError_ReturnsFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.InternalServerError);
+
+        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188");
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
     // Realistic redacted ReEx organisation payload — companyDetails deliberately has no
     // registrationNumber key, matching the real API. Mirrors the fixture used in
     // ReExOrganisationFixtureTests.cs.
@@ -678,6 +958,432 @@ public class HttpReExApiAdapterTests
             }
             """;
 
+    private const string OrganisationJsonNoMatchingAccreditation = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": { "address": { "line1": "Reprocessor Site Road", "postcode": "HU7 7BX", "country": "UK", "town": "Exampleton" } },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": []
+        }
+        """;
+
+    private const string OrganisationJsonDuplicateAccreditations = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": { "address": { "line1": "Reprocessor Site Road", "postcode": "HU7 7BX", "country": "UK", "town": "Exampleton" } },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            },
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12046AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    private const string OrganisationJsonBadValidFrom = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": { "address": { "line1": "Reprocessor Site Road", "postcode": "HU7 7BX", "country": "UK", "town": "Exampleton" } },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "not-a-date",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    private const string OrganisationJsonWithBusinessPlan = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": { "address": { "line1": "Reprocessor Site Road", "postcode": "HU7 7BX", "country": "UK", "town": "Exampleton" } },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": {
+                "tonnageBand": "over_10000",
+                "signatories": [],
+                "incomeBusinessPlan": [
+                  { "usageDescription": "New reprocessing infrastructure and maintaining existing infrastructure", "percentIncomeSpent": 10 },
+                  { "usageDescription": "Price support for buying packaging waste or selling recycled packaging waste", "percentIncomeSpent": 20 },
+                  { "usageDescription": "Support for business collections", "percentIncomeSpent": 5 },
+                  { "usageDescription": "Communications, including information campaigns", "percentIncomeSpent": 5 },
+                  { "usageDescription": "Developing new markets for products made from recycled packaging waste", "percentIncomeSpent": 5 },
+                  { "usageDescription": "Developing new uses for recycled packaging waste", "percentIncomeSpent": 5 },
+                  { "usageDescription": "Activities or investment not covered by the other categories", "percentIncomeSpent": 50 }
+                ]
+              },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    private const string OrganisationJsonWithUnrecognisedBusinessPlanEntry = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": { "address": { "line1": "Reprocessor Site Road", "postcode": "HU7 7BX", "country": "UK", "town": "Exampleton" } },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": {
+                "tonnageBand": "over_10000",
+                "signatories": [],
+                "incomeBusinessPlan": [
+                  { "usageDescription": "Something ReEx invents later", "percentIncomeSpent": 99 }
+                ]
+              },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    private const string OrganisationJsonWithNullBusinessPlanFields = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": { "address": { "line1": "Reprocessor Site Road", "postcode": "HU7 7BX", "country": "UK", "town": "Exampleton" } },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": {
+                "tonnageBand": "over_10000",
+                "signatories": [],
+                "incomeBusinessPlan": [
+                  { "usageDescription": null, "percentIncomeSpent": 10 },
+                  { "usageDescription": "New reprocessing infrastructure and maintaining existing infrastructure", "percentIncomeSpent": null }
+                ]
+              },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    private const string OrganisationJsonNoPrnIssuance = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": { "address": { "line1": "Reprocessor Site Road", "postcode": "HU7 7BX", "country": "UK", "town": "Exampleton" } },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    private const string OrganisationJsonUnrecognisedTonnageBand = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": { "address": { "line1": "Reprocessor Site Road", "postcode": "HU7 7BX", "country": "UK", "town": "Exampleton" } },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "up_to_a_million", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    private const string OrganisationJsonWithLinkedDefraOrganisation = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "linkedDefraOrganisation": { "orgId": "defra-org-123" },
+          "registrations": [],
+          "accreditations": []
+        }
+        """;
+
     // Returns the organisation payload for the organisations endpoint, and an empty
     // overseas-sites dictionary for the overseas-sites endpoint the adapter calls for
     // exporter registrations — a single fixed body can't serve both shapes.
@@ -685,11 +1391,20 @@ public class HttpReExApiAdapterTests
     {
         private readonly string _organisationJson;
         private readonly string _overseasSitesJson;
+        private readonly HttpStatusCode _organisationStatusCode;
+        private readonly HttpStatusCode _overseasSitesStatusCode;
 
-        public RoutingHandler(string organisationJson, string overseasSitesJson = "{}")
+        public RoutingHandler(
+            string organisationJson,
+            string overseasSitesJson = "{}",
+            HttpStatusCode organisationStatusCode = HttpStatusCode.OK,
+            HttpStatusCode overseasSitesStatusCode = HttpStatusCode.OK
+        )
         {
             _organisationJson = organisationJson;
             _overseasSitesJson = overseasSitesJson;
+            _organisationStatusCode = organisationStatusCode;
+            _overseasSitesStatusCode = overseasSitesStatusCode;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -699,9 +1414,10 @@ public class HttpReExApiAdapterTests
         {
             var isOverseasSites = request.RequestUri!.AbsolutePath.Contains("overseas-sites");
             var body = isOverseasSites ? _overseasSitesJson : _organisationJson;
+            var statusCode = isOverseasSites ? _overseasSitesStatusCode : _organisationStatusCode;
 
             return Task.FromResult(
-                new HttpResponseMessage(HttpStatusCode.OK)
+                new HttpResponseMessage(statusCode)
                 {
                     Content = new StringContent(body, Encoding.UTF8, "application/json"),
                 }
