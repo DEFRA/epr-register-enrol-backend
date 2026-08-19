@@ -269,7 +269,9 @@ library.db
 .envrc
 .claude/
 
-# Beads / Dolt files (added by bd init)
+# Beads / Dolt files (added by bd init) - local task-tracking tool state,
+# not part of the product repo's shared history.
+.beads/
 .dolt/
 *.db
 .beads-credential-key
