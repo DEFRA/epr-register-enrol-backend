@@ -3,6 +3,7 @@ using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
@@ -127,6 +128,18 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IAccreditationApplicationPersistence,
         AccreditationApplicationPersistence
     >();
+
+    // RA-448: registration/accreditation number generation
+    builder.Services.AddSingleton<
+        IRegulatoryNumberSequenceCounterPersistence,
+        RegulatoryNumberSequenceCounterPersistence
+    >();
+    builder.Services.AddSingleton<IRegulatoryNumberGenerator, RegulatoryNumberGenerator>();
+    // Launch blocker (AC4): must run in every environment, not just Development -
+    // seeds the counters so the first number this endpoint issues doesn't collide
+    // with one already in the real register. Idempotent, safe on every startup.
+    builder.Services.AddHostedService<RegulatoryNumberSequenceBackfillService>();
+
     // CDP Uploader
     builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
     builder.Services.Configure<AppConfig>(builder.Configuration.GetSection("App"));
@@ -163,9 +176,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // FrontendAuth__* key.
     builder.Services.Configure<FrontendAuthConfig>(config =>
     {
-        config.SharedSecret = builder.Configuration.GetValue<string>(
-            "AUTH_SHARED_SECRET:FRONTEND"
-        );
+        config.SharedSecret = builder.Configuration.GetValue<string>("AUTH_SHARED_SECRET:FRONTEND");
     });
 
     builder
@@ -263,9 +274,7 @@ static WebApplication SetupApplication(WebApplication app)
         );
 
     var caseWorkingCfg = app
-        .Services.GetRequiredService<
-            Microsoft.Extensions.Options.IOptions<CaseWorkingApiConfig>
-        >()
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<CaseWorkingApiConfig>>()
         .Value;
     if (!caseWorkingCfg.UseStub && string.IsNullOrWhiteSpace(caseWorkingCfg.Url))
         startupLogger.LogWarning(
@@ -285,11 +294,12 @@ static WebApplication SetupApplication(WebApplication app)
         );
 
     var caseManagementAuthCfg = app
-        .Services.GetRequiredService<
-            Microsoft.Extensions.Options.IOptions<CaseManagementAuthConfig>
-        >()
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<CaseManagementAuthConfig>>()
         .Value;
-    if (!app.Environment.IsDevelopment() && string.IsNullOrWhiteSpace(caseManagementAuthCfg.SharedSecret))
+    if (
+        !app.Environment.IsDevelopment()
+        && string.IsNullOrWhiteSpace(caseManagementAuthCfg.SharedSecret)
+    )
         startupLogger.LogWarning(
             "AUTH_SHARED_SECRET__MANAGEMENT_BE is not configured — inbound CaseManagement-authenticated requests will be rejected."
         );
@@ -325,7 +335,7 @@ static WebApplication SetupApplication(WebApplication app)
             new HealthCheckOptions
             {
                 Predicate = check => check.Tags.Contains("ready"),
-                ResponseWriter = WriteReadinessResponse
+                ResponseWriter = WriteReadinessResponse,
             }
         )
         .WithMetadata(new HttpMethodMetadata(new[] { HttpMethods.Get, HttpMethods.Head }));
@@ -363,8 +373,8 @@ static Task WriteReadinessResponse(HttpContext context, HealthReport report)
         {
             name = entry.Key,
             status = entry.Value.Status.ToString(),
-            description = entry.Value.Exception is null ? entry.Value.Description : null
-        })
+            description = entry.Value.Exception is null ? entry.Value.Description : null,
+        }),
     };
     return context.Response.WriteAsync(JsonSerializer.Serialize(payload));
 }

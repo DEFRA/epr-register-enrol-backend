@@ -1,3 +1,5 @@
+using MongoDB.Bson.Serialization.Attributes;
+
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 // RA-448: one document per (NumberType x AgencyType) sequence pool - 16 total
@@ -7,6 +9,11 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 // doc's counter-scoping evidence.
 public class RegulatoryNumberSequenceCounter
 {
+    // Explicit [BsonId] (no IdGenerator - we always supply the composite key
+    // ourselves, never asking Mongo to generate one) maps this to _id, which
+    // gets Mongo's mandatory built-in unique index for free - see
+    // RegulatoryNumberSequenceCounterPersistence's constructor comment.
+    [BsonId]
     public required string Id { get; set; }
 
     public int CurrentMax { get; set; }

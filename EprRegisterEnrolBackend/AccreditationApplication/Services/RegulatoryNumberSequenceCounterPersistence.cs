@@ -14,19 +14,15 @@ public class RegulatoryNumberSequenceCounterPersistence
     )
         : base(connectionFactory, "regulatoryNumberSequences", loggerFactory)
     {
-        // RA-448: MongoService<T>.EnsureIndexes never actually calls
-        // Collection.Indexes.CreateMany (see Utils/Mongo/MongoService.cs) - that's
-        // dead code repo-wide, not something to fix here since it'd affect every
-        // other MongoService<T> subclass in production. This collection's unique
-        // index on Id is created explicitly instead, since AC2's counter-scoping
-        // guarantee genuinely depends on it (two racing upserts for the same new
-        // key must not create duplicate documents).
-        Collection.Indexes.CreateOne(
-            new CreateIndexModel<RegulatoryNumberSequenceCounter>(
-                Builders<RegulatoryNumberSequenceCounter>.IndexKeys.Ascending(c => c.Id),
-                new CreateIndexOptions { Unique = true }
-            )
-        );
+        // No custom index needed for AC2's uniqueness guarantee: RegulatoryNumberSequenceCounter.Id
+        // is annotated [BsonId], so it maps to Mongo's _id field, which already carries a mandatory
+        // built-in unique index on every collection - a custom CreateIndexModel would be redundant.
+        // (An earlier version of this constructor called Collection.Indexes.CreateOne explicitly,
+        // which made real, blocking Mongo network calls at DI-construction time - the one thing
+        // every other MongoService<T> subclass in this codebase avoids, since EnsureIndexes'
+        // Collection.Indexes.CreateMany call is dead code. That broke every WebApplicationFactory
+        // test that doesn't override this interface, since DI singletons here must stay
+        // network-safe to construct.)
     }
 
     public async Task<int> IncrementAsync(string key, CancellationToken ct = default)
