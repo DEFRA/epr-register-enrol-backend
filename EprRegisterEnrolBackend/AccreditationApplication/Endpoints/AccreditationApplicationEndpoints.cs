@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.AccreditationApplication.Validators;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
@@ -139,6 +140,41 @@ public static class AccreditationApplicationEndpoints
                 "Application is Approved, Rejected or Withdrawn and can no longer be edited."
             )
             : null;
+
+    private static readonly System.Text.RegularExpressions.Regex FilenameIsSafe = new(
+        @"^[^\x00-\x1f<>:""/\\|?*]+$"
+    );
+
+    // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
+    // from the server-held PendingUploadService record, populated only by the real
+    // CDP-uploader webhook callback — never trusted verbatim from the client request body.
+    private static IResult? TryResolveScannedFile(
+        string fileUploadId,
+        IPendingUploadService pendingUploadService,
+        out CdpCallbackFile scannedFile
+    )
+    {
+        var status = pendingUploadService.GetStatus(fileUploadId);
+        var file = status.Form?.File;
+        if (
+            status.ProcessingStatus != "validated"
+            || file is null
+            || string.IsNullOrWhiteSpace(file.FileId)
+            || string.IsNullOrWhiteSpace(file.Filename)
+            || file.Filename.Length > 255
+            || !FilenameIsSafe.IsMatch(file.Filename)
+            || string.IsNullOrWhiteSpace(file.S3Key)
+        )
+        {
+            scannedFile = null!;
+            return Results.UnprocessableEntity(
+                "No completed, scanned upload was found for the supplied FileUploadId."
+            );
+        }
+
+        scannedFile = file;
+        return null;
+    }
 
     private static async Task<IResult> Seed(
         string organisationId,
@@ -1033,12 +1069,19 @@ public static class AccreditationApplicationEndpoints
         int siteId,
         AddBesEvidenceFileRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<AddBesEvidenceFileRequest> validator
+        IValidator<AddBesEvidenceFileRequest> validator,
+        IPendingUploadService pendingUploadService
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
+
+        if (
+            TryResolveScannedFile(request.FileUploadId, pendingUploadService, out var scannedFile)
+            is { } uploadError
+        )
+            return uploadError;
 
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -1060,18 +1103,20 @@ public static class AccreditationApplicationEndpoints
         if (site is null)
             return Results.NotFound();
 
+        var scanStatus = scannedFile.FileStatus == "complete" ? "Clean" : "Infected";
+
         site.BesEvidence ??= new BesEvidenceModel();
         site.BesEvidence.BesEvidenceUploads.Add(
             new BesEvidenceFileModel
             {
-                FileId = request.FileId,
-                Filename = request.Filename,
-                ContentType = request.ContentType,
-                ScanStatus = request.ScanStatus,
+                FileId = scannedFile.FileId,
+                Filename = scannedFile.Filename,
+                ContentType = scannedFile.ContentType ?? scannedFile.DetectedContentType,
+                ScanStatus = scanStatus,
                 BesEvidenceValidFromDate = request.BesEvidenceValidFromDate,
                 BesEvidenceExpiryDate = request.BesEvidenceExpiryDate,
-                S3Key = request.S3Key,
-                S3Bucket = request.S3Bucket,
+                S3Key = scannedFile.S3Key,
+                S3Bucket = scannedFile.S3Bucket,
             }
         );
 
@@ -1569,12 +1614,26 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         FileUploadRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<FileUploadRequest> validator
+        IValidator<FileUploadRequest> validator,
+        IPendingUploadService pendingUploadService
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
+
+        if (
+            TryResolveScannedFile(request.FileUploadId, pendingUploadService, out var scannedFile)
+            is { } uploadError
+        )
+            return uploadError;
+
+        var contentType = scannedFile.ContentType ?? scannedFile.DetectedContentType;
+        if (
+            contentType is null
+            || !FileUploadRequestValidator.PermittedContentTypes.Contains(contentType)
+        )
+            return Results.UnprocessableEntity("Content type is not permitted.");
 
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -1597,14 +1656,16 @@ public static class AccreditationApplicationEndpoints
 
         var file = new AccreditationApplicationFile
         {
-            FileId = request.FileId,
-            Filename = request.Filename,
-            ContentType = request.ContentType,
+            FileId = scannedFile.FileId,
+            Filename = scannedFile.Filename,
+            ContentType = contentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus = request.ScanStatus ?? FileScanStatus.Pending,
+            ScanStatus = scannedFile.FileStatus == "complete"
+                ? FileScanStatus.Clean
+                : FileScanStatus.Infected,
             DocumentType = request.DocumentType,
-            S3Key = request.S3Key,
-            S3Bucket = request.S3Bucket,
+            S3Key = scannedFile.S3Key,
+            S3Bucket = scannedFile.S3Bucket,
         };
 
         application.SamplingPlan.Files.Add(file);
