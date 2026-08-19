@@ -4,9 +4,12 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.CdpUploader.Models;
+using EprRegisterEnrolBackend.CdpUploader.Services;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using NSubstitute;
 using NSubstitute.ClearExtensions;
@@ -43,6 +46,64 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
+    }
+
+    // Simulates a real CDP-uploader webhook callback having already completed for
+    // fileUploadId, so AddBesEvidenceFile can resolve it via the real IPendingUploadService
+    // singleton instead of trusting client-supplied file fields.
+    private string SeedValidatedUpload(
+        string fileId,
+        string filename,
+        string s3Key,
+        string? contentType = "application/pdf",
+        string? s3Bucket = "test-bucket",
+        string fileStatus = "complete"
+    )
+    {
+        var fileUploadId = $"upload-{fileId}";
+        var pendingUploadService = _factory.Services.GetRequiredService<IPendingUploadService>();
+        pendingUploadService.Create(fileUploadId, "https://cdp.example/status");
+        pendingUploadService.Complete(
+            fileUploadId,
+            new CdpCallbackFile
+            {
+                FileId = fileId,
+                Filename = filename,
+                FileStatus = fileStatus,
+                ContentType = contentType,
+                S3Key = s3Key,
+                S3Bucket = s3Bucket,
+            }
+        );
+        return fileUploadId;
+    }
+
+    // Builds a standalone, pre-seeded IPendingUploadService for use with
+    // CreateClientWithFailingUpdate, whose swapped-in HttpClient runs against a separate
+    // WebApplicationFactory host (and therefore a separate IPendingUploadService singleton
+    // instance) from _factory/_client.
+    private static (string FileUploadId, IPendingUploadService Service) CreateSeededPendingUploadService(
+        string fileId,
+        string filename,
+        string s3Key
+    )
+    {
+        var fileUploadId = $"upload-{fileId}";
+        var service = new PendingUploadService(NullLogger<PendingUploadService>.Instance);
+        service.Create(fileUploadId, "https://cdp.example/status");
+        service.Complete(
+            fileUploadId,
+            new CdpCallbackFile
+            {
+                FileId = fileId,
+                Filename = filename,
+                FileStatus = "complete",
+                ContentType = "application/pdf",
+                S3Key = s3Key,
+                S3Bucket = "test-bucket",
+            }
+        );
+        return (fileUploadId, service);
     }
 
     private AccreditationApplicationModel SeedApplication(
@@ -87,7 +148,10 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
     // to exercise the "updated is null -> Results.Problem" branch that FakeAccreditationApplicationPersistence
     // cannot otherwise produce (its UpdateAsync only returns null for an application that was never
     // seeded, in which case GetByIdAsync would also have returned null, producing a 404 instead).
-    private HttpClient CreateClientWithFailingUpdate(AccreditationApplicationModel application)
+    private HttpClient CreateClientWithFailingUpdate(
+        AccreditationApplicationModel application,
+        IPendingUploadService? pendingUploadService = null
+    )
     {
         var brokenPersistence = Substitute.For<IAccreditationApplicationPersistence>();
         brokenPersistence
@@ -99,8 +163,11 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
 
         var factoryWithBrokenPersistence = _factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
-                services.AddSingleton(brokenPersistence)
-            )
+            {
+                services.AddSingleton(brokenPersistence);
+                if (pendingUploadService is not null)
+                    services.AddSingleton(pendingUploadService);
+            })
         );
         return factoryWithBrokenPersistence.CreateClient();
     }
@@ -111,13 +178,13 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
     public async Task AddBesEvidenceFile_ApplicationNotFound_Returns404()
     {
         Reset();
+        var fileUploadId = SeedValidatedUpload(
+            "bes-file-404",
+            "evidence.pdf",
+            "bes-evidence/bes-file-404"
+        );
 
-        var request = new AddBesEvidenceFileRequest
-        {
-            FileId = "bes-file-404",
-            Filename = "evidence.pdf",
-            S3Key = "bes-evidence/bes-file-404",
-        };
+        var request = new AddBesEvidenceFileRequest { FileUploadId = fileUploadId };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{ObjectId.GenerateNewId()}/overseas-sites/1/bes-evidence/files",
             request,
@@ -132,13 +199,13 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
     {
         Reset();
         var app = SeedApplicationWithOverseasSite(siteId: 1);
+        var fileUploadId = SeedValidatedUpload(
+            "bes-file-405",
+            "evidence.pdf",
+            "bes-evidence/bes-file-405"
+        );
 
-        var request = new AddBesEvidenceFileRequest
-        {
-            FileId = "bes-file-405",
-            Filename = "evidence.pdf",
-            S3Key = "bes-evidence/bes-file-405",
-        };
+        var request = new AddBesEvidenceFileRequest { FileUploadId = fileUploadId };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/999/bes-evidence/files",
             request,
@@ -166,12 +233,8 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
             ],
         };
 
-        var request = new AddBesEvidenceFileRequest
-        {
-            FileId = "bes-file-new",
-            Filename = "new.pdf",
-            S3Key = "bes-evidence/bes-file-new",
-        };
+        var fileUploadId = SeedValidatedUpload("bes-file-new", "new.pdf", "bes-evidence/bes-file-new");
+        var request = new AddBesEvidenceFileRequest { FileUploadId = fileUploadId };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
             request,
@@ -194,14 +257,14 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
     {
         Reset();
         var app = SeedApplicationWithOverseasSite();
-        using var client = CreateClientWithFailingUpdate(app);
+        var (fileUploadId, pendingUploadService) = CreateSeededPendingUploadService(
+            "bes-file-fail",
+            "evidence.pdf",
+            "bes-evidence/bes-file-fail"
+        );
+        using var client = CreateClientWithFailingUpdate(app, pendingUploadService);
 
-        var request = new AddBesEvidenceFileRequest
-        {
-            FileId = "bes-file-fail",
-            Filename = "evidence.pdf",
-            S3Key = "bes-evidence/bes-file-fail",
-        };
+        var request = new AddBesEvidenceFileRequest { FileUploadId = fileUploadId };
         var response = await client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
             request,

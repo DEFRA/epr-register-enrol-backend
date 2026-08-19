@@ -4,7 +4,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.CdpUploader.Models;
+using EprRegisterEnrolBackend.CdpUploader.Services;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using NSubstitute;
 using NSubstitute.ClearExtensions;
@@ -40,6 +42,36 @@ public class AccreditationApplicationEndpointsSitesFilesTests
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
+    }
+
+    // Simulates a real CDP-uploader webhook callback having already completed for
+    // fileUploadId, so AddFile can resolve it via the real IPendingUploadService singleton
+    // instead of trusting client-supplied file fields.
+    private string SeedValidatedUpload(
+        string fileId,
+        string filename,
+        string s3Key,
+        string? contentType = "application/pdf",
+        string? s3Bucket = "test-bucket",
+        string fileStatus = "complete"
+    )
+    {
+        var fileUploadId = $"upload-{fileId}";
+        var pendingUploadService = _factory.Services.GetRequiredService<IPendingUploadService>();
+        pendingUploadService.Create(fileUploadId, "https://cdp.example/status");
+        pendingUploadService.Complete(
+            fileUploadId,
+            new CdpCallbackFile
+            {
+                FileId = fileId,
+                Filename = filename,
+                FileStatus = fileStatus,
+                ContentType = contentType,
+                S3Key = s3Key,
+                S3Bucket = s3Bucket,
+            }
+        );
+        return fileUploadId;
     }
 
     private AccreditationApplicationModel SeedApplication(
@@ -398,14 +430,16 @@ public class AccreditationApplicationEndpointsSitesFilesTests
     public async Task AddFile_ApplicationNotFound_Returns404()
     {
         Reset();
+        var fileUploadId = SeedValidatedUpload(
+            "file-missing-app",
+            "plan.pdf",
+            "sampling-plans/file-missing-app"
+        );
 
         var request = new FileUploadRequest
         {
-            FileId = "file-missing-app",
-            Filename = "plan.pdf",
-            ContentType = "application/pdf",
+            FileUploadId = fileUploadId,
             DocumentType = AccreditationFileDocumentType.SamplingPlan,
-            S3Key = "sampling-plans/file-missing-app",
         };
         var response = await _client.PostAsJsonAsync(
             "/api/v1/accreditation-applications/org-123/nonexistent-id/files",
@@ -421,15 +455,17 @@ public class AccreditationApplicationEndpointsSitesFilesTests
     {
         Reset();
         var app = SeedApplication();
+        var fileUploadId = SeedValidatedUpload(
+            "file-update-fails",
+            "plan.pdf",
+            "sampling-plans/file-update-fails"
+        );
         _factory.FakePersistence.FailNextUpdate = true;
 
         var request = new FileUploadRequest
         {
-            FileId = "file-update-fails",
-            Filename = "plan.pdf",
-            ContentType = "application/pdf",
+            FileUploadId = fileUploadId,
             DocumentType = AccreditationFileDocumentType.SamplingPlan,
-            S3Key = "sampling-plans/file-update-fails",
         };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
