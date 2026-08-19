@@ -116,6 +116,16 @@ public static class AccreditationApplicationEndpoints
                     .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
+        group
+            .MapPost(
+                "{organisationId}/{applicationId}/accreditation-number",
+                GenerateOrUpdateAccreditationNumber
+            )
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/files", AddFile));
         FrontendOnly(
             group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile)
@@ -212,6 +222,99 @@ public static class AccreditationApplicationEndpoints
         return updated is null
             ? Results.Problem("Failed to update registration number.")
             : Results.Ok(updated);
+    }
+
+    // RA-448 AC1/AC5/AC6/AC7/AC9. Regenerate here is NOT the same mechanism as
+    // registration's: "reapply for accreditation" increments only the existing
+    // number's YY segment in place - it never draws from the atomic counter and
+    // never mutates regulatoryNumberSequences. A first-ever generate still goes
+    // through the normal counter-backed generator, same as registration.
+    private static async Task<IResult> GenerateOrUpdateAccreditationNumber(
+        string organisationId,
+        string applicationId,
+        GenerateOrUpdateRegulatoryNumberRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IRegulatoryNumberGenerator generator,
+        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+
+        // AC9: registration precedes and is independent of accreditation - an
+        // accreditation number is never issued with nothing to accredit against.
+        if (application.RegistrationReference is null)
+            return Results.Conflict(
+                "Application has no registration number yet; an accreditation number cannot be issued."
+            );
+
+        // AC5: idempotent - an existing number is returned unchanged unless the
+        // caller explicitly asks to regenerate.
+        if (application.AccreditationReference is not null && !request.Regenerate)
+            return Results.Ok(application);
+
+        string newNumber;
+        if (application.AccreditationReference is { } numberToReapply && request.Regenerate)
+        {
+            // "Reapply for accreditation": pure string transform, no counter draw.
+            newNumber = IncrementYear(numberToReapply);
+        }
+        else
+        {
+            if (
+                request.Nation is not { } nationValue
+                || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
+                || request.OrgId is not { } orgId
+            )
+                return Results.BadRequest(
+                    "Nation and OrgId are required to generate an accreditation number."
+                );
+
+            newNumber = await generator.GenerateAsync(
+                NumberType.Accreditation,
+                nation,
+                application.IsExporter,
+                orgId,
+                application.MaterialType,
+                application.GlassRecyclingProcess,
+                DateTime.UtcNow.Year
+            );
+        }
+
+        // Regenerate (either mechanism): keep the prior number in the audit trail,
+        // never reuse/reissue it (AC5). A first-ever generate has no prior number.
+        if (application.AccreditationReference is { } previousNumber)
+            application.PreviousAccreditationNumbers.Add(previousNumber);
+
+        application.AccreditationReference = newNumber;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update accreditation number.")
+            : Results.Ok(updated);
+    }
+
+    // "Reapply for accreditation" (AC5, RA-448): increments only the YY segment
+    // (index 1-2 of the fixed {R|A}{YY}{AgencyType}{OrgID}{Sequence}{Material}
+    // format) against whatever YY the number currently holds - not the calendar
+    // year at reapply time - leaving every other segment byte-identical.
+    private static string IncrementYear(string existingNumber)
+    {
+        var currentYear = int.Parse(existingNumber.Substring(1, 2));
+        var nextYear = (currentYear + 1) % 100;
+        return string.Concat(
+            existingNumber.AsSpan(0, 1),
+            nextYear.ToString("D2"),
+            existingNumber.AsSpan(3)
+        );
     }
 
     private static readonly System.Text.RegularExpressions.Regex FilenameIsSafe = new(

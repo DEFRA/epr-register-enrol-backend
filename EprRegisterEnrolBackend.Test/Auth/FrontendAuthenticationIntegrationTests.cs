@@ -146,11 +146,15 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
             .Where(e =>
                 e.RoutePattern.RawText != "api/v1/accreditation-applications/files/upload-completed"
             )
-            // RA-448: regulator/caseworker action, same CaseManagement scheme as the two
+            // RA-448: regulator/caseworker actions, same CaseManagement scheme as the two
             // case-management/* routes above (AC7) - not something the operator frontend calls.
             .Where(e =>
                 e.RoutePattern.RawText
                 != "api/v1/accreditation-applications/{organisationId}/{applicationId}/registration-number"
+            )
+            .Where(e =>
+                e.RoutePattern.RawText
+                != "api/v1/accreditation-applications/{organisationId}/{applicationId}/accreditation-number"
             )
             .ToList();
 

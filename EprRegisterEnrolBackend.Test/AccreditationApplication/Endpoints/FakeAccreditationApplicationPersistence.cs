@@ -83,6 +83,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             // on every read through this fake.
             RegistrationReference = src.RegistrationReference,
             PreviousRegistrationNumbers = src.PreviousRegistrationNumbers,
+            AccreditationReference = src.AccreditationReference,
+            PreviousAccreditationNumbers = src.PreviousAccreditationNumbers,
             SubmittedBy = src.SubmittedBy,
             WithdrawalReason = src.WithdrawalReason,
             DateSent = src.DateSent,

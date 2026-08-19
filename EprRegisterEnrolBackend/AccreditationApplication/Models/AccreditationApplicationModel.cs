@@ -70,6 +70,15 @@ public class AccreditationApplicationModel
     // and does not go through this list.
     public List<string> PreviousRegistrationNumbers { get; set; } = [];
 
+    // RA-448: no ReEx-sourced equivalent exists for accreditation (unlike
+    // RegistrationReference) - always issued by this backend's own endpoint.
+    public string? AccreditationReference { get; set; }
+
+    // RA-448: "reapply for accreditation" regenerate - a YY-increment string
+    // transform, kept distinct from PreviousRegistrationNumbers since a reader
+    // later needs to tell at a glance which history belongs to which number.
+    public List<string> PreviousAccreditationNumbers { get; set; } = [];
+
     public SubmittedByModel? SubmittedBy { get; set; }
 
     public string? WithdrawalReason { get; set; }
