@@ -65,7 +65,12 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
 
         var response = await _client.PostAsJsonAsync(
             RegistrationNumberUrl(app),
-            new { nation = "England", orgId = 500027 }
+            new
+            {
+                nation = "England",
+                orgId = 500027,
+                year = 2026,
+            }
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -107,6 +112,7 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
             {
                 nation = "England",
                 orgId = 500027,
+                year = 2026,
                 regenerate = true,
             }
         );
@@ -190,7 +196,12 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
 
         var response = await _client.PostAsJsonAsync(
             RegistrationNumberUrl(app),
-            new { nation = "Scotland", orgId = 7 }
+            new
+            {
+                nation = "Scotland",
+                orgId = 7,
+                year = 2026,
+            }
         );
 
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
@@ -211,7 +222,12 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
 
         var response = await _client.PostAsJsonAsync(
             RegistrationNumberUrl(app),
-            new { nation = "England", orgId = 1 }
+            new
+            {
+                nation = "England",
+                orgId = 1,
+                year = 2026,
+            }
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -219,5 +235,39 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
             JsonOptions
         );
         body!.RegistrationReference.Should().EndWith("GR");
+    }
+
+    [Fact]
+    public async Task GenerateOrUpdateRegistrationNumber_missing_year_returns_400_without_touching_the_counter()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.PostAsJsonAsync(
+            RegistrationNumberUrl(app),
+            new { nation = "England", orgId = 500027 }
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _factory.FakeCounters.GetCurrentMaxAsync("R-ER")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GenerateOrUpdateRegistrationNumber_implausible_year_returns_400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.PostAsJsonAsync(
+            RegistrationNumberUrl(app),
+            new
+            {
+                nation = "England",
+                orgId = 500027,
+                year = 2126,
+            }
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 }

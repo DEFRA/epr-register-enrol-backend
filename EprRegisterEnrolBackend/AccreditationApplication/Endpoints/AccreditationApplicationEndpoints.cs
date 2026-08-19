@@ -162,9 +162,11 @@ public static class AccreditationApplicationEndpoints
             )
             : null;
 
-    // RA-448 AC1/AC5/AC6/AC7/AC9. Nation/OrgId are caller-supplied (see
-    // GenerateOrUpdateRegulatoryNumberRequest) - this backend has no reliable
-    // real organisation data source to derive them from.
+    // RA-448 AC1/AC5/AC6/AC7/AC9. Nation/OrgId/Year are all caller-supplied (see
+    // GenerateOrUpdateRegulatoryNumberRequest) - Nation/OrgId because this
+    // backend has no reliable real organisation data source to derive them
+    // from, and Year per explicit product direction (2026-08-19): no
+    // assumption about the year may be made on a first-ever generate.
     private static async Task<IResult> GenerateOrUpdateRegistrationNumber(
         string organisationId,
         string applicationId,
@@ -195,9 +197,10 @@ public static class AccreditationApplicationEndpoints
             request.Nation is not { } nationValue
             || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
             || request.OrgId is not { } orgId
+            || request.Year is not { } year
         )
             return Results.BadRequest(
-                "Nation and OrgId are required to generate a registration number."
+                "Nation, OrgId and Year are required to generate a registration number."
             );
 
         var newNumber = await generator.GenerateAsync(
@@ -207,7 +210,7 @@ public static class AccreditationApplicationEndpoints
             orgId,
             application.MaterialType,
             application.GlassRecyclingProcess,
-            DateTime.UtcNow.Year
+            year
         );
 
         // Regenerate: keep the prior number in the audit trail, never reuse/reissue it
@@ -272,9 +275,10 @@ public static class AccreditationApplicationEndpoints
                 request.Nation is not { } nationValue
                 || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
                 || request.OrgId is not { } orgId
+                || request.Year is not { } year
             )
                 return Results.BadRequest(
-                    "Nation and OrgId are required to generate an accreditation number."
+                    "Nation, OrgId and Year are required to generate an accreditation number."
                 );
 
             newNumber = await generator.GenerateAsync(
@@ -284,7 +288,7 @@ public static class AccreditationApplicationEndpoints
                 orgId,
                 application.MaterialType,
                 application.GlassRecyclingProcess,
-                DateTime.UtcNow.Year
+                year
             );
         }
 

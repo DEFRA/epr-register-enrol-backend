@@ -65,6 +65,7 @@ public class RegenerateMechanismContrastTests : IClassFixture<AccreditationAppli
             {
                 nation = "England",
                 orgId = 500027,
+                year = 2026,
                 regenerate = true,
             }
         );

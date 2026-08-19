@@ -148,11 +148,17 @@ public class StatusChangedFromCaseManagementRequest
 }
 
 // RA-448: shared by both GenerateOrUpdateRegistrationNumber and
-// GenerateOrUpdateAccreditationNumber. Nation and OrgId are caller-supplied
-// rather than derived internally - this backend has no reliable real
-// organisation data source (see the RA-448 design notes). Regenerate is
-// ignored (treated as false) on a first-ever generate; it only changes
-// behaviour when a number already exists (AC5).
+// GenerateOrUpdateAccreditationNumber. Nation, OrgId and Year are all
+// caller-supplied rather than derived/assumed internally - this backend has
+// no reliable real organisation data source for Nation/OrgId (see the
+// RA-448 design notes), and per explicit product direction (2026-08-19) no
+// assumption about the year (calendar year at generation time or otherwise)
+// may be made either - the caller must always pass it. The one exception is
+// accreditation's "reapply" regenerate, which never takes a Year at all -
+// it increments whatever YY the existing number already holds, with no
+// calendar dependency. Regenerate is ignored (treated as false) on a
+// first-ever generate; it only changes behaviour when a number already
+// exists (AC5).
 //
 // Nation is a raw string, not the Nation enum, deliberately: Minimal API's
 // default JSON body binding throws (surfacing as an unhandled 500, not a
@@ -163,6 +169,7 @@ public class GenerateOrUpdateRegulatoryNumberRequest
 {
     public string? Nation { get; set; }
     public int? OrgId { get; set; }
+    public int? Year { get; set; }
     public bool Regenerate { get; set; }
 }
 

@@ -68,7 +68,12 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(app),
-            new { nation = "England", orgId = 500027 }
+            new
+            {
+                nation = "England",
+                orgId = 500027,
+                year = 2026,
+            }
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -166,6 +171,7 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
             {
                 nation = "England",
                 orgId = 500027,
+                year = 2026,
                 regenerate = true,
             }
         );
@@ -192,12 +198,22 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         // effect whatsoever on A-ER's own counter (AC2: separate counters).
         await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/{regApp.OrganisationId}/{regApp.ApplicationId}/registration-number",
-            new { nation = "England", orgId = 1 }
+            new
+            {
+                nation = "England",
+                orgId = 1,
+                year = 2026,
+            }
         );
 
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(accApp),
-            new { nation = "England", orgId = 3 }
+            new
+            {
+                nation = "England",
+                orgId = 3,
+                year = 2026,
+            }
         );
 
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
@@ -247,6 +263,21 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         var app = SeedApplication();
 
         var response = await _client.PostAsJsonAsync(AccreditationNumberUrl(app), new { });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GenerateOrUpdateAccreditationNumber_missing_year_on_first_generate_returns_400_without_touching_the_counter()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.PostAsJsonAsync(
+            AccreditationNumberUrl(app),
+            new { nation = "England", orgId = 500027 }
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
