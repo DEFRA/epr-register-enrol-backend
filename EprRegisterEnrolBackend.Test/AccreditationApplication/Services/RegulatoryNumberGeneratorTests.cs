@@ -195,4 +195,34 @@ public class RegulatoryNumberGeneratorTests
         sequences.Should().OnlyHaveUniqueItems();
         sequences.Should().HaveCount(50);
     }
+
+    [Fact]
+    public async Task GenerateAsync_never_returns_a_duplicate_sequence_under_concurrent_load_for_accreditation()
+    {
+        // AC3 explicitly calls for this once for registration (above) and once for
+        // accreditation - separate counters (AC2), so uniqueness must hold within
+        // each type independently, not just across the combined set.
+        var (generator, _) = Create();
+
+        var tasks = Enumerable
+            .Range(0, 50)
+            .Select(i =>
+                generator.GenerateAsync(
+                    NumberType.Accreditation,
+                    Nation.England,
+                    isExporter: false,
+                    orgId: i,
+                    MaterialType.Wood,
+                    glassRecyclingProcess: null,
+                    year: 2026
+                )
+            );
+
+        var numbers = await Task.WhenAll(tasks);
+
+        var sequences = numbers.Select(n => n[11..15]).ToList();
+        sequences.Should().OnlyHaveUniqueItems();
+        sequences.Should().HaveCount(50);
+        numbers.Should().OnlyContain(n => n.StartsWith("A26ER"));
+    }
 }
