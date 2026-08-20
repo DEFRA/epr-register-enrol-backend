@@ -70,12 +70,14 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
                 nation = "England",
                 orgId = 500027,
                 year = 2026,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.RegistrationReference.Should().Be("R26ER5000270001WO");
     }
@@ -88,15 +90,24 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
 
         var response = await _client.PostAsJsonAsync(
             RegistrationNumberUrl(app),
-            new { nation = "England", orgId = 999999 }
+            new { nation = "England", orgId = 999999 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.RegistrationReference.Should().Be("R26ER5000270001WO");
-        (await _factory.FakeCounters.GetCurrentMaxAsync("R-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "R-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -114,19 +125,28 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
                 orgId = 500027,
                 year = 2026,
                 regenerate = true,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.RegistrationReference.Should().Be("R26ER5000270002WO");
         body.PreviousRegistrationNumbers.Should()
             .ContainSingle()
             .Which.Should()
             .Be("R26ER5000270001WO");
-        (await _factory.FakeCounters.GetCurrentMaxAsync("R-ER")).Should().Be(2);
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "R-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .Be(2);
     }
 
     [Fact]
@@ -136,7 +156,8 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-1/{ObjectId.GenerateNewId()}/registration-number",
-            new { nation = "England", orgId = 1 }
+            new { nation = "England", orgId = 1 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -155,11 +176,19 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
 
         var response = await _client.PostAsJsonAsync(
             RegistrationNumberUrl(app),
-            new { nation = "England", orgId = 500027 }
+            new { nation = "England", orgId = 500027 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await _factory.FakeCounters.GetCurrentMaxAsync("R-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "R-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -168,10 +197,21 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
         Reset();
         var app = SeedApplication();
 
-        var response = await _client.PostAsJsonAsync(RegistrationNumberUrl(app), new { });
+        var response = await _client.PostAsJsonAsync(
+            RegistrationNumberUrl(app),
+            new { },
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await _factory.FakeCounters.GetCurrentMaxAsync("R-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "R-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -182,7 +222,8 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
 
         var response = await _client.PostAsJsonAsync(
             RegistrationNumberUrl(app),
-            new { nation = "Atlantis", orgId = 1 }
+            new { nation = "Atlantis", orgId = 1 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -201,11 +242,13 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
                 nation = "Scotland",
                 orgId = 7,
                 year = 2026,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.RegistrationReference.Should().StartWith("R26SX");
     }
@@ -227,12 +270,14 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
                 nation = "England",
                 orgId = 1,
                 year = 2026,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.RegistrationReference.Should().EndWith("GR");
     }
@@ -245,11 +290,19 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
 
         var response = await _client.PostAsJsonAsync(
             RegistrationNumberUrl(app),
-            new { nation = "England", orgId = 500027 }
+            new { nation = "England", orgId = 500027 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await _factory.FakeCounters.GetCurrentMaxAsync("R-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "R-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -265,7 +318,8 @@ public class RegulatoryNumberEndpointsTests : IClassFixture<AccreditationApplica
                 nation = "England",
                 orgId = 500027,
                 year = 2126,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);

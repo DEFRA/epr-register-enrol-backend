@@ -67,31 +67,49 @@ public class RegenerateMechanismContrastTests : IClassFixture<AccreditationAppli
                 orgId = 500027,
                 year = 2026,
                 regenerate = true,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
         var accreditationResponse = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
-            new { regenerate = true }
+            new { regenerate = true },
+            TestContext.Current.CancellationToken
         );
 
         var registrationBody =
             await registrationResponse.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-                JsonOptions
+                JsonOptions,
+                TestContext.Current.CancellationToken
             );
         var accreditationBody =
             await accreditationResponse.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-                JsonOptions
+                JsonOptions,
+                TestContext.Current.CancellationToken
             );
 
         // Registration regenerate: brand-new sequence drawn from the counter, so the
         // sequence digits (index 11-14) change and R-ER's CurrentMax advances.
         registrationBody!.RegistrationReference.Should().Be("R26ER5000270002WO");
-        (await _factory.FakeCounters.GetCurrentMaxAsync("R-ER")).Should().Be(2);
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "R-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .Be(2);
 
         // Accreditation regenerate: only the YY segment (index 1-2) changes, every
         // other segment - including the sequence - is byte-identical, and A-ER's
         // CurrentMax is untouched (no counter draw at all).
         accreditationBody!.AccreditationReference.Should().Be("A27ER5000270063WO");
-        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 }

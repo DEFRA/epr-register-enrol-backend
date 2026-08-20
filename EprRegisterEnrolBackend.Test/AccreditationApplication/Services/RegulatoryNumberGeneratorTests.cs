@@ -33,13 +33,17 @@ public class RegulatoryNumberGeneratorTests
         var (generator, _) = Create();
 
         var number = await generator.GenerateAsync(
-            NumberType.Registration,
-            nation,
-            isExporter,
-            orgId: 500027,
-            MaterialType.Wood,
-            glassRecyclingProcess: null,
-            year: 2026
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Registration,
+                Nation = nation,
+                IsExporter = isExporter,
+                OrgId = 500027,
+                Material = MaterialType.Wood,
+                GlassRecyclingProcess = null,
+                Year = 2026,
+            },
+            TestContext.Current.CancellationToken
         );
 
         number.Should().MatchRegex($"^R26{expectedAgencyType}5000270001WO$");
@@ -63,13 +67,17 @@ public class RegulatoryNumberGeneratorTests
         var (generator, _) = Create();
 
         var number = await generator.GenerateAsync(
-            NumberType.Accreditation,
-            Nation.England,
-            isExporter: false,
-            orgId: 1,
-            material,
-            glassRecyclingProcess,
-            year: 2026
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Accreditation,
+                Nation = Nation.England,
+                IsExporter = false,
+                OrgId = 1,
+                Material = material,
+                GlassRecyclingProcess = glassRecyclingProcess,
+                Year = 2026,
+            },
+            TestContext.Current.CancellationToken
         );
 
         number.Should().EndWith(expectedCode);
@@ -83,17 +91,23 @@ public class RegulatoryNumberGeneratorTests
 
         var act = () =>
             generator.GenerateAsync(
-                NumberType.Registration,
-                Nation.England,
-                isExporter: false,
-                orgId: 1,
-                MaterialType.Glass,
-                glassRecyclingProcess: null,
-                year: 2026
+                new RegulatoryNumberSpec
+                {
+                    Type = NumberType.Registration,
+                    Nation = Nation.England,
+                    IsExporter = false,
+                    OrgId = 1,
+                    Material = MaterialType.Glass,
+                    GlassRecyclingProcess = null,
+                    Year = 2026,
+                },
+                TestContext.Current.CancellationToken
             );
 
         await act.Should().ThrowAsync<ArgumentException>();
-        (await store.GetCurrentMaxAsync("R-ER")).Should().BeNull();
+        (await store.GetCurrentMaxAsync("R-ER", TestContext.Current.CancellationToken))
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -102,13 +116,17 @@ public class RegulatoryNumberGeneratorTests
         var (generator, _) = Create();
 
         var number = await generator.GenerateAsync(
-            NumberType.Registration,
-            Nation.England,
-            isExporter: false,
-            orgId: 42,
-            MaterialType.Wood,
-            glassRecyclingProcess: null,
-            year: 2026
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Registration,
+                Nation = Nation.England,
+                IsExporter = false,
+                OrgId = 42,
+                Material = MaterialType.Wood,
+                GlassRecyclingProcess = null,
+                Year = 2026,
+            },
+            TestContext.Current.CancellationToken
         );
 
         number.Should().Be("R26ER0000420001WO");
@@ -120,13 +138,17 @@ public class RegulatoryNumberGeneratorTests
         var (generator, _) = Create();
 
         var number = await generator.GenerateAsync(
-            NumberType.Registration,
-            Nation.England,
-            isExporter: false,
-            orgId: 1,
-            MaterialType.Wood,
-            glassRecyclingProcess: null,
-            year: 2031
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Registration,
+                Nation = Nation.England,
+                IsExporter = false,
+                OrgId = 1,
+                Material = MaterialType.Wood,
+                GlassRecyclingProcess = null,
+                Year = 2031,
+            },
+            TestContext.Current.CancellationToken
         );
 
         number.Should().StartWith("R31");
@@ -138,31 +160,43 @@ public class RegulatoryNumberGeneratorTests
         var (generator, store) = Create();
 
         await generator.GenerateAsync(
-            NumberType.Registration,
-            Nation.England,
-            isExporter: false,
-            orgId: 1,
-            MaterialType.Wood,
-            glassRecyclingProcess: null,
-            year: 2026
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Registration,
+                Nation = Nation.England,
+                IsExporter = false,
+                OrgId = 1,
+                Material = MaterialType.Wood,
+                GlassRecyclingProcess = null,
+                Year = 2026,
+            },
+            TestContext.Current.CancellationToken
         );
         await generator.GenerateAsync(
-            NumberType.Registration,
-            Nation.England,
-            isExporter: false,
-            orgId: 2,
-            MaterialType.Wood,
-            glassRecyclingProcess: null,
-            year: 2026
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Registration,
+                Nation = Nation.England,
+                IsExporter = false,
+                OrgId = 2,
+                Material = MaterialType.Wood,
+                GlassRecyclingProcess = null,
+                Year = 2026,
+            },
+            TestContext.Current.CancellationToken
         );
         var accreditationNumber = await generator.GenerateAsync(
-            NumberType.Accreditation,
-            Nation.England,
-            isExporter: false,
-            orgId: 3,
-            MaterialType.Wood,
-            glassRecyclingProcess: null,
-            year: 2026
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Accreditation,
+                Nation = Nation.England,
+                IsExporter = false,
+                OrgId = 3,
+                Material = MaterialType.Wood,
+                GlassRecyclingProcess = null,
+                Year = 2026,
+            },
+            TestContext.Current.CancellationToken
         );
 
         // Registration pool R-ER is already at 2; the accreditation pool A-ER is
@@ -174,18 +208,23 @@ public class RegulatoryNumberGeneratorTests
     public async Task GenerateAsync_never_returns_a_duplicate_sequence_under_concurrent_load()
     {
         var (generator, _) = Create();
+        var ct = TestContext.Current.CancellationToken;
 
         var tasks = Enumerable
             .Range(0, 50)
             .Select(i =>
                 generator.GenerateAsync(
-                    NumberType.Registration,
-                    Nation.England,
-                    isExporter: false,
-                    orgId: i,
-                    MaterialType.Wood,
-                    glassRecyclingProcess: null,
-                    year: 2026
+                    new RegulatoryNumberSpec
+                    {
+                        Type = NumberType.Registration,
+                        Nation = Nation.England,
+                        IsExporter = false,
+                        OrgId = i,
+                        Material = MaterialType.Wood,
+                        GlassRecyclingProcess = null,
+                        Year = 2026,
+                    },
+                    ct
                 )
             );
 
@@ -203,18 +242,23 @@ public class RegulatoryNumberGeneratorTests
         // accreditation - separate counters (AC2), so uniqueness must hold within
         // each type independently, not just across the combined set.
         var (generator, _) = Create();
+        var ct = TestContext.Current.CancellationToken;
 
         var tasks = Enumerable
             .Range(0, 50)
             .Select(i =>
                 generator.GenerateAsync(
-                    NumberType.Accreditation,
-                    Nation.England,
-                    isExporter: false,
-                    orgId: i,
-                    MaterialType.Wood,
-                    glassRecyclingProcess: null,
-                    year: 2026
+                    new RegulatoryNumberSpec
+                    {
+                        Type = NumberType.Accreditation,
+                        Nation = Nation.England,
+                        IsExporter = false,
+                        OrgId = i,
+                        Material = MaterialType.Wood,
+                        GlassRecyclingProcess = null,
+                        Year = 2026,
+                    },
+                    ct
                 )
             );
 

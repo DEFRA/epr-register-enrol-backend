@@ -12,7 +12,10 @@ public class RegulatoryNumberBackfillHealthCheckTests
         var status = new RegulatoryNumberBackfillStatus();
         var check = new RegulatoryNumberBackfillHealthCheck(status);
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken
+        );
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
     }
@@ -24,7 +27,10 @@ public class RegulatoryNumberBackfillHealthCheckTests
         status.MarkComplete();
         var check = new RegulatoryNumberBackfillHealthCheck(status);
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken
+        );
 
         result.Status.Should().Be(HealthStatus.Healthy);
     }

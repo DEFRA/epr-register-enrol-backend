@@ -204,13 +204,16 @@ public static class AccreditationApplicationEndpoints
             );
 
         var newNumber = await generator.GenerateAsync(
-            NumberType.Registration,
-            nation,
-            application.IsExporter,
-            orgId,
-            application.MaterialType,
-            application.GlassRecyclingProcess,
-            year
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Registration,
+                Nation = nation,
+                IsExporter = application.IsExporter,
+                OrgId = orgId,
+                Material = application.MaterialType,
+                GlassRecyclingProcess = application.GlassRecyclingProcess,
+                Year = year,
+            }
         );
 
         // Regenerate: keep the prior number in the audit trail, never reuse/reissue it
@@ -282,13 +285,16 @@ public static class AccreditationApplicationEndpoints
                 );
 
             newNumber = await generator.GenerateAsync(
-                NumberType.Accreditation,
-                nation,
-                application.IsExporter,
-                orgId,
-                application.MaterialType,
-                application.GlassRecyclingProcess,
-                year
+                new RegulatoryNumberSpec
+                {
+                    Type = NumberType.Accreditation,
+                    Nation = nation,
+                    IsExporter = application.IsExporter,
+                    OrgId = orgId,
+                    Material = application.MaterialType,
+                    GlassRecyclingProcess = application.GlassRecyclingProcess,
+                    Year = year,
+                }
             );
         }
 

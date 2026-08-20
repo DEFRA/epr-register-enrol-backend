@@ -52,7 +52,7 @@ public class RegulatoryNumberSequenceBackfillServiceTests
 
         foreach (var key in AllSixteenKeys)
         {
-            (await store.GetCurrentMaxAsync(key))
+            (await store.GetCurrentMaxAsync(key, TestContext.Current.CancellationToken))
                 .Should()
                 .NotBeNull($"{key} should have been seeded");
         }
@@ -69,7 +69,9 @@ public class RegulatoryNumberSequenceBackfillServiceTests
         await service.SeedAllAsync(CancellationToken.None);
         await service.SeedAllAsync(CancellationToken.None);
 
-        (await store.GetCurrentMaxAsync("R-ER")).Should().Be(9999);
+        (await store.GetCurrentMaxAsync("R-ER", TestContext.Current.CancellationToken))
+            .Should()
+            .Be(9999);
     }
 
     [Fact]
@@ -80,7 +82,9 @@ public class RegulatoryNumberSequenceBackfillServiceTests
 
         await service.SeedAllAsync(CancellationToken.None);
 
-        (await store.GetCurrentMaxAsync("R-ER")).Should().Be(337);
+        (await store.GetCurrentMaxAsync("R-ER", TestContext.Current.CancellationToken))
+            .Should()
+            .Be(337);
     }
 
     [Fact]

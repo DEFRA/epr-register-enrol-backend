@@ -6,13 +6,7 @@ public class RegulatoryNumberGenerator(IRegulatoryNumberSequenceCounterPersisten
     : IRegulatoryNumberGenerator
 {
     public async Task<string> GenerateAsync(
-        NumberType type,
-        Nation nation,
-        bool isExporter,
-        int orgId,
-        MaterialType material,
-        GlassRecyclingProcess? glassRecyclingProcess,
-        int year,
+        RegulatoryNumberSpec spec,
         CancellationToken ct = default
     )
     {
@@ -20,16 +14,16 @@ public class RegulatoryNumberGenerator(IRegulatoryNumberSequenceCounterPersisten
         // so an invalid combination throws without ever touching a counter (AC6) -
         // a defence-in-depth backstop even though the calling endpoint validates
         // first too.
-        var agencyLetter = AgencyLetterFor(nation);
-        var processTypeLetter = isExporter ? 'X' : 'R';
+        var agencyLetter = AgencyLetterFor(spec.Nation);
+        var processTypeLetter = spec.IsExporter ? 'X' : 'R';
         var agencyType = $"{agencyLetter}{processTypeLetter}";
-        var materialCode = MaterialCodeFor(material, glassRecyclingProcess);
-        var prefix = type == NumberType.Registration ? 'R' : 'A';
+        var materialCode = MaterialCodeFor(spec.Material, spec.GlassRecyclingProcess);
+        var prefix = spec.Type == NumberType.Registration ? 'R' : 'A';
         var poolKey = $"{prefix}-{agencyType}";
 
         var sequence = await counters.IncrementAsync(poolKey, ct);
 
-        return $"{prefix}{year % 100:D2}{agencyType}{orgId:D6}{sequence:D4}{materialCode}";
+        return $"{prefix}{spec.Year % 100:D2}{agencyType}{spec.OrgId:D6}{sequence:D4}{materialCode}";
     }
 
     private static char AgencyLetterFor(Nation nation) =>

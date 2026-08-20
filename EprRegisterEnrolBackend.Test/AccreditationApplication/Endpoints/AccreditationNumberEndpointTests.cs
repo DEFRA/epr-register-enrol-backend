@@ -73,12 +73,14 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
                 nation = "England",
                 orgId = 500027,
                 year = 2026,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.AccreditationReference.Should().Be("A26ER5000270001WO");
     }
@@ -91,11 +93,19 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(app),
-            new { nation = "England", orgId = 500027 }
+            new { nation = "England", orgId = 500027 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -106,15 +116,24 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(app),
-            new { nation = "England", orgId = 999999 }
+            new { nation = "England", orgId = 999999 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.AccreditationReference.Should().Be("A26ER5000270063WO");
-        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -125,19 +144,28 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(app),
-            new { regenerate = true }
+            new { regenerate = true },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.AccreditationReference.Should().Be("A27ER5000270063WO");
         body.PreviousAccreditationNumbers.Should()
             .ContainSingle()
             .Which.Should()
             .Be("A26ER5000270063WO");
-        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -150,7 +178,8 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(app),
-            new { regenerate = true }
+            new { regenerate = true },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -173,15 +202,24 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
                 orgId = 500027,
                 year = 2026,
                 regenerate = true,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
         body!.AccreditationReference.Should().Be("A26ER5000270001WO");
-        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().Be(1);
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .Be(1);
     }
 
     [Fact]
@@ -203,7 +241,8 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
                 nation = "England",
                 orgId = 1,
                 year = 2026,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         var response = await _client.PostAsJsonAsync(
@@ -213,13 +252,22 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
                 nation = "England",
                 orgId = 3,
                 year = 2026,
-            }
+            },
+            TestContext.Current.CancellationToken
         );
 
         var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
-            JsonOptions
+            JsonOptions,
+            TestContext.Current.CancellationToken
         );
-        (await _factory.FakeCounters.GetCurrentMaxAsync("R-ER")).Should().Be(1);
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "R-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .Be(1);
         body!.AccreditationReference.Should().Be("A26ER0000030001WO");
     }
 
@@ -236,11 +284,19 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(app),
-            new { nation = "England", orgId = 500027 }
+            new { nation = "England", orgId = 500027 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -250,7 +306,8 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-1/{ObjectId.GenerateNewId()}/accreditation-number",
-            new { nation = "England", orgId = 1 }
+            new { nation = "England", orgId = 1 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -262,10 +319,21 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         Reset();
         var app = SeedApplication();
 
-        var response = await _client.PostAsJsonAsync(AccreditationNumberUrl(app), new { });
+        var response = await _client.PostAsJsonAsync(
+            AccreditationNumberUrl(app),
+            new { },
+            TestContext.Current.CancellationToken
+        );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -276,10 +344,18 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(app),
-            new { nation = "England", orgId = 500027 }
+            new { nation = "England", orgId = 500027 },
+            TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await _factory.FakeCounters.GetCurrentMaxAsync("A-ER")).Should().BeNull();
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
     }
 }

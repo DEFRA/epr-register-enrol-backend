@@ -9,14 +9,5 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 // the only difference is the prefix and which pool is incremented.
 public interface IRegulatoryNumberGenerator
 {
-    Task<string> GenerateAsync(
-        NumberType type,
-        Nation nation,
-        bool isExporter,
-        int orgId,
-        MaterialType material,
-        GlassRecyclingProcess? glassRecyclingProcess,
-        int year,
-        CancellationToken ct = default
-    );
+    Task<string> GenerateAsync(RegulatoryNumberSpec spec, CancellationToken ct = default);
 }
