@@ -27,14 +27,14 @@ jobs:
           dotnet-version: |
             10.0
       - name: Test with coverage
-        run: dotnet test --collect:"XPlat Code Coverage" --results-directory ./coverage
+        run: dotnet test --coverage --coverage-output-format cobertura --results-directory ./coverage
 
       # Baseline as measured on 2026-08-19 (RA-437 branch-coverage push, epr-register-enrol-3kj):
       # 95.6% line / 93.1% branch. Fails the job on regression; raise as coverage improves.
       - name: Enforce coverage threshold and report on PR
         if: always()
         run: |
-          FILE=$(find ./coverage -name 'coverage.cobertura.xml' | head -1)
+          FILE=$(find ./coverage -name '*.cobertura.xml' | head -1)
           if [ -z "$FILE" ]; then
             echo "::error::No coverage report found — did dotnet test run?"
             exit 1
@@ -67,16 +67,12 @@ jobs:
 
       - name: Comment coverage on PR
         if: always()
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3
         with:
           header: coverage
           path: /tmp/coverage-comment.md
-    ## SonarCloud
-    ## Uncomment to unable SonarCloud scan
-    ## Requires project to be set up in SonarCloud
-    ## and the SonarCloud token to be set in the repository secrets
-#   sonarcloud-scan:
-#     name: CDP SonarCloud Scan
-#     uses: ./.github/workflows/sonarcloud.yml
-#     needs: pr-validator
-#     secrets: inherit
+  sonarcloud-scan:
+    name: CDP SonarCloud Scan
+    uses: ./.github/workflows/sonarcloud.yml
+    needs: pr-validator
+    secrets: inherit
