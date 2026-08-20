@@ -1,15 +1,11 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Utils;
 using FluentValidation;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Validators;
 
 public class AddOverseasSiteRequestValidator : AbstractValidator<AddOverseasSiteRequest>
 {
-    private static readonly System.Text.RegularExpressions.Regex BaselOecdRegex = new(
-        @"^(?:[A-Za-z]\d{4}|[A-Za-z]{2}\d{3})$",
-        System.Text.RegularExpressions.RegexOptions.Compiled
-    );
-
     private static readonly System.Text.RegularExpressions.Regex EmailRegex = new(
         @"^[^\s@]+@[^\s@]+\.[^\s@]+$",
         System.Text.RegularExpressions.RegexOptions.Compiled
@@ -64,18 +60,28 @@ public class AddOverseasSiteRequestValidator : AbstractValidator<AddOverseasSite
             );
         RuleFor(r => r.Code1)
             .NotEmpty()
-            .Matches(BaselOecdRegex)
+            .Must(c => BaselOecdCodes.ApprovedCodes.Contains(c))
             .WithMessage(
                 "Code1 must be a valid Basel Convention or OECD code (e.g. A1181 or GC010)."
             );
         RuleFor(r => r.Code2)
-            .Matches(BaselOecdRegex)
+            .Must(c => BaselOecdCodes.ApprovedCodes.Contains(c!))
             .WithMessage("Code2 must be a valid Basel Convention or OECD code.")
             .When(r => !string.IsNullOrEmpty(r.Code2));
         RuleFor(r => r.Code3)
-            .Matches(BaselOecdRegex)
+            .Must(c => BaselOecdCodes.ApprovedCodes.Contains(c!))
             .WithMessage("Code3 must be a valid Basel Convention or OECD code.")
             .When(r => !string.IsNullOrEmpty(r.Code3));
+        RuleFor(r => r)
+            .Must(r => !HasDuplicateCode(r.Code1, r.Code2, r.Code3))
+            .WithMessage("Code1, Code2 and Code3 must not contain duplicate codes.")
+            .WithName("Code2");
         RuleFor(r => r.RepatriatedLoads).NotEmpty().MaximumLength(5000);
+    }
+
+    private static bool HasDuplicateCode(string? code1, string? code2, string? code3)
+    {
+        var codes = new[] { code1, code2, code3 }.Where(c => !string.IsNullOrEmpty(c));
+        return codes.GroupBy(c => c, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
     }
 }
