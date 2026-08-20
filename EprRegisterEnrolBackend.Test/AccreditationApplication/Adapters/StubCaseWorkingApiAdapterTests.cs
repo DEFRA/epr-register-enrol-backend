@@ -86,6 +86,27 @@ public class StubCaseWorkingApiAdapterTests
         result.ApplicationReference.Should().Contain("EA");
     }
 
+    // Covers MaterialPrefix's `material.Length <= 2` true branch. Every defined MaterialType
+    // enum value (Steel, Wood, Aluminium, Fibre, Glass, Paper, Plastic) is 4+ characters long, so
+    // that branch is unreachable via any real MaterialType — an undefined enum value is the only
+    // way to exercise it, and Enum.ToString() on an undefined value returns the raw numeric
+    // string (e.g. "9"), which is legitimately <= 2 characters.
+    [Fact]
+    public async Task SubmitApplicationAsync_UndefinedMaterialTypeValue_UsesRawNumericPrefix()
+    {
+        var sut = BuildSut();
+
+        var result = await sut.SubmitApplicationAsync(
+            CreateApplication(materialType: (MaterialType)9)
+        );
+
+        result.ApplicationReference.Should()
+            .EndWith(
+                "9",
+                because: "MaterialPrefix takes the whole raw value verbatim when it's already <= 2 characters"
+            );
+    }
+
     [Fact]
     public async Task GetNotificationStatusAsync_ReturnsNullStatusAndDueDate()
     {

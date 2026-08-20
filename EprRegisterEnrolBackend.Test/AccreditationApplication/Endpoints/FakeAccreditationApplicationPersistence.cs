@@ -10,7 +10,19 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public void Seed(AccreditationApplicationModel application) => _store.Add(application);
 
-    public void Clear() => _store.Clear();
+    public void Clear()
+    {
+        _store.Clear();
+        FailNextUpdate = false;
+    }
+
+    /// <summary>
+    /// When set, the next call to <see cref="UpdateAsync"/> returns null (as if the persisted
+    /// record vanished between the read and the write) and clears itself, so endpoints'
+    /// `updated is null ? Results.Problem(...) : ...` branches can be exercised without a real
+    /// database. Purely additive test-only infrastructure.
+    /// </summary>
+    public bool FailNextUpdate { get; set; }
 
     public Task<AccreditationApplicationModel?> CreateAsync(
         AccreditationApplicationModel application
@@ -52,6 +64,12 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         AccreditationApplicationModel application
     )
     {
+        if (FailNextUpdate)
+        {
+            FailNextUpdate = false;
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+        }
+
         var idx = _store.FindIndex(a => a.Id == application.Id);
         if (idx < 0)
             return Task.FromResult<AccreditationApplicationModel?>(null);
