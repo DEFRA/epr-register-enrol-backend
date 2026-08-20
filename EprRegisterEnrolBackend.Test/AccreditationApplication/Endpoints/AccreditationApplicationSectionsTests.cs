@@ -220,4 +220,283 @@ public class AccreditationApplicationSectionsTests
             Year = 2026,
             MaterialType = MaterialType.Plastic,
         };
+
+    // --- CmSectionKeysFor (remaining switch arms) ---
+
+    [Fact]
+    public void CmSectionKeysFor_BusinessPlan_ReturnsBusinessPlanKey()
+    {
+        AccreditationApplicationSections
+            .CmSectionKeysFor(OperatorSection.BusinessPlan)
+            .Should()
+            .BeEquivalentTo(["business-plan"]);
+    }
+
+    [Fact]
+    public void CmSectionKeysFor_SamplingPlan_ReturnsSamplingAndInspectionPlanKey()
+    {
+        AccreditationApplicationSections
+            .CmSectionKeysFor(OperatorSection.SamplingPlan)
+            .Should()
+            .BeEquivalentTo(["sampling-and-inspection-plan"]);
+    }
+
+    [Fact]
+    public void CmSectionKeysFor_BesEvidence_ReturnsBroadlyEquivalentStandardsKey()
+    {
+        AccreditationApplicationSections
+            .CmSectionKeysFor(OperatorSection.BesEvidence)
+            .Should()
+            .BeEquivalentTo(["broadly-equivalent-standards"]);
+    }
+
+    [Fact]
+    public void CmSectionKeysFor_OverseasSites_ReturnsOverseasReprocessingSitesKey()
+    {
+        AccreditationApplicationSections
+            .CmSectionKeysFor(OperatorSection.OverseasSites)
+            .Should()
+            .BeEquivalentTo(["overseas-reprocessing-sites"]);
+    }
+
+    [Fact]
+    public void CmSectionKeysFor_UnknownSection_ReturnsEmpty()
+    {
+        AccreditationApplicationSections
+            .CmSectionKeysFor((OperatorSection)999)
+            .Should()
+            .BeEmpty();
+    }
+
+    // --- GetSectionStatus (remaining switch arms) ---
+
+    [Fact]
+    public void GetSectionStatus_Prns_ReturnsPrnsSectionStatus()
+    {
+        var application = CreateApplication();
+        application.Prns.SectionStatus = SectionStatus.InProgress;
+
+        AccreditationApplicationSections
+            .GetSectionStatus(application, OperatorSection.Prns)
+            .Should()
+            .Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void GetSectionStatus_BusinessPlan_ReturnsBusinessPlanSectionStatus()
+    {
+        var application = CreateApplication();
+        application.BusinessPlan.SectionStatus = SectionStatus.Completed;
+
+        AccreditationApplicationSections
+            .GetSectionStatus(application, OperatorSection.BusinessPlan)
+            .Should()
+            .Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public void GetSectionStatus_SamplingPlan_ReturnsSamplingPlanSectionStatus()
+    {
+        var application = CreateApplication();
+        application.SamplingPlan.SectionStatus = SectionStatus.Queried;
+
+        AccreditationApplicationSections
+            .GetSectionStatus(application, OperatorSection.SamplingPlan)
+            .Should()
+            .Be(SectionStatus.Queried);
+    }
+
+    [Fact]
+    public void GetSectionStatus_OverseasSitesNonNull_ReturnsItsSectionStatus()
+    {
+        var application = CreateApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            SectionStatus = SectionStatus.InProgress,
+        };
+
+        AccreditationApplicationSections
+            .GetSectionStatus(application, OperatorSection.OverseasSites)
+            .Should()
+            .Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void GetSectionStatus_BesEvidenceNull_ReturnsNotStarted()
+    {
+        var application = CreateApplication();
+
+        AccreditationApplicationSections
+            .GetSectionStatus(application, OperatorSection.BesEvidence)
+            .Should()
+            .Be(SectionStatus.NotStarted);
+    }
+
+    [Fact]
+    public void GetSectionStatus_BesEvidenceNonNull_ReturnsItsSectionStatus()
+    {
+        var application = CreateApplication();
+        application.BesEvidence = new AccreditationApplicationBesEvidence
+        {
+            SectionStatus = SectionStatus.Completed,
+        };
+
+        AccreditationApplicationSections
+            .GetSectionStatus(application, OperatorSection.BesEvidence)
+            .Should()
+            .Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public void GetSectionStatus_UnknownSection_ReturnsNotStarted()
+    {
+        var application = CreateApplication();
+
+        AccreditationApplicationSections
+            .GetSectionStatus(application, (OperatorSection)999)
+            .Should()
+            .Be(SectionStatus.NotStarted);
+    }
+
+    // --- SetSectionStatus (remaining switch arms) ---
+
+    [Fact]
+    public void SetSectionStatus_BusinessPlan_SetsBusinessPlanSectionStatus()
+    {
+        var application = CreateApplication();
+        AccreditationApplicationSections.SetSectionStatus(
+            application,
+            OperatorSection.BusinessPlan,
+            SectionStatus.Completed
+        );
+        application.BusinessPlan.SectionStatus.Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public void SetSectionStatus_SamplingPlan_SetsSamplingPlanSectionStatus()
+    {
+        var application = CreateApplication();
+        AccreditationApplicationSections.SetSectionStatus(
+            application,
+            OperatorSection.SamplingPlan,
+            SectionStatus.InProgress
+        );
+        application.SamplingPlan.SectionStatus.Should().Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void SetSectionStatus_BesEvidenceNull_CreatesSectionAndSetsStatus()
+    {
+        var application = CreateApplication();
+        AccreditationApplicationSections.SetSectionStatus(
+            application,
+            OperatorSection.BesEvidence,
+            SectionStatus.Queried
+        );
+
+        application.BesEvidence.Should().NotBeNull();
+        application.BesEvidence!.SectionStatus.Should().Be(SectionStatus.Queried);
+    }
+
+    // --- ComputeCurrentStatus (remaining switch arms) ---
+
+    [Fact]
+    public void ComputeCurrentStatus_BusinessPlan_MatchesSectionStatusService()
+    {
+        var application = CreateApplication();
+        application.BusinessPlan.NewInfrastructurePercent = 100;
+        application.BusinessPlan.PriceSupportPercent = 0;
+        application.BusinessPlan.BusinessCollectionsPercent = 0;
+        application.BusinessPlan.CommunicationsPercent = 0;
+        application.BusinessPlan.NewMarketsPercent = 0;
+        application.BusinessPlan.NewUsesPercent = 0;
+
+        AccreditationApplicationSections
+            .ComputeCurrentStatus(application, OperatorSection.BusinessPlan)
+            .Should()
+            .Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public void ComputeCurrentStatus_SamplingPlan_MatchesSectionStatusService()
+    {
+        var application = CreateApplication();
+
+        AccreditationApplicationSections
+            .ComputeCurrentStatus(application, OperatorSection.SamplingPlan)
+            .Should()
+            .Be(SectionStatus.NotStarted);
+    }
+
+    [Fact]
+    public void ComputeCurrentStatus_OverseasSitesWithNoSelectedSite_IsNotStarted()
+    {
+        var application = CreateApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "Site 1", Selected = false }],
+        };
+
+        AccreditationApplicationSections
+            .ComputeCurrentStatus(application, OperatorSection.OverseasSites)
+            .Should()
+            .Be(SectionStatus.NotStarted);
+    }
+
+    [Fact]
+    public void ComputeCurrentStatus_OverseasSitesNull_IsNotStarted()
+    {
+        var application = CreateApplication();
+
+        AccreditationApplicationSections
+            .ComputeCurrentStatus(application, OperatorSection.OverseasSites)
+            .Should()
+            .Be(SectionStatus.NotStarted);
+    }
+
+    [Fact]
+    public void ComputeCurrentStatus_UnknownSection_ReturnsNotStarted()
+    {
+        var application = CreateApplication();
+
+        AccreditationApplicationSections
+            .ComputeCurrentStatus(application, (OperatorSection)999)
+            .Should()
+            .Be(SectionStatus.NotStarted);
+    }
+
+    // --- SnapshotSection (remaining switch arms) ---
+
+    [Fact]
+    public void SnapshotSection_SamplingPlan_AppendsCurrentValues()
+    {
+        var application = CreateApplication();
+        var versionedAt = new DateTime(2026, 2, 2, 0, 0, 0, DateTimeKind.Utc);
+
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.SamplingPlan,
+            versionedAt
+        );
+
+        application.SamplingPlan.Versions.Should().ContainSingle();
+        application.SamplingPlan.Versions[0].VersionedAt.Should().Be(versionedAt);
+    }
+
+    [Fact]
+    public void SnapshotSection_BesEvidenceNull_CreatesSectionAndAppendsSnapshot()
+    {
+        var application = CreateApplication();
+        var versionedAt = new DateTime(2026, 3, 3, 0, 0, 0, DateTimeKind.Utc);
+
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.BesEvidence,
+            versionedAt
+        );
+
+        application.BesEvidence.Should().NotBeNull();
+        application.BesEvidence!.Versions.Should().ContainSingle();
+        application.BesEvidence.Versions[0].VersionedAt.Should().Be(versionedAt);
+    }
 }

@@ -147,6 +147,22 @@ public class ReExClientTests
         result.StatusCode.Should().Be(200);
     }
 
+    [Fact]
+    public async Task GetOrganisationsAsync_SuccessStatusWithNullBody_ReturnsDeserializationError()
+    {
+        // "null" is valid JSON that deserializes to a null T — distinct from the
+        // InvalidJson case above, which throws JsonException. This exercises the
+        // `value is null` branch inside the IsSuccessStatusCode arm of MapResponseAsync.
+        var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, "null"));
+
+        var result = await sut.GetOrganisationsAsync("1234");
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error!.Kind.Should().Be(ReExErrorKind.DeserializationError);
+        result.Error.Message.Should().Be("Response body was empty");
+        result.StatusCode.Should().Be(200);
+    }
+
     // ── Timeout and transport ─────────────────────────────────────────────────
 
     [Fact]

@@ -814,6 +814,45 @@ public class HttpCaseWorkingApiAdapterTests
         request.Headers.GetValues("x-cdp-user-name").Should().ContainSingle("Jane Smith");
     }
 
+    // Covers the `userId ?? OrganisationId` fallback and BuildRequest's
+    // `!string.IsNullOrEmpty(userName)` false branch — every other test supplies SubmittedBy.
+    [Fact]
+    public async Task SubmitApplicationAsync_NoSubmittedBy_UsesOrganisationIdAsUserIdAndOmitsUserNameHeader()
+    {
+        var application = CreateTestApplication();
+        application.SubmittedBy = null;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+
+        var request = handler.CapturedRequest!;
+        request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("12345");
+        request.Headers.Contains("x-cdp-user-name").Should().BeFalse();
+    }
+
+    // Covers the generic `catch (Exception ex) { ...; throw; }` branch — distinct from the
+    // TaskCanceledException-specific catches already exercised by the timeout/cancellation tests.
+    [Fact]
+    public async Task SubmitApplicationAsync_NetworkFailure_RethrowsException()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory
+            .CreateClient("DefaultClient")
+            .Returns(new HttpClient(new ThrowingHttpMessageHandler()));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        await act.Should()
+            .ThrowAsync<HttpRequestException>()
+            .WithMessage("*Simulated network failure*");
+    }
+
     [Fact]
     public async Task SubmitApplicationAsync_WithSharedSecret_SetsHmacHeaders()
     {
@@ -1112,6 +1151,47 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task GetNotificationStatusAsync_EmptyUrl_ReturnsNullWithoutThrowing()
     {
         var (adapter, _) = CreateAdapter(url: "");
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        var result = await adapter.GetNotificationStatusAsync(app);
+
+        result.NotificationStatus.Should().BeNull();
+        result.SlaDueDate.Should().BeNull();
+    }
+
+    // Covers the `userId ?? OrganisationId` fallback and BuildRequest's
+    // `!string.IsNullOrEmpty(userName)` false branch for this method's own request-building code.
+    [Fact]
+    public async Task GetNotificationStatusAsync_NoSubmittedBy_UsesOrganisationIdAsUserId()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.SubmittedBy = null;
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        await adapter.GetNotificationStatusAsync(app);
+
+        var request = handler.CapturedRequest!;
+        request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("12345");
+        request.Headers.Contains("x-cdp-user-name").Should().BeFalse();
+    }
+
+    // Covers `detail?.AuditLog` / `detail?.SlaDueDate` when ManagementBe's response body
+    // deserializes to a null WorkItemDetailResponseDto (e.g. a literal "null" JSON body) rather
+    // than throwing — must still resolve to an empty status, not propagate a NullReferenceException.
+    [Fact]
+    public async Task GetNotificationStatusAsync_NullResponseBody_ReturnsNullWithoutThrowing()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var handler = new RawBodyHttpMessageHandler(HttpStatusCode.OK, "null");
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
@@ -1531,6 +1611,23 @@ public class HttpCaseWorkingApiAdapterTests
         var root = doc.RootElement;
         root.GetProperty("siteType").GetString().Should().Be("interim");
         root.GetProperty("siteNumber").GetString().Should().Be("SN-0002");
+    }
+
+    // Covers the `userId ?? OrganisationId` fallback and BuildRequest's
+    // `!string.IsNullOrEmpty(userName)` false branch for this method's own request-building code.
+    [Fact]
+    public async Task NotifySiteAddedAsync_NoSubmittedBy_UsesOrganisationIdAsUserId()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var app = CreateTestApplication();
+        app.SubmittedBy = null;
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+
+        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+
+        var request = handler.CapturedRequest!;
+        request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("12345");
+        request.Headers.Contains("x-cdp-user-name").Should().BeFalse();
     }
 
     [Fact]

@@ -617,6 +617,78 @@ public class HttpReExApiAdapterTests
         result.Value!.Prns!.PlannedTonnageBand.Should().BeNull();
     }
 
+    // Covers FormatAddress(SiteAddressDto?) returning null when a reprocessor registration has
+    // no "site" key at all — the ternary's null branch was previously untested (every other
+    // fixture supplies a site).
+    [Fact]
+    public async Task GetAccreditationAsync_ReprocessorRegistrationWithNoSite_SiteAddressIsNull()
+    {
+        var sut = BuildSut(OrganisationJsonReprocessorNoSite);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result
+            .Value!.SiteAddress.Should()
+            .BeNull(because: "FormatAddress must handle a missing site gracefully");
+    }
+
+    // Covers FormatAddress(RegisteredAddressDto?) returning null when companyDetails has no
+    // "address" key at all (reprocessor, so the exporter-only postcode guard doesn't apply).
+    [Fact]
+    public async Task GetAccreditationAsync_NoCompanyAddress_MapsNullRegisteredAddressAndPostcode()
+    {
+        var sut = BuildSut(OrganisationJsonNoCompanyAddress);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.CompanyRegisteredAddress.Should().BeNull();
+        result.Value!.CompanyRegisterAddressPostcode.Should().BeNull();
+    }
+
+    // Covers MapOverseasSite's two defensive ternaries: a non-numeric overseas-site dictionary
+    // key falls back to SiteId 0 rather than throwing, and a site with no "address" key maps to
+    // a null SiteAddress rather than throwing.
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterOverseasSite_NonNumericKeyAndNoAddress_FallsBackToDefaults()
+    {
+        const string overseasSitesJson = """
+            {
+              "site-A": {
+                "name": "Overseas Recycling Co",
+                "country": "France"
+              }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OverseasSites.Should().ContainSingle();
+        var site = result.Value!.OverseasSites[0];
+        site.SiteId.Should()
+            .Be(0, because: "a non-numeric overseas site key has no id to fall back to");
+        site.SiteAddress.Should()
+            .BeNull(because: "the site had no address in the ReEx payload");
+    }
+
     [Fact]
     public async Task GetLinkedDefraOrganisationAsync_Success_ReturnsLinkedOrgId()
     {
@@ -957,6 +1029,111 @@ public class HttpReExApiAdapterTests
               ]
             }
             """;
+
+    // Same as OrganisationJson's reg-reprocessor-1 registration but with no "site" key at all,
+    // covering FormatAddress(SiteAddressDto?)'s null branch.
+    private const string OrganisationJsonReprocessorNoSite = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    // Same as OrganisationJsonReprocessorNoSite but companyDetails has no "address" key at all,
+    // covering FormatAddress(RegisteredAddressDto?)'s null branch.
+    private const string OrganisationJsonNoCompanyAddress = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd"
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "site": {
+                "address": {
+                  "line1": "Reprocessor Site Road",
+                  "postcode": "HU7 7BX",
+                  "country": "UK",
+                  "town": "Exampleton"
+                }
+              },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
 
     private const string OrganisationJsonNoMatchingAccreditation = """
         {
