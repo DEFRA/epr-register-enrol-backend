@@ -73,15 +73,9 @@ public class AddOverseasSiteRequestValidator : AbstractValidator<AddOverseasSite
             .WithMessage("Code3 must be a valid Basel Convention or OECD code.")
             .When(r => !string.IsNullOrEmpty(r.Code3));
         RuleFor(r => r)
-            .Must(r => !HasDuplicateCode(r.Code1, r.Code2, r.Code3))
+            .Must(r => !BaselOecdCodes.HasDuplicateCode(r.Code1, r.Code2, r.Code3))
             .WithMessage("Code1, Code2 and Code3 must not contain duplicate codes.")
             .WithName("Code2");
         RuleFor(r => r.RepatriatedLoads).NotEmpty().MaximumLength(5000);
-    }
-
-    private static bool HasDuplicateCode(string? code1, string? code2, string? code3)
-    {
-        var codes = new[] { code1, code2, code3 }.Where(c => !string.IsNullOrEmpty(c));
-        return codes.GroupBy(c => c, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
     }
 }

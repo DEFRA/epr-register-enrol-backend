@@ -9,7 +9,15 @@ namespace EprRegisterEnrolBackend.Utils;
 /// </summary>
 public static class BaselOecdCodes
 {
-    public static readonly HashSet<string> ApprovedCodes = new(StringComparer.OrdinalIgnoreCase)
+    public static IReadOnlySet<string> ApprovedCodes => _approvedCodes;
+
+    public static bool HasDuplicateCode(string? code1, string? code2, string? code3)
+    {
+        var codes = new[] { code1, code2, code3 }.Where(c => !string.IsNullOrEmpty(c));
+        return codes.GroupBy(c => c, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
+    }
+
+    private static readonly HashSet<string> _approvedCodes = new(StringComparer.OrdinalIgnoreCase)
     {
         "A1010",
         "A1020",
