@@ -17,6 +17,7 @@ public static class CdpLogging
             .ReadFrom.Configuration(ctx.Configuration)
             .Enrich.WithEcsHttpContext(httpAccessor!)
             .Enrich.FromLogContext()
+            .Enrich.With<PiiRedactionEnricher>()
             .Enrich.WithProperty("service.version", serviceVersion);
 
         if (traceIdHeader != null)
