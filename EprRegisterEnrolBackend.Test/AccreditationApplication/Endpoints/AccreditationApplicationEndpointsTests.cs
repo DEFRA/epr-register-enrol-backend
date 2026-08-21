@@ -3166,6 +3166,66 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Theory]
+    [InlineData("Y46")]
+    [InlineData("Y47")]
+    [InlineData("Y48")]
+    [InlineData("Y49")]
+    [InlineData("y46")]
+    public async Task AddOverseasSite_ApprovedYCode_Returns201(string code)
+    {
+        // Y46-Y49 are on the approved Basel/OECD list but match neither shape the old
+        // BaselOecdRegex accepted - this is the bug the membership check fixes.
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { Code1 = code };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_ShapeValidButUnlistedBaselCode_Returns400()
+    {
+        // "Z9999" matches the old shape regex (letter + 4 digits) but is not on the
+        // approved list, so it must now be rejected by the membership check.
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { Code1 = "Z9999" };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_DuplicateCode_Returns400()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = ValidAddOrsRequest() with { Code1 = "A1181", Code2 = "A1181" };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     [Fact]
     public async Task AddOverseasSite_InvalidOperationCode_Returns400()
     {
@@ -3375,6 +3435,77 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Theory]
+    [InlineData("Y46")]
+    [InlineData("Y47")]
+    [InlineData("Y48")]
+    [InlineData("Y49")]
+    public async Task PromoteOverseasSite_ApprovedYCode_Returns200(string code)
+    {
+        // Y46-Y49 are on the approved Basel/OECD list but match neither shape the old
+        // BaselOecdRegex accepted - this is the bug the membership check fixes.
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var request = ValidPromoteRequest() with { Code1 = code };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task PromoteOverseasSite_ShapeValidButUnlistedBaselCode_Returns400()
+    {
+        // "Z9999" matches the old shape regex (letter + 4 digits) but is not on the
+        // approved list, so it must now be rejected by the membership check.
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var request = ValidPromoteRequest() with { Code1 = "Z9999" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PromoteOverseasSite_DuplicateCode_Returns400()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var request = ValidPromoteRequest() with { Code1 = "A1181", Code2 = "A1181" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/900001/promote",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]
