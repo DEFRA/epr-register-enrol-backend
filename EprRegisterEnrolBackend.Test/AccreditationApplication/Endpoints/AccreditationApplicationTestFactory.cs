@@ -23,6 +23,13 @@ public class AccreditationApplicationTestFactory : WebApplicationFactory<Program
     public ICdpUploaderService MockCdpUploaderService { get; } =
         Substitute.For<ICdpUploaderService>();
 
+    // RA-469 AC15/AC19: NSubstitute mock, matching the other adapter mocks above, rather than a
+    // real MongoService<T>-backed persistence - RecyclingOperationsEndpointTests only needs to
+    // assert RecordAsync was (or wasn't) called with the right fields, never to query stored
+    // records back.
+    public IRecyclingOperationsAuditPersistence MockAuditPersistence { get; } =
+        Substitute.For<IRecyclingOperationsAuditPersistence>();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
@@ -33,6 +40,7 @@ public class AccreditationApplicationTestFactory : WebApplicationFactory<Program
             services.AddSingleton(MockReExAdapter);
             services.AddSingleton(MockCaseWorkingAdapter);
             services.AddSingleton(MockCdpUploaderService);
+            services.AddSingleton(MockAuditPersistence);
         });
     }
 }

@@ -331,15 +331,28 @@ public static class AccreditationApplicationEndpoints
     // operator's normal edit flow, not an operator edit itself. Deliberately does NOT go through
     // AccreditationApplicationSections.IsSectionEditable (unlike AddInterimSite) for the same
     // reason - that gate exists to protect the operator's own Queried/section workflow, which
-    // this correction must not disturb either way. Audit persistence (AC15/AC19) is wired in
-    // separately by epr-register-enrol-backend-9kr, not here.
+    // this correction must not disturb either way.
+    //
+    // RA-469 AC15/AC19 (epr-register-enrol-backend-9kr): the audit record is written after a
+    // successful update, never on a validation/404/409 short-circuit above. cdp_user_id/
+    // cdp_user_name come from CaseManagementAuthenticationHandler's claims (in turn from the
+    // x-cdp-user-id/x-cdp-user-name request headers) - both are absent on the Development
+    // header-trust bypass (no shared secret configured), so FindFirst(...)?.Value defaults to
+    // string.Empty rather than throwing when identity is unavailable. The audit write is
+    // deliberately NOT wrapped in try/catch: unlike AddInterimSite's best-effort ManagementBe
+    // courtesy notification, AC19 requires every successful edit to be recorded, so a failed
+    // audit write should surface as a 500 (via the app's exception handler) rather than silently
+    // leaving an unaudited change in place.
     private static async Task<IResult> PatchRecyclingOperations(
         string organisationId,
         string applicationId,
         int siteId,
         PatchRecyclingOperationsRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchRecyclingOperationsRequest> validator
+        IValidator<PatchRecyclingOperationsRequest> validator,
+        IRecyclingOperationsAuditPersistence auditPersistence,
+        HttpContext httpContext,
+        CancellationToken cancellationToken
     )
     {
         var validation = await validator.ValidateAsync(request);
@@ -376,11 +389,29 @@ public static class AccreditationApplicationEndpoints
                 $"R12 and R13 require an associated interim site on overseas site '{siteId}'."
             );
 
+        // Snapshotted before mutation, as an independent list - not aliased with the request's
+        // own OperationCodes below (RecyclingOperationsAuditPersistence's tests require the
+        // before/after lists to remain independent).
+        var beforeCodes = site.OperationCodes.ToList();
         site.OperationCodes = request.OperationCodes;
 
         var updated = await persistence.UpdateAsync(application);
         if (updated is null)
             return Results.Problem("Failed to update recycling operations.");
+
+        await auditPersistence.RecordAsync(
+            new RecyclingOperationsAuditRecord
+            {
+                CdpUserId = httpContext.User.FindFirst("cdp_user_id")?.Value ?? string.Empty,
+                CdpUserName = httpContext.User.FindFirst("cdp_user_name")?.Value ?? string.Empty,
+                OrganisationId = organisationId,
+                ApplicationId = applicationId,
+                SiteId = siteId,
+                BeforeCodes = beforeCodes,
+                AfterCodes = request.OperationCodes,
+            },
+            cancellationToken
+        );
 
         // `site` is the same object already mutated above (and, on the real Mongo-backed
         // persistence, `updated` is that same `application` reference echoed back on success -

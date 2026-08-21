@@ -10,13 +10,13 @@ using NSubstitute.ClearExtensions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
-// RA-469 AC18: PATCH .../overseas-sites/{siteId}/recycling-operations, authorized for
+// RA-469 AC18/AC15/AC19: PATCH .../overseas-sites/{siteId}/recycling-operations, authorized for
 // management-be's CaseManagement client credentials (not FrontendOnly) - same shape as
 // AccreditationNumberEndpointTests.cs's split-out file for the other CaseManagement-scheme
 // routes, kept out of the (already very large) main AccreditationApplicationEndpointsTests.cs.
-// Does not exercise audit persistence (epr-register-enrol-backend-9kr's scope) - the factory
-// here has no IRecyclingOperationsAuditPersistence registered, matching that this endpoint's own
-// scope is the site-mutation mechanics only.
+// Also covers epr-register-enrol-backend-9kr's audit-wiring scope, via
+// AccreditationApplicationTestFactory.MockAuditPersistence - an NSubstitute mock, so these tests
+// assert RecordAsync was (or wasn't) called with the right fields rather than a real Mongo write.
 public class RecyclingOperationsEndpointTests : IClassFixture<AccreditationApplicationTestFactory>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -39,6 +39,7 @@ public class RecyclingOperationsEndpointTests : IClassFixture<AccreditationAppli
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
+        _factory.MockAuditPersistence.ClearSubstitute(ClearOptions.All);
     }
 
     // Steel's applicable codes (RecyclingOperationCodes.CodesByMaterialType) are R4/R12/R13 -
@@ -264,5 +265,161 @@ public class RecyclingOperationsEndpointTests : IClassFixture<AccreditationAppli
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    // --- RA-469 AC15/AC19 (epr-register-enrol-backend-9kr): audit persistence wiring ---
+
+    [Fact]
+    public async Task PatchRecyclingOperations_SuccessfulEdit_WritesExactlyOneAuditRecordWithBeforeAndAfterCodes()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite(
+            initialCodes: ["R4"],
+            interimSite: new InterimSiteModel
+            {
+                SiteId = 2,
+                SiteNumber = "SN-0002",
+                Country = "France",
+                SiteName = "Interim Site",
+                AddressLine1 = "1 Rue Example",
+                TownOrCity = "Paris",
+                ContactName = "Jane Smith",
+                ContactEmail = "jane.smith@example.com",
+                ContactPhone = "+33 1 23 45 67 89",
+            }
+        );
+
+        var response = await _client.PatchAsJsonAsync(
+            Url(app, 1),
+            new { OperationCodes = new List<string> { "R4", "R12" } },
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockAuditPersistence.Received(1)
+            .RecordAsync(
+                Arg.Is<RecyclingOperationsAuditRecord>(r =>
+                    r.OrganisationId == app.OrganisationId
+                    && r.ApplicationId == app.ApplicationId
+                    && r.SiteId == 1
+                    && r.BeforeCodes.SequenceEqual(new[] { "R4" })
+                    && r.AfterCodes.SequenceEqual(new[] { "R4", "R12" })
+                ),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task PatchRecyclingOperations_IdentityClaimsAbsentFromDevBypass_DoesNotThrowAndRecordsEmptyActor()
+    {
+        // AccreditationApplicationTestFactory runs Development with no CaseManagement shared
+        // secret configured, so CaseManagementAuthenticationHandler's dev-bypass authenticates
+        // with a zero-claim principal (see CaseManagementAuthenticationHandler's own
+        // devPrincipal) - exactly the "claims absent" path this endpoint must not throw on.
+        Reset();
+        var app = SeedApplicationWithOverseasSite(initialCodes: ["R4"]);
+
+        var response = await _client.PatchAsJsonAsync(
+            Url(app, 1),
+            new { OperationCodes = new List<string> { "R4" } },
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockAuditPersistence.Received(1)
+            .RecordAsync(
+                Arg.Is<RecyclingOperationsAuditRecord>(r =>
+                    r.CdpUserId == string.Empty && r.CdpUserName == string.Empty
+                ),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task PatchRecyclingOperations_ValidCodes_DoesNotMutateTheOverseasSitesVersionsSnapshot()
+    {
+        Reset();
+        var snapshotVersionedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                SectionStatus = SectionStatus.Completed,
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Test Site",
+                        OperationCodes = ["R4"],
+                    },
+                ],
+                Versions =
+                [
+                    new OverseasSitesSnapshot
+                    {
+                        VersionedAt = snapshotVersionedAt,
+                        Sites =
+                        [
+                            new OverseasSiteModel
+                            {
+                                SiteId = 1,
+                                SiteName = "Test Site",
+                                OperationCodes = ["R4"],
+                            },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        await _client.PatchAsJsonAsync(
+            Url(app, 1),
+            new { OperationCodes = new List<string> { "R4" } },
+            TestContext.Current.CancellationToken
+        );
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            app.OrganisationId,
+            app.ApplicationId!
+        );
+        stored!.OverseasSites!.Versions.Should().ContainSingle();
+        stored.OverseasSites.Versions[0].VersionedAt.Should().Be(snapshotVersionedAt);
+    }
+
+    [Fact]
+    public async Task PatchRecyclingOperations_ValidationFailure_DoesNotWriteAnAuditRecord()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var response = await _client.PatchAsJsonAsync(
+            Url(app, 1),
+            new { OperationCodes = new List<string>() },
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        await _factory
+            .MockAuditPersistence.DidNotReceive()
+            .RecordAsync(Arg.Any<RecyclingOperationsAuditRecord>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PatchRecyclingOperations_ApplicationNotFound_DoesNotWriteAnAuditRecord()
+    {
+        Reset();
+
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{ObjectId.GenerateNewId()}/overseas-sites/1/recycling-operations",
+            new { OperationCodes = new List<string> { "R4" } },
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        await _factory
+            .MockAuditPersistence.DidNotReceive()
+            .RecordAsync(Arg.Any<RecyclingOperationsAuditRecord>(), Arg.Any<CancellationToken>());
     }
 }
