@@ -126,6 +126,19 @@ public static class AccreditationApplicationEndpoints
                     .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
+        // RA-469 AC18: regulator-scoped correction of one overseas site's recycling operation
+        // codes, called by management-be (never the operator frontend) - same CaseManagement
+        // caller identity as registration-number/accreditation-number above, not FrontendOnly.
+        group
+            .MapPatch(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/recycling-operations",
+                PatchRecyclingOperations
+            )
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/files", AddFile));
         FrontendOnly(
             group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile)
@@ -310,6 +323,71 @@ public static class AccreditationApplicationEndpoints
         return updated is null
             ? Results.Problem("Failed to update accreditation number.")
             : Results.Ok(updated);
+    }
+
+    // RA-469 AC18: updates OverseasSiteModel.OperationCodes for exactly one site - nothing else
+    // on the application (not SectionStatus, not DateLastEdited, not the submit/resubmit-only
+    // Versions snapshot) is touched, since this is a one-off regulator correction outside the
+    // operator's normal edit flow, not an operator edit itself. Deliberately does NOT go through
+    // AccreditationApplicationSections.IsSectionEditable (unlike AddInterimSite) for the same
+    // reason - that gate exists to protect the operator's own Queried/section workflow, which
+    // this correction must not disturb either way. Audit persistence (AC15/AC19) is wired in
+    // separately by epr-register-enrol-backend-9kr, not here.
+    private static async Task<IResult> PatchRecyclingOperations(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PatchRecyclingOperationsRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchRecyclingOperationsRequest> validator
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        // Application/material-type-aware check the request-shape validator can't do alone (see
+        // RecyclingOperationCodes' own doc comment) - a code not offered for this application's
+        // material type is rejected even though it's a member of the overall valid-code set.
+        var applicableCodes = RecyclingOperationCodes.ApplicableCodesFor(application.MaterialType);
+        if (request.OperationCodes.Any(c => !applicableCodes.Contains(c)))
+            return Results.BadRequest(
+                $"OperationCodes must each be applicable to material type '{application.MaterialType}': {string.Join(", ", applicableCodes)}."
+            );
+
+        // AC11: R12/R13 describe an operation performed in relation to an associated interim
+        // site, so an ORS with none can't carry them - needs the loaded site, so the
+        // request-shape validator (86z) can't enforce this rule itself.
+        if (
+            request.OperationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
+            && site.InterimSite is null
+        )
+            return Results.BadRequest(
+                $"R12 and R13 require an associated interim site on overseas site '{siteId}'."
+            );
+
+        site.OperationCodes = request.OperationCodes;
+
+        var updated = await persistence.UpdateAsync(application);
+        if (updated is null)
+            return Results.Problem("Failed to update recycling operations.");
+
+        // `site` is the same object already mutated above (and, on the real Mongo-backed
+        // persistence, `updated` is that same `application` reference echoed back on success -
+        // see AccreditationApplicationPersistence.UpdateAsync) - returning it directly avoids
+        // re-deriving it from `updated` with a null-forgiving lookup, matching AddInterimSite's
+        // own pattern of returning the local object it already holds.
+        return Results.Ok(site);
     }
 
     // "Reapply for accreditation" (AC5, RA-448): increments only the YY segment
