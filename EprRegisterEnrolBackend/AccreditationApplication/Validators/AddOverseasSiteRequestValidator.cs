@@ -62,7 +62,7 @@ public class AddOverseasSiteRequestValidator : AbstractValidator<AddOverseasSite
             .NotEmpty()
             .Must(c => BaselOecdCodes.ApprovedCodes.Contains(c))
             .WithMessage(
-                "Code1 must be a valid Basel Convention or OECD code (e.g. A1181 or GC010)."
+                "Code1 must be a valid Basel Convention or OECD code (e.g. A1181 or GC030)."
             );
         RuleFor(r => r.Code2)
             .Must(c => BaselOecdCodes.ApprovedCodes.Contains(c!))
