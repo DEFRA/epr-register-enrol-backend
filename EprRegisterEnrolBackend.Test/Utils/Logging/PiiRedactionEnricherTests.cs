@@ -33,6 +33,48 @@ public class PiiRedactionEnricherTests
     }
 
     [Fact]
+    public void Enrich_RedactsNameAndEmail_OnClientUserAndTopLevelUser()
+    {
+        var clientUser = new User
+        {
+            Id = "user-1",
+            Name = "jdoe",
+            FullName = "Jane Doe",
+            Email = "jane.doe@example.com",
+            Hash = "abc123",
+        };
+        var topLevelUser = new User
+        {
+            Id = "user-2",
+            Name = "jsmith",
+            Email = "john.smith@example.com",
+        };
+        var enrichments = new SpecialProperties.HttpContextEnrichments
+        {
+            Client = new Client { Ip = "203.0.113.5", User = clientUser },
+            User = topLevelUser,
+        };
+        var logEvent = CreateLogEvent(
+            new LogEventProperty(
+                SpecialProperties.SpecialKeys.HttpContext,
+                new ScalarValue(enrichments)
+            )
+        );
+
+        new PiiRedactionEnricher().Enrich(logEvent, new TestPropertyFactory());
+
+        clientUser.Name.Should().BeNull();
+        clientUser.FullName.Should().BeNull();
+        clientUser.Email.Should().BeNull();
+        clientUser.Hash.Should().BeNull();
+        clientUser.Id.Should().Be("user-1");
+
+        topLevelUser.Name.Should().BeNull();
+        topLevelUser.Email.Should().BeNull();
+        topLevelUser.Id.Should().Be("user-2");
+    }
+
+    [Fact]
     public void Enrich_DoesNotThrow_WhenHttpContextPropertyIsAbsent()
     {
         var logEvent = CreateLogEvent();
@@ -43,7 +85,7 @@ public class PiiRedactionEnricherTests
     }
 
     [Fact]
-    public void Enrich_DoesNotThrow_WhenHttpContextHasNoClient()
+    public void Enrich_DoesNotThrow_WhenHttpContextHasNoClientOrUser()
     {
         var enrichments = new SpecialProperties.HttpContextEnrichments { Client = null };
         var logEvent = CreateLogEvent(
@@ -71,6 +113,24 @@ public class PiiRedactionEnricherTests
             .Properties["Email"]
             .Should()
             .BeEquivalentTo(new ScalarValue(PiiRedactionEnricher.RedactedValue));
+    }
+
+    [Fact]
+    public void Enrich_RedactsEmailEmbeddedInAnyStringProperty_RegardlessOfPropertyName()
+    {
+        // Mirrors HttpCaseWorkingApiAdapter.cs's `{Body}` logging, which can
+        // echo a submitted email back inside a downstream API's raw error text.
+        var logEvent = CreateLogEvent(
+            new LogEventProperty(
+                "Body",
+                new ScalarValue("{\"error\":\"Invalid contact email: jane.doe@example.com\"}")
+            )
+        );
+
+        new PiiRedactionEnricher().Enrich(logEvent, new TestPropertyFactory());
+
+        var redacted = (ScalarValue)logEvent.Properties["Body"];
+        redacted.Value.Should().Be("{\"error\":\"Invalid contact email: [REDACTED]\"}");
     }
 
     [Fact]
