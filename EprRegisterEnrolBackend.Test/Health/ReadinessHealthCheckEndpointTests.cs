@@ -1,8 +1,10 @@
 using System.Net;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace EprRegisterEnrolBackend.Test.Health;
@@ -14,20 +16,19 @@ namespace EprRegisterEnrolBackend.Test.Health;
 // tests exercise that path directly with a real Production environment.
 public class ReadinessHealthCheckEndpointTests
 {
-    private static readonly Dictionary<string, string?> CompleteConfig =
-        new()
-        {
-            ["ReExApi:BaseUrl"] = "http://reex.test",
-            ["REEX_API_BASIC_AUTH_USERNAME"] = "user",
-            ["REEX_API_BASIC_AUTH_PASSWORD"] = "pass",
-            ["App:BaseUrl"] = "http://app.test",
-            ["CdpUploader:Url"] = "http://uploader.test",
-            ["CaseWorking:UseStub"] = "false",
-            ["CaseWorking:Url"] = "http://case-working.test",
-            ["CASE_MANAGEMENT_API_SHARED_SECRET"] = "case-working-secret",
-            ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "case-management-secret",
-            ["AUTH_SHARED_SECRET:FRONTEND"] = "frontend-secret",
-        };
+    private static readonly Dictionary<string, string?> CompleteConfig = new()
+    {
+        ["ReExApi:BaseUrl"] = "http://reex.test",
+        ["REEX_API_BASIC_AUTH_USERNAME"] = "user",
+        ["REEX_API_BASIC_AUTH_PASSWORD"] = "pass",
+        ["App:BaseUrl"] = "http://app.test",
+        ["CdpUploader:Url"] = "http://uploader.test",
+        ["CaseWorking:UseStub"] = "false",
+        ["CaseWorking:Url"] = "http://case-working.test",
+        ["CASE_MANAGEMENT_API_SHARED_SECRET"] = "case-working-secret",
+        ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "case-management-secret",
+        ["AUTH_SHARED_SECRET:FRONTEND"] = "frontend-secret",
+    };
 
     [Fact]
     public async Task Health_ReturnsHealthy_RegardlessOfConfig()
@@ -76,6 +77,16 @@ public class ReadinessHealthCheckEndpointTests
             builder.ConfigureAppConfiguration(
                 (_, config) => config.AddInMemoryCollection(configOverrides)
             );
+            builder.ConfigureServices(services =>
+            {
+                // RA-448: this file exercises RequiredConfigHealthCheck specifically, not
+                // RegulatoryNumberBackfillHealthCheck - without this, HealthReady_ReturnsHealthy
+                // would fail regardless of config, since the real backfill has no live Mongo
+                // to actually seed against in this test environment and never completes.
+                var status = new RegulatoryNumberBackfillStatus();
+                status.MarkComplete();
+                services.AddSingleton<IRegulatoryNumberBackfillStatus>(status);
+            });
         }
     }
 }

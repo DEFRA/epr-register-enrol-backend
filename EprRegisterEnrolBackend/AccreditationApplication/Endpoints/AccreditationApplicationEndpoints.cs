@@ -85,10 +85,7 @@ public static class AccreditationApplicationEndpoints
             )
         );
         FrontendOnly(
-            group.MapPatch(
-                "{organisationId}/{applicationId}/bes-evidence",
-                PatchBesEvidenceSection
-            )
+            group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection)
         );
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/submit", Submit));
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/resubmit", Resubmit));
@@ -107,8 +104,32 @@ public static class AccreditationApplicationEndpoints
                     .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
+        // RA-448: regulator/caseworker actions, same CaseManagement caller identity as the
+        // two routes above - not something the operator-facing frontend calls (AC7).
+        group
+            .MapPost(
+                "{organisationId}/{applicationId}/registration-number",
+                GenerateOrUpdateRegistrationNumber
+            )
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
+        group
+            .MapPost(
+                "{organisationId}/{applicationId}/accreditation-number",
+                GenerateOrUpdateAccreditationNumber
+            )
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/files", AddFile));
-        FrontendOnly(group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile));
+        FrontendOnly(
+            group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile)
+        );
         FrontendOnly(
             group.MapPost("{organisationId}/{applicationId}/files/initiate", InitiateUpload)
         );
@@ -140,6 +161,171 @@ public static class AccreditationApplicationEndpoints
                 "Application is Approved, Rejected or Withdrawn and can no longer be edited."
             )
             : null;
+
+    // RA-448 AC1/AC5/AC6/AC7/AC9. Nation/OrgId/Year are all caller-supplied (see
+    // GenerateOrUpdateRegulatoryNumberRequest) - Nation/OrgId because this
+    // backend has no reliable real organisation data source to derive them
+    // from, and Year per explicit product direction (2026-08-19): no
+    // assumption about the year may be made on a first-ever generate.
+    private static async Task<IResult> GenerateOrUpdateRegistrationNumber(
+        string organisationId,
+        string applicationId,
+        GenerateOrUpdateRegulatoryNumberRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IRegulatoryNumberGenerator generator,
+        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+
+        // AC5: idempotent - an existing number is returned unchanged unless the
+        // caller explicitly asks to regenerate, so a retry never burns a sequence
+        // value. Covers both a number this endpoint issued previously and one
+        // already populated from ReEx at Seed time (AccreditationApplicationEndpoints.Seed).
+        if (application.RegistrationReference is not null && !request.Regenerate)
+            return Results.Ok(application);
+
+        if (
+            request.Nation is not { } nationValue
+            || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
+            || request.OrgId is not { } orgId
+            || request.Year is not { } year
+        )
+            return Results.BadRequest(
+                "Nation, OrgId and Year are required to generate a registration number."
+            );
+
+        var newNumber = await generator.GenerateAsync(
+            new RegulatoryNumberSpec
+            {
+                Type = NumberType.Registration,
+                Nation = nation,
+                IsExporter = application.IsExporter,
+                OrgId = orgId,
+                Material = application.MaterialType,
+                GlassRecyclingProcess = application.GlassRecyclingProcess,
+                Year = year,
+            }
+        );
+
+        // Regenerate: keep the prior number in the audit trail, never reuse/reissue it
+        // (AC5). A first-ever generate has no prior number to preserve.
+        if (application.RegistrationReference is { } previousNumber)
+            application.PreviousRegistrationNumbers.Add(previousNumber);
+
+        application.RegistrationReference = newNumber;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update registration number.")
+            : Results.Ok(updated);
+    }
+
+    // RA-448 AC1/AC5/AC6/AC7/AC9. Regenerate here is NOT the same mechanism as
+    // registration's: "reapply for accreditation" increments only the existing
+    // number's YY segment in place - it never draws from the atomic counter and
+    // never mutates regulatoryNumberSequences. A first-ever generate still goes
+    // through the normal counter-backed generator, same as registration.
+    private static async Task<IResult> GenerateOrUpdateAccreditationNumber(
+        string organisationId,
+        string applicationId,
+        GenerateOrUpdateRegulatoryNumberRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IRegulatoryNumberGenerator generator,
+        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator
+    )
+    {
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+
+        // AC9: registration precedes and is independent of accreditation - an
+        // accreditation number is never issued with nothing to accredit against.
+        if (application.RegistrationReference is null)
+            return Results.Conflict(
+                "Application has no registration number yet; an accreditation number cannot be issued."
+            );
+
+        // AC5: idempotent - an existing number is returned unchanged unless the
+        // caller explicitly asks to regenerate.
+        if (application.AccreditationReference is not null && !request.Regenerate)
+            return Results.Ok(application);
+
+        string newNumber;
+        if (application.AccreditationReference is { } numberToReapply && request.Regenerate)
+        {
+            // "Reapply for accreditation": pure string transform, no counter draw.
+            newNumber = IncrementYear(numberToReapply);
+        }
+        else
+        {
+            if (
+                request.Nation is not { } nationValue
+                || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
+                || request.OrgId is not { } orgId
+                || request.Year is not { } year
+            )
+                return Results.BadRequest(
+                    "Nation, OrgId and Year are required to generate an accreditation number."
+                );
+
+            newNumber = await generator.GenerateAsync(
+                new RegulatoryNumberSpec
+                {
+                    Type = NumberType.Accreditation,
+                    Nation = nation,
+                    IsExporter = application.IsExporter,
+                    OrgId = orgId,
+                    Material = application.MaterialType,
+                    GlassRecyclingProcess = application.GlassRecyclingProcess,
+                    Year = year,
+                }
+            );
+        }
+
+        // Regenerate (either mechanism): keep the prior number in the audit trail,
+        // never reuse/reissue it (AC5). A first-ever generate has no prior number.
+        if (application.AccreditationReference is { } previousNumber)
+            application.PreviousAccreditationNumbers.Add(previousNumber);
+
+        application.AccreditationReference = newNumber;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update accreditation number.")
+            : Results.Ok(updated);
+    }
+
+    // "Reapply for accreditation" (AC5, RA-448): increments only the YY segment
+    // (index 1-2 of the fixed {R|A}{YY}{AgencyType}{OrgID}{Sequence}{Material}
+    // format) against whatever YY the number currently holds - not the calendar
+    // year at reapply time - leaving every other segment byte-identical.
+    private static string IncrementYear(string existingNumber)
+    {
+        var currentYear = int.Parse(existingNumber.Substring(1, 2));
+        var nextYear = (currentYear + 1) % 100;
+        return string.Concat(
+            existingNumber.AsSpan(0, 1),
+            nextYear.ToString("D2"),
+            existingNumber.AsSpan(3)
+        );
+    }
 
     private static readonly System.Text.RegularExpressions.Regex FilenameIsSafe = new(
         @"^[^\x00-\x1f<>:""/\\|?*]+$"
@@ -1078,8 +1264,12 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
 
         if (
-            TryResolveScannedFile(request.FileUploadId, pendingUploadService, out var scannedFile)
-            is { } uploadError
+            TryResolveScannedFile(
+                request.FileUploadId,
+                pendingUploadService,
+                out var scannedFile
+            ) is
+            { } uploadError
         )
             return uploadError;
 
@@ -1623,8 +1813,12 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
 
         if (
-            TryResolveScannedFile(request.FileUploadId, pendingUploadService, out var scannedFile)
-            is { } uploadError
+            TryResolveScannedFile(
+                request.FileUploadId,
+                pendingUploadService,
+                out var scannedFile
+            ) is
+            { } uploadError
         )
             return uploadError;
 
@@ -1660,9 +1854,10 @@ public static class AccreditationApplicationEndpoints
             Filename = scannedFile.Filename,
             ContentType = contentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus = scannedFile.FileStatus == "complete"
-                ? FileScanStatus.Clean
-                : FileScanStatus.Infected,
+            ScanStatus =
+                scannedFile.FileStatus == "complete"
+                    ? FileScanStatus.Clean
+                    : FileScanStatus.Infected,
             DocumentType = request.DocumentType,
             S3Key = scannedFile.S3Key,
             S3Bucket = scannedFile.S3Bucket,

@@ -143,7 +143,19 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
                 ) == true
             )
             .Where(e => !e.RoutePattern.RawText!.Contains("case-management"))
-            .Where(e => e.RoutePattern.RawText != "api/v1/accreditation-applications/files/upload-completed")
+            .Where(e =>
+                e.RoutePattern.RawText != "api/v1/accreditation-applications/files/upload-completed"
+            )
+            // RA-448: regulator/caseworker actions, same CaseManagement scheme as the two
+            // case-management/* routes above (AC7) - not something the operator frontend calls.
+            .Where(e =>
+                e.RoutePattern.RawText
+                != "api/v1/accreditation-applications/{organisationId}/{applicationId}/registration-number"
+            )
+            .Where(e =>
+                e.RoutePattern.RawText
+                != "api/v1/accreditation-applications/{organisationId}/{applicationId}/accreditation-number"
+            )
             .ToList();
 
         routes.Should().NotBeEmpty();
@@ -151,7 +163,9 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
         foreach (var route in routes)
         {
             var policy = route.Metadata.GetMetadata<AuthorizationPolicy>();
-            policy.Should().NotBeNull($"route '{route.RoutePattern.RawText}' should require authorization");
+            policy
+                .Should()
+                .NotBeNull($"route '{route.RoutePattern.RawText}' should require authorization");
             policy!
                 .AuthenticationSchemes.Should()
                 .Contain(
