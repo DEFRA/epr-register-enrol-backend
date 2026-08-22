@@ -308,7 +308,7 @@ public class HttpCaseWorkingApiAdapterTests
         application.BusinessPlan.OtherDetail = "Other spend detail";
 
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(application);
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var businessPlan = doc.RootElement.GetProperty("payload").GetProperty("businessPlan");
@@ -1349,7 +1349,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            TestContext.Current.CancellationToken
         );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
