@@ -426,15 +426,19 @@ public static class AccreditationApplicationEndpoints
     // [AsParameters] argument so the handler itself stays under Sonar's 7-parameter
     // limit (S107) - same reasoning as RegulatoryNumberSpec, adapted for a minimal-API
     // handler (whose route/body parameters can't be bundled the same way, since ASP.NET
-    // binds each top-level parameter from a different source).
-    private sealed class RecyclingOperationsServices
-    {
-        public required IAccreditationApplicationPersistence Persistence { get; init; }
-        public required IValidator<PatchRecyclingOperationsRequest> Validator { get; init; }
-        public required IRecyclingOperationsAuditPersistence AuditPersistence { get; init; }
-        public required HttpContext HttpContext { get; init; }
-        public required CancellationToken CancellationToken { get; init; }
-    }
+    // binds each top-level parameter from a different source). A positional record,
+    // not bare `{ get; init; }` auto-properties: ASP.NET's [AsParameters] binding
+    // constructs this via reflection either way, invisible to static analysis, but a
+    // primary-constructor assignment reads as a real assignment to Sonar (S3459/S1144)
+    // the same way every other DI-constructed class in this file already does - a bare
+    // init-only auto-property with no constructor at all does not.
+    private sealed record RecyclingOperationsServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<PatchRecyclingOperationsRequest> Validator,
+        IRecyclingOperationsAuditPersistence AuditPersistence,
+        HttpContext HttpContext,
+        CancellationToken CancellationToken
+    );
 
     // "Reapply for accreditation" (AC5, RA-448): increments only the YY segment
     // (index 1-2 of the fixed {R|A}{YY}{AgencyType}{OrgID}{Sequence}{Material}
