@@ -299,6 +299,23 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("wasteProcessingType").GetString().Should().Be("reprocessor");
     }
 
+    // RA-456
+    [Fact]
+    public async Task SubmitApplicationAsync_MapsBusinessPlanOtherFieldsIntoPayload()
+    {
+        var application = CreateTestApplication();
+        application.BusinessPlan.OtherPercent = 15;
+        application.BusinessPlan.OtherDetail = "Other spend detail";
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var businessPlan = doc.RootElement.GetProperty("payload").GetProperty("businessPlan");
+        businessPlan.GetProperty("otherPercent").GetInt32().Should().Be(15);
+        businessPlan.GetProperty("otherDetail").GetString().Should().Be("Other spend detail");
+    }
+
     // RA-434
     [Fact]
     public async Task SubmitApplicationAsync_NoPermitNumbers_SendsEmptyPermitNumbersArray()
@@ -1312,6 +1329,33 @@ public class HttpCaseWorkingApiAdapterTests
             .GetInt32()
             .Should()
             .Be(40);
+    }
+
+    // RA-456
+    [Fact]
+    public async Task ResumeFromQueryAsync_MapsBusinessPlanOtherFieldsIntoPayload()
+    {
+        var app = CreateTestApplication();
+        app.CaseManagementWorkItemId = Guid.NewGuid();
+        app.BusinessPlan.OtherPercent = 15;
+        app.BusinessPlan.OtherDetail = "Other spend detail";
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            app,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["business-plan"]
+        );
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var businessPlan = doc.RootElement.GetProperty("sections").GetProperty("BusinessPlan");
+        businessPlan.GetProperty("otherPercent").GetInt32().Should().Be(15);
+        businessPlan.GetProperty("otherDetail").GetString().Should().Be("Other spend detail");
     }
 
     [Fact]
