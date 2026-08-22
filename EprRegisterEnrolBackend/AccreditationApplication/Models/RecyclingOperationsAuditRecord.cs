@@ -17,8 +17,8 @@ public class RecyclingOperationsAuditRecord
     // From CaseManagementAuthenticationHandler's "cdp_user_id"/"cdp_user_name" claims (in turn
     // from the x-cdp-user-id/x-cdp-user-name request headers). Both may be empty when the caller
     // didn't send them - e.g. the Development header-trust bypass when no shared secret is
-    // configured - so this is deliberately a plain string, not a required/non-nullable field;
-    // the endpoint must not fail to record an edit just because identity is unavailable.
+    // configured - so this is deliberately a plain string, not a required/non-nullable field.
+    // The endpoint must not fail to record an edit just because identity is unavailable.
     public string CdpUserId { get; set; } = string.Empty;
     public string CdpUserName { get; set; } = string.Empty;
 

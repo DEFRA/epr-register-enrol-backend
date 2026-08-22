@@ -348,18 +348,17 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         int siteId,
         PatchRecyclingOperationsRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<PatchRecyclingOperationsRequest> validator,
-        IRecyclingOperationsAuditPersistence auditPersistence,
-        HttpContext httpContext,
-        CancellationToken cancellationToken
+        [AsParameters] RecyclingOperationsServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -395,22 +394,24 @@ public static class AccreditationApplicationEndpoints
         var beforeCodes = site.OperationCodes.ToList();
         site.OperationCodes = request.OperationCodes;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         if (updated is null)
             return Results.Problem("Failed to update recycling operations.");
 
-        await auditPersistence.RecordAsync(
+        await services.AuditPersistence.RecordAsync(
             new RecyclingOperationsAuditRecord
             {
-                CdpUserId = httpContext.User.FindFirst("cdp_user_id")?.Value ?? string.Empty,
-                CdpUserName = httpContext.User.FindFirst("cdp_user_name")?.Value ?? string.Empty,
+                CdpUserId =
+                    services.HttpContext.User.FindFirst("cdp_user_id")?.Value ?? string.Empty,
+                CdpUserName =
+                    services.HttpContext.User.FindFirst("cdp_user_name")?.Value ?? string.Empty,
                 OrganisationId = organisationId,
                 ApplicationId = applicationId,
                 SiteId = siteId,
                 BeforeCodes = beforeCodes,
                 AfterCodes = request.OperationCodes,
             },
-            cancellationToken
+            services.CancellationToken
         );
 
         // `site` is the same object already mutated above (and, on the real Mongo-backed
@@ -419,6 +420,20 @@ public static class AccreditationApplicationEndpoints
         // re-deriving it from `updated` with a null-forgiving lookup, matching AddInterimSite's
         // own pattern of returning the local object it already holds.
         return Results.Ok(site);
+    }
+
+    // Bundles PatchRecyclingOperations' DI-service/framework parameters under one
+    // [AsParameters] argument so the handler itself stays under Sonar's 7-parameter
+    // limit (S107) - same reasoning as RegulatoryNumberSpec, adapted for a minimal-API
+    // handler (whose route/body parameters can't be bundled the same way, since ASP.NET
+    // binds each top-level parameter from a different source).
+    private sealed class RecyclingOperationsServices
+    {
+        public required IAccreditationApplicationPersistence Persistence { get; init; }
+        public required IValidator<PatchRecyclingOperationsRequest> Validator { get; init; }
+        public required IRecyclingOperationsAuditPersistence AuditPersistence { get; init; }
+        public required HttpContext HttpContext { get; init; }
+        public required CancellationToken CancellationToken { get; init; }
     }
 
     // "Reapply for accreditation" (AC5, RA-448): increments only the YY segment
