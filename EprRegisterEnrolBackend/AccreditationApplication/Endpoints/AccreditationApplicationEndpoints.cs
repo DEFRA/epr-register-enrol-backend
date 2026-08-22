@@ -126,6 +126,19 @@ public static class AccreditationApplicationEndpoints
                     .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
+        // RA-469 AC18: regulator-scoped correction of one overseas site's recycling operation
+        // codes, called by management-be (never the operator frontend) - same CaseManagement
+        // caller identity as registration-number/accreditation-number above, not FrontendOnly.
+        group
+            .MapPatch(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/recycling-operations",
+                PatchRecyclingOperations
+            )
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/files", AddFile));
         FrontendOnly(
             group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile)
@@ -311,6 +324,121 @@ public static class AccreditationApplicationEndpoints
             ? Results.Problem("Failed to update accreditation number.")
             : Results.Ok(updated);
     }
+
+    // RA-469 AC18: updates OverseasSiteModel.OperationCodes for exactly one site - nothing else
+    // on the application (not SectionStatus, not DateLastEdited, not the submit/resubmit-only
+    // Versions snapshot) is touched, since this is a one-off regulator correction outside the
+    // operator's normal edit flow, not an operator edit itself. Deliberately does NOT go through
+    // AccreditationApplicationSections.IsSectionEditable (unlike AddInterimSite) for the same
+    // reason - that gate exists to protect the operator's own Queried/section workflow, which
+    // this correction must not disturb either way.
+    //
+    // RA-469 AC15/AC19 (epr-register-enrol-backend-9kr): the audit record is written after a
+    // successful update, never on a validation/404/409 short-circuit above. cdp_user_id/
+    // cdp_user_name come from CaseManagementAuthenticationHandler's claims (in turn from the
+    // x-cdp-user-id/x-cdp-user-name request headers) - both are absent on the Development
+    // header-trust bypass (no shared secret configured), so FindFirst(...)?.Value defaults to
+    // string.Empty rather than throwing when identity is unavailable. The audit write is
+    // deliberately NOT wrapped in try/catch: unlike AddInterimSite's best-effort ManagementBe
+    // courtesy notification, AC19 requires every successful edit to be recorded, so a failed
+    // audit write should surface as a 500 (via the app's exception handler) rather than silently
+    // leaving an unaudited change in place.
+    private static async Task<IResult> PatchRecyclingOperations(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PatchRecyclingOperationsRequest request,
+        [AsParameters] RecyclingOperationsServices services
+    )
+    {
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        // Application/material-type-aware check the request-shape validator can't do alone (see
+        // RecyclingOperationCodes' own doc comment) - a code not offered for this application's
+        // material type is rejected even though it's a member of the overall valid-code set.
+        var applicableCodes = RecyclingOperationCodes.ApplicableCodesFor(application.MaterialType);
+        if (request.OperationCodes.Any(c => !applicableCodes.Contains(c)))
+            return Results.BadRequest(
+                $"OperationCodes must each be applicable to material type '{application.MaterialType}': {string.Join(", ", applicableCodes)}."
+            );
+
+        // AC11: R12/R13 describe an operation performed in relation to an associated interim
+        // site, so an ORS with none can't carry them - needs the loaded site, so the
+        // request-shape validator (86z) can't enforce this rule itself.
+        if (
+            request.OperationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
+            && site.InterimSite is null
+        )
+            return Results.BadRequest(
+                $"R12 and R13 require an associated interim site on overseas site '{siteId}'."
+            );
+
+        // Snapshotted before mutation, as an independent list - not aliased with the request's
+        // own OperationCodes below (RecyclingOperationsAuditPersistence's tests require the
+        // before/after lists to remain independent).
+        var beforeCodes = site.OperationCodes.ToList();
+        site.OperationCodes = request.OperationCodes;
+
+        var updated = await services.Persistence.UpdateAsync(application);
+        if (updated is null)
+            return Results.Problem("Failed to update recycling operations.");
+
+        await services.AuditPersistence.RecordAsync(
+            new RecyclingOperationsAuditRecord
+            {
+                CdpUserId =
+                    services.HttpContext.User.FindFirst("cdp_user_id")?.Value ?? string.Empty,
+                CdpUserName =
+                    services.HttpContext.User.FindFirst("cdp_user_name")?.Value ?? string.Empty,
+                OrganisationId = organisationId,
+                ApplicationId = applicationId,
+                SiteId = siteId,
+                BeforeCodes = beforeCodes,
+                AfterCodes = request.OperationCodes,
+            },
+            services.CancellationToken
+        );
+
+        // `site` is the same object already mutated above (and, on the real Mongo-backed
+        // persistence, `updated` is that same `application` reference echoed back on success -
+        // see AccreditationApplicationPersistence.UpdateAsync) - returning it directly avoids
+        // re-deriving it from `updated` with a null-forgiving lookup, matching AddInterimSite's
+        // own pattern of returning the local object it already holds.
+        return Results.Ok(site);
+    }
+
+    // Bundles PatchRecyclingOperations' DI-service/framework parameters under one
+    // [AsParameters] argument so the handler itself stays under Sonar's 7-parameter
+    // limit (S107) - same reasoning as RegulatoryNumberSpec, adapted for a minimal-API
+    // handler (whose route/body parameters can't be bundled the same way, since ASP.NET
+    // binds each top-level parameter from a different source). A positional record,
+    // not bare `{ get; init; }` auto-properties: ASP.NET's [AsParameters] binding
+    // constructs this via reflection either way, invisible to static analysis, but a
+    // primary-constructor assignment reads as a real assignment to Sonar (S3459/S1144)
+    // the same way every other DI-constructed class in this file already does - a bare
+    // init-only auto-property with no constructor at all does not.
+    private sealed record RecyclingOperationsServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<PatchRecyclingOperationsRequest> Validator,
+        IRecyclingOperationsAuditPersistence AuditPersistence,
+        HttpContext HttpContext,
+        CancellationToken CancellationToken
+    );
 
     // "Reapply for accreditation" (AC5, RA-448): increments only the YY segment
     // (index 1-2 of the fixed {R|A}{YY}{AgencyType}{OrgID}{Sequence}{Material}

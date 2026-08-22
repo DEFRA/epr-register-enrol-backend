@@ -156,6 +156,13 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
                 e.RoutePattern.RawText
                 != "api/v1/accreditation-applications/{organisationId}/{applicationId}/accreditation-number"
             )
+            // RA-469 AC18: regulator/caseworker correction of an overseas site's recycling
+            // operation codes, same CaseManagement scheme as the two routes above - called by
+            // management-be, not the operator frontend.
+            .Where(e =>
+                e.RoutePattern.RawText
+                != "api/v1/accreditation-applications/{organisationId}/{applicationId}/overseas-sites/{siteId}/recycling-operations"
+            )
             .ToList();
 
         routes.Should().NotBeEmpty();

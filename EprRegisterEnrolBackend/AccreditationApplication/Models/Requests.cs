@@ -116,6 +116,13 @@ public class PatchBesEvidenceRequest
     public bool? DoYouWantToUploadMoreEvidence { get; set; }
 }
 
+// RA-469: regulator-scoped correction of an ORS's recycling operation codes only - no other
+// overseas-site fields are editable through this endpoint.
+public class PatchRecyclingOperationsRequest
+{
+    public required List<string> OperationCodes { get; set; }
+}
+
 public class PatchBesEvidenceSectionRequest
 {
     public SectionStatus? SectionStatus { get; set; }

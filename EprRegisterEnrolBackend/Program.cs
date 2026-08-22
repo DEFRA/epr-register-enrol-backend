@@ -146,6 +146,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IRegulatoryNumberBackfillStatus,
         RegulatoryNumberBackfillStatus
     >();
+
+    // RA-469: audit trail for the regulator-facing recycling-operations PATCH endpoint (AC15/AC19).
+    builder.Services.AddSingleton<
+        IRecyclingOperationsAuditPersistence,
+        RecyclingOperationsAuditPersistence
+    >();
     // Launch blocker (AC4): must run in every environment, not just Development -
     // seeds the counters so the first number this endpoint issues doesn't collide
     // with one already in the real register. Idempotent, safe on every startup.
