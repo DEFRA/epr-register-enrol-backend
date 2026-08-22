@@ -267,6 +267,61 @@ public class RecyclingOperationsEndpointTests : IClassFixture<AccreditationAppli
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // epr-register-enrol-backend-8h7: simulates every MaterialType to prove the server-side
+    // RecyclingOperationCodes.CodesByMaterialType mapping matches epr-register-enrol-frontend's
+    // CODES_BY_MATERIAL_TYPE (see RecyclingOperationCodes' own doc comment) - one non-R12/R13
+    // code that IS offered for the material type (expect 200) and one that ISN'T (expect 400),
+    // covering all 7 MaterialType values so a future drift in either map's per-material set
+    // fails this test rather than silently diverging between the two repos.
+    [Theory]
+    [InlineData(MaterialType.Aluminium, "R4", "R3")]
+    [InlineData(MaterialType.Fibre, "R3", "R4")]
+    [InlineData(MaterialType.Glass, "R5", "R3")]
+    [InlineData(MaterialType.Paper, "R3", "R4")]
+    [InlineData(MaterialType.Plastic, "R3", "R4")]
+    [InlineData(MaterialType.Steel, "R4", "R3")]
+    [InlineData(MaterialType.Wood, "R3", "R4")]
+    public async Task PatchRecyclingOperations_MaterialTypeApplicability_MatchesFrontendCodesByMaterialType(
+        MaterialType materialType,
+        string allowedCode,
+        string disallowedCode
+    )
+    {
+        Reset();
+        var allowedApp = SeedApplicationWithOverseasSite(
+            materialType: materialType,
+            siteName: $"Site-{materialType}-allowed"
+        );
+
+        var allowedResponse = await _client.PatchAsJsonAsync(
+            Url(allowedApp, 1),
+            new { OperationCodes = new List<string> { allowedCode } },
+            TestContext.Current.CancellationToken
+        );
+
+        allowedResponse
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK, $"{allowedCode} should be applicable for {materialType}");
+
+        var disallowedApp = SeedApplicationWithOverseasSite(
+            materialType: materialType,
+            siteName: $"Site-{materialType}-disallowed"
+        );
+
+        var disallowedResponse = await _client.PatchAsJsonAsync(
+            Url(disallowedApp, 1),
+            new { OperationCodes = new List<string> { disallowedCode } },
+            TestContext.Current.CancellationToken
+        );
+
+        disallowedResponse
+            .StatusCode.Should()
+            .Be(
+                HttpStatusCode.BadRequest,
+                $"{disallowedCode} should not be applicable for {materialType}"
+            );
+    }
+
     // --- RA-469 AC15/AC19 (epr-register-enrol-backend-9kr): audit persistence wiring ---
 
     [Fact]
