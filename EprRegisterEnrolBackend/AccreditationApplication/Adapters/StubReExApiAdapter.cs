@@ -1,3 +1,4 @@
+using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx;
@@ -200,5 +201,36 @@ public class StubReExApiAdapter(
                 200
             )
         );
+    }
+
+    public Task<ReExResult<int?>> GetOrganisationNumberAsync(
+        string organisationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubReExApiAdapter.GetOrganisationNumberAsync called for org={OrganisationId}",
+                organisationId
+            );
+        }
+
+        // Stub: a numeric org id passes straight through so a locally-seeded
+        // numeric organisation behaves exactly as the real ReEx would. Anything
+        // else (the UUID a real ReEx organisation id actually is) reports "no
+        // orgId recorded" rather than inventing one - the caller then falls back
+        // to its own supplied value, which is what every existing local/dev
+        // fixture relies on.
+        var orgNumber = int.TryParse(
+            organisationId,
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out var parsed
+        )
+            ? parsed
+            : (int?)null;
+
+        return Task.FromResult(ReExResult<int?>.Success(orgNumber, 200));
     }
 }

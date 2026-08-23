@@ -175,18 +175,61 @@ public static class AccreditationApplicationEndpoints
             )
             : null;
 
-    // RA-448 AC1/AC5/AC6/AC7/AC9. Nation/OrgId/Year are all caller-supplied (see
-    // GenerateOrUpdateRegulatoryNumberRequest) - Nation/OrgId because this
-    // backend has no reliable real organisation data source to derive them
-    // from, and Year per explicit product direction (2026-08-19): no
-    // assumption about the year may be made on a first-ever generate.
+    /// <summary>
+    /// RA-475: resolve the numeric organisation id the <c>{OrgId:D6}</c> segment
+    /// of a regulatory number is built from.
+    ///
+    /// ReEx is authoritative and is tried FIRST, because the caller cannot supply
+    /// this value correctly: management-be only holds the ReEx organisation id,
+    /// which is a UUID. It was passing that through <c>int.TryParse</c>, which
+    /// fails for every genuinely-submitted application, and the resulting refusal
+    /// surfaced in Case Management as "this application has changed since you
+    /// opened it" on a determination that could never succeed.
+    ///
+    /// The caller's <c>OrgId</c> survives only as a fallback, for the two cases
+    /// ReEx cannot answer: an organisation with no <c>orgId</c> recorded, and the
+    /// seeded/stubbed fixtures whose organisation ids are already numeric and have
+    /// no ReEx document behind them. A ReEx lookup FAILURE also falls back rather
+    /// than failing the request outright - the caller-supplied value is no worse
+    /// than the one this endpoint accepted unconditionally before.
+    ///
+    /// Returns null when neither source yields a value; the caller turns that into
+    /// the same 400 a missing OrgId has always produced.
+    /// </summary>
+    private static async Task<int?> ResolveOrgIdAsync(
+        string organisationId,
+        GenerateOrUpdateRegulatoryNumberRequest request,
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
+    )
+    {
+        var reExResult = await reExAdapter.GetOrganisationNumberAsync(
+            organisationId,
+            cancellationToken
+        );
+
+        return reExResult is { IsSuccess: true, Value: { } orgNumber } ? orgNumber : request.OrgId;
+    }
+
+    // RA-448 AC1/AC5/AC6/AC7/AC9. Nation and Year stay caller-supplied (see
+    // GenerateOrUpdateRegulatoryNumberRequest) - Nation because this backend has
+    // no reliable source to derive it from, and Year per explicit product
+    // direction (2026-08-19): no assumption about the year may be made on a
+    // first-ever generate.
+    //
+    // RA-475: OrgId no longer is. ReEx IS a reliable source for it - an
+    // organisation document carries its own numeric `orgId`, which is exactly
+    // what the number format's {OrgId:D6} segment means - so it is resolved
+    // here and the caller's value is only a fallback. See ResolveOrgIdAsync.
     private static async Task<IResult> GenerateOrUpdateRegistrationNumber(
         string organisationId,
         string applicationId,
         GenerateOrUpdateRegulatoryNumberRequest request,
         IAccreditationApplicationPersistence persistence,
         IRegulatoryNumberGenerator generator,
-        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator
+        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator,
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
     )
     {
         var validation = await validator.ValidateAsync(request);
@@ -206,10 +249,17 @@ public static class AccreditationApplicationEndpoints
         if (application.RegistrationReference is not null && !request.Regenerate)
             return Results.Ok(application);
 
+        var orgIdResolution = await ResolveOrgIdAsync(
+            organisationId,
+            request,
+            reExAdapter,
+            cancellationToken
+        );
+
         if (
             request.Nation is not { } nationValue
             || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
-            || request.OrgId is not { } orgId
+            || orgIdResolution is not { } orgId
             || request.Year is not { } year
         )
             return Results.BadRequest(
@@ -254,7 +304,9 @@ public static class AccreditationApplicationEndpoints
         GenerateOrUpdateRegulatoryNumberRequest request,
         IAccreditationApplicationPersistence persistence,
         IRegulatoryNumberGenerator generator,
-        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator
+        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator,
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
     )
     {
         var validation = await validator.ValidateAsync(request);
@@ -287,10 +339,17 @@ public static class AccreditationApplicationEndpoints
         }
         else
         {
+            var orgIdResolution = await ResolveOrgIdAsync(
+                organisationId,
+                request,
+                reExAdapter,
+                cancellationToken
+            );
+
             if (
                 request.Nation is not { } nationValue
                 || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
-                || request.OrgId is not { } orgId
+                || orgIdResolution is not { } orgId
                 || request.Year is not { } year
             )
                 return Results.BadRequest(
