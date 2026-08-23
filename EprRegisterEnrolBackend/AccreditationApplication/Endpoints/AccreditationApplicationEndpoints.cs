@@ -608,6 +608,11 @@ public static class AccreditationApplicationEndpoints
                 CommunicationsPercent = priorYearData.BusinessPlan.CommunicationsPercent,
                 NewMarketsPercent = priorYearData.BusinessPlan.NewMarketsPercent,
                 NewUsesPercent = priorYearData.BusinessPlan.NewUsesPercent,
+                // RA-456: ReEx already sends this category ("Activities or investment not covered
+                // by the other categories") and HttpReExApiAdapter already maps it into
+                // ReExBusinessPlanDto.OtherPercent — this copy was the missing link that silently
+                // dropped it before it ever reached the domain model.
+                OtherPercent = priorYearData.BusinessPlan.OtherPercent,
                 SectionStatus = SectionStatus.NotStarted,
             };
         }
@@ -828,6 +833,8 @@ public static class AccreditationApplicationEndpoints
             bp.NewMarketsPercent = request.NewMarketsPercent;
         if (request.NewUsesPercent.HasValue)
             bp.NewUsesPercent = request.NewUsesPercent;
+        if (request.OtherPercent.HasValue)
+            bp.OtherPercent = request.OtherPercent;
 
         if (request.NewInfrastructureDetail != null)
             bp.NewInfrastructureDetail = request.NewInfrastructureDetail;
@@ -841,6 +848,8 @@ public static class AccreditationApplicationEndpoints
             bp.NewMarketsDetail = request.NewMarketsDetail;
         if (request.NewUsesDetail != null)
             bp.NewUsesDetail = request.NewUsesDetail;
+        if (request.OtherDetail != null)
+            bp.OtherDetail = request.OtherDetail;
 
         if (bp.SectionStatus != SectionStatus.Queried)
             bp.SectionStatus = SectionStatusService.ComputeBusinessPlan(bp);

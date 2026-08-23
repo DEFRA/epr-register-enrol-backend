@@ -164,10 +164,11 @@ public class StubReExApiAdapter(
             {
                 NewInfrastructurePercent = 20,
                 PriceSupportPercent = 20,
-                BusinessCollectionsPercent = 20,
-                CommunicationsPercent = 20,
+                BusinessCollectionsPercent = 15,
+                CommunicationsPercent = 15,
                 NewMarketsPercent = 10,
                 NewUsesPercent = 10,
+                OtherPercent = 10,
             },
         };
 

@@ -23,7 +23,8 @@ public static class SectionStatusService
             && bp.BusinessCollectionsPercent.HasValue
             && bp.CommunicationsPercent.HasValue
             && bp.NewMarketsPercent.HasValue
-            && bp.NewUsesPercent.HasValue;
+            && bp.NewUsesPercent.HasValue
+            && bp.OtherPercent.HasValue;
 
         if (!allSet)
         {
@@ -33,7 +34,8 @@ public static class SectionStatusService
                 || bp.BusinessCollectionsPercent.HasValue
                 || bp.CommunicationsPercent.HasValue
                 || bp.NewMarketsPercent.HasValue
-                || bp.NewUsesPercent.HasValue;
+                || bp.NewUsesPercent.HasValue
+                || bp.OtherPercent.HasValue;
 
             return anySet ? SectionStatus.InProgress : SectionStatus.NotStarted;
         }
@@ -44,7 +46,8 @@ public static class SectionStatusService
             + (bp.BusinessCollectionsPercent ?? 0)
             + (bp.CommunicationsPercent ?? 0)
             + (bp.NewMarketsPercent ?? 0)
-            + (bp.NewUsesPercent ?? 0);
+            + (bp.NewUsesPercent ?? 0)
+            + (bp.OtherPercent ?? 0);
 
         return sum == 100 ? SectionStatus.Completed : SectionStatus.InProgress;
     }
