@@ -50,7 +50,7 @@ COPY --from=publish --chown=$APP_UID:$APP_UID /app/publish .
 # runtime write is the ASP.NET Data Protection key ring under $HOME (/home/app), which the
 # base image already creates owned by this account. Verified by running the built image:
 # starts as uid 1654, binds 8080, /health returns 200.
-RUN chown $APP_UID:$APP_UID /app
+RUN chown "$APP_UID:$APP_UID" /app
 USER $APP_UID
 EXPOSE 8085
 ENTRYPOINT ["dotnet", "EprRegisterEnrolBackend.dll"]
