@@ -4,8 +4,8 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
@@ -35,8 +35,8 @@ public class HttpReExApiAdapterTests
         );
         var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExConfig { BaseUrl = "http://localhost:5000/" });
-        var reExClient = new ReExClient(httpClient, config, NullLogger<ReExClient>.Instance);
-        return new HttpReExApiAdapter(reExClient, NullLogger<HttpReExApiAdapter>.Instance);
+        var reExClient = new ReExClient(httpClient, config, EnabledNullLogger<ReExClient>.Instance);
+        return new HttpReExApiAdapter(reExClient, EnabledNullLogger<HttpReExApiAdapter>.Instance);
     }
 
     [Fact]

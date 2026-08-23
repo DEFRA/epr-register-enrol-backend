@@ -1,7 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 
@@ -13,7 +13,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 public class StubCaseWorkingApiAdapterTests
 {
     private static StubCaseWorkingApiAdapter BuildSut() =>
-        new(NullLogger<StubCaseWorkingApiAdapter>.Instance);
+        new(EnabledNullLogger<StubCaseWorkingApiAdapter>.Instance);
 
     private static AccreditationApplicationModel CreateApplication(
         string? siteAddress = "123 High Street, London, SW1A 1AA",

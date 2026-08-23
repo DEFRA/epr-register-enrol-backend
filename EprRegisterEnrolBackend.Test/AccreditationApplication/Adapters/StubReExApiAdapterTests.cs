@@ -2,8 +2,8 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Organisation.Models;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
@@ -22,7 +22,7 @@ public class StubReExApiAdapterTests
     {
         var sut = new StubReExApiAdapter(
             new FakeOrganisationPersistence(),
-            NullLogger<StubReExApiAdapter>.Instance
+            EnabledNullLogger<StubReExApiAdapter>.Instance
         );
 
         var result = await sut.GetAccreditationAsync(
@@ -50,7 +50,7 @@ public class StubReExApiAdapterTests
     {
         var sut = new StubReExApiAdapter(
             new FakeOrganisationPersistence(),
-            NullLogger<StubReExApiAdapter>.Instance
+            EnabledNullLogger<StubReExApiAdapter>.Instance
         );
 
         var result = await sut.GetAccreditationAsync(
@@ -72,7 +72,7 @@ public class StubReExApiAdapterTests
     {
         var sut = new StubReExApiAdapter(
             new FakeOrganisationPersistence(),
-            NullLogger<StubReExApiAdapter>.Instance
+            EnabledNullLogger<StubReExApiAdapter>.Instance
         );
 
         var result = await sut.GetAccreditationAsync(
@@ -92,7 +92,7 @@ public class StubReExApiAdapterTests
     {
         var sut = new StubReExApiAdapter(
             new FakeOrganisationPersistence(),
-            NullLogger<StubReExApiAdapter>.Instance
+            EnabledNullLogger<StubReExApiAdapter>.Instance
         );
 
         var result = await sut.GetAccreditationAsync(
@@ -119,7 +119,7 @@ public class StubReExApiAdapterTests
     {
         var sut = new StubReExApiAdapter(
             new FakeOrganisationPersistence(),
-            NullLogger<StubReExApiAdapter>.Instance
+            EnabledNullLogger<StubReExApiAdapter>.Instance
         );
 
         var result = await sut.GetAccreditationAsync("999999", "reg-1", MaterialType.Plastic, 2027);
@@ -142,7 +142,7 @@ public class StubReExApiAdapterTests
     {
         var sut = new StubReExApiAdapter(
             new FakeOrganisationPersistence(),
-            NullLogger<StubReExApiAdapter>.Instance
+            EnabledNullLogger<StubReExApiAdapter>.Instance
         );
 
         var result = await sut.GetAccreditationAsync(
@@ -196,7 +196,7 @@ public class StubReExApiAdapterTests
                 ],
             }
         );
-        var sut = new StubReExApiAdapter(fakeOrgs, NullLogger<StubReExApiAdapter>.Instance);
+        var sut = new StubReExApiAdapter(fakeOrgs, EnabledNullLogger<StubReExApiAdapter>.Instance);
 
         var result = await sut.GetAccreditationAsync(
             "60001",
@@ -245,7 +245,7 @@ public class StubReExApiAdapterTests
                 ],
             }
         );
-        var sut = new StubReExApiAdapter(fakeOrgs, NullLogger<StubReExApiAdapter>.Instance);
+        var sut = new StubReExApiAdapter(fakeOrgs, EnabledNullLogger<StubReExApiAdapter>.Instance);
 
         var result = await sut.GetAccreditationAsync(
             "60002",
