@@ -52,13 +52,16 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         var applicationReference = GenerateReference(application);
         var workItemId = Guid.NewGuid();
 
-        logger.LogInformation(
-            "StubCaseWorkingApiAdapter.SubmitApplicationAsync called for applicationId={ApplicationId} generatedRef={ApplicationReference} workItemId={WorkItemId} org={OrganisationId}",
-            application.Id,
-            applicationReference,
-            workItemId,
-            application.OrganisationId
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.SubmitApplicationAsync called for applicationId={ApplicationId} generatedRef={ApplicationReference} workItemId={WorkItemId} org={OrganisationId}",
+                application.Id,
+                applicationReference,
+                workItemId,
+                application.OrganisationId
+            );
+        }
 
         return Task.FromResult(new CaseWorkingSubmissionResult(applicationReference, workItemId));
     }
@@ -68,11 +71,14 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         CancellationToken cancellationToken = default
     )
     {
-        logger.LogInformation(
-            "StubCaseWorkingApiAdapter.GetNotificationStatusAsync called for applicationId={ApplicationId} workItemId={WorkItemId}",
-            application.Id,
-            application.CaseManagementWorkItemId
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.GetNotificationStatusAsync called for applicationId={ApplicationId} workItemId={WorkItemId}",
+                application.Id,
+                application.CaseManagementWorkItemId
+            );
+        }
 
         return Task.FromResult(new NotificationStatusResult(null, null));
     }
@@ -84,12 +90,15 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         CancellationToken cancellationToken = default
     )
     {
-        logger.LogInformation(
-            "StubCaseWorkingApiAdapter.ResumeFromQueryAsync called for applicationId={ApplicationId} workItemId={WorkItemId} sectionKeys={SectionKeys}",
-            application.Id,
-            application.CaseManagementWorkItemId,
-            string.Join(',', sectionKeys)
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.ResumeFromQueryAsync called for applicationId={ApplicationId} workItemId={WorkItemId} sectionKeys={SectionKeys}",
+                application.Id,
+                application.CaseManagementWorkItemId,
+                string.Join(',', sectionKeys)
+            );
+        }
 
         return Task.FromResult(new ResumeFromQueryResult(true));
     }
@@ -101,13 +110,16 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         CancellationToken cancellationToken = default
     )
     {
-        logger.LogInformation(
-            "StubCaseWorkingApiAdapter.WithdrawApplicationAsync called for applicationId={ApplicationId} workItemId={WorkItemId} reason={Reason} withdrawnBy={WithdrawnBy}",
-            application.Id,
-            application.CaseManagementWorkItemId,
-            reason,
-            contactDetails.Email
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.WithdrawApplicationAsync called for applicationId={ApplicationId} workItemId={WorkItemId} reason={Reason} withdrawnBy={WithdrawnBy}",
+                application.Id,
+                application.CaseManagementWorkItemId,
+                reason,
+                contactDetails.Email
+            );
+        }
 
         return Task.FromResult(new WithdrawResult(true));
     }
@@ -121,14 +133,17 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         CancellationToken cancellationToken = default
     )
     {
-        logger.LogInformation(
-            "StubCaseWorkingApiAdapter.NotifySiteAddedAsync called for applicationId={ApplicationId} siteType={SiteType} orsId={OrsId} siteNumber={SiteNumber} isNewSite={IsNewSite}",
-            application.Id,
-            siteType,
-            orsId,
-            siteNumber,
-            isNewSite
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.NotifySiteAddedAsync called for applicationId={ApplicationId} siteType={SiteType} orsId={OrsId} siteNumber={SiteNumber} isNewSite={IsNewSite}",
+                application.Id,
+                siteType,
+                orsId,
+                siteNumber,
+                isNewSite
+            );
+        }
 
         return Task.CompletedTask;
     }
