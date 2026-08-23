@@ -30,7 +30,10 @@ public class ReExClient : IReExClient
         else
             _logger.LogWarning("ReExApi__BaseUrl is not configured — ReEx calls will fail");
 
-        _logger.LogInformation("ReExClient base URL is: {BaseUrl}", baseUrl);  
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("ReExClient base URL is: {BaseUrl}", baseUrl);
+        }
         _httpClient = httpClient;
     }
 
@@ -40,17 +43,23 @@ public class ReExClient : IReExClient
     )
     {
         var endpoint = $"v1/organisations/{Uri.EscapeDataString(organisationId)}";
-        _logger.LogInformation("Calling ReEx API: GET {Endpoint}", endpoint);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Calling ReEx API: GET {Endpoint}", endpoint);
+        }
 
         try
         {
             using var response = await _httpClient.GetAsync(endpoint, cancellationToken);
             var result = await MapResponseAsync<OrganisationDto>(response, cancellationToken);
-            _logger.LogInformation(
-                "ReEx API GET {Endpoint} returned {StatusCode}",
-                endpoint,
-                result.StatusCode
-            );
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(
+                    "ReEx API GET {Endpoint} returned {StatusCode}",
+                    endpoint,
+                    result.StatusCode
+                );
+            }
             return result;
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -75,17 +84,23 @@ public class ReExClient : IReExClient
         var endpoint = $"v1/organisations/{Uri.EscapeDataString(organisationId)}" +
             $"/registrations/{Uri.EscapeDataString(registrationId)}" +
             $"/accreditations/{Uri.EscapeDataString(accreditationId)}/overseas-sites";
-        _logger.LogInformation("Calling ReEx API: GET {Endpoint}", endpoint);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Calling ReEx API: GET {Endpoint}", endpoint);
+        }
 
         try
         {
             using var response = await _httpClient.GetAsync(endpoint, cancellationToken);
             var result = await MapResponseAsync<OverseasSitesDto>(response, cancellationToken);
-            _logger.LogInformation(
-                "ReEx API GET {Endpoint} returned {StatusCode}",
-                endpoint,
-                result.StatusCode
-            );
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(
+                    "ReEx API GET {Endpoint} returned {StatusCode}",
+                    endpoint,
+                    result.StatusCode
+                );
+            }
             return result;
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
