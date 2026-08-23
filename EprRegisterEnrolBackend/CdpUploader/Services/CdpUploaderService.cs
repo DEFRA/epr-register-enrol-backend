@@ -38,11 +38,14 @@ public class CdpUploaderService(
         request.Redirect = ToRelativeUri(request.Redirect);
 
         var requestJson = JsonSerializer.Serialize(request, ResponseJsonOptions);
-        logger.LogInformation(
-            "Calling CDP uploader POST {InitiateUrl} with body: {RequestBody}",
-            initiateUrl,
-            requestJson
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Calling CDP uploader POST {InitiateUrl} with body: {RequestBody}",
+                initiateUrl,
+                requestJson
+            );
+        }
 
         var client = httpClientFactory.CreateClient("DefaultClient");
 
@@ -87,12 +90,15 @@ public class CdpUploaderService(
             );
         }
 
-        logger.LogInformation(
-            "CDP uploader returned {Status} from {InitiateUrl}: {ResponseBody}",
-            (int)response.StatusCode,
-            initiateUrl,
-            responseBody
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "CDP uploader returned {Status} from {InitiateUrl}: {ResponseBody}",
+                (int)response.StatusCode,
+                initiateUrl,
+                responseBody
+            );
+        }
 
         var result = JsonSerializer.Deserialize<CdpInitiateResponse>(
             responseBody,
@@ -112,12 +118,15 @@ public class CdpUploaderService(
             StatusUrl = RewriteHost(result.StatusUrl, uploaderUrl),
         };
 
-        logger.LogInformation(
-            "CDP upload initiated: uploadId={UploadId}, uploadUrl={UploadUrl}, statusUrl={StatusUrl}",
-            result.UploadId,
-            result.UploadUrl,
-            result.StatusUrl
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "CDP upload initiated: uploadId={UploadId}, uploadUrl={UploadUrl}, statusUrl={StatusUrl}",
+                result.UploadId,
+                result.UploadUrl,
+                result.StatusUrl
+            );
+        }
         return result;
     }
 

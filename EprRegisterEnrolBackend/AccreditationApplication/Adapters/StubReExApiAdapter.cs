@@ -36,13 +36,16 @@ public class StubReExApiAdapter(
         int year
     )
     {
-        logger.LogInformation(
-            "StubReExApiAdapter.GetAccreditationAsync called for org={OrganisationId} reg={RegistrationId} material={MaterialType} year={Year}",
-            organisationId,
-            registrationId,
-            materialType,
-            year
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubReExApiAdapter.GetAccreditationAsync called for org={OrganisationId} reg={RegistrationId} material={MaterialType} year={Year}",
+                organisationId,
+                registrationId,
+                materialType,
+                year
+            );
+        }
 
         string? organisationName = null;
         string? registrationReference = null;
@@ -177,10 +180,13 @@ public class StubReExApiAdapter(
         CancellationToken cancellationToken = default
     )
     {
-        logger.LogInformation(
-            "StubReExApiAdapter.GetLinkedDefraOrganisationAsync called for org={OrganisationId}",
-            organisationId
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubReExApiAdapter.GetLinkedDefraOrganisationAsync called for org={OrganisationId}",
+                organisationId
+            );
+        }
 
         // Stub: the linked Defra organisation id echoes the ReEx org id so local
         // dev and integration runs are self-consistent.

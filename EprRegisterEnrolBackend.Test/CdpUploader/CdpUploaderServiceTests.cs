@@ -4,8 +4,8 @@ using System.Text.Json;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 
@@ -29,7 +29,7 @@ public class CdpUploaderServiceTests
         factory.CreateClient("DefaultClient").Returns(httpClient);
 
         var config = Options.Create(new CdpUploaderConfig { Url = uploaderUrl });
-        return new CdpUploaderService(factory, config, NullLogger<CdpUploaderService>.Instance);
+        return new CdpUploaderService(factory, config, EnabledNullLogger<CdpUploaderService>.Instance);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class CdpUploaderServiceTests
     {
         var factory = Substitute.For<IHttpClientFactory>();
         var config = Options.Create(new CdpUploaderConfig { Url = "" });
-        var sut = new CdpUploaderService(factory, config, NullLogger<CdpUploaderService>.Instance);
+        var sut = new CdpUploaderService(factory, config, EnabledNullLogger<CdpUploaderService>.Instance);
 
         var act = async () =>
             await sut.InitiateAsync(

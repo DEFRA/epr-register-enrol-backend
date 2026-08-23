@@ -1803,11 +1803,14 @@ public static class AccreditationApplicationEndpoints
             ? correlationValues.ToString()
             : null;
 
-        logger.LogInformation(
-            "QueryFromCaseManagement request received for workItemId={WorkItemId} correlationId={CorrelationId}",
-            workItemId,
-            correlationId ?? "(absent)"
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "QueryFromCaseManagement request received for workItemId={WorkItemId} correlationId={CorrelationId}",
+                workItemId,
+                correlationId ?? "(absent)"
+            );
+        }
 
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
@@ -1927,12 +1930,15 @@ public static class AccreditationApplicationEndpoints
             return Results.Problem("Failed to record query from case management.");
         }
 
-        logger.LogInformation(
-            "QueryFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
-            updated.Id,
-            workItemId,
-            correlationId ?? "(absent)"
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "QueryFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
+                updated.Id,
+                workItemId,
+                correlationId ?? "(absent)"
+            );
+        }
         return Results.Ok(updated);
     }
 
@@ -2074,6 +2080,30 @@ public static class AccreditationApplicationEndpoints
             _ => null,
         };
 
+    // Extracted from StatusChangedFromCaseManagement so the level check does not add to that
+    // method's cognitive complexity (S3776), which is already at the limit.
+    private static void LogOutOfOrderPushIgnored(
+        ILogger logger,
+        AccreditationApplicationModel application,
+        Guid workItemId,
+        DateTime occurredAt,
+        DateTime lastUpdated,
+        string? correlationId
+    )
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StatusChangedFromCaseManagement: out-of-order or duplicate push ignored for applicationId={ApplicationId} workItemId={WorkItemId} occurredAt={OccurredAt} lastUpdated={LastUpdated} correlationId={CorrelationId}",
+                application.Id,
+                workItemId,
+                occurredAt,
+                lastUpdated,
+                correlationId ?? "(absent)"
+            );
+        }
+    }
+
     private static async Task<IResult> StatusChangedFromCaseManagement(
         Guid workItemId,
         StatusChangedFromCaseManagementRequest request,
@@ -2092,13 +2122,16 @@ public static class AccreditationApplicationEndpoints
             ? correlationValues.ToString()
             : null;
 
-        logger.LogInformation(
-            "StatusChangedFromCaseManagement request received for workItemId={WorkItemId} toStateId={ToStateId} actionId={ActionId} correlationId={CorrelationId}",
-            workItemId,
-            request.ToStateId,
-            request.ActionId,
-            correlationId ?? "(absent)"
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StatusChangedFromCaseManagement request received for workItemId={WorkItemId} toStateId={ToStateId} actionId={ActionId} correlationId={CorrelationId}",
+                workItemId,
+                request.ToStateId,
+                request.ActionId,
+                correlationId ?? "(absent)"
+            );
+        }
 
         var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
         if (application is null)
@@ -2119,13 +2152,13 @@ public static class AccreditationApplicationEndpoints
             && request.OccurredAt <= lastUpdated
         )
         {
-            logger.LogInformation(
-                "StatusChangedFromCaseManagement: out-of-order or duplicate push ignored for applicationId={ApplicationId} workItemId={WorkItemId} occurredAt={OccurredAt} lastUpdated={LastUpdated} correlationId={CorrelationId}",
-                application.Id,
+            LogOutOfOrderPushIgnored(
+                logger,
+                application,
                 workItemId,
                 request.OccurredAt,
                 lastUpdated,
-                correlationId ?? "(absent)"
+                correlationId
             );
             return Results.Ok(application);
         }
@@ -2198,13 +2231,16 @@ public static class AccreditationApplicationEndpoints
             return Results.Problem("Failed to record status change from case management.");
         }
 
-        logger.LogInformation(
-            "StatusChangedFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
-            updated.Id,
-            workItemId,
-            request.ToStateId,
-            correlationId ?? "(absent)"
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StatusChangedFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
+                updated.Id,
+                workItemId,
+                request.ToStateId,
+                correlationId ?? "(absent)"
+            );
+        }
         return Results.Ok(updated);
     }
 

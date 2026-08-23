@@ -4,8 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 
@@ -79,7 +79,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         return (adapter, handler);
@@ -116,7 +116,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
@@ -139,7 +139,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
@@ -163,7 +163,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         var act = () =>
@@ -188,7 +188,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         using var cts = new CancellationTokenSource();
@@ -220,7 +220,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
@@ -251,7 +251,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
@@ -860,7 +860,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
@@ -940,7 +940,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
@@ -1076,7 +1076,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
@@ -1108,7 +1108,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
@@ -1131,7 +1131,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -1153,7 +1153,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -1207,7 +1207,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -1401,7 +1401,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -1432,7 +1432,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -1577,7 +1577,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -1603,7 +1603,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -1712,7 +1712,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
@@ -1735,7 +1735,7 @@ public class HttpCaseWorkingApiAdapterTests
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();

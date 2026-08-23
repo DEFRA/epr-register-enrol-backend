@@ -4,8 +4,8 @@ using System.Text;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.ReEx.Dtos;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.Test.ReEx;
@@ -16,7 +16,7 @@ public class ReExClientTests
     {
         var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExConfig { BaseUrl = baseUrl });
-        return new ReExClient(httpClient, config, NullLogger<ReExClient>.Instance);
+        return new ReExClient(httpClient, config, EnabledNullLogger<ReExClient>.Instance);
     }
 
     // ── Success path ─────────────────────────────────────────────────────────

@@ -33,11 +33,14 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
             null,
             FileProcessingStatus.Preprocessing
         );
-        logger.LogInformation(
-            "Upload {FileUploadId} state → {Status}",
-            fileUploadId,
-            FileProcessingStatus.Preprocessing
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Upload {FileUploadId} state → {Status}",
+                fileUploadId,
+                FileProcessingStatus.Preprocessing
+            );
+        }
     }
 
     public PendingUploadDetails? TryGetPendingUploadDetails(string fileUploadId)
@@ -68,12 +71,15 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
             (_, existing) => existing with { ScanResult = fileResult, Status = newStatus }
         );
 
-        logger.LogInformation(
-            "Upload {FileUploadId} state → {Status} (fileStatus={FileStatus})",
-            fileUploadId,
-            newStatus,
-            fileResult.FileStatus
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Upload {FileUploadId} state → {Status} (fileStatus={FileStatus})",
+                fileUploadId,
+                newStatus,
+                fileResult.FileStatus
+            );
+        }
     }
 
     public IReadOnlyList<string> GetPendingUploadIds()

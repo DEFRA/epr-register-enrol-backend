@@ -1,13 +1,13 @@
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace EprRegisterEnrolBackend.Test.CdpUploader;
 
 public class PendingUploadServiceTests
 {
-    private readonly PendingUploadService _sut = new(NullLogger<PendingUploadService>.Instance);
+    private readonly PendingUploadService _sut = new(EnabledNullLogger<PendingUploadService>.Instance);
 
     [Fact]
     public void GetStatus_UnknownId_ReturnsPendingPreprocessing()

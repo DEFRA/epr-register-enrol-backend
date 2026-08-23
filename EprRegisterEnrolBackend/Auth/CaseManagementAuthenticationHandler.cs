@@ -72,19 +72,25 @@ public class CaseManagementAuthenticationHandler(
             }
 
             var devPrincipal = new ClaimsPrincipal(new ClaimsIdentity(SchemeName));
-            Logger.LogInformation(
-                "CaseManagement auth succeeded (development header-trust bypass) correlationId={CorrelationId}",
-                correlationId ?? AbsentCorrelationId
-            );
+            if (Logger.IsEnabled(LogLevel.Information))
+            {
+                Logger.LogInformation(
+                    "CaseManagement auth succeeded (development header-trust bypass) correlationId={CorrelationId}",
+                    correlationId ?? AbsentCorrelationId
+                );
+            }
             return Task.FromResult(
                 AuthenticateResult.Success(new AuthenticationTicket(devPrincipal, SchemeName))
             );
         }
 
-        Logger.LogInformation(
-            "CaseManagement auth request received correlationId={CorrelationId}",
-            correlationId ?? AbsentCorrelationId
-        );
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
+                "CaseManagement auth request received correlationId={CorrelationId}",
+                correlationId ?? AbsentCorrelationId
+            );
+        }
 
         if (!Request.Headers.TryGetValue("x-cdp-client-id", out var clientIdValues))
             return Task.FromResult(Fail("Missing x-cdp-client-id header."));
@@ -159,11 +165,14 @@ public class CaseManagementAuthenticationHandler(
             claims.Add(new Claim("cdp_user_name", userName));
 
         var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, SchemeName));
-        Logger.LogInformation(
-            "CaseManagement auth succeeded for clientId={ClientId} correlationId={CorrelationId}",
-            clientId,
-            correlationId ?? AbsentCorrelationId
-        );
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
+                "CaseManagement auth succeeded for clientId={ClientId} correlationId={CorrelationId}",
+                clientId,
+                correlationId ?? AbsentCorrelationId
+            );
+        }
         return Task.FromResult(
             AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName))
         );

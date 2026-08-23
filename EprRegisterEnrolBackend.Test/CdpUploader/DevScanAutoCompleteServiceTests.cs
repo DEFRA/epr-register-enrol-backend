@@ -1,7 +1,7 @@
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.CdpUploader;
@@ -17,7 +17,7 @@ public class DevScanAutoCompleteServiceTests
         new(
             _pendingUploadService,
             _cdpUploaderService,
-            NullLogger<DevScanAutoCompleteService>.Instance
+            EnabledNullLogger<DevScanAutoCompleteService>.Instance
         );
 
     // Regression test for a race that clobbered clean scan results: the real CDP uploader
