@@ -965,7 +965,7 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
@@ -1303,7 +1303,7 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
@@ -1814,7 +1814,7 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, httpContext.RequestAborted);
         if (!validation.IsValid)
         {
             logger.LogWarning(
