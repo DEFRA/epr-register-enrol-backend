@@ -482,12 +482,14 @@ public class HttpCaseWorkingApiAdapter(
                     communicationsPercent = application.BusinessPlan.CommunicationsPercent,
                     newMarketsPercent = application.BusinessPlan.NewMarketsPercent,
                     newUsesPercent = application.BusinessPlan.NewUsesPercent,
+                    otherPercent = application.BusinessPlan.OtherPercent,
                     newInfrastructureDetail = application.BusinessPlan.NewInfrastructureDetail,
                     priceSupportDetail = application.BusinessPlan.PriceSupportDetail,
                     businessCollectionsDetail = application.BusinessPlan.BusinessCollectionsDetail,
                     communicationsDetail = application.BusinessPlan.CommunicationsDetail,
                     newMarketsDetail = application.BusinessPlan.NewMarketsDetail,
                     newUsesDetail = application.BusinessPlan.NewUsesDetail,
+                    otherDetail = application.BusinessPlan.OtherDetail,
                 },
                 OperatorSection.SamplingPlan => new
                 {
@@ -576,12 +578,14 @@ public class HttpCaseWorkingApiAdapter(
                 communicationsPercent = application.BusinessPlan.CommunicationsPercent,
                 newMarketsPercent = application.BusinessPlan.NewMarketsPercent,
                 newUsesPercent = application.BusinessPlan.NewUsesPercent,
+                otherPercent = application.BusinessPlan.OtherPercent,
                 newInfrastructureDetail = application.BusinessPlan.NewInfrastructureDetail,
                 priceSupportDetail = application.BusinessPlan.PriceSupportDetail,
                 businessCollectionsDetail = application.BusinessPlan.BusinessCollectionsDetail,
                 communicationsDetail = application.BusinessPlan.CommunicationsDetail,
                 newMarketsDetail = application.BusinessPlan.NewMarketsDetail,
                 newUsesDetail = application.BusinessPlan.NewUsesDetail,
+                otherDetail = application.BusinessPlan.OtherDetail,
             },
             samplingPlan = new
             {

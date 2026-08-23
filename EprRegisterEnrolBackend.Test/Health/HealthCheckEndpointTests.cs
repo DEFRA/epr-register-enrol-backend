@@ -17,7 +17,7 @@ public class HealthCheckEndpointTests : IClassFixture<WebApplicationFactory<Prog
     [Fact]
     public async Task Get_health_returns_200()
     {
-        var response = await _client.GetAsync("/health");
+        var response = await _client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -25,7 +25,7 @@ public class HealthCheckEndpointTests : IClassFixture<WebApplicationFactory<Prog
     [Fact]
     public async Task Head_health_returns_200()
     {
-        var response = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Head, "/health"));
+        var response = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Head, "/health"), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -33,7 +33,7 @@ public class HealthCheckEndpointTests : IClassFixture<WebApplicationFactory<Prog
     [Fact]
     public async Task Trace_health_returns_405()
     {
-        var response = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Trace, "/health"));
+        var response = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Trace, "/health"), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.MethodNotAllowed);
     }
@@ -45,7 +45,8 @@ public class HealthCheckEndpointTests : IClassFixture<WebApplicationFactory<Prog
     public async Task Other_verbs_return_405(string verb)
     {
         var response = await _client.SendAsync(
-            new HttpRequestMessage(new HttpMethod(verb), "/health")
+            new HttpRequestMessage(new HttpMethod(verb), "/health"),
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.MethodNotAllowed);

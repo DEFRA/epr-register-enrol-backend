@@ -41,11 +41,12 @@ public class ReExOrganisationEndpointsTests
                 )
             );
 
-        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<LinkedDefraOrganisationResult>(
-            JsonOptions
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
         );
         body!.OrganisationId.Should().Be("50002");
         body.LinkedDefraOrganisationId.Should().Be("67b9e8fc-2235-431a-a7b9-80663c81b6ff");
@@ -67,11 +68,12 @@ public class ReExOrganisationEndpointsTests
                 )
             );
 
-        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<LinkedDefraOrganisationResult>(
-            JsonOptions
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
         );
         body!.LinkedDefraOrganisationId.Should().BeNull();
     }
@@ -88,7 +90,7 @@ public class ReExOrganisationEndpointsTests
                 )
             );
 
-        var response = await _client.GetAsync("/api/v1/organisations/99999/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/99999/defra-link", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -105,7 +107,7 @@ public class ReExOrganisationEndpointsTests
                 )
             );
 
-        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link", TestContext.Current.CancellationToken);
 
         ((int)response.StatusCode).Should().Be(502);
     }
@@ -122,10 +124,10 @@ public class ReExOrganisationEndpointsTests
                 )
             );
 
-        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link", TestContext.Current.CancellationToken);
 
         ((int)response.StatusCode).Should().Be(502);
-        var body = await response.Content.ReadAsStringAsync();
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         body.Should().Contain("Failed to resolve linked Defra organisation");
     }
 
@@ -141,7 +143,7 @@ public class ReExOrganisationEndpointsTests
                 )
             );
 
-        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link", TestContext.Current.CancellationToken);
 
         ((int)response.StatusCode).Should().Be(502);
     }
