@@ -47,12 +47,15 @@ public class HttpCaseWorkingApiAdapter(
         };
 
         var endpoint = $"{url.TrimEnd('/')}/work-items";
-        logger.LogInformation(
-            "Submitting work item to ManagementBe at {Endpoint} for applicationId={ApplicationId} org={OrganisationId}",
-            endpoint,
-            application.ApplicationId,
-            application.OrganisationId
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Submitting work item to ManagementBe at {Endpoint} for applicationId={ApplicationId} org={OrganisationId}",
+                endpoint,
+                application.ApplicationId,
+                application.OrganisationId
+            );
+        }
 
         var userId = application.SubmittedBy?.Email ?? application.OrganisationId;
         var userName = application.SubmittedBy?.FullName;
@@ -143,11 +146,14 @@ public class HttpCaseWorkingApiAdapter(
         // so a missing id must not fail the submission.
         Guid? workItemId = result.Id == Guid.Empty ? null : result.Id;
 
-        logger.LogInformation(
-            "Work item created: workItemId={WorkItemId} applicationReference={ApplicationReference}",
-            workItemId,
-            result.ApplicationReference
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Work item created: workItemId={WorkItemId} applicationReference={ApplicationReference}",
+                workItemId,
+                result.ApplicationReference
+            );
+        }
 
         return new CaseWorkingSubmissionResult(result.ApplicationReference, workItemId);
     }
@@ -476,12 +482,14 @@ public class HttpCaseWorkingApiAdapter(
                     communicationsPercent = application.BusinessPlan.CommunicationsPercent,
                     newMarketsPercent = application.BusinessPlan.NewMarketsPercent,
                     newUsesPercent = application.BusinessPlan.NewUsesPercent,
+                    otherPercent = application.BusinessPlan.OtherPercent,
                     newInfrastructureDetail = application.BusinessPlan.NewInfrastructureDetail,
                     priceSupportDetail = application.BusinessPlan.PriceSupportDetail,
                     businessCollectionsDetail = application.BusinessPlan.BusinessCollectionsDetail,
                     communicationsDetail = application.BusinessPlan.CommunicationsDetail,
                     newMarketsDetail = application.BusinessPlan.NewMarketsDetail,
                     newUsesDetail = application.BusinessPlan.NewUsesDetail,
+                    otherDetail = application.BusinessPlan.OtherDetail,
                 },
                 OperatorSection.SamplingPlan => new
                 {
@@ -570,12 +578,14 @@ public class HttpCaseWorkingApiAdapter(
                 communicationsPercent = application.BusinessPlan.CommunicationsPercent,
                 newMarketsPercent = application.BusinessPlan.NewMarketsPercent,
                 newUsesPercent = application.BusinessPlan.NewUsesPercent,
+                otherPercent = application.BusinessPlan.OtherPercent,
                 newInfrastructureDetail = application.BusinessPlan.NewInfrastructureDetail,
                 priceSupportDetail = application.BusinessPlan.PriceSupportDetail,
                 businessCollectionsDetail = application.BusinessPlan.BusinessCollectionsDetail,
                 communicationsDetail = application.BusinessPlan.CommunicationsDetail,
                 newMarketsDetail = application.BusinessPlan.NewMarketsDetail,
                 newUsesDetail = application.BusinessPlan.NewUsesDetail,
+                otherDetail = application.BusinessPlan.OtherDetail,
             },
             samplingPlan = new
             {

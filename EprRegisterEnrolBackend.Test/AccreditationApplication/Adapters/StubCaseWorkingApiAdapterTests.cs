@@ -1,7 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 
@@ -13,7 +13,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 public class StubCaseWorkingApiAdapterTests
 {
     private static StubCaseWorkingApiAdapter BuildSut() =>
-        new(NullLogger<StubCaseWorkingApiAdapter>.Instance);
+        new(EnabledNullLogger<StubCaseWorkingApiAdapter>.Instance);
 
     private static AccreditationApplicationModel CreateApplication(
         string? siteAddress = "123 High Street, London, SW1A 1AA",
@@ -39,7 +39,7 @@ public class StubCaseWorkingApiAdapterTests
     {
         var sut = BuildSut();
 
-        var result = await sut.SubmitApplicationAsync(CreateApplication());
+        var result = await sut.SubmitApplicationAsync(CreateApplication(), TestContext.Current.CancellationToken);
 
         result.ApplicationReference.Should().NotBeNullOrWhiteSpace();
         result.WorkItemId.Should().NotBeNull();
@@ -51,7 +51,8 @@ public class StubCaseWorkingApiAdapterTests
         var sut = BuildSut();
 
         var result = await sut.SubmitApplicationAsync(
-            CreateApplication(organisationId: "1234567890123456789")
+            CreateApplication(organisationId: "1234567890123456789"),
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.ApplicationReference.Length.Should().BeLessThanOrEqualTo(18);
@@ -70,7 +71,8 @@ public class StubCaseWorkingApiAdapterTests
         var sut = BuildSut();
 
         var result = await sut.SubmitApplicationAsync(
-            CreateApplication(siteAddress: $"1 Test Street, Testville, {postcode}")
+            CreateApplication(siteAddress: $"1 Test Street, Testville, {postcode}"),
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.ApplicationReference.Should().Contain(expectedAgencyCode);
@@ -81,7 +83,7 @@ public class StubCaseWorkingApiAdapterTests
     {
         var sut = BuildSut();
 
-        var result = await sut.SubmitApplicationAsync(CreateApplication(siteAddress: null));
+        var result = await sut.SubmitApplicationAsync(CreateApplication(siteAddress: null), TestContext.Current.CancellationToken);
 
         result.ApplicationReference.Should().Contain("EA");
     }
@@ -97,7 +99,8 @@ public class StubCaseWorkingApiAdapterTests
         var sut = BuildSut();
 
         var result = await sut.SubmitApplicationAsync(
-            CreateApplication(materialType: (MaterialType)9)
+            CreateApplication(materialType: (MaterialType)9),
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.ApplicationReference.Should()
@@ -112,7 +115,7 @@ public class StubCaseWorkingApiAdapterTests
     {
         var sut = BuildSut();
 
-        var result = await sut.GetNotificationStatusAsync(CreateApplication());
+        var result = await sut.GetNotificationStatusAsync(CreateApplication(), TestContext.Current.CancellationToken);
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -131,7 +134,8 @@ public class StubCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Operations Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeTrue();
@@ -150,7 +154,8 @@ public class StubCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Operations Manager",
             },
-            "No longer required"
+            "No longer required",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeTrue();

@@ -71,6 +71,7 @@ public class SectionStatusComputationTests
             CommunicationsPercent = 20,
             NewMarketsPercent = 10,
             NewUsesPercent = 10,
+            OtherPercent = 0,
         };
         SectionStatusService.ComputeBusinessPlan(bp).Should().Be(SectionStatus.Completed);
     }
@@ -86,8 +87,43 @@ public class SectionStatusComputationTests
             CommunicationsPercent = 10,
             NewMarketsPercent = 10,
             NewUsesPercent = 10,
+            OtherPercent = 0,
         };
         SectionStatusService.ComputeBusinessPlan(bp).Should().Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void BusinessPlan_OtherPercentMissing_TreatedAsIncompleteEvenWhenOtherSixSumTo100()
+    {
+        // RA-456: Other is a seventh required percent, same as the original six — omitting it
+        // alone must not be treated as "all set", even though the other six already sum to 100.
+        var bp = new AccreditationApplicationBusinessPlan
+        {
+            NewInfrastructurePercent = 20,
+            PriceSupportPercent = 20,
+            BusinessCollectionsPercent = 20,
+            CommunicationsPercent = 20,
+            NewMarketsPercent = 10,
+            NewUsesPercent = 10,
+            // OtherPercent not set
+        };
+        SectionStatusService.ComputeBusinessPlan(bp).Should().Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void BusinessPlan_AllSevenSetIncludingOtherSumTo100_IsCompleted()
+    {
+        var bp = new AccreditationApplicationBusinessPlan
+        {
+            NewInfrastructurePercent = 20,
+            PriceSupportPercent = 20,
+            BusinessCollectionsPercent = 15,
+            CommunicationsPercent = 15,
+            NewMarketsPercent = 10,
+            NewUsesPercent = 10,
+            OtherPercent = 10,
+        };
+        SectionStatusService.ComputeBusinessPlan(bp).Should().Be(SectionStatus.Completed);
     }
 
     // --- Sampling Plan ---

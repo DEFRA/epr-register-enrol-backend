@@ -10,6 +10,7 @@ public class AccreditationApplicationBusinessPlan
     public int? CommunicationsPercent { get; set; }
     public int? NewMarketsPercent { get; set; }
     public int? NewUsesPercent { get; set; }
+    public int? OtherPercent { get; set; }
 
     public string? NewInfrastructureDetail { get; set; }
     public string? PriceSupportDetail { get; set; }
@@ -17,6 +18,7 @@ public class AccreditationApplicationBusinessPlan
     public string? CommunicationsDetail { get; set; }
     public string? NewMarketsDetail { get; set; }
     public string? NewUsesDetail { get; set; }
+    public string? OtherDetail { get; set; }
 
     public SectionStatus SectionStatus { get; set; } = SectionStatus.NotStarted;
 
@@ -33,6 +35,7 @@ public class BusinessPlanSnapshot
     public int? CommunicationsPercent { get; set; }
     public int? NewMarketsPercent { get; set; }
     public int? NewUsesPercent { get; set; }
+    public int? OtherPercent { get; set; }
 
     public string? NewInfrastructureDetail { get; set; }
     public string? PriceSupportDetail { get; set; }
@@ -40,6 +43,7 @@ public class BusinessPlanSnapshot
     public string? CommunicationsDetail { get; set; }
     public string? NewMarketsDetail { get; set; }
     public string? NewUsesDetail { get; set; }
+    public string? OtherDetail { get; set; }
 
     public DateTime VersionedAt { get; set; }
 }
