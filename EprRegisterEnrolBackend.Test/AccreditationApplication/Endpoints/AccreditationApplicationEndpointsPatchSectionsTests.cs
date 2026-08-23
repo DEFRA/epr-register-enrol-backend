@@ -227,13 +227,15 @@ public class AccreditationApplicationEndpointsPatchSectionsTests
             BusinessCollectionsPercent = 20,
             CommunicationsPercent = 20,
             NewMarketsPercent = 10,
-            NewUsesPercent = 10,
+            NewUsesPercent = 5,
+            OtherPercent = 5,
             NewInfrastructureDetail = "Infrastructure detail",
             PriceSupportDetail = "Price support detail",
             BusinessCollectionsDetail = "Business collections detail",
             CommunicationsDetail = "Communications detail",
             NewMarketsDetail = "New markets detail",
             NewUsesDetail = "New uses detail",
+            OtherDetail = "Other detail",
             IsPartialSave = true,
         };
 
@@ -273,13 +275,15 @@ public class AccreditationApplicationEndpointsPatchSectionsTests
         body.BusinessPlan.BusinessCollectionsPercent.Should().Be(20);
         body.BusinessPlan.CommunicationsPercent.Should().Be(20);
         body.BusinessPlan.NewMarketsPercent.Should().Be(10);
-        body.BusinessPlan.NewUsesPercent.Should().Be(10);
+        body.BusinessPlan.NewUsesPercent.Should().Be(5);
+        body.BusinessPlan.OtherPercent.Should().Be(5);
         body.BusinessPlan.NewInfrastructureDetail.Should().Be("Infrastructure detail");
         body.BusinessPlan.PriceSupportDetail.Should().Be("Price support detail");
         body.BusinessPlan.BusinessCollectionsDetail.Should().Be("Business collections detail");
         body.BusinessPlan.CommunicationsDetail.Should().Be("Communications detail");
         body.BusinessPlan.NewMarketsDetail.Should().Be("New markets detail");
         body.BusinessPlan.NewUsesDetail.Should().Be("New uses detail");
+        body.BusinessPlan.OtherDetail.Should().Be("Other detail");
         // Percents sum to 100 -> ComputeBusinessPlan returns Completed.
         body.BusinessPlan.SectionStatus.Should().Be(SectionStatus.Completed);
         body.ApplicationStatus.Should().Be(ApplicationStatus.Started);

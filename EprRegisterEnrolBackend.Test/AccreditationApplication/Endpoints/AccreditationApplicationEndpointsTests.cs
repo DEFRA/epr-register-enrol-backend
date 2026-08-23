@@ -190,6 +190,50 @@ public class AccreditationApplicationEndpointsTests
         body.CompanyRegisteredAddress.Should().Be("29 Acacia Road, London, SW1A 1AA");
     }
 
+    // RA-456: ReEx already sends the "Activities or investment not covered by the other
+    // categories" usage description and HttpReExApiAdapter already maps it into
+    // ReExBusinessPlanDto.OtherPercent (see HttpReExApiAdapterTests), but Seed used to silently
+    // drop it when copying ReExBusinessPlanDto onto the domain AccreditationApplicationBusinessPlan
+    // — this proves OtherPercent now survives all the way into the persisted domain model.
+    [Fact]
+    public async Task Seed_WithPriorYearData_CarriesOtherPercentIntoDomainModel()
+    {
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync("org-123", "reg-1", MaterialType.Steel, 2025)
+            .Returns(
+                Task.FromResult(
+                    ReExResult<ReExAccreditationDto>.Success(
+                        new ReExAccreditationDto
+                        {
+                            AccreditationId = "reex-abc",
+                            OrganisationId = "org-123",
+                            MaterialType = MaterialType.Steel,
+                            Year = 2025,
+                            IsExporter = false,
+                            OverseasSites = [],
+                            BusinessPlan = new ReExBusinessPlanDto { OtherPercent = 50 },
+                        },
+                        200
+                    )
+                )
+            );
+
+        var request = new SeedRequest { Year = 2026 };
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.BusinessPlan.OtherPercent.Should().Be(50);
+    }
+
     [Fact]
     public async Task Seed_InvalidYear_Returns400()
     {

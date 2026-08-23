@@ -4,8 +4,8 @@ using System.Text.Json;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 
@@ -29,7 +29,7 @@ public class CdpUploaderServiceTests
         factory.CreateClient("DefaultClient").Returns(httpClient);
 
         var config = Options.Create(new CdpUploaderConfig { Url = uploaderUrl });
-        return new CdpUploaderService(factory, config, NullLogger<CdpUploaderService>.Instance);
+        return new CdpUploaderService(factory, config, EnabledNullLogger<CdpUploaderService>.Instance);
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class CdpUploaderServiceTests
             S3Path = "uploads/test.csv",
         };
 
-        var result = await sut.InitiateAsync(request);
+        var result = await sut.InitiateAsync(request, TestContext.Current.CancellationToken);
 
         result.UploadId.Should().Be("upload-123");
         result.UploadUrl.Should().Be("http://localhost:7337/upload/upload-123");
@@ -80,7 +80,8 @@ public class CdpUploaderServiceTests
                 Redirect = "http://frontend/redirect",
                 S3Bucket = "bucket",
                 S3Path = "path",
-            }
+            },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.UploadUrl.Should().StartWith("http://localhost:7337");
@@ -112,7 +113,7 @@ public class CdpUploaderServiceTests
     {
         var factory = Substitute.For<IHttpClientFactory>();
         var config = Options.Create(new CdpUploaderConfig { Url = "" });
-        var sut = new CdpUploaderService(factory, config, NullLogger<CdpUploaderService>.Instance);
+        var sut = new CdpUploaderService(factory, config, EnabledNullLogger<CdpUploaderService>.Instance);
 
         var act = async () =>
             await sut.InitiateAsync(
@@ -147,11 +148,13 @@ public class CdpUploaderServiceTests
                 Redirect = "http://frontend.example.com/accreditation/x/status?y=1",
                 S3Bucket = "my-bucket",
                 S3Path = "uploads/test.csv",
-            }
+            },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var sentRequest = await handler.LastRequest!.Content!.ReadFromJsonAsync<CdpInitiateRequest>(
-            CamelCaseOptions
+            CamelCaseOptions,
+            cancellationToken: TestContext.Current.CancellationToken
         );
         sentRequest!.Redirect.Should().Be("/accreditation/x/status?y=1");
     }
@@ -176,11 +179,13 @@ public class CdpUploaderServiceTests
                 Redirect = "/already/relative",
                 S3Bucket = "my-bucket",
                 S3Path = "uploads/test.csv",
-            }
+            },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var sentRequest = await handler.LastRequest!.Content!.ReadFromJsonAsync<CdpInitiateRequest>(
-            CamelCaseOptions
+            CamelCaseOptions,
+            cancellationToken: TestContext.Current.CancellationToken
         );
         sentRequest!.Redirect.Should().Be("/already/relative");
     }
@@ -205,11 +210,13 @@ public class CdpUploaderServiceTests
                 Redirect = "",
                 S3Bucket = "my-bucket",
                 S3Path = "uploads/test.csv",
-            }
+            },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var sentRequest = await handler.LastRequest!.Content!.ReadFromJsonAsync<CdpInitiateRequest>(
-            CamelCaseOptions
+            CamelCaseOptions,
+            cancellationToken: TestContext.Current.CancellationToken
         );
         sentRequest!.Redirect.Should().Be("");
     }
@@ -240,10 +247,11 @@ public class CdpUploaderServiceTests
                 S3Path = "uploads/test.csv",
                 MimeTypes = ["application/pdf"],
                 MaxFileSize = 1024,
-            }
+            },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
-        var bytes = await handler.LastRequest!.Content!.ReadAsByteArrayAsync();
+        var bytes = await handler.LastRequest!.Content!.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
         var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
         root.GetProperty("redirect").GetString().Should().Be("/frontend/redirect");
