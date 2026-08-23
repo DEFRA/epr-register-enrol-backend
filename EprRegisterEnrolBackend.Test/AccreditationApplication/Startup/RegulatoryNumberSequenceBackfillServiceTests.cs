@@ -1,7 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.Test.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
@@ -38,7 +38,7 @@ public class RegulatoryNumberSequenceBackfillServiceTests
         var service = new RegulatoryNumberSequenceBackfillService(
             store,
             status,
-            NullLogger<RegulatoryNumberSequenceBackfillService>.Instance
+            EnabledNullLogger<RegulatoryNumberSequenceBackfillService>.Instance
         );
         return (service, store, status);
     }

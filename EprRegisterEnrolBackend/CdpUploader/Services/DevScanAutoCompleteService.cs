@@ -104,10 +104,13 @@ public class DevScanAutoCompleteService(
         };
 
         pendingUploadService.Complete(fileUploadId, result);
-        logger.LogInformation(
-            "DevScanAutoComplete: completed upload {FileUploadId} from real CDP status (fileStatus={FileStatus})",
-            fileUploadId,
-            fileStatus
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "DevScanAutoComplete: completed upload {FileUploadId} from real CDP status (fileStatus={FileStatus})",
+                fileUploadId,
+                fileStatus
+            );
+        }
     }
 }

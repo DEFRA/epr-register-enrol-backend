@@ -77,10 +77,13 @@ public class RegulatoryNumberSequenceBackfillService(
     // StartAsync only kicks ExecuteAsync off as a background task, it doesn't wait for it.
     public async Task SeedAllAsync(CancellationToken ct = default)
     {
-        logger.LogInformation(
-            "RegulatoryNumberSequenceBackfillService: seeding {Count} counter pools",
-            SeedValues.Count
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "RegulatoryNumberSequenceBackfillService: seeding {Count} counter pools",
+                SeedValues.Count
+            );
+        }
 
         foreach (var (key, value) in SeedValues)
         {

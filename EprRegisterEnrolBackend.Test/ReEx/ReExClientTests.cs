@@ -4,8 +4,8 @@ using System.Text;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.ReEx.Dtos;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.Test.ReEx;
@@ -16,7 +16,7 @@ public class ReExClientTests
     {
         var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExConfig { BaseUrl = baseUrl });
-        return new ReExClient(httpClient, config, NullLogger<ReExClient>.Instance);
+        return new ReExClient(httpClient, config, EnabledNullLogger<ReExClient>.Instance);
     }
 
     // ── Success path ─────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("1234");
+        var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.StatusCode.Should().Be(200);
@@ -63,7 +63,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("987654");
+        var result = await sut.GetOrganisationsAsync("987654", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value!.OrgId.Should().Be(987654);
@@ -86,7 +86,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1");
+        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().ContainKey("100");
@@ -110,7 +110,7 @@ public class ReExClientTests
     {
         var sut = BuildSut(new RawStringHandler(statusCode, "error"));
 
-        var result = await sut.GetOrganisationsAsync("1234");
+        var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(expectedKind);
@@ -127,7 +127,7 @@ public class ReExClientTests
     {
         var sut = BuildSut(new RawStringHandler(statusCode, "error"));
 
-        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1");
+        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(expectedKind);
@@ -140,7 +140,7 @@ public class ReExClientTests
     {
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, "not-valid-json{{{{"));
 
-        var result = await sut.GetOrganisationsAsync("1234");
+        var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(ReExErrorKind.DeserializationError);
@@ -155,7 +155,7 @@ public class ReExClientTests
         // `value is null` branch inside the IsSuccessStatusCode arm of MapResponseAsync.
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, "null"));
 
-        var result = await sut.GetOrganisationsAsync("1234");
+        var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(ReExErrorKind.DeserializationError);
@@ -170,7 +170,7 @@ public class ReExClientTests
     {
         var sut = BuildSut(new TimeoutHandler());
 
-        var result = await sut.GetOrganisationsAsync("1234");
+        var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(ReExErrorKind.Timeout);
@@ -181,7 +181,7 @@ public class ReExClientTests
     {
         var sut = BuildSut(new TimeoutHandler());
 
-        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1");
+        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(ReExErrorKind.Timeout);
@@ -192,7 +192,7 @@ public class ReExClientTests
     {
         var sut = BuildSut(new ExceptionHandler(new HttpRequestException("connection refused")));
 
-        var result = await sut.GetOrganisationsAsync("1234");
+        var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(ReExErrorKind.TransportError);
@@ -253,7 +253,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("1234");
+        var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value!.Registrations.Should().HaveCount(1);
@@ -291,7 +291,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("1234");
+        var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         var reg = result.Value!.Registrations[0].Should().BeOfType<ExporterRegistrationDto>().Subject;
@@ -324,7 +324,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("org-1");
+        var result = await sut.GetOrganisationsAsync("org-1", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         var reprocessor = (ReprocessorRegistrationDto)result.Value!.Registrations[0];
@@ -358,7 +358,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("org-1");
+        var result = await sut.GetOrganisationsAsync("org-1", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         var reg = (ReprocessorRegistrationDto)result.Value!.Registrations[0];
@@ -381,7 +381,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("org-1");
+        var result = await sut.GetOrganisationsAsync("org-1", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value!.Registrations[0].AccreditationId.Should().BeNull();
@@ -411,7 +411,7 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("org-1");
+        var result = await sut.GetOrganisationsAsync("org-1", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         var acc = result.Value!.Accreditations[0];

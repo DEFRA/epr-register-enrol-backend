@@ -28,10 +28,13 @@ public abstract class MongoService<T>
         var indexes = DefineIndexes(builder);
         if (indexes.Count == 0) return;
 
-        Logger.LogInformation(
-            "Ensuring index is created if it does not exist for collection {CollectionNamespaceCollectionName} in DB {DatabaseDatabaseNamespace}",
-            Collection.CollectionNamespace.CollectionName,
-            Collection.Database.DatabaseNamespace);
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
+                "Ensuring index is created if it does not exist for collection {CollectionNamespaceCollectionName} in DB {DatabaseDatabaseNamespace}",
+                Collection.CollectionNamespace.CollectionName,
+                Collection.Database.DatabaseNamespace);
+        }
         //Collection.Indexes.CreateMany(indexes);
     }
 }

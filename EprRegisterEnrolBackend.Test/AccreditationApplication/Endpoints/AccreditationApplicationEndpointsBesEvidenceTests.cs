@@ -6,10 +6,10 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using NSubstitute;
 using NSubstitute.ClearExtensions;
@@ -89,7 +89,7 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
     )
     {
         var fileUploadId = $"upload-{fileId}";
-        var service = new PendingUploadService(NullLogger<PendingUploadService>.Instance);
+        var service = new PendingUploadService(EnabledNullLogger<PendingUploadService>.Instance);
         service.Create(fileUploadId, "https://cdp.example/status");
         service.Complete(
             fileUploadId,
