@@ -25,6 +25,9 @@ public class BusinessPlanValidator : AbstractValidator<PatchBusinessPlanRequest>
         RuleFor(r => r.NewUsesPercent)
             .InclusiveBetween(0, 100)
             .When(r => r.NewUsesPercent.HasValue);
+        RuleFor(r => r.OtherPercent)
+            .InclusiveBetween(0, 100)
+            .When(r => r.OtherPercent.HasValue);
 
         RuleFor(r => r.NewInfrastructureDetail)
             .MaximumLength(500)
@@ -40,6 +43,7 @@ public class BusinessPlanValidator : AbstractValidator<PatchBusinessPlanRequest>
             .When(r => r.CommunicationsDetail != null);
         RuleFor(r => r.NewMarketsDetail).MaximumLength(500).When(r => r.NewMarketsDetail != null);
         RuleFor(r => r.NewUsesDetail).MaximumLength(500).When(r => r.NewUsesDetail != null);
+        RuleFor(r => r.OtherDetail).MaximumLength(500).When(r => r.OtherDetail != null);
 
         // Detail field required when corresponding percentage > 0 (non-partial saves only).
         When(
@@ -70,6 +74,10 @@ public class BusinessPlanValidator : AbstractValidator<PatchBusinessPlanRequest>
                     .NotEmpty()
                     .WithMessage("Detail is required when percentage is greater than 0.")
                     .When(r => r.NewUsesPercent > 0);
+                RuleFor(r => r.OtherDetail)
+                    .NotEmpty()
+                    .WithMessage("Detail is required when percentage is greater than 0.")
+                    .When(r => r.OtherPercent > 0);
             }
         );
 
@@ -92,7 +100,8 @@ public class BusinessPlanValidator : AbstractValidator<PatchBusinessPlanRequest>
         && r.BusinessCollectionsPercent.HasValue
         && r.CommunicationsPercent.HasValue
         && r.NewMarketsPercent.HasValue
-        && r.NewUsesPercent.HasValue;
+        && r.NewUsesPercent.HasValue
+        && r.OtherPercent.HasValue;
 
     private static int SumOfPercents(PatchBusinessPlanRequest r) =>
         (r.NewInfrastructurePercent ?? 0)
@@ -100,5 +109,6 @@ public class BusinessPlanValidator : AbstractValidator<PatchBusinessPlanRequest>
         + (r.BusinessCollectionsPercent ?? 0)
         + (r.CommunicationsPercent ?? 0)
         + (r.NewMarketsPercent ?? 0)
-        + (r.NewUsesPercent ?? 0);
+        + (r.NewUsesPercent ?? 0)
+        + (r.OtherPercent ?? 0);
 }

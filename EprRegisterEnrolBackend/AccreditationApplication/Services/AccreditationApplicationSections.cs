@@ -186,12 +186,14 @@ public static class AccreditationApplicationSections
                         CommunicationsPercent = bp.CommunicationsPercent,
                         NewMarketsPercent = bp.NewMarketsPercent,
                         NewUsesPercent = bp.NewUsesPercent,
+                        OtherPercent = bp.OtherPercent,
                         NewInfrastructureDetail = bp.NewInfrastructureDetail,
                         PriceSupportDetail = bp.PriceSupportDetail,
                         BusinessCollectionsDetail = bp.BusinessCollectionsDetail,
                         CommunicationsDetail = bp.CommunicationsDetail,
                         NewMarketsDetail = bp.NewMarketsDetail,
                         NewUsesDetail = bp.NewUsesDetail,
+                        OtherDetail = bp.OtherDetail,
                         VersionedAt = versionedAt,
                     }
                 );
