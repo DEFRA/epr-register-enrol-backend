@@ -2071,6 +2071,30 @@ public static class AccreditationApplicationEndpoints
             _ => null,
         };
 
+    // Extracted from StatusChangedFromCaseManagement so the level check does not add to that
+    // method's cognitive complexity (S3776), which is already at the limit.
+    private static void LogOutOfOrderPushIgnored(
+        ILogger logger,
+        AccreditationApplicationModel application,
+        Guid workItemId,
+        DateTime occurredAt,
+        DateTime lastUpdated,
+        string? correlationId
+    )
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StatusChangedFromCaseManagement: out-of-order or duplicate push ignored for applicationId={ApplicationId} workItemId={WorkItemId} occurredAt={OccurredAt} lastUpdated={LastUpdated} correlationId={CorrelationId}",
+                application.Id,
+                workItemId,
+                occurredAt,
+                lastUpdated,
+                correlationId ?? "(absent)"
+            );
+        }
+    }
+
     private static async Task<IResult> StatusChangedFromCaseManagement(
         Guid workItemId,
         StatusChangedFromCaseManagementRequest request,
@@ -2119,17 +2143,14 @@ public static class AccreditationApplicationEndpoints
             && request.OccurredAt <= lastUpdated
         )
         {
-            if (logger.IsEnabled(LogLevel.Information))
-            {
-                logger.LogInformation(
-                    "StatusChangedFromCaseManagement: out-of-order or duplicate push ignored for applicationId={ApplicationId} workItemId={WorkItemId} occurredAt={OccurredAt} lastUpdated={LastUpdated} correlationId={CorrelationId}",
-                    application.Id,
-                    workItemId,
-                    request.OccurredAt,
-                    lastUpdated,
-                    correlationId ?? "(absent)"
-                );
-            }
+            LogOutOfOrderPushIgnored(
+                logger,
+                application,
+                workItemId,
+                request.OccurredAt,
+                lastUpdated,
+                correlationId
+            );
             return Results.Ok(application);
         }
 
