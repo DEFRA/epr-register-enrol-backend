@@ -25,6 +25,7 @@ public class PatchBusinessPlanRequest
     public int? CommunicationsPercent { get; set; }
     public int? NewMarketsPercent { get; set; }
     public int? NewUsesPercent { get; set; }
+    public int? OtherPercent { get; set; }
 
     public string? NewInfrastructureDetail { get; set; }
     public string? PriceSupportDetail { get; set; }
@@ -32,6 +33,7 @@ public class PatchBusinessPlanRequest
     public string? CommunicationsDetail { get; set; }
     public string? NewMarketsDetail { get; set; }
     public string? NewUsesDetail { get; set; }
+    public string? OtherDetail { get; set; }
 
     /// <summary>When true, bypasses the sum-to-100 check (used by "Save and come back later").</summary>
     public bool IsPartialSave { get; set; }

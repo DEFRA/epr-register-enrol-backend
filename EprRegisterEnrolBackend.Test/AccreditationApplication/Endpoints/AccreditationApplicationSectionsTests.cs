@@ -180,6 +180,30 @@ public class AccreditationApplicationSectionsTests
     }
 
     [Fact]
+    public void SnapshotSection_BusinessPlan_AppendsCurrentValuesIncludingOther()
+    {
+        // RA-456: Other must be carried into the snapshot alongside the original six fields.
+        var application = CreateApplication();
+        application.BusinessPlan.NewInfrastructurePercent = 20;
+        application.BusinessPlan.OtherPercent = 10;
+        application.BusinessPlan.OtherDetail = "Other spend detail";
+        var versionedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.BusinessPlan,
+            versionedAt
+        );
+
+        application.BusinessPlan.Versions.Should().ContainSingle();
+        var snapshot = application.BusinessPlan.Versions[0];
+        snapshot.NewInfrastructurePercent.Should().Be(20);
+        snapshot.OtherPercent.Should().Be(10);
+        snapshot.OtherDetail.Should().Be("Other spend detail");
+        snapshot.VersionedAt.Should().Be(versionedAt);
+    }
+
+    [Fact]
     public void SnapshotSection_CalledTwice_AppendsRatherThanOverwrites()
     {
         var application = CreateApplication();
@@ -410,6 +434,7 @@ public class AccreditationApplicationSectionsTests
         application.BusinessPlan.CommunicationsPercent = 0;
         application.BusinessPlan.NewMarketsPercent = 0;
         application.BusinessPlan.NewUsesPercent = 0;
+        application.BusinessPlan.OtherPercent = 0;
 
         AccreditationApplicationSections
             .ComputeCurrentStatus(application, OperatorSection.BusinessPlan)
