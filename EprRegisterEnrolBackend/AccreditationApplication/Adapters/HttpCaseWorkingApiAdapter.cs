@@ -708,7 +708,8 @@ public class HttpCaseWorkingApiAdapter(
             siteAddress,
             @"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                | System.Text.RegularExpressions.RegexOptions.RightToLeft
+                | System.Text.RegularExpressions.RegexOptions.RightToLeft,
+            TimeSpan.FromMilliseconds(100)
         );
         return match.Success ? match.Value.ToUpperInvariant() : null;
     }
