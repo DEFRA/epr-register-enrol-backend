@@ -694,7 +694,7 @@ public class HttpReExApiAdapterTests
     {
         var sut = BuildSut(OrganisationJsonWithLinkedDefraOrganisation);
 
-        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188");
+        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.OrganisationId.Should().Be("6a2fcd74e16883c137d01188");
@@ -706,7 +706,7 @@ public class HttpReExApiAdapterTests
     {
         var sut = BuildSut(OrganisationJson);
 
-        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188");
+        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.LinkedDefraOrganisationId.Should().BeNull();
@@ -717,7 +717,7 @@ public class HttpReExApiAdapterTests
     {
         var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.NotFound);
 
-        var result = await sut.GetLinkedDefraOrganisationAsync("does-not-exist");
+        var result = await sut.GetLinkedDefraOrganisationAsync("does-not-exist", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(404);
@@ -728,7 +728,7 @@ public class HttpReExApiAdapterTests
     {
         var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.InternalServerError);
 
-        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188");
+        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(500);

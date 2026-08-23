@@ -33,7 +33,7 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
     [Fact]
     public async Task DefraLink_MissingAuthorization_Returns401()
     {
-        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -44,7 +44,7 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
         _client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ValidSecret);
 
-        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized);
     }
@@ -55,7 +55,7 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
         _client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "wrong-secret");
 
-        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link");
+        var response = await _client.GetAsync("/api/v1/organisations/50002/defra-link", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -63,7 +63,7 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
     [Fact]
     public async Task AccreditationApplications_GetById_MissingAuthorization_Returns401()
     {
-        var response = await _client.GetAsync("/api/v1/accreditation-applications/50002/app-1");
+        var response = await _client.GetAsync("/api/v1/accreditation-applications/50002/app-1", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -74,7 +74,7 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
         _client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ValidSecret);
 
-        var response = await _client.GetAsync("/api/v1/accreditation-applications/50002/app-1");
+        var response = await _client.GetAsync("/api/v1/accreditation-applications/50002/app-1", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized);
     }
@@ -84,7 +84,8 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
     {
         var response = await _client.PostAsJsonAsync(
             "/api/v1/accreditation-applications/50002/app-1/withdraw",
-            new { reason = "test" }
+            new { reason = "test" },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
@@ -100,7 +101,8 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
 
         var response = await _client.PostAsJsonAsync(
             "/api/v1/accreditation-applications/case-management/work-item-1/query",
-            new { queryNote = "test", sectionKeys = Array.Empty<string>() }
+            new { queryNote = "test", sectionKeys = Array.Empty<string>() },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
@@ -114,7 +116,8 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
         // relying on nobody adding FrontendOnly(...) here by mistake later.
         var response = await _client.PostAsJsonAsync(
             "/api/v1/accreditation-applications/files/upload-completed",
-            new { }
+            new { },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized);
