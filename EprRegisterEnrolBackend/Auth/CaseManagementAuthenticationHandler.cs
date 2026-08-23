@@ -34,6 +34,9 @@ public class CaseManagementAuthenticationHandler(
     // Purely a diagnostic aid: absence must never fail the request.
     private const string CorrelationIdHeaderName = "X-Correlation-Id";
 
+    // Logged in place of the correlation id when that header was not sent.
+    private const string AbsentCorrelationId = "(absent)";
+
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var config = authConfig.Value;
@@ -47,7 +50,7 @@ public class CaseManagementAuthenticationHandler(
             Logger.LogWarning(
                 "CaseManagement auth failed: {Reason} correlationId={CorrelationId}",
                 reason,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return AuthenticateResult.Fail(reason);
         }
@@ -61,7 +64,7 @@ public class CaseManagementAuthenticationHandler(
                 Logger.LogError(
                     "CaseManagement auth misconfigured: shared secret is not configured in environment '{Environment}'. correlationId={CorrelationId}",
                     environment.EnvironmentName,
-                    correlationId ?? "(absent)"
+                    correlationId ?? AbsentCorrelationId
                 );
                 return Task.FromResult(
                     AuthenticateResult.Fail("CaseManagement shared secret is not configured.")
@@ -73,7 +76,7 @@ public class CaseManagementAuthenticationHandler(
             {
                 Logger.LogInformation(
                     "CaseManagement auth succeeded (development header-trust bypass) correlationId={CorrelationId}",
-                    correlationId ?? "(absent)"
+                    correlationId ?? AbsentCorrelationId
                 );
             }
             return Task.FromResult(
@@ -85,7 +88,7 @@ public class CaseManagementAuthenticationHandler(
         {
             Logger.LogInformation(
                 "CaseManagement auth request received correlationId={CorrelationId}",
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
         }
 
@@ -167,7 +170,7 @@ public class CaseManagementAuthenticationHandler(
             Logger.LogInformation(
                 "CaseManagement auth succeeded for clientId={ClientId} correlationId={CorrelationId}",
                 clientId,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
         }
         return Task.FromResult(
