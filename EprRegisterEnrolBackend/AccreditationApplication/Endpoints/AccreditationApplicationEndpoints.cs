@@ -15,6 +15,17 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 
 public static class AccreditationApplicationEndpoints
 {
+    private const string LoggerCategory = nameof(AccreditationApplicationEndpoints);
+
+    private const string OverseasSitesNotEditableMessage =
+        "Overseas sites section is not editable in the application's current status.";
+
+    private const string BesEvidenceNotEditableMessage =
+        "BES evidence section is not editable in the application's current status.";
+
+    // Logged in place of the correlation id when the caller omitted the optional header.
+    private const string AbsentCorrelationId = "(absent)";
+
     // Every route here is called only by epr-register-enrol-frontend, except the two
     // case-management/* routes (ManagementBe, its own CaseManagement scheme below) and
     // files/upload-completed (the CDP Uploader webhook callback — a third caller with no
@@ -673,7 +684,7 @@ public static class AccreditationApplicationEndpoints
             catch (Exception ex)
             {
                 loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
+                    .CreateLogger(LoggerCategory)
                     .LogWarning(
                         ex,
                         "Failed to resolve notification status for applicationId={ApplicationId}",
@@ -915,9 +926,7 @@ public static class AccreditationApplicationEndpoints
                 application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
+            return Results.Conflict(OverseasSitesNotEditableMessage);
 
         if (application.OverseasSites is null)
             application.OverseasSites = new AccreditationApplicationOverseasSites();
@@ -970,9 +979,7 @@ public static class AccreditationApplicationEndpoints
                 application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
+            return Results.Conflict(OverseasSitesNotEditableMessage);
 
         application.OverseasSites ??= new AccreditationApplicationOverseasSites();
 
@@ -1053,7 +1060,7 @@ public static class AccreditationApplicationEndpoints
             catch (Exception ex)
             {
                 loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
+                    .CreateLogger(LoggerCategory)
                     .LogWarning(
                         ex,
                         "Failed to notify ManagementBe of new overseas site for applicationId={ApplicationId}",
@@ -1177,9 +1184,7 @@ public static class AccreditationApplicationEndpoints
                 application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
+            return Results.Conflict(OverseasSitesNotEditableMessage);
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -1251,9 +1256,7 @@ public static class AccreditationApplicationEndpoints
                 application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
+            return Results.Conflict(OverseasSitesNotEditableMessage);
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -1308,9 +1311,7 @@ public static class AccreditationApplicationEndpoints
                 application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
+            return Results.Conflict(OverseasSitesNotEditableMessage);
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -1365,7 +1366,7 @@ public static class AccreditationApplicationEndpoints
             catch (Exception ex)
             {
                 loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
+                    .CreateLogger(LoggerCategory)
                     .LogWarning(
                         ex,
                         "Failed to notify ManagementBe of new interim site for applicationId={ApplicationId}",
@@ -1413,9 +1414,7 @@ public static class AccreditationApplicationEndpoints
                 application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "BES evidence section is not editable in the application's current status."
-            );
+            return Results.Conflict(BesEvidenceNotEditableMessage);
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -1465,9 +1464,7 @@ public static class AccreditationApplicationEndpoints
                 application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "BES evidence section is not editable in the application's current status."
-            );
+            return Results.Conflict(BesEvidenceNotEditableMessage);
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -1506,9 +1503,7 @@ public static class AccreditationApplicationEndpoints
                 application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "BES evidence section is not editable in the application's current status."
-            );
+            return Results.Conflict(BesEvidenceNotEditableMessage);
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site?.BesEvidence is null)
@@ -1549,9 +1544,7 @@ public static class AccreditationApplicationEndpoints
                 application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
             )
         )
-            return Results.Conflict(
-                "BES evidence section is not editable in the application's current status."
-            );
+            return Results.Conflict(BesEvidenceNotEditableMessage);
 
         application.BesEvidence ??= new AccreditationApplicationBesEvidence();
         if (
@@ -1784,7 +1777,7 @@ public static class AccreditationApplicationEndpoints
         ILoggerFactory loggerFactory
     )
     {
-        var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+        var logger = loggerFactory.CreateLogger(LoggerCategory);
         // CM BE's push hook sends this on every request for cross-service tracing (RA-311).
         // Purely a diagnostic aid — absence must never fail the request.
         var correlationId = httpContext.Request.Headers.TryGetValue(
@@ -1797,7 +1790,7 @@ public static class AccreditationApplicationEndpoints
         logger.LogInformation(
             "QueryFromCaseManagement request received for workItemId={WorkItemId} correlationId={CorrelationId}",
             workItemId,
-            correlationId ?? "(absent)"
+            correlationId ?? AbsentCorrelationId
         );
 
         var validation = await validator.ValidateAsync(request);
@@ -1806,7 +1799,7 @@ public static class AccreditationApplicationEndpoints
             logger.LogWarning(
                 "QueryFromCaseManagement validation failed for workItemId={WorkItemId} correlationId={CorrelationId}: {Errors}",
                 workItemId,
-                correlationId ?? "(absent)",
+                correlationId ?? AbsentCorrelationId,
                 string.Join("; ", validation.Errors.Select(e => e.ErrorMessage))
             );
             return Results.BadRequest(validation.Errors);
@@ -1818,7 +1811,7 @@ public static class AccreditationApplicationEndpoints
             logger.LogWarning(
                 "QueryFromCaseManagement: no application found for workItemId={WorkItemId} correlationId={CorrelationId}",
                 workItemId,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.NotFound();
         }
@@ -1832,7 +1825,7 @@ public static class AccreditationApplicationEndpoints
                 "QueryFromCaseManagement: a query is already open for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
                 workItemId,
                 application.Id,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.Conflict("A query is already open for this application.");
         }
@@ -1852,7 +1845,7 @@ public static class AccreditationApplicationEndpoints
                 application.ApplicationStatus,
                 workItemId,
                 application.Id,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.Conflict(
                 "Application must be in 'Submitted', 'DulyMade', 'Updated' or 'AwaitingDecision' status to raise a query."
@@ -1869,7 +1862,7 @@ public static class AccreditationApplicationEndpoints
             logger.LogWarning(
                 "QueryFromCaseManagement: exporter-only section keys rejected for non-exporter applicationId={ApplicationId} correlationId={CorrelationId}",
                 application.Id,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.BadRequest(
                 "BES evidence / overseas sites section keys are not valid for non-exporter applications."
@@ -1913,7 +1906,7 @@ public static class AccreditationApplicationEndpoints
                 "QueryFromCaseManagement: failed to persist query for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
                 application.Id,
                 workItemId,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.Problem("Failed to record query from case management.");
         }
@@ -1922,7 +1915,7 @@ public static class AccreditationApplicationEndpoints
             "QueryFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
             updated.Id,
             workItemId,
-            correlationId ?? "(absent)"
+            correlationId ?? AbsentCorrelationId
         );
         return Results.Ok(updated);
     }
@@ -2073,7 +2066,7 @@ public static class AccreditationApplicationEndpoints
         ILoggerFactory loggerFactory
     )
     {
-        var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+        var logger = loggerFactory.CreateLogger(LoggerCategory);
         // CM BE's push hook sends this on every request for cross-service tracing (RA-311/RA-368).
         // Purely a diagnostic aid — absence must never fail the request.
         var correlationId = httpContext.Request.Headers.TryGetValue(
@@ -2088,7 +2081,7 @@ public static class AccreditationApplicationEndpoints
             workItemId,
             request.ToStateId,
             request.ActionId,
-            correlationId ?? "(absent)"
+            correlationId ?? AbsentCorrelationId
         );
 
         var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
@@ -2097,7 +2090,7 @@ public static class AccreditationApplicationEndpoints
             logger.LogWarning(
                 "StatusChangedFromCaseManagement: no application found for workItemId={WorkItemId} correlationId={CorrelationId}",
                 workItemId,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.NotFound();
         }
@@ -2116,7 +2109,7 @@ public static class AccreditationApplicationEndpoints
                 workItemId,
                 request.OccurredAt,
                 lastUpdated,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.Ok(application);
         }
@@ -2137,7 +2130,7 @@ public static class AccreditationApplicationEndpoints
                 request.ToStateId,
                 workItemId,
                 application.Id,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.Conflict(
                 "Application is already Approved, Rejected or Withdrawn and can no longer be updated."
@@ -2164,7 +2157,7 @@ public static class AccreditationApplicationEndpoints
                 request.ToStateId,
                 workItemId,
                 application.Id,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.Conflict(
                 "Application must be in 'Submitted', 'Updated', 'DulyMade' or 'AwaitingDecision' status to approve or reject."
@@ -2184,7 +2177,7 @@ public static class AccreditationApplicationEndpoints
                 "StatusChangedFromCaseManagement: failed to persist status change for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
                 application.Id,
                 workItemId,
-                correlationId ?? "(absent)"
+                correlationId ?? AbsentCorrelationId
             );
             return Results.Problem("Failed to record status change from case management.");
         }
@@ -2194,7 +2187,7 @@ public static class AccreditationApplicationEndpoints
             updated.Id,
             workItemId,
             request.ToStateId,
-            correlationId ?? "(absent)"
+            correlationId ?? AbsentCorrelationId
         );
         return Results.Ok(updated);
     }

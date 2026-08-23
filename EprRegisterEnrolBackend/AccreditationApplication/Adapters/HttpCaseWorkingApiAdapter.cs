@@ -24,6 +24,12 @@ public class HttpCaseWorkingApiAdapter(
 
     private readonly CaseWorkingApiConfig _config = config.Value;
 
+    // Named HttpClient registered in Program.cs (carries the explicit 15s timeout).
+    private const string DefaultHttpClientName = "DefaultClient";
+
+    private const string ManagementBeErrorTemplate =
+        "ManagementBe returned {Status} from {Endpoint}: {Body}";
+
     public async Task<CaseWorkingSubmissionResult> SubmitApplicationAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
@@ -57,7 +63,7 @@ public class HttpCaseWorkingApiAdapter(
         var userId = application.SubmittedBy?.Email ?? application.OrganisationId;
         var userName = application.SubmittedBy?.FullName;
         using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
-        var client = httpClientFactory.CreateClient("DefaultClient");
+        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
 
         HttpResponseMessage response;
         try
@@ -92,7 +98,7 @@ public class HttpCaseWorkingApiAdapter(
         {
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
             logger.LogError(
-                "ManagementBe returned {Status} from {Endpoint}: {Body}",
+                ManagementBeErrorTemplate,
                 (int)response.StatusCode,
                 endpoint,
                 responseBody
@@ -186,7 +192,7 @@ public class HttpCaseWorkingApiAdapter(
                 userId: userId,
                 userName: userName
             );
-            var client = httpClientFactory.CreateClient("DefaultClient");
+            var client = httpClientFactory.CreateClient(DefaultHttpClientName);
 
             var response = await client.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
@@ -281,14 +287,14 @@ public class HttpCaseWorkingApiAdapter(
             var userId = contactDetails.Email;
             var userName = contactDetails.FullName;
             using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
-            var client = httpClientFactory.CreateClient("DefaultClient");
+            var client = httpClientFactory.CreateClient(DefaultHttpClientName);
 
             var response = await client.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 logger.LogError(
-                    "ManagementBe returned {Status} from {Endpoint}: {Body}",
+                    ManagementBeErrorTemplate,
                     (int)response.StatusCode,
                     endpoint,
                     responseBody
@@ -340,14 +346,14 @@ public class HttpCaseWorkingApiAdapter(
             var userId = contactDetails.Email;
             var userName = contactDetails.FullName;
             using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
-            var client = httpClientFactory.CreateClient("DefaultClient");
+            var client = httpClientFactory.CreateClient(DefaultHttpClientName);
 
             var response = await client.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 logger.LogError(
-                    "ManagementBe returned {Status} from {Endpoint}: {Body}",
+                    ManagementBeErrorTemplate,
                     (int)response.StatusCode,
                     endpoint,
                     responseBody
@@ -418,14 +424,14 @@ public class HttpCaseWorkingApiAdapter(
                 userName,
                 SiteAddedJsonOptions
             );
-            var client = httpClientFactory.CreateClient("DefaultClient");
+            var client = httpClientFactory.CreateClient(DefaultHttpClientName);
 
             var response = await client.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 logger.LogWarning(
-                    "ManagementBe returned {Status} from {Endpoint}: {Body}",
+                    ManagementBeErrorTemplate,
                     (int)response.StatusCode,
                     endpoint,
                     responseBody

@@ -5,6 +5,9 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Validators;
 
 public class BusinessPlanValidator : AbstractValidator<PatchBusinessPlanRequest>
 {
+    private const string DetailRequiredMessage =
+        "Detail is required when percentage is greater than 0.";
+
     public BusinessPlanValidator()
     {
         RuleFor(r => r.NewInfrastructurePercent)
@@ -48,27 +51,27 @@ public class BusinessPlanValidator : AbstractValidator<PatchBusinessPlanRequest>
             {
                 RuleFor(r => r.NewInfrastructureDetail)
                     .NotEmpty()
-                    .WithMessage("Detail is required when percentage is greater than 0.")
+                    .WithMessage(DetailRequiredMessage)
                     .When(r => r.NewInfrastructurePercent > 0);
                 RuleFor(r => r.PriceSupportDetail)
                     .NotEmpty()
-                    .WithMessage("Detail is required when percentage is greater than 0.")
+                    .WithMessage(DetailRequiredMessage)
                     .When(r => r.PriceSupportPercent > 0);
                 RuleFor(r => r.BusinessCollectionsDetail)
                     .NotEmpty()
-                    .WithMessage("Detail is required when percentage is greater than 0.")
+                    .WithMessage(DetailRequiredMessage)
                     .When(r => r.BusinessCollectionsPercent > 0);
                 RuleFor(r => r.CommunicationsDetail)
                     .NotEmpty()
-                    .WithMessage("Detail is required when percentage is greater than 0.")
+                    .WithMessage(DetailRequiredMessage)
                     .When(r => r.CommunicationsPercent > 0);
                 RuleFor(r => r.NewMarketsDetail)
                     .NotEmpty()
-                    .WithMessage("Detail is required when percentage is greater than 0.")
+                    .WithMessage(DetailRequiredMessage)
                     .When(r => r.NewMarketsPercent > 0);
                 RuleFor(r => r.NewUsesDetail)
                     .NotEmpty()
-                    .WithMessage("Detail is required when percentage is greater than 0.")
+                    .WithMessage(DetailRequiredMessage)
                     .When(r => r.NewUsesPercent > 0);
             }
         );

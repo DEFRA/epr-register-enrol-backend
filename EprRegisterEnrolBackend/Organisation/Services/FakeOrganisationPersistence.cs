@@ -6,6 +6,13 @@ namespace EprRegisterEnrolBackend.Organisation.Services;
 // In-memory ReEx organisation fixtures for StubReExApiAdapter's dev-mode responses.
 public class FakeOrganisationPersistence
 {
+    private const string BusinessTypeUnincorporated = "unincorporated";
+    private const string WasteProcessingTypeExporter = "exporter";
+    private const string WasteProcessingTypeReprocessor = "reprocessor";
+    private const string NationEngland = "england";
+    private const string RoleDirector = "Director";
+    private const string RegistrationStatusCreated = "created";
+
     public static readonly ObjectId Reg50001 = ObjectId.Parse("aaa000000000000000050001");
     public static readonly ObjectId Reg50002 = ObjectId.Parse("aaa000000000000000050002");
     public static readonly ObjectId Reg50003 = ObjectId.Parse("aaa000000000000000050003");
@@ -24,9 +31,13 @@ public class FakeOrganisationPersistence
                 OrgId = 1,
                 SchemaVersion = 1,
                 Version = 1,
-                BusinessType = "unincorporated",
-                WasteProcessingTypes = ["reprocessor", "exporter"],
-                ReprocessingNations = ["england", "wales"],
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes =
+                [
+                    WasteProcessingTypeReprocessor,
+                    WasteProcessingTypeExporter,
+                ],
+                ReprocessingNations = [NationEngland, "wales"],
                 CompanyDetails = new CompanyDetailsModel
                 {
                     Name = "Operator Export Company",
@@ -49,9 +60,9 @@ public class FakeOrganisationPersistence
                 },
                 Users =
                 [
-                    new PersonModel { FullName = "Eric Twinge", Role = "Director" },
-                    new PersonModel { FullName = "Crow", Role = "Director" },
-                    new PersonModel { FullName = "Doctor Gloom", Role = "Director" },
+                    new PersonModel { FullName = "Eric Twinge", Role = RoleDirector },
+                    new PersonModel { FullName = "Crow", Role = RoleDirector },
+                    new PersonModel { FullName = "Doctor Gloom", Role = RoleDirector },
                 ],
             }
         );
@@ -63,7 +74,7 @@ public class FakeOrganisationPersistence
                 SchemaVersion = 1,
                 Version = 1,
                 BusinessType = "partnership",
-                WasteProcessingTypes = ["reprocessor"],
+                WasteProcessingTypes = [WasteProcessingTypeReprocessor],
                 ReprocessingNations = ["scotland"],
                 CompanyDetails = new CompanyDetailsModel
                 {
@@ -82,7 +93,7 @@ public class FakeOrganisationPersistence
                     FullName = "Jane Example",
                     Email = "jane@anothercompany.co.uk",
                 },
-                Users = [new PersonModel { FullName = "Alice", Role = "Director" }],
+                Users = [new PersonModel { FullName = "Alice", Role = RoleDirector }],
             }
         );
 
@@ -93,7 +104,7 @@ public class FakeOrganisationPersistence
                 SchemaVersion = 1,
                 Version = 1,
                 BusinessType = "individual",
-                WasteProcessingTypes = ["exporter"],
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
                 ReprocessingNations = ["northern_ireland"],
                 CompanyDetails = new CompanyDetailsModel
                 {
@@ -112,7 +123,7 @@ public class FakeOrganisationPersistence
                     FullName = "Aysha Shaikh",
                     Email = "aysha@thirdcompany.co.uk",
                 },
-                Users = [new PersonModel { FullName = "Aysha", Role = "Director" }],
+                Users = [new PersonModel { FullName = "Aysha", Role = RoleDirector }],
             }
         );
 
@@ -122,9 +133,9 @@ public class FakeOrganisationPersistence
                 OrgId = 50001,
                 SchemaVersion = 1,
                 Version = 1,
-                BusinessType = "unincorporated",
-                WasteProcessingTypes = ["reprocessor"],
-                ReprocessingNations = ["england"],
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeReprocessor],
+                ReprocessingNations = [NationEngland],
                 CompanyDetails = new CompanyDetailsModel
                 {
                     Name = "NEWDEV RECYCLING LIMITED",
@@ -151,9 +162,9 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50001,
                         SiteId = "REG001",
-                        Status = "created",
+                        Status = RegistrationStatusCreated,
                         Material = "plastic",
-                        WasteProcessingType = "reprocessor",
+                        WasteProcessingType = WasteProcessingTypeReprocessor,
                         SiteAddress = new SiteAddressModel
                         {
                             Line1 = "UNIT 5",
@@ -175,9 +186,9 @@ public class FakeOrganisationPersistence
                 OrgId = 50002,
                 SchemaVersion = 1,
                 Version = 1,
-                BusinessType = "unincorporated",
-                WasteProcessingTypes = ["reprocessor"],
-                ReprocessingNations = ["england"],
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeReprocessor],
+                ReprocessingNations = [NationEngland],
                 CompanyDetails = new CompanyDetailsModel
                 {
                     Name = "Beta Recycling Co",
@@ -204,12 +215,12 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50002,
                         SiteId = "REG002",
-                        Status = "created",
+                        Status = RegistrationStatusCreated,
                         Material = "glass",
                         // RA-307: local-dev/e2e coverage for the "Glass - Remelt"
                         // display suffix, mapped to the enum by StubReExApiAdapter.
                         GlassRecyclingProcess = "glass_re_melt",
-                        WasteProcessingType = "reprocessor",
+                        WasteProcessingType = WasteProcessingTypeReprocessor,
                         SiteAddress = new SiteAddressModel
                         {
                             Line1 = "Site Lane 002",
@@ -231,9 +242,9 @@ public class FakeOrganisationPersistence
                 OrgId = 50005,
                 SchemaVersion = 1,
                 Version = 1,
-                BusinessType = "unincorporated",
-                WasteProcessingTypes = ["exporter"],
-                ReprocessingNations = ["england"],
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
                 CompanyDetails = new CompanyDetailsModel
                 {
                     Name = "Export Plastics Ltd",
@@ -260,9 +271,9 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50005,
                         SiteId = "REG005",
-                        Status = "created",
+                        Status = RegistrationStatusCreated,
                         Material = "plastic",
-                        WasteProcessingType = "exporter",
+                        WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = ["900010", "900011"],
                         WasteManagementPermits =
                         [
@@ -279,8 +290,8 @@ public class FakeOrganisationPersistence
                 OrgId = 50006,
                 SchemaVersion = 1,
                 Version = 1,
-                BusinessType = "unincorporated",
-                WasteProcessingTypes = ["exporter"],
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
                 ReprocessingNations = ["scotland"],
                 CompanyDetails = new CompanyDetailsModel
                 {
@@ -309,9 +320,9 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50006,
                         SiteId = "REG006",
-                        Status = "created",
+                        Status = RegistrationStatusCreated,
                         Material = "glass",
-                        WasteProcessingType = "exporter",
+                        WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = ["900001", "900002", "900003", "900004"],
                         WasteManagementPermits =
                         [
@@ -344,9 +355,9 @@ public class FakeOrganisationPersistence
                 OrgId = 50013,
                 SchemaVersion = 1,
                 Version = 1,
-                BusinessType = "unincorporated",
-                WasteProcessingTypes = ["exporter"],
-                ReprocessingNations = ["england"],
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
                 CompanyDetails = new CompanyDetailsModel
                 {
                     Name = "Interim Site Test Exports Ltd",
@@ -373,9 +384,9 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50013,
                         SiteId = "REG013",
-                        Status = "created",
+                        Status = RegistrationStatusCreated,
                         Material = "plastic",
-                        WasteProcessingType = "exporter",
+                        WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = ["900010", "900011"],
                         WasteManagementPermits =
                         [
