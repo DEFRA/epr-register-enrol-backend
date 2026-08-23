@@ -37,10 +37,10 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
             .MockPersistence.GetByOrgAsync("org-1")
             .Returns([doc1, doc2]);
 
-        var response = await _client.GetAsync("/api/v1/stub/accreditation-applications/org-1");
+        var response = await _client.GetAsync("/api/v1/stub/accreditation-applications/org-1", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadAsStringAsync();
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         body.Should().Contain("\"S1\"");
         body.Should().Contain("\"S2\"");
     }
@@ -53,11 +53,12 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
             .Returns(Enumerable.Empty<StubApplicationDocument>());
 
         var response = await _client.GetAsync(
-            "/api/v1/stub/accreditation-applications/org-empty"
+            "/api/v1/stub/accreditation-applications/org-empty",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadAsStringAsync();
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         body.Trim().Should().Be("[]");
     }
 
@@ -73,11 +74,12 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
         _factory.MockPersistence.GetByIdAsync("org-2", "app-3").Returns(doc);
 
         var response = await _client.GetAsync(
-            "/api/v1/stub/accreditation-applications/org-2/app-3"
+            "/api/v1/stub/accreditation-applications/org-2/app-3",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadAsStringAsync();
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         body.Should().Contain("\"S3\"");
     }
 
@@ -89,7 +91,8 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
             .Returns((StubApplicationDocument?)null);
 
         var response = await _client.GetAsync(
-            "/api/v1/stub/accreditation-applications/org-2/does-not-exist"
+            "/api/v1/stub/accreditation-applications/org-2/does-not-exist",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -105,7 +108,8 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
                 siteId = "SITE-4",
                 materialType = "plastic",
                 year = 2026,
-            }
+            },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
@@ -127,7 +131,8 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
     {
         var response = await _client.PutAsJsonAsync(
             "/api/v1/stub/accreditation-applications/org-4/app-5",
-            new { }
+            new { },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
@@ -158,7 +163,8 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
 
         var response = await _client.PutAsync(
             "/api/v1/stub/accreditation-applications/org-5/app-6",
-            content
+            content,
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
@@ -184,7 +190,8 @@ public class StubApplicationEndpointsTests : IClassFixture<StubApplicationEndpoi
         // such as a JSON string), but it isn't representable as an Int32 (fractional value).
         var response = await _client.PutAsJsonAsync(
             "/api/v1/stub/accreditation-applications/org-6/app-7",
-            new { siteId = "SITE-7", materialType = "glass", year = 2026.5 }
+            new { siteId = "SITE-7", materialType = "glass", year = 2026.5 },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);

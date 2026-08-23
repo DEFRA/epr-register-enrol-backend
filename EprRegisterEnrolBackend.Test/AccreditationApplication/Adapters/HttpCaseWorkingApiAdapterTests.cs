@@ -89,7 +89,7 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_Success_ReturnsApplicationReferenceFromManagementBeResponse()
     {
         var (adapter, _) = CreateAdapter();
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
+        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
         result.ApplicationReference.Should().Be(TestApplicationReference);
     }
 
@@ -119,7 +119,7 @@ public class HttpCaseWorkingApiAdapterTests
             EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
+        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         result.WorkItemId.Should().Be(expectedId);
     }
@@ -254,7 +254,7 @@ public class HttpCaseWorkingApiAdapterTests
             EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication());
+        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         result.ApplicationReference.Should().Be(TestApplicationReference);
         result.WorkItemId.Should().BeNull();
@@ -264,7 +264,7 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_MapsPayloadCorrectly()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication());
+        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         handler.CapturedRequestBody.Should().NotBeNullOrEmpty();
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
@@ -324,7 +324,7 @@ public class HttpCaseWorkingApiAdapterTests
         application.PermitNumbers = [];
 
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(application);
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var payload = doc.RootElement.GetProperty("payload");
@@ -340,7 +340,7 @@ public class HttpCaseWorkingApiAdapterTests
         application.GlassRecyclingProcess = GlassRecyclingProcess.Remelt;
 
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(application);
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var payload = doc.RootElement.GetProperty("payload");
@@ -353,7 +353,7 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_NonGlassMaterial_OmitsGlassRecyclingProcessFromPayload()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication());
+        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var payload = doc.RootElement.GetProperty("payload");
@@ -380,7 +380,7 @@ public class HttpCaseWorkingApiAdapterTests
         };
 
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(application);
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var site = doc
@@ -427,7 +427,7 @@ public class HttpCaseWorkingApiAdapterTests
         };
 
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(application);
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var interimSite = doc
@@ -822,7 +822,7 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_SetsAuthHeaders()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication());
+        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         handler.CapturedRequest.Should().NotBeNull();
         var request = handler.CapturedRequest!;
@@ -840,7 +840,7 @@ public class HttpCaseWorkingApiAdapterTests
         application.SubmittedBy = null;
 
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(application);
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
 
         var request = handler.CapturedRequest!;
         request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("12345");
@@ -874,7 +874,7 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_WithSharedSecret_SetsHmacHeaders()
     {
         var (adapter, handler) = CreateAdapter(sharedSecret: "test-secret-key");
-        await adapter.SubmitApplicationAsync(CreateTestApplication());
+        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         var request = handler.CapturedRequest!;
         request.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
@@ -893,7 +893,7 @@ public class HttpCaseWorkingApiAdapterTests
     {
         const string secret = "test-secret-key";
         var (adapter, handler) = CreateAdapter(sharedSecret: secret);
-        await adapter.SubmitApplicationAsync(CreateTestApplication());
+        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         var request = handler.CapturedRequest!;
         var timestamp = request.Headers.GetValues("x-cdp-auth-timestamp").Single();
@@ -916,7 +916,7 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_WithoutSharedSecret_DoesNotSetHmacHeaders()
     {
         var (adapter, handler) = CreateAdapter(sharedSecret: null);
-        await adapter.SubmitApplicationAsync(CreateTestApplication());
+        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         var request = handler.CapturedRequest!;
         request.Headers.Contains("x-cdp-auth-signature").Should().BeFalse();
@@ -954,7 +954,7 @@ public class HttpCaseWorkingApiAdapterTests
         // sends, so the backend must not send one at all — sending a value it knows will be
         // silently discarded is misleading about where the reference actually comes from.
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication());
+        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         doc.RootElement.TryGetProperty("applicationReference", out _).Should().BeFalse();
@@ -976,7 +976,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.SiteAddress = null;
 
-        await adapter.SubmitApplicationAsync(app);
+        await adapter.SubmitApplicationAsync(app, TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var payload = doc.RootElement.GetProperty("payload");
@@ -990,7 +990,7 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_PostsToCorrectUrl()
     {
         var (adapter, handler) = CreateAdapter(url: "http://my-mgmt-be:9090");
-        await adapter.SubmitApplicationAsync(CreateTestApplication());
+        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
 
         handler
             .CapturedRequest!.RequestUri!.ToString()
@@ -1039,7 +1039,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = null;
 
-        var result = await adapter.GetNotificationStatusAsync(app);
+        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1081,7 +1081,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        var result = await adapter.GetNotificationStatusAsync(app);
+        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
 
         result.NotificationStatus.Should().Be("sent");
         handler
@@ -1113,7 +1113,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        var result = await adapter.GetNotificationStatusAsync(app);
+        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
 
         result.SlaDueDate.Should().Be(slaDueDate);
     }
@@ -1136,7 +1136,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app);
+        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1158,7 +1158,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app);
+        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1171,7 +1171,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app);
+        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1187,7 +1187,7 @@ public class HttpCaseWorkingApiAdapterTests
         app.SubmittedBy = null;
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        await adapter.GetNotificationStatusAsync(app);
+        await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
 
         var request = handler.CapturedRequest!;
         request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("12345");
@@ -1212,7 +1212,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app);
+        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1235,7 +1235,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeFalse();
@@ -1257,7 +1258,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeFalse();
@@ -1279,7 +1281,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeTrue();
@@ -1306,7 +1309,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
@@ -1376,7 +1380,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
@@ -1409,7 +1414,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeFalse();
@@ -1439,7 +1445,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["business-plan"]
+            ["business-plan"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeFalse();
@@ -1468,7 +1475,8 @@ public class HttpCaseWorkingApiAdapterTests
         var result = await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
-            "No longer required"
+            "No longer required",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeFalse();
@@ -1485,7 +1493,8 @@ public class HttpCaseWorkingApiAdapterTests
         var result = await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
-            "No longer required"
+            "No longer required",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeFalse();
@@ -1502,7 +1511,8 @@ public class HttpCaseWorkingApiAdapterTests
         var result = await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
-            "No longer required"
+            "No longer required",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeTrue();
@@ -1523,7 +1533,8 @@ public class HttpCaseWorkingApiAdapterTests
         await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
-            "No longer required"
+            "No longer required",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
@@ -1540,7 +1551,8 @@ public class HttpCaseWorkingApiAdapterTests
         await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
-            "No longer required"
+            "No longer required",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         handler.CapturedRequest.Should().NotBeNull();
@@ -1573,7 +1585,8 @@ public class HttpCaseWorkingApiAdapterTests
         var result = await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
-            "No longer required"
+            "No longer required",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeFalse();
@@ -1598,7 +1611,8 @@ public class HttpCaseWorkingApiAdapterTests
         var result = await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
-            "No longer required"
+            "No longer required",
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeFalse();
@@ -1613,7 +1627,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = null;
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
 
         handler.CapturedRequest.Should().BeNull();
     }
@@ -1626,7 +1640,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
 
         handler
             .CapturedRequest!.RequestUri!.ToString()
@@ -1650,7 +1664,7 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        await adapter.NotifySiteAddedAsync(app, "interim", "001", "SN-0002", true);
+        await adapter.NotifySiteAddedAsync(app, "interim", "001", "SN-0002", true, TestContext.Current.CancellationToken);
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var root = doc.RootElement;
@@ -1668,7 +1682,7 @@ public class HttpCaseWorkingApiAdapterTests
         app.SubmittedBy = null;
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
+        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
 
         var request = handler.CapturedRequest!;
         request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("12345");
@@ -1874,7 +1888,7 @@ public class HttpCaseWorkingApiAdapterTests
         // The chosen missing-band behaviour: omit the field, never throw. The submission itself
         // must still succeed — a display-only field must not be able to block accreditation.
         var (adapter, handler) = CreateAdapter();
-        var result = await adapter.SubmitApplicationAsync(ApplicationWithCharge(null, 2));
+        var result = await adapter.SubmitApplicationAsync(ApplicationWithCharge(null, 2), TestContext.Current.CancellationToken);
 
         result.ApplicationReference.Should().Be(TestApplicationReference);
 
@@ -1933,7 +1947,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["prn-tonnage"]
+            ["prn-tonnage"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
@@ -1969,7 +1984,8 @@ public class HttpCaseWorkingApiAdapterTests
                 Email = "jane@example.com",
                 Role = "Manager",
             },
-            ["prn-tonnage"]
+            ["prn-tonnage"],
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeTrue();
@@ -2001,7 +2017,8 @@ public class HttpCaseWorkingApiAdapterTests
         const string secret = "test-secret-key";
         var (adapter, handler) = CreateAdapter(sharedSecret: secret);
         await adapter.SubmitApplicationAsync(
-            ApplicationWithCharge(PlannedTonnageBand.Over10000, selectedSites: 4)
+            ApplicationWithCharge(PlannedTonnageBand.Over10000, selectedSites: 4),
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var request = handler.CapturedRequest!;
