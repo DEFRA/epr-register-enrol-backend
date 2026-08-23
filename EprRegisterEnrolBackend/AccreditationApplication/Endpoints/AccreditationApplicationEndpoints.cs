@@ -456,7 +456,9 @@ public static class AccreditationApplicationEndpoints
     }
 
     private static readonly System.Text.RegularExpressions.Regex FilenameIsSafe = new(
-        @"^[^\x00-\x1f<>:""/\\|?*]+$"
+        @"^[^\x00-\x1f<>:""/\\|?*]+$",
+        System.Text.RegularExpressions.RegexOptions.None,
+        TimeSpan.FromMilliseconds(100)
     );
 
     // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
@@ -963,7 +965,7 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
@@ -1301,7 +1303,7 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
@@ -1812,7 +1814,7 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, httpContext.RequestAborted);
         if (!validation.IsValid)
         {
             logger.LogWarning(
