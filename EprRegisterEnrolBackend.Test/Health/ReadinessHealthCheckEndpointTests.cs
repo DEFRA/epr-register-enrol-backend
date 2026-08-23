@@ -38,7 +38,7 @@ public class ReadinessHealthCheckEndpointTests
         );
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/health");
+        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -49,7 +49,7 @@ public class ReadinessHealthCheckEndpointTests
         await using var factory = new ProductionFactory(CompleteConfig);
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/health/ready");
+        var response = await client.GetAsync("/health/ready", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -61,10 +61,10 @@ public class ReadinessHealthCheckEndpointTests
         await using var factory = new ProductionFactory(incomplete);
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/health/ready");
+        var response = await client.GetAsync("/health/ready", TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
-        var body = await response.Content.ReadAsStringAsync();
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         body.Should().Contain("App__BaseUrl");
     }
 
