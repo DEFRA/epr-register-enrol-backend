@@ -392,10 +392,7 @@ public class HttpReExApiAdapterTests
     [Fact]
     public async Task GetAccreditationAsync_OrganisationNotFound_ReturnsNotFoundFailure()
     {
-        var sut = BuildSut(
-            "{}",
-            organisationStatusCode: HttpStatusCode.NotFound
-        );
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.NotFound);
 
         var result = await sut.GetAccreditationAsync(
             "does-not-exist",
@@ -411,10 +408,7 @@ public class HttpReExApiAdapterTests
     [Fact]
     public async Task GetAccreditationAsync_OrganisationServerError_ReturnsFailureWithUpstreamStatusCode()
     {
-        var sut = BuildSut(
-            "{}",
-            organisationStatusCode: HttpStatusCode.InternalServerError
-        );
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.InternalServerError);
 
         var result = await sut.GetAccreditationAsync(
             "6a2fcd74e16883c137d01188",
@@ -685,8 +679,7 @@ public class HttpReExApiAdapterTests
         var site = result.Value!.OverseasSites[0];
         site.SiteId.Should()
             .Be(0, because: "a non-numeric overseas site key has no id to fall back to");
-        site.SiteAddress.Should()
-            .BeNull(because: "the site had no address in the ReEx payload");
+        site.SiteAddress.Should().BeNull(because: "the site had no address in the ReEx payload");
     }
 
     [Fact]
@@ -694,7 +687,10 @@ public class HttpReExApiAdapterTests
     {
         var sut = BuildSut(OrganisationJsonWithLinkedDefraOrganisation);
 
-        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188", TestContext.Current.CancellationToken);
+        var result = await sut.GetLinkedDefraOrganisationAsync(
+            "6a2fcd74e16883c137d01188",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.OrganisationId.Should().Be("6a2fcd74e16883c137d01188");
@@ -706,7 +702,10 @@ public class HttpReExApiAdapterTests
     {
         var sut = BuildSut(OrganisationJson);
 
-        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188", TestContext.Current.CancellationToken);
+        var result = await sut.GetLinkedDefraOrganisationAsync(
+            "6a2fcd74e16883c137d01188",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.LinkedDefraOrganisationId.Should().BeNull();
@@ -717,7 +716,10 @@ public class HttpReExApiAdapterTests
     {
         var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.NotFound);
 
-        var result = await sut.GetLinkedDefraOrganisationAsync("does-not-exist", TestContext.Current.CancellationToken);
+        var result = await sut.GetLinkedDefraOrganisationAsync(
+            "does-not-exist",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(404);
@@ -728,7 +730,68 @@ public class HttpReExApiAdapterTests
     {
         var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.InternalServerError);
 
-        var result = await sut.GetLinkedDefraOrganisationAsync("6a2fcd74e16883c137d01188", TestContext.Current.CancellationToken);
+        var result = await sut.GetLinkedDefraOrganisationAsync(
+            "6a2fcd74e16883c137d01188",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
+    // ---------------- RA-475: GetOrganisationNumberAsync ----------------
+
+    [Fact]
+    public async Task GetOrganisationNumberAsync_Success_ReturnsOrgId()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetOrganisationNumberAsync(
+            "6a2fcd74e16883c137d01188",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(509193);
+    }
+
+    [Fact]
+    public async Task GetOrganisationNumberAsync_NoOrgIdRecorded_ReturnsSuccessWithNullValue()
+    {
+        var sut = BuildSut("{}");
+
+        var result = await sut.GetOrganisationNumberAsync(
+            "6a2fcd74e16883c137d01188",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetOrganisationNumberAsync_OrganisationNotFound_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.NotFound);
+
+        var result = await sut.GetOrganisationNumberAsync(
+            "does-not-exist",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetOrganisationNumberAsync_OrganisationServerError_ReturnsFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.InternalServerError);
+
+        var result = await sut.GetOrganisationNumberAsync(
+            "6a2fcd74e16883c137d01188",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(500);

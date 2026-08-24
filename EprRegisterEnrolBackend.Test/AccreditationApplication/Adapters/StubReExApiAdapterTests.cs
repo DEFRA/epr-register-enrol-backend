@@ -127,7 +127,9 @@ public class StubReExApiAdapterTests
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.OrganisationName.Should().Be("Stub Reprocessing Ltd");
         result.Value!.RegistrationReference.Should().Be("STUB-REG-001");
-        result.Value!.CompanyRegisteredAddress.Should().Be("1 Stub Registered Office, Stubton, ST1 1AB");
+        result
+            .Value!.CompanyRegisteredAddress.Should()
+            .Be("1 Stub Registered Office, Stubton, ST1 1AB");
         result.Value!.WasteProcessingType.Should().Be("reprocessor");
         result.Value!.SiteAddress.Should().Be("1 Stub Lane, Stubton, ST1 1AB");
         result.Value!.PermitNumbers.Should().BeEmpty();
@@ -154,7 +156,8 @@ public class StubReExApiAdapterTests
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.OrganisationName.Should().Be("NEWDEV RECYCLING LIMITED");
-        result.Value!.SiteAddress.Should()
+        result
+            .Value!.SiteAddress.Should()
             .Be(
                 "1 Stub Lane, Stubton, ST1 1AB",
                 because: "no matching registration means SiteAddress falls back, not to null (that's the exporter-only path)"
@@ -258,18 +261,52 @@ public class StubReExApiAdapterTests
         result.Value!.OverseasSites.Should().HaveCount(5);
 
         var firstSite = result.Value!.OverseasSites[0];
-        firstSite.SiteId.Should()
-            .Be(
-                900001,
-                because: "a non-numeric raw site id falls back to 900001 + its index (0)"
-            );
+        firstSite
+            .SiteId.Should()
+            .Be(900001, because: "a non-numeric raw site id falls back to 900001 + its index (0)");
 
         var fifthSite = result.Value!.OverseasSites[4];
-        fifthSite.Country.Should()
+        fifthSite
+            .Country.Should()
             .Be("Unknown", because: "StubSiteData only defines 4 entries (indices 0-3)");
         fifthSite.IsEu.Should().BeFalse();
         fifthSite.IsOecd.Should().BeFalse();
-        fifthSite.SiteId.Should()
-            .Be(900005, because: "\"900005\" parses cleanly as an int");
+        fifthSite.SiteId.Should().Be(900005, because: "\"900005\" parses cleanly as an int");
+    }
+
+    // ---------------- RA-475: GetOrganisationNumberAsync ----------------
+
+    [Fact]
+    public async Task GetOrganisationNumberAsync_NumericOrganisationId_ReturnsParsedOrgId()
+    {
+        var sut = new StubReExApiAdapter(
+            new FakeOrganisationPersistence(),
+            EnabledNullLogger<StubReExApiAdapter>.Instance
+        );
+
+        var result = await sut.GetOrganisationNumberAsync(
+            "50005",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(50005);
+    }
+
+    [Fact]
+    public async Task GetOrganisationNumberAsync_UuidOrganisationId_ReturnsSuccessWithNullValue()
+    {
+        var sut = new StubReExApiAdapter(
+            new FakeOrganisationPersistence(),
+            EnabledNullLogger<StubReExApiAdapter>.Instance
+        );
+
+        var result = await sut.GetOrganisationNumberAsync(
+            "c14854d9-e20a-41b3-87d5-a1fd4bbe2153",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().BeNull();
     }
 }

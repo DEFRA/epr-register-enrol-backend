@@ -225,18 +225,17 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         GenerateOrUpdateRegulatoryNumberRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IRegulatoryNumberGenerator generator,
-        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator,
-        IReExApiAdapter reExAdapter,
-        CancellationToken cancellationToken
+        [AsParameters] RegulatoryNumberServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -252,8 +251,8 @@ public static class AccreditationApplicationEndpoints
         var orgIdResolution = await ResolveOrgIdAsync(
             organisationId,
             request,
-            reExAdapter,
-            cancellationToken
+            services.ReExAdapter,
+            services.CancellationToken
         );
 
         if (
@@ -266,7 +265,7 @@ public static class AccreditationApplicationEndpoints
                 "Nation, OrgId and Year are required to generate a registration number."
             );
 
-        var newNumber = await generator.GenerateAsync(
+        var newNumber = await services.Generator.GenerateAsync(
             new RegulatoryNumberSpec
             {
                 Type = NumberType.Registration,
@@ -276,7 +275,8 @@ public static class AccreditationApplicationEndpoints
                 Material = application.MaterialType,
                 GlassRecyclingProcess = application.GlassRecyclingProcess,
                 Year = year,
-            }
+            },
+            services.CancellationToken
         );
 
         // Regenerate: keep the prior number in the audit trail, never reuse/reissue it
@@ -287,7 +287,7 @@ public static class AccreditationApplicationEndpoints
         application.RegistrationReference = newNumber;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to update registration number.")
             : Results.Ok(updated);
@@ -302,18 +302,17 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         GenerateOrUpdateRegulatoryNumberRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IRegulatoryNumberGenerator generator,
-        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator,
-        IReExApiAdapter reExAdapter,
-        CancellationToken cancellationToken
+        [AsParameters] RegulatoryNumberServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -342,8 +341,8 @@ public static class AccreditationApplicationEndpoints
             var orgIdResolution = await ResolveOrgIdAsync(
                 organisationId,
                 request,
-                reExAdapter,
-                cancellationToken
+                services.ReExAdapter,
+                services.CancellationToken
             );
 
             if (
@@ -356,7 +355,7 @@ public static class AccreditationApplicationEndpoints
                     "Nation, OrgId and Year are required to generate an accreditation number."
                 );
 
-            newNumber = await generator.GenerateAsync(
+            newNumber = await services.Generator.GenerateAsync(
                 new RegulatoryNumberSpec
                 {
                     Type = NumberType.Accreditation,
@@ -366,7 +365,8 @@ public static class AccreditationApplicationEndpoints
                     Material = application.MaterialType,
                     GlassRecyclingProcess = application.GlassRecyclingProcess,
                     Year = year,
-                }
+                },
+                services.CancellationToken
             );
         }
 
@@ -378,11 +378,24 @@ public static class AccreditationApplicationEndpoints
         application.AccreditationReference = newNumber;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to update accreditation number.")
             : Results.Ok(updated);
     }
+
+    // Bundles GenerateOrUpdateRegistrationNumber/GenerateOrUpdateAccreditationNumber's
+    // DI-service/framework parameters under one [AsParameters] argument so each handler
+    // stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // RecyclingOperationsServices above. A positional record, not bare `{ get; init; }`
+    // auto-properties, for the same S3459/S1144 reason given there.
+    private sealed record RegulatoryNumberServices(
+        IAccreditationApplicationPersistence Persistence,
+        IRegulatoryNumberGenerator Generator,
+        IValidator<GenerateOrUpdateRegulatoryNumberRequest> Validator,
+        IReExApiAdapter ReExAdapter,
+        CancellationToken CancellationToken
+    );
 
     // RA-469 AC18: updates OverseasSiteModel.OperationCodes for exactly one site - nothing else
     // on the application (not SectionStatus, not DateLastEdited, not the submit/resubmit-only
