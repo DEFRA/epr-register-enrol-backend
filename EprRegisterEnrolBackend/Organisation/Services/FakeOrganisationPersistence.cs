@@ -404,6 +404,13 @@ public class FakeOrganisationPersistence
         // the shape of assertion the org-50005 Seed race (documented above) corrupts under
         // concurrent wdio workers. Giving it its own org sidesteps that race entirely rather
         // than relying on timing.
+        //
+        // Deliberately NOT copying org 50013's OverseasSites = ["900010", "900011"] pattern:
+        // StubReExApiAdapter.cs converts each RegistrationModel.OverseasSites entry into a
+        // pre-seeded, pre-selected OverseasSiteModel at accreditation-creation time. Org 50013
+        // never noticed because its own test never asserts an absolute site count — but this
+        // org's whole purpose IS an absolute count assertion, so it must start with zero
+        // pre-seeded sites or "2 added via the wizard" silently becomes 4.
         _store.Add(
             new OrganisationModel
             {
@@ -442,7 +449,7 @@ public class FakeOrganisationPersistence
                         Status = RegistrationStatusCreated,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeExporter,
-                        OverseasSites = ["900012", "900013"],
+                        OverseasSites = [],
                         WasteManagementPermits =
                         [
                             new WasteManagementPermitModel { PermitNumber = "WML50014" },
