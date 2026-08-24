@@ -15,10 +15,8 @@ public class OrganisationModelTests
     [Fact]
     public void OrganisationModel_AllPropertiesRoundTrip()
     {
-        var id = ObjectId.GenerateNewId();
         var model = new OrganisationModel
         {
-            Id = id,
             OrgId = 42,
             SchemaVersion = 1,
             Version = 2,
@@ -31,12 +29,27 @@ public class OrganisationModelTests
             SubmitterContactDetails = new ContactDetailsModel(),
             SubmittedToRegulator = "ea",
             Users = [new PersonModel()],
-            Registrations = [new RegistrationModel { Status = "created", Material = "plastic", WasteProcessingType = "reprocessor" }],
-            Accreditations = [new AccreditationModel { Status = "created", Material = "plastic", WasteProcessingType = "reprocessor" }],
+            Registrations =
+            [
+                new RegistrationModel
+                {
+                    Status = "created",
+                    Material = "plastic",
+                    WasteProcessingType = "reprocessor",
+                },
+            ],
+            Accreditations =
+            [
+                new AccreditationModel
+                {
+                    Status = "created",
+                    Material = "plastic",
+                    WasteProcessingType = "reprocessor",
+                },
+            ],
             FormSubmissionRawDataId = "raw-data-id",
         };
 
-        model.Id.Should().Be(id);
         model.OrgId.Should().Be(42);
         model.SchemaVersion.Should().Be(1);
         model.Version.Should().Be(2);
@@ -57,10 +70,8 @@ public class OrganisationModelTests
     [Fact]
     public void OrganisationSummaryModel_AllPropertiesRoundTrip()
     {
-        var id = ObjectId.GenerateNewId();
         var model = new OrganisationSummaryModel
         {
-            Id = id,
             OrgId = 7,
             WasteProcessingTypes = ["exporter"],
             ReprocessingNations = ["wales"],
@@ -71,7 +82,6 @@ public class OrganisationModelTests
             SubmittedToRegulator = "sepa",
         };
 
-        model.Id.Should().Be(id);
         model.OrgId.Should().Be(7);
         model.WasteProcessingTypes.Should().ContainSingle();
         model.ReprocessingNations.Should().ContainSingle();
@@ -416,10 +426,7 @@ public class OrganisationModelTests
         {
             PlannedIssuance = "quarterly",
             Signatories = [new PersonModel { FullName = "Signatory" }],
-            PrnIncomeBusinessPlan =
-            [
-                new PrnIncomeBusinessPlanItemModel { Description = "desc" },
-            ],
+            PrnIncomeBusinessPlan = [new PrnIncomeBusinessPlanItemModel { Description = "desc" }],
         };
 
         model.PlannedIssuance.Should().Be("quarterly");
