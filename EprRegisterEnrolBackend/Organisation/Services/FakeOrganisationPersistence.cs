@@ -19,6 +19,7 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50005 = ObjectId.Parse("aaa000000000000000050005");
     public static readonly ObjectId Reg50006 = ObjectId.Parse("aaa000000000000000050006");
     public static readonly ObjectId Reg50013 = ObjectId.Parse("aaa000000000000000050013");
+    public static readonly ObjectId Reg50014 = ObjectId.Parse("aaa000000000000000050014");
 
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
@@ -391,6 +392,60 @@ public class FakeOrganisationPersistence
                         WasteManagementPermits =
                         [
                             new WasteManagementPermitModel { PermitNumber = "WML50013" },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        // RA-477 regression-guard org: exists for the same reason as org 50013 above —
+        // ors-fee-calculation.e2e.js needs to add ORS/interim sites to a Plastic exporter
+        // application and assert an exact site count on the payment page, which is exactly
+        // the shape of assertion the org-50005 Seed race (documented above) corrupts under
+        // concurrent wdio workers. Giving it its own org sidesteps that race entirely rather
+        // than relying on timing.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50014,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "ORS Fee Test Exports Ltd",
+                    TradingName = "ORS Fee Test Exports",
+                    RegistrationNumber = "EXP-50014",
+                    CompaniesHouseNumber = "12345014",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "Export House",
+                        Town = "Southampton",
+                        Postcode = "SO14 2AQ",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Export Manager",
+                    Email = "info@orsfeetestexports.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50014,
+                        SiteId = "REG014",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeExporter,
+                        OverseasSites = ["900012", "900013"],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50014" },
                         ],
                     },
                 ],
