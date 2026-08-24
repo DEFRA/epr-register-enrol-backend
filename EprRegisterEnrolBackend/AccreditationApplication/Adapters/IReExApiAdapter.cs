@@ -16,6 +16,24 @@ public interface IReExApiAdapter
         string organisationId,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// RA-475: the ReEx organisation's own numeric <c>orgId</c> - the value the
+    /// 6-digit organisation segment of a regulatory number is defined to be.
+    ///
+    /// Deliberately NOT <see cref="LinkedDefraOrganisationResult.LinkedDefraOrganisationId"/>,
+    /// which is the linked Defra Customer organisation's id and is a UUID (see
+    /// LinkedDefraOrganisationDto), and deliberately NOT the <c>{organisationId}</c>
+    /// route segment either, which is the ReEx organisation id and is also a UUID.
+    /// Neither can be parsed into the number format's <c>{OrgId:D6}</c> segment.
+    ///
+    /// <c>Value</c> is null when ReEx returned the organisation but it carries no
+    /// <c>orgId</c> - a data gap, distinct from a failed lookup (<c>IsSuccess</c> false).
+    /// </summary>
+    Task<ReExResult<int?>> GetOrganisationNumberAsync(
+        string organisationId,
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <summary>

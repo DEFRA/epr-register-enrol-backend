@@ -175,25 +175,67 @@ public static class AccreditationApplicationEndpoints
             )
             : null;
 
-    // RA-448 AC1/AC5/AC6/AC7/AC9. Nation/OrgId/Year are all caller-supplied (see
-    // GenerateOrUpdateRegulatoryNumberRequest) - Nation/OrgId because this
-    // backend has no reliable real organisation data source to derive them
-    // from, and Year per explicit product direction (2026-08-19): no
-    // assumption about the year may be made on a first-ever generate.
+    /// <summary>
+    /// RA-475: resolve the numeric organisation id the <c>{OrgId:D6}</c> segment
+    /// of a regulatory number is built from.
+    ///
+    /// ReEx is authoritative and is tried FIRST, because the caller cannot supply
+    /// this value correctly: management-be only holds the ReEx organisation id,
+    /// which is a UUID. It was passing that through <c>int.TryParse</c>, which
+    /// fails for every genuinely-submitted application, and the resulting refusal
+    /// surfaced in Case Management as "this application has changed since you
+    /// opened it" on a determination that could never succeed.
+    ///
+    /// The caller's <c>OrgId</c> survives only as a fallback, for the two cases
+    /// ReEx cannot answer: an organisation with no <c>orgId</c> recorded, and the
+    /// seeded/stubbed fixtures whose organisation ids are already numeric and have
+    /// no ReEx document behind them. A ReEx lookup FAILURE also falls back rather
+    /// than failing the request outright - the caller-supplied value is no worse
+    /// than the one this endpoint accepted unconditionally before.
+    ///
+    /// Returns null when neither source yields a value; the caller turns that into
+    /// the same 400 a missing OrgId has always produced.
+    /// </summary>
+    private static async Task<int?> ResolveOrgIdAsync(
+        string organisationId,
+        GenerateOrUpdateRegulatoryNumberRequest request,
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
+    )
+    {
+        var reExResult = await reExAdapter.GetOrganisationNumberAsync(
+            organisationId,
+            cancellationToken
+        );
+
+        return reExResult is { IsSuccess: true, Value: { } orgNumber } ? orgNumber : request.OrgId;
+    }
+
+    // RA-448 AC1/AC5/AC6/AC7/AC9. Nation and Year stay caller-supplied (see
+    // GenerateOrUpdateRegulatoryNumberRequest) - Nation because this backend has
+    // no reliable source to derive it from, and Year per explicit product
+    // direction (2026-08-19): no assumption about the year may be made on a
+    // first-ever generate.
+    //
+    // RA-475: OrgId no longer is. ReEx IS a reliable source for it - an
+    // organisation document carries its own numeric `orgId`, which is exactly
+    // what the number format's {OrgId:D6} segment means - so it is resolved
+    // here and the caller's value is only a fallback. See ResolveOrgIdAsync.
     private static async Task<IResult> GenerateOrUpdateRegistrationNumber(
         string organisationId,
         string applicationId,
         GenerateOrUpdateRegulatoryNumberRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IRegulatoryNumberGenerator generator,
-        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator
+        [AsParameters] RegulatoryNumberServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -206,17 +248,24 @@ public static class AccreditationApplicationEndpoints
         if (application.RegistrationReference is not null && !request.Regenerate)
             return Results.Ok(application);
 
+        var orgIdResolution = await ResolveOrgIdAsync(
+            organisationId,
+            request,
+            services.ReExAdapter,
+            services.CancellationToken
+        );
+
         if (
             request.Nation is not { } nationValue
             || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
-            || request.OrgId is not { } orgId
+            || orgIdResolution is not { } orgId
             || request.Year is not { } year
         )
             return Results.BadRequest(
                 "Nation, OrgId and Year are required to generate a registration number."
             );
 
-        var newNumber = await generator.GenerateAsync(
+        var newNumber = await services.Generator.GenerateAsync(
             new RegulatoryNumberSpec
             {
                 Type = NumberType.Registration,
@@ -226,7 +275,8 @@ public static class AccreditationApplicationEndpoints
                 Material = application.MaterialType,
                 GlassRecyclingProcess = application.GlassRecyclingProcess,
                 Year = year,
-            }
+            },
+            services.CancellationToken
         );
 
         // Regenerate: keep the prior number in the audit trail, never reuse/reissue it
@@ -237,7 +287,7 @@ public static class AccreditationApplicationEndpoints
         application.RegistrationReference = newNumber;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to update registration number.")
             : Results.Ok(updated);
@@ -252,16 +302,17 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         GenerateOrUpdateRegulatoryNumberRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IRegulatoryNumberGenerator generator,
-        IValidator<GenerateOrUpdateRegulatoryNumberRequest> validator
+        [AsParameters] RegulatoryNumberServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -287,17 +338,24 @@ public static class AccreditationApplicationEndpoints
         }
         else
         {
+            var orgIdResolution = await ResolveOrgIdAsync(
+                organisationId,
+                request,
+                services.ReExAdapter,
+                services.CancellationToken
+            );
+
             if (
                 request.Nation is not { } nationValue
                 || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
-                || request.OrgId is not { } orgId
+                || orgIdResolution is not { } orgId
                 || request.Year is not { } year
             )
                 return Results.BadRequest(
                     "Nation, OrgId and Year are required to generate an accreditation number."
                 );
 
-            newNumber = await generator.GenerateAsync(
+            newNumber = await services.Generator.GenerateAsync(
                 new RegulatoryNumberSpec
                 {
                     Type = NumberType.Accreditation,
@@ -307,7 +365,8 @@ public static class AccreditationApplicationEndpoints
                     Material = application.MaterialType,
                     GlassRecyclingProcess = application.GlassRecyclingProcess,
                     Year = year,
-                }
+                },
+                services.CancellationToken
             );
         }
 
@@ -319,11 +378,24 @@ public static class AccreditationApplicationEndpoints
         application.AccreditationReference = newNumber;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to update accreditation number.")
             : Results.Ok(updated);
     }
+
+    // Bundles GenerateOrUpdateRegistrationNumber/GenerateOrUpdateAccreditationNumber's
+    // DI-service/framework parameters under one [AsParameters] argument so each handler
+    // stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // RecyclingOperationsServices above. A positional record, not bare `{ get; init; }`
+    // auto-properties, for the same S3459/S1144 reason given there.
+    private sealed record RegulatoryNumberServices(
+        IAccreditationApplicationPersistence Persistence,
+        IRegulatoryNumberGenerator Generator,
+        IValidator<GenerateOrUpdateRegulatoryNumberRequest> Validator,
+        IReExApiAdapter ReExAdapter,
+        CancellationToken CancellationToken
+    );
 
     // RA-469 AC18: updates OverseasSiteModel.OperationCodes for exactly one site - nothing else
     // on the application (not SectionStatus, not DateLastEdited, not the submit/resubmit-only

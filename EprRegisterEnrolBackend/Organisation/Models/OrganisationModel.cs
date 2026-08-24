@@ -1,16 +1,10 @@
-using System.Text.Json.Serialization;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
-using MongoDB.Bson.Serialization.IdGenerators;
 
 namespace EprRegisterEnrolBackend.Organisation.Models;
 
 public class OrganisationModel
 {
-    [BsonId(IdGenerator = typeof(ObjectIdGenerator))]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Always)]
-    public ObjectId? Id { get; init; }
-
     public int OrgId { get; set; }
 
     public int SchemaVersion { get; set; }
@@ -44,10 +38,6 @@ public class OrganisationModel
 
 public class OrganisationSummaryModel
 {
-    [BsonId(IdGenerator = typeof(ObjectIdGenerator))]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Always)]
-    public ObjectId? Id { get; init; }
-
     public int OrgId { get; set; }
     public List<string>? WasteProcessingTypes { get; set; }
     public List<string>? ReprocessingNations { get; set; }

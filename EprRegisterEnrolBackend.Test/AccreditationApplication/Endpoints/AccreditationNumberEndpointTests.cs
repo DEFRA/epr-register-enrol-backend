@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using MongoDB.Bson;
 using NSubstitute;
@@ -345,6 +346,134 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         var response = await _client.PostAsJsonAsync(
             AccreditationNumberUrl(app),
             new { nation = "England", orgId = 500027 },
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (
+            await _factory.FakeCounters.GetCurrentMaxAsync(
+                "A-ER",
+                TestContext.Current.CancellationToken
+            )
+        )
+            .Should()
+            .BeNull();
+    }
+
+    // ---------------- RA-475: ReEx is authoritative for OrgId ----------------
+
+    private void StubReExOrgNumber(string organisationId, int? orgNumber) =>
+        _factory
+            .MockReExAdapter.GetOrganisationNumberAsync(
+                organisationId,
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(ReExResult<int?>.Success(orgNumber, 200));
+
+    /// <summary>
+    /// RA-475, the dev bug this endpoint change exists for: a real
+    /// application's organisation id is a ReEx UUID, so the caller (management-be)
+    /// has no numeric OrgId to send and sends none. Before the fix that was a 400
+    /// here and an un-clearable "this application has changed since you opened it"
+    /// in Case Management; now the number is built from ReEx's own numeric orgId.
+    /// </summary>
+    [Fact]
+    public async Task GenerateOrUpdateAccreditationNumber_resolves_org_id_from_reex_when_the_caller_sends_none()
+    {
+        Reset();
+        var app = SeedApplication(orgId: "c14854d9-e20a-41b3-87d5-a1fd4bbe2153");
+        StubReExOrgNumber(app.OrganisationId, 500000);
+
+        var response = await _client.PostAsJsonAsync(
+            AccreditationNumberUrl(app),
+            new { nation = "England", year = 2026 },
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        body!.AccreditationReference.Should().Be("A26ER5000000001WO");
+    }
+
+    /// <summary>
+    /// ReEx wins outright. A caller that still sends its own OrgId (an older
+    /// management-be, mid-rollout) must not be able to mint a number against the
+    /// wrong organisation.
+    /// </summary>
+    [Fact]
+    public async Task GenerateOrUpdateAccreditationNumber_prefers_the_reex_org_id_over_the_caller_supplied_one()
+    {
+        Reset();
+        var app = SeedApplication(orgId: "c14854d9-e20a-41b3-87d5-a1fd4bbe2153");
+        StubReExOrgNumber(app.OrganisationId, 500000);
+
+        var response = await _client.PostAsJsonAsync(
+            AccreditationNumberUrl(app),
+            new
+            {
+                nation = "England",
+                orgId = 999999,
+                year = 2026,
+            },
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        body!.AccreditationReference.Should().Be("A26ER5000000001WO");
+    }
+
+    /// <summary>
+    /// ReEx answered but has no orgId recorded: fall back to the caller's value
+    /// rather than refusing. Same shape as a ReEx lookup that fails outright -
+    /// the fallback is no worse than the behaviour this endpoint had before.
+    /// </summary>
+    [Fact]
+    public async Task GenerateOrUpdateAccreditationNumber_falls_back_to_the_caller_org_id_when_reex_has_none()
+    {
+        Reset();
+        var app = SeedApplication();
+        StubReExOrgNumber(app.OrganisationId, null);
+
+        var response = await _client.PostAsJsonAsync(
+            AccreditationNumberUrl(app),
+            new
+            {
+                nation = "England",
+                orgId = 500027,
+                year = 2026,
+            },
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        body!.AccreditationReference.Should().Be("A26ER5000270001WO");
+    }
+
+    /// <summary>
+    /// Neither source has one: still the same 400 a missing OrgId has always
+    /// produced, and still without burning a sequence value.
+    /// </summary>
+    [Fact]
+    public async Task GenerateOrUpdateAccreditationNumber_returns_400_when_neither_reex_nor_the_caller_has_an_org_id()
+    {
+        Reset();
+        var app = SeedApplication(orgId: "c14854d9-e20a-41b3-87d5-a1fd4bbe2153");
+        StubReExOrgNumber(app.OrganisationId, null);
+
+        var response = await _client.PostAsJsonAsync(
+            AccreditationNumberUrl(app),
+            new { nation = "England", year = 2026 },
             TestContext.Current.CancellationToken
         );
 
