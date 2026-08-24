@@ -44,6 +44,20 @@ public class AccreditationChargeCalculatorTests
         return application;
     }
 
+    private static InterimSiteModel CreateInterimSite(int siteId) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = $"SN-{siteId:D4}",
+            Country = "France",
+            SiteName = $"Interim Site {siteId}",
+            AddressLine1 = "1 Interim Road",
+            TownOrCity = "Paris",
+            ContactName = "Contact",
+            ContactEmail = "contact@example.com",
+            ContactPhone = "0000000000",
+        };
+
     // Every band in the table, with no overseas sites: the tonnage fee alone, in pence.
     [Theory]
     [InlineData(PlannedTonnageBand.UpTo500, 54_600)]
@@ -215,18 +229,7 @@ public class AccreditationChargeCalculatorTests
     public void SiteWithNestedInterimSite_StillCountsAsOneOrsSite()
     {
         var application = CreateApplication(PlannedTonnageBand.UpTo500, true);
-        application.OverseasSites!.Sites[0].InterimSite = new InterimSiteModel
-        {
-            SiteId = 101,
-            SiteNumber = "SN-0101",
-            Country = "France",
-            SiteName = "Interim Site A",
-            AddressLine1 = "1 Interim Road",
-            TownOrCity = "Paris",
-            ContactName = "Contact",
-            ContactEmail = "contact@example.com",
-            ContactPhone = "0000000000",
-        };
+        application.OverseasSites!.Sites[0].InterimSite = CreateInterimSite(101);
 
         // 546 + 328 = 874 — one ORS fee, the nested interim site is not a second site.
         AccreditationChargeCalculator.CalculateChargePence(application).Should().Be(87_400);
@@ -236,18 +239,7 @@ public class AccreditationChargeCalculatorTests
     public void TwoSelectedSitesOneWithNestedInterimSite_CountsAsTwoNotThree()
     {
         var application = CreateApplication(PlannedTonnageBand.UpTo500, true, true);
-        application.OverseasSites!.Sites[0].InterimSite = new InterimSiteModel
-        {
-            SiteId = 101,
-            SiteNumber = "SN-0101",
-            Country = "France",
-            SiteName = "Interim Site A",
-            AddressLine1 = "1 Interim Road",
-            TownOrCity = "Paris",
-            ContactName = "Contact",
-            ContactEmail = "contact@example.com",
-            ContactPhone = "0000000000",
-        };
+        application.OverseasSites!.Sites[0].InterimSite = CreateInterimSite(101);
 
         // 546 + (328 * 2) = 1202 — exactly the RA-477 repro shape: 2 ORS + 1 interim must
         // charge for 2 sites, not 3.
@@ -260,18 +252,7 @@ public class AccreditationChargeCalculatorTests
         var application = CreateApplication(PlannedTonnageBand.UpTo500, true, true, true);
         foreach (var (site, index) in application.OverseasSites!.Sites.Select((s, i) => (s, i)))
         {
-            site.InterimSite = new InterimSiteModel
-            {
-                SiteId = 200 + index,
-                SiteNumber = $"SN-02{index:D2}",
-                Country = "France",
-                SiteName = $"Interim Site {index}",
-                AddressLine1 = "1 Interim Road",
-                TownOrCity = "Paris",
-                ContactName = "Contact",
-                ContactEmail = "contact@example.com",
-                ContactPhone = "0000000000",
-            };
+            site.InterimSite = CreateInterimSite(200 + index);
         }
 
         // 546 + (328 * 3) = 1530 — three ORS sites, each with its own nested interim site,
@@ -283,18 +264,7 @@ public class AccreditationChargeCalculatorTests
     public void DeselectedSiteWithNestedInterimSite_IsStillExcludedFromTheCharge()
     {
         var application = CreateApplication(PlannedTonnageBand.UpTo500, true, false);
-        application.OverseasSites!.Sites[1].InterimSite = new InterimSiteModel
-        {
-            SiteId = 101,
-            SiteNumber = "SN-0101",
-            Country = "France",
-            SiteName = "Interim Site A",
-            AddressLine1 = "1 Interim Road",
-            TownOrCity = "Paris",
-            ContactName = "Contact",
-            ContactEmail = "contact@example.com",
-            ContactPhone = "0000000000",
-        };
+        application.OverseasSites!.Sites[1].InterimSite = CreateInterimSite(101);
 
         // 546 + 328 = 874 — the deselected site contributes nothing, interim or not.
         AccreditationChargeCalculator.CalculateChargePence(application).Should().Be(87_400);
