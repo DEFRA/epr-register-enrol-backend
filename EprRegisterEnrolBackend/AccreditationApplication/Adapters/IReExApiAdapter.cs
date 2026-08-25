@@ -66,6 +66,19 @@ public class ReExAccreditationDto
 
     public ReExPrnsDto? Prns { get; set; }
     public ReExBusinessPlanDto? BusinessPlan { get; set; }
+
+    // RA-480: the original registration submitter's contact details, as captured by ReEx at
+    // registration time. Distinct from SubmittedBy (captured at CM submit time, a different
+    // person) and QuerySubmitterContactDetails (the query/withdrawal responder).
+    public SubmitterContactDetailsDto? SubmitterContactDetails { get; set; }
+}
+
+public class SubmitterContactDetailsDto
+{
+    public string? FullName { get; set; }
+    public string? Email { get; set; }
+    public string? Phone { get; set; }
+    public string? JobTitle { get; set; }
 }
 
 public class ReExPrnsDto

@@ -40,6 +40,13 @@ public class HttpCaseWorkingApiAdapterTests
                 JobTitle = "Operations Manager",
                 Email = "jane@example.com",
             },
+            SubmitterContactDetails = new SubmitterContactDetailsModel
+            {
+                FullName = "Barton Deckow",
+                Email = "barton.deckow@example.com",
+                Phone = "0111 478 4919",
+                JobTitle = "Human Infrastructure Architect",
+            },
         };
     }
 
@@ -297,6 +304,36 @@ public class HttpCaseWorkingApiAdapterTests
             .Should()
             .BeEquivalentTo(["WML123456", "PPC456789"]);
         payload.GetProperty("wasteProcessingType").GetString().Should().Be("reprocessor");
+
+        var submitterContactDetails = payload.GetProperty("submitterContactDetails");
+        submitterContactDetails.GetProperty("fullName").GetString().Should().Be("Barton Deckow");
+        submitterContactDetails
+            .GetProperty("email")
+            .GetString()
+            .Should()
+            .Be("barton.deckow@example.com");
+        submitterContactDetails.GetProperty("phone").GetString().Should().Be("0111 478 4919");
+        submitterContactDetails
+            .GetProperty("jobTitle")
+            .GetString()
+            .Should()
+            .Be("Human Infrastructure Architect");
+    }
+
+    // RA-480
+    [Fact]
+    public async Task SubmitApplicationAsync_NoSubmitterContactDetails_OmitsSubmitterContactDetailsFromPayload()
+    {
+        var application = CreateTestApplication();
+        application.SubmitterContactDetails = null;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        var payload = JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload");
+        payload.TryGetProperty("submitterContactDetails", out _).Should().BeFalse();
     }
 
     // RA-456
