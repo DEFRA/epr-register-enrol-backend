@@ -74,4 +74,47 @@ public static class SectionStatusService
 
         return SectionStatus.InProgress;
     }
+
+    // RA-496: resolves what SectionStatus a Patch endpoint should persist given the client's
+    // requested intent ("save and come back later" -> InProgress, "save and continue" ->
+    // Completed). The requested status is an intent, not an unconditional command — Completed is
+    // only honoured when the section is actually complete per the same `compute` this service
+    // already uses for the legacy auto-computed status, closing the trust-boundary gap a client
+    // would otherwise have to just POST Completed with incomplete data. When the client sends no
+    // explicit status at all (older callers, or the field omitted), falls back to that legacy
+    // auto-computed behaviour so existing integrations are unaffected. Callers are expected to
+    // skip this entirely while the section is Queried — that guard stays at the call site
+    // alongside each section's existing `!= Queried` check.
+    public static (SectionStatus? Status, string? Error) ResolveRequestedStatus(
+        SectionStatus? requestedStatus,
+        Func<SectionStatus> compute,
+        string sectionDisplayName
+    )
+    {
+        if (!requestedStatus.HasValue)
+            return (compute(), null);
+
+        if (requestedStatus.Value == SectionStatus.Completed && compute() != SectionStatus.Completed)
+            return (
+                null,
+                $"{sectionDisplayName} section cannot be marked Completed until it is complete."
+            );
+
+        return (requestedStatus.Value, null);
+    }
+
+    // BES evidence has no NotStarted/InProgress/Completed auto-compute — SectionStatus there is
+    // operator-controlled directly via PatchBesEvidenceSection (see
+    // AccreditationApplicationSections.ComputeCurrentStatus). This answers only the completeness
+    // half of the same Completed gate ResolveRequestedStatus applies elsewhere: every selected
+    // overseas site that needs evidence (not EU/OECD, no conditions-of-export exemption) must
+    // have at least one uploaded file. Vacuously true when there are no such sites, so an
+    // exporter with only EU/OECD sites can still complete the section.
+    public static bool IsBesEvidenceComplete(AccreditationApplicationOverseasSites? overseasSites)
+    {
+        var sites = overseasSites?.Sites ?? [];
+        return sites
+            .Where(s => s.Selected && !s.IsEu && !s.IsOecd && s.ConditionsOfExport != true)
+            .All(s => (s.BesEvidence?.BesEvidenceUploads.Count ?? 0) > 0);
+    }
 }

@@ -9,12 +9,20 @@ public class PatchPrnsRequest
 {
     public PlannedTonnageBand? PlannedTonnageBand { get; set; }
     public List<PrnsAuthoriser>? Authorisers { get; set; }
+
+    /// <summary>RA-496: operator's save intent — InProgress ("save and come back later") or
+    /// Completed ("save and continue"). Null falls back to the legacy auto-computed status.</summary>
+    public SectionStatus? SectionStatus { get; set; }
 }
 
 public class PatchTonnageRequest
 {
     public PlannedTonnageBand? PlannedTonnageBand { get; set; }
     public List<PrnsAuthoriser>? Authorisers { get; set; }
+
+    /// <summary>RA-496: operator's save intent — InProgress ("save and come back later") or
+    /// Completed ("save and continue"). Null falls back to the legacy auto-computed status.</summary>
+    public SectionStatus? SectionStatus { get; set; }
 }
 
 public class PatchBusinessPlanRequest
@@ -37,16 +45,29 @@ public class PatchBusinessPlanRequest
 
     /// <summary>When true, bypasses the sum-to-100 check (used by "Save and come back later").</summary>
     public bool IsPartialSave { get; set; }
+
+    /// <summary>RA-496: operator's save intent — InProgress ("save and come back later") or
+    /// Completed ("save and continue"). Null falls back to the legacy auto-computed status.</summary>
+    public SectionStatus? SectionStatus { get; set; }
 }
 
 public class PatchSamplingPlanRequest
 {
     public List<AccreditationApplicationFile>? Files { get; set; }
+
+    /// <summary>RA-496: operator's save intent — InProgress ("save and come back later") or
+    /// Completed ("save and continue"). Null falls back to the legacy auto-computed status.</summary>
+    public SectionStatus? SectionStatus { get; set; }
 }
 
 public class PatchOverseasSitesRequest
 {
     public List<OverseasSiteModel>? Sites { get; set; }
+
+    /// <summary>RA-496: operator's save intent — InProgress ("save and come back later") or
+    /// Completed ("save and continue"). Null falls back to the legacy binary auto-computed
+    /// status (this section has no partial-completion concept beyond that).</summary>
+    public SectionStatus? SectionStatus { get; set; }
 }
 
 public record AddOverseasSiteRequest
