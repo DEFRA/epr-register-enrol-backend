@@ -65,28 +65,24 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
-    public async Task<AccreditationApplicationModel?> UpdateAsync(
+    public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application
     )
     {
         if (application.Id is null)
-            return null;
+            return Task.FromResult<AccreditationApplicationModel?>(null);
 
         var filter = Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, application.Id);
-
-        application.UpdatedAt = DateTime.UtcNow;
-
-        var result = await Collection.ReplaceOneAsync(filter, application);
-        return result.ModifiedCount > 0 ? application : null;
+        return ReplaceIfMatchAsync(application, filter);
     }
 
-    public async Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
+    public Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
         string orsId
     )
     {
         if (application.Id is null)
-            return null;
+            return Task.FromResult<AccreditationApplicationModel?>(null);
 
         var filter = Builders<AccreditationApplicationModel>.Filter.And(
             Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, application.Id),
@@ -97,9 +93,18 @@ public class AccreditationApplicationPersistence(
                 )
             )
         );
+        return ReplaceIfMatchAsync(application, filter);
+    }
 
+    // RA-482: shared by UpdateAsync and UpdateIfOrsIdAbsentAsync -- they differ only in the
+    // filter (plain Id match vs. Id match plus an OrsId-absence guard), so the actual
+    // stamp-then-replace-then-check-ModifiedCount body has exactly one implementation.
+    private async Task<AccreditationApplicationModel?> ReplaceIfMatchAsync(
+        AccreditationApplicationModel application,
+        FilterDefinition<AccreditationApplicationModel> filter
+    )
+    {
         application.UpdatedAt = DateTime.UtcNow;
-
         var result = await Collection.ReplaceOneAsync(filter, application);
         return result.ModifiedCount > 0 ? application : null;
     }
