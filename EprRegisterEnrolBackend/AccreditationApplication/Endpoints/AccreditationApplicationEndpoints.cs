@@ -648,6 +648,15 @@ public static class AccreditationApplicationEndpoints
             CompanyRegisteredAddress = priorYearData.CompanyRegisteredAddress,
             CompaniesHouseNumber = priorYearData.CompaniesHouseNumber,
             PermitNumbers = priorYearData.PermitNumbers,
+            SubmitterContactDetails = priorYearData.SubmitterContactDetails is { } submitterContact
+                ? new SubmitterContactDetailsModel
+                {
+                    FullName = submitterContact.FullName,
+                    Email = submitterContact.Email,
+                    Phone = submitterContact.Phone,
+                    JobTitle = submitterContact.JobTitle,
+                }
+                : null,
             WasteProcessingType = priorYearData.WasteProcessingType,
             RegistrationReference = priorYearData.RegistrationReference,
             MaterialType = materialTypeEnum,

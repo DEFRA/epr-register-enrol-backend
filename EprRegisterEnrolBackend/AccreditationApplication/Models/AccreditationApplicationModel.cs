@@ -81,6 +81,11 @@ public class AccreditationApplicationModel
 
     public SubmittedByModel? SubmittedBy { get; set; }
 
+    // RA-480: the original registration submitter's contact details, sourced from ReEx at Seed
+    // time. Distinct from SubmittedBy (captured at CM submit time, a different person) and
+    // AccreditationApplicationQuery.QuerySubmitterContactDetails (the query/withdrawal responder).
+    public SubmitterContactDetailsModel? SubmitterContactDetails { get; set; }
+
     public string? WithdrawalReason { get; set; }
 
     public DateTime? DateSent { get; set; }
@@ -126,6 +131,14 @@ public class SubmittedByModel
     public required string FullName { get; set; }
     public required string JobTitle { get; set; }
     public string? Email { get; set; }
+}
+
+public class SubmitterContactDetailsModel
+{
+    public string? FullName { get; set; }
+    public string? Email { get; set; }
+    public string? Phone { get; set; }
+    public string? JobTitle { get; set; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
