@@ -11,7 +11,6 @@ public class AddOverseasSiteRequestValidatorTests
     private static AddOverseasSiteRequest ValidRequest() =>
         new()
         {
-            OrsId = "001",
             SiteName = "Test Recycling GmbH",
             AddressLine1 = "Industriestrasse 42",
             TownOrCity = "Hamburg",
@@ -42,7 +41,10 @@ public class AddOverseasSiteRequestValidatorTests
         // Y46-Y49 are on the approved list but match neither shape the old
         // BaselOecdRegex accepted - this is the bug the membership check fixes.
         // Matching is case-insensitive.
-        var request = ValidRequest() with { Code1 = code };
+        var request = ValidRequest() with
+        {
+            Code1 = code,
+        };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor(r => r.Code1);
     }
@@ -62,7 +64,10 @@ public class AddOverseasSiteRequestValidatorTests
     {
         // "Z9999" matches the old shape regex (letter + 4 digits) but is not on the
         // approved list, so it must now be rejected by the membership check.
-        var request = ValidRequest() with { Code1 = code };
+        var request = ValidRequest() with
+        {
+            Code1 = code,
+        };
         var result = _validator.TestValidate(request);
         result.ShouldHaveValidationErrorFor(r => r.Code1);
     }
@@ -102,12 +107,7 @@ public class AddOverseasSiteRequestValidatorTests
     [Fact]
     public void DistinctCodes_PassesValidation()
     {
-        var request = ValidRequest() with
-        {
-            Code1 = "A1181",
-            Code2 = "Y46",
-            Code3 = "B1010",
-        };
+        var request = ValidRequest() with { Code1 = "A1181", Code2 = "Y46", Code3 = "B1010" };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor("Code2");
     }

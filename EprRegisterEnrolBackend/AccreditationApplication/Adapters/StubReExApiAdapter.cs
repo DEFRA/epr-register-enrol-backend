@@ -171,6 +171,13 @@ public class StubReExApiAdapter(
                 NewUsesPercent = 10,
                 OtherPercent = 10,
             },
+            SubmitterContactDetails = new SubmitterContactDetailsDto
+            {
+                FullName = "Stub Submitter",
+                Email = "stub.submitter@example.com",
+                Phone = "01234 567890",
+                JobTitle = "Stub Job Title",
+            },
         };
 
         return ReExResult<ReExAccreditationDto>.Success(fixture, 200);

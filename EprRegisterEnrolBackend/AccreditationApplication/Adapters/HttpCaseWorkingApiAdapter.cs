@@ -575,6 +575,15 @@ public class HttpCaseWorkingApiAdapter(
                     jobTitle = application.SubmittedBy.JobTitle,
                     email = application.SubmittedBy.Email,
                 },
+            submitterContactDetails = application.SubmitterContactDetails is null
+                ? null
+                : new
+                {
+                    fullName = application.SubmitterContactDetails.FullName,
+                    email = application.SubmitterContactDetails.Email,
+                    phone = application.SubmitterContactDetails.Phone,
+                    jobTitle = application.SubmitterContactDetails.JobTitle,
+                },
             prns = BuildPrnsSection(application),
             businessPlan = new
             {
