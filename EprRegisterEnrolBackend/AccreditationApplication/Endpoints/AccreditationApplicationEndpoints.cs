@@ -1065,56 +1065,85 @@ public static class AccreditationApplicationEndpoints
                 $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
             );
 
-        if (application.OverseasSites.Sites.Any(s => s.OrsId == request.OrsId))
-            return Results.Conflict(
-                $"A site with OrsId '{request.OrsId}' already exists on this application."
-            );
+        // RA-482: OrsId is server-generated (max existing numeric id + 1, zero-padded, scoped by
+        // RegistrationId across every application under it, falling back to just this
+        // application when no RegistrationId is set yet) rather than accepted from the client.
+        // The write is guarded so a concurrent AddOverseasSite call under the same registration
+        // can't silently produce a duplicate: UpdateIfOrsIdAbsentAsync only persists if nothing
+        // else already inserted that exact id, and a failed attempt retries with a freshly
+        // computed id. Bounded, not unlimited, so a genuinely stuck conflict fails loudly.
+        const int maxOrsIdAttempts = 3;
+        OverseasSiteModel? newSite = null;
+        AccreditationApplicationModel? updated = null;
 
-        var nextSiteId = NextSiteId(application.OverseasSites);
-
-        var newSite = new OverseasSiteModel
+        for (var attempt = 1; attempt <= maxOrsIdAttempts; attempt++)
         {
-            SiteId = nextSiteId,
-            OrsId = request.OrsId,
-            SiteName = request.SiteName,
-            AddressLine1 = request.AddressLine1,
-            AddressLine2 = request.AddressLine2,
-            TownOrCity = request.TownOrCity,
-            Country = request.Country,
-            SiteAddress = string.Join(
-                ", ",
-                new[] { request.AddressLine1, request.TownOrCity, request.Country }.Where(s =>
-                    !string.IsNullOrWhiteSpace(s)
-                )
-            ),
-            Coordinates = request.Coordinates,
-            ContactName = request.ContactName,
-            ContactEmail = request.ContactEmail,
-            ContactPhone = request.ContactPhone,
-            OperationCodes = request.OperationCodes,
-            Code1 = request.Code1,
-            Code2 = request.Code2,
-            Code3 = request.Code3,
-            RepatriatedLoads = request.RepatriatedLoads,
-            ConditionsOfExport = request.ConditionsOfExport,
-            IsEu = CountryClassifications.IsEu(request.Country),
-            IsOecd = CountryClassifications.IsOecd(request.Country),
-            // The one place an ORS is genuinely created by the operator, so the one place the
-            // regulator's "new" badge is switched on (RA-292 AC01). Sites arriving from ReEx are
-            // pre-existing and stay false.
-            IsNewSite = true,
-        };
+            var scope = await OrsIdScope(persistence, organisationId, application);
+            var generated = OrsIdGenerator.GenerateNext(scope);
+            if (generated.CapacityExceeded)
+                return Results.UnprocessableEntity(
+                    "This registration has reached the maximum of 999 overseas sites."
+                );
 
-        application.OverseasSites.Sites.Add(newSite);
-        RecomputeOverseasSitesSectionStatus(application.OverseasSites);
-        application.DateLastEdited = DateTime.UtcNow;
+            var nextSiteId = NextSiteId(application.OverseasSites);
 
-        if (application.ApplicationStatus == ApplicationStatus.Saved)
-            application.ApplicationStatus = ApplicationStatus.Started;
+            newSite = new OverseasSiteModel
+            {
+                SiteId = nextSiteId,
+                OrsId = generated.OrsId,
+                SiteName = request.SiteName,
+                AddressLine1 = request.AddressLine1,
+                AddressLine2 = request.AddressLine2,
+                TownOrCity = request.TownOrCity,
+                Country = request.Country,
+                SiteAddress = string.Join(
+                    ", ",
+                    new[] { request.AddressLine1, request.TownOrCity, request.Country }.Where(s =>
+                        !string.IsNullOrWhiteSpace(s)
+                    )
+                ),
+                Coordinates = request.Coordinates,
+                ContactName = request.ContactName,
+                ContactEmail = request.ContactEmail,
+                ContactPhone = request.ContactPhone,
+                OperationCodes = request.OperationCodes,
+                Code1 = request.Code1,
+                Code2 = request.Code2,
+                Code3 = request.Code3,
+                RepatriatedLoads = request.RepatriatedLoads,
+                ConditionsOfExport = request.ConditionsOfExport,
+                IsEu = CountryClassifications.IsEu(request.Country),
+                IsOecd = CountryClassifications.IsOecd(request.Country),
+                // The one place an ORS is genuinely created by the operator, so the one place the
+                // regulator's "new" badge is switched on (RA-292 AC01). Sites arriving from ReEx are
+                // pre-existing and stay false.
+                IsNewSite = true,
+            };
 
-        var updated = await persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to add overseas site.");
+            application.OverseasSites.Sites.Add(newSite);
+            RecomputeOverseasSitesSectionStatus(application.OverseasSites);
+            application.DateLastEdited = DateTime.UtcNow;
+
+            if (application.ApplicationStatus == ApplicationStatus.Saved)
+                application.ApplicationStatus = ApplicationStatus.Started;
+
+            updated = await persistence.UpdateIfOrsIdAbsentAsync(application, generated.OrsId!);
+            if (updated is not null)
+                break;
+
+            // Lost the race to a concurrent writer — re-fetch the now-current document and retry
+            // with a freshly computed id rather than risking a duplicate.
+            var refetched = await persistence.GetByIdAsync(organisationId, applicationId);
+            if (refetched is null)
+                return Results.NotFound();
+            application = refetched;
+            application.OverseasSites ??= new AccreditationApplicationOverseasSites();
+        }
+
+        if (updated is null || newSite is null)
+            return Results.Conflict(
+                "Could not allocate a unique ORS id after several attempts; please retry."
+            );
 
         // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
         // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s): skip the round-trip
@@ -1146,6 +1175,32 @@ public static class AccreditationApplicationEndpoints
         }
 
         return Results.Created(string.Empty, newSite);
+    }
+
+    // RA-482: the OrsId allocation scope. A registration is established once and renewed
+    // annually via a new AccreditationApplicationModel each year, so RegistrationId (not the
+    // non-nullable OrganisationId) is what actually identifies "this registration" across every
+    // year's application — see the RA-482 lesson. GetByOrganisationAsync is the only query
+    // available (no direct by-RegistrationId lookup), so every application for the org is
+    // fetched and filtered in memory. Every OrsId string is included regardless of Selected
+    // status or origin (operator-added or ReEx-seeded) — a deselected site keeps its id
+    // permanently. When RegistrationId is null (no registration established yet for this
+    // application), there is by definition no cross-year history to scope against, so this
+    // falls back to just the current application's own sites.
+    private static async Task<IEnumerable<string?>> OrsIdScope(
+        IAccreditationApplicationPersistence persistence,
+        string organisationId,
+        AccreditationApplicationModel application
+    )
+    {
+        if (application.RegistrationId is null)
+            return application.OverseasSites!.Sites.Select(s => s.OrsId);
+
+        var allForOrganisation = await persistence.GetByOrganisationAsync(organisationId);
+        return allForOrganisation
+            .Where(a => a.RegistrationId == application.RegistrationId)
+            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+            .Select(s => s.OrsId);
     }
 
     // Site numbers must be unique application-wide across both ORS sites and their nested

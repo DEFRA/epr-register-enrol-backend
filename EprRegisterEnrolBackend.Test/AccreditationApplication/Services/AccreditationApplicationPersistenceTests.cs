@@ -32,7 +32,8 @@ public class AccreditationApplicationPersistenceTests
             new CollectionNamespace(databaseNamespace, "accreditationApplications")
         );
         factory.GetClient().Returns(Substitute.For<IMongoClient>());
-        factory.GetCollection<AccreditationApplicationModel>("accreditationApplications")
+        factory
+            .GetCollection<AccreditationApplicationModel>("accreditationApplications")
             .Returns(mongoCollection);
 
         var loggerFactory = Substitute.For<ILoggerFactory>();
@@ -86,7 +87,13 @@ public class AccreditationApplicationPersistenceTests
                 Arg.Any<ReplaceOptions>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(new ReplaceOneResult.Acknowledged(matchedCount: 1, modifiedCount: 1, upsertedId: null));
+            .Returns(
+                new ReplaceOneResult.Acknowledged(
+                    matchedCount: 1,
+                    modifiedCount: 1,
+                    upsertedId: null
+                )
+            );
 
         var result = await sut.UpdateAsync(application);
 
@@ -112,9 +119,109 @@ public class AccreditationApplicationPersistenceTests
                 Arg.Any<ReplaceOptions>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(new ReplaceOneResult.Acknowledged(matchedCount: 1, modifiedCount: 0, upsertedId: null));
+            .Returns(
+                new ReplaceOneResult.Acknowledged(
+                    matchedCount: 1,
+                    modifiedCount: 0,
+                    upsertedId: null
+                )
+            );
 
         var result = await sut.UpdateAsync(application);
+
+        result.Should().BeNull();
+    }
+
+    // RA-482: same guard-clause and ternary shape as UpdateAsync above, plus the null-Id
+    // short-circuit must apply here too since it's a second write path into the same collection.
+    [Fact]
+    public async Task UpdateIfOrsIdAbsentAsync_ApplicationIdIsNull_ReturnsNullWithoutTouchingCollection()
+    {
+        var sut = CreateSut(out var collection);
+        var application = new AccreditationApplicationModel
+        {
+            Id = null,
+            OrganisationId = "org-1",
+            Year = 2026,
+            MaterialType = MaterialType.Steel,
+        };
+
+        var result = await sut.UpdateIfOrsIdAbsentAsync(application, "001");
+
+        result.Should().BeNull();
+        await collection
+            .DidNotReceive()
+            .ReplaceOneAsync(
+                Arg.Any<FilterDefinition<AccreditationApplicationModel>>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<ReplaceOptions>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task UpdateIfOrsIdAbsentAsync_ReplaceModifiesDocument_ReturnsUpdatedApplication()
+    {
+        var sut = CreateSut(out var collection);
+        var application = new AccreditationApplicationModel
+        {
+            Id = MongoDB.Bson.ObjectId.GenerateNewId(),
+            OrganisationId = "org-1",
+            Year = 2026,
+            MaterialType = MaterialType.Steel,
+        };
+
+        collection
+            .ReplaceOneAsync(
+                Arg.Any<FilterDefinition<AccreditationApplicationModel>>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<ReplaceOptions>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new ReplaceOneResult.Acknowledged(
+                    matchedCount: 1,
+                    modifiedCount: 1,
+                    upsertedId: null
+                )
+            );
+
+        var result = await sut.UpdateIfOrsIdAbsentAsync(application, "001");
+
+        result.Should().BeSameAs(application);
+    }
+
+    // A concurrent writer already claiming the id is indistinguishable, at this layer, from any
+    // other reason the guarded filter matched nothing -- modifiedCount 0 always means "did not
+    // persist," which is exactly what the caller's retry loop needs to know.
+    [Fact]
+    public async Task UpdateIfOrsIdAbsentAsync_ReplaceModifiesNoDocument_ReturnsNull()
+    {
+        var sut = CreateSut(out var collection);
+        var application = new AccreditationApplicationModel
+        {
+            Id = MongoDB.Bson.ObjectId.GenerateNewId(),
+            OrganisationId = "org-1",
+            Year = 2026,
+            MaterialType = MaterialType.Steel,
+        };
+
+        collection
+            .ReplaceOneAsync(
+                Arg.Any<FilterDefinition<AccreditationApplicationModel>>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<ReplaceOptions>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new ReplaceOneResult.Acknowledged(
+                    matchedCount: 1,
+                    modifiedCount: 0,
+                    upsertedId: null
+                )
+            );
+
+        var result = await sut.UpdateIfOrsIdAbsentAsync(application, "001");
 
         result.Should().BeNull();
     }
@@ -133,10 +240,19 @@ public class AccreditationApplicationPersistenceTests
     public async Task CreateAsync_InsertThrows_ReturnsNull()
     {
         var sut = CreateSut(out var collection);
-        var application = new AccreditationApplicationModel { OrganisationId = "org-1", Year = 2026, MaterialType = MaterialType.Steel };
+        var application = new AccreditationApplicationModel
+        {
+            OrganisationId = "org-1",
+            Year = 2026,
+            MaterialType = MaterialType.Steel,
+        };
 
         collection
-            .InsertOneAsync(Arg.Any<AccreditationApplicationModel>(), Arg.Any<InsertOneOptions>(), Arg.Any<CancellationToken>())
+            .InsertOneAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<InsertOneOptions>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(Task.FromException(new MongoException("boom")));
 
         var result = await sut.CreateAsync(application);

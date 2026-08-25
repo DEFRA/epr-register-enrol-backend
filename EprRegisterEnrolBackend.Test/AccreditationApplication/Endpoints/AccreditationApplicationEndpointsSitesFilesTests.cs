@@ -30,7 +30,9 @@ public class AccreditationApplicationEndpointsSitesFilesTests
     private readonly AccreditationApplicationTestFactory _factory;
     private readonly HttpClient _client;
 
-    public AccreditationApplicationEndpointsSitesFilesTests(AccreditationApplicationTestFactory factory)
+    public AccreditationApplicationEndpointsSitesFilesTests(
+        AccreditationApplicationTestFactory factory
+    )
     {
         _factory = factory;
         _client = factory.CreateClient();
@@ -96,7 +98,6 @@ public class AccreditationApplicationEndpointsSitesFilesTests
     private static AddOverseasSiteRequest ValidAddOrsRequest() =>
         new()
         {
-            OrsId = "001",
             SiteName = "Test Recycling GmbH",
             AddressLine1 = "Industriestrasse 42",
             TownOrCity = "Hamburg",
@@ -169,12 +170,16 @@ public class AccreditationApplicationEndpointsSitesFilesTests
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
+    // RA-482: OrsId generation moved server-side and now writes via UpdateIfOrsIdAbsentAsync, so
+    // a persistence write failure surfaces through the retry-on-conflict loop (bounded at 3
+    // attempts) rather than a single-attempt UpdateAsync -- exhausting it is a 409 Conflict, not
+    // a 500. Supersedes the old single-failure "ReturnsProblem" test for this endpoint.
     [Fact]
-    public async Task AddOverseasSite_WhenPersistenceUpdateFails_ReturnsProblem()
+    public async Task AddOverseasSite_WhenOrsIdWriteKeepsConflicting_ReturnsConflictAfterRetries()
     {
         Reset();
         var app = SeedApplication();
-        _factory.FakePersistence.FailNextUpdate = true;
+        _factory.FakePersistence.FailNextOrsIdWrites = 3;
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
@@ -182,7 +187,28 @@ public class AccreditationApplicationEndpointsSitesFilesTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddOverseasSite_WhenOrsIdWriteConflictsOnce_RetriesAndSucceeds()
+    {
+        Reset();
+        var app = SeedApplication();
+        _factory.FakePersistence.FailNextOrsIdWrites = 1;
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.OrsId.Should().Be("001");
     }
 
     [Fact]
@@ -385,7 +411,15 @@ public class AccreditationApplicationEndpointsSitesFilesTests
             a.CaseManagementWorkItemId = Guid.NewGuid();
             a.OverseasSites = new AccreditationApplicationOverseasSites
             {
-                Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "ORS 1", OrsId = null }],
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "ORS 1",
+                        OrsId = null,
+                    },
+                ],
             };
         });
 
