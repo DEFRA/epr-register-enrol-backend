@@ -14,6 +14,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     {
         _store.Clear();
         FailNextUpdate = false;
+        FailNextOrsIdWrites = 0;
     }
 
     /// <summary>
@@ -23,6 +24,14 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     /// database. Purely additive test-only infrastructure.
     /// </summary>
     public bool FailNextUpdate { get; set; }
+
+    /// <summary>
+    /// RA-482: when greater than zero, the next N calls to <see cref="UpdateIfOrsIdAbsentAsync"/>
+    /// return null (as if a concurrent writer had already claimed that OrsId) and decrement this
+    /// counter, so AddOverseasSite's retry-on-conflict loop can be exercised deterministically
+    /// without real concurrency.
+    /// </summary>
+    public int FailNextOrsIdWrites { get; set; }
 
     public Task<AccreditationApplicationModel?> CreateAsync(
         AccreditationApplicationModel application
@@ -77,6 +86,29 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult<AccreditationApplicationModel?>(application);
     }
 
+    public Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
+        AccreditationApplicationModel application,
+        string orsId
+    )
+    {
+        if (FailNextOrsIdWrites > 0)
+        {
+            FailNextOrsIdWrites--;
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+        }
+
+        var idx = _store.FindIndex(a => a.Id == application.Id);
+        if (idx < 0)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+
+        var alreadyPresent = (_store[idx].OverseasSites?.Sites ?? []).Any(s => s.OrsId == orsId);
+        if (alreadyPresent)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+
+        _store[idx] = application;
+        return Task.FromResult<AccreditationApplicationModel?>(application);
+    }
+
     private static AccreditationApplicationModel ShallowCopy(AccreditationApplicationModel src) =>
         new()
         {
@@ -118,7 +150,19 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             Prns = src.Prns,
             BusinessPlan = src.BusinessPlan,
             SamplingPlan = src.SamplingPlan,
-            OverseasSites = src.OverseasSites,
+            // RA-482: was aliasing the stored record's own OverseasSites/Sites list, same
+            // isolation gap PreviousRegistrationNumbers/PreviousAccreditationNumbers were already
+            // fixed for above. Latent until UpdateIfOrsIdAbsentAsync started comparing the
+            // "stored" copy against a site the endpoint had already Add()-ed to what turned out to
+            // be the very same list instance -- a self-collision false positive on every write.
+            OverseasSites = src.OverseasSites is null
+                ? null
+                : new AccreditationApplicationOverseasSites
+                {
+                    Sites = src.OverseasSites.Sites.ToList(),
+                    SectionStatus = src.OverseasSites.SectionStatus,
+                    Versions = src.OverseasSites.Versions.ToList(),
+                },
             BesEvidence = src.BesEvidence,
             Query = src.Query,
         };

@@ -38,7 +38,6 @@ public class AddOverseasSiteRequestValidator : AbstractValidator<AddOverseasSite
 
     public AddOverseasSiteRequestValidator()
     {
-        RuleFor(r => r.OrsId).NotEmpty().MaximumLength(10);
         RuleFor(r => r.SiteName).NotEmpty().MaximumLength(200);
         RuleFor(r => r.AddressLine1).NotEmpty().MaximumLength(200);
         RuleFor(r => r.AddressLine2).MaximumLength(200);

@@ -1075,9 +1075,8 @@ public class AccreditationApplicationEndpointsTests
     public async Task PatchAuthorisers_NewEmail_IsFlaggedNewAndKnownEmailIsNot(string route)
     {
         Reset();
-        var app = SeedApplication(
-            configure: a =>
-                a.Prns.Authorisers = [Authoriser("Prior Year Person", "prior@example.com")]
+        var app = SeedApplication(configure: a =>
+            a.Prns.Authorisers = [Authoriser("Prior Year Person", "prior@example.com")]
         );
 
         var authorisers = await PatchAuthorisers(
@@ -1150,8 +1149,8 @@ public class AccreditationApplicationEndpointsTests
     )
     {
         Reset();
-        var app = SeedApplication(
-            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com")]
+        var app = SeedApplication(configure: a =>
+            a.Prns.Authorisers = [Authoriser("Known", "known@example.com")]
         );
 
         var authorisers = await PatchAuthorisers(
@@ -1179,18 +1178,15 @@ public class AccreditationApplicationEndpointsTests
     public async Task PatchAuthorisers_EmailDiffersByCaseAndWhitespace_StaysNotNew(string route)
     {
         Reset();
-        var app = SeedApplication(
-            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com")]
+        var app = SeedApplication(configure: a =>
+            a.Prns.Authorisers = [Authoriser("Known", "known@example.com")]
         );
 
         var authorisers = await PatchAuthorisers(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
             new
             {
-                authorisers = new[]
-                {
-                    new { fullName = "Known", email = "  KNOWN@Example.COM " },
-                },
+                authorisers = new[] { new { fullName = "Known", email = "  KNOWN@Example.COM " } },
             }
         );
 
@@ -1222,21 +1218,16 @@ public class AccreditationApplicationEndpointsTests
     public async Task PatchAuthorisers_OmittedAuthoriser_IsRemovedNotResurrected(string route)
     {
         Reset();
-        var app = SeedApplication(
-            configure: a =>
-                a.Prns.Authorisers =
-                [
-                    Authoriser("Kept", "kept@example.com"),
-                    Authoriser("Removed", "removed@example.com"),
-                ]
+        var app = SeedApplication(configure: a =>
+            a.Prns.Authorisers = [
+                Authoriser("Kept", "kept@example.com"),
+                Authoriser("Removed", "removed@example.com"),
+            ]
         );
 
         var authorisers = await PatchAuthorisers(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/{route}",
-            new
-            {
-                authorisers = new[] { new { fullName = "Kept", email = "kept@example.com" } },
-            }
+            new { authorisers = new[] { new { fullName = "Kept", email = "kept@example.com" } } }
         );
 
         authorisers.Should().ContainSingle().Which.Email.Should().Be("kept@example.com");
@@ -1250,8 +1241,8 @@ public class AccreditationApplicationEndpointsTests
     )
     {
         Reset();
-        var app = SeedApplication(
-            configure: a => a.Prns.Authorisers = [Authoriser("Known", "known@example.com", true)]
+        var app = SeedApplication(configure: a =>
+            a.Prns.Authorisers = [Authoriser("Known", "known@example.com", true)]
         );
 
         var authorisers = await PatchAuthorisers(
@@ -1337,8 +1328,10 @@ public class AccreditationApplicationEndpointsTests
         return body!.OverseasSites!.Sites;
     }
 
-    private AccreditationApplicationModel SeedApplicationWithSites(params OverseasSiteModel[] sites)
-        => SeedApplication(configure: a =>
+    private AccreditationApplicationModel SeedApplicationWithSites(
+        params OverseasSiteModel[] sites
+    ) =>
+        SeedApplication(configure: a =>
             a.OverseasSites = new AccreditationApplicationOverseasSites { Sites = [.. sites] }
         );
 
@@ -1603,13 +1596,7 @@ public class AccreditationApplicationEndpointsTests
         // Deliberately omits registeredNowAccredited — this is the exact body that used to break it.
         var sites = await PatchSites(
             app,
-            new
-            {
-                sites = new[]
-                {
-                    new { siteId = 900001, siteName = "Promoted Recycling GmbH" },
-                },
-            }
+            new { sites = new[] { new { siteId = 900001, siteName = "Promoted Recycling GmbH" } } }
         );
 
         sites.Should().ContainSingle().Which.RegisteredNowAccredited.Should().BeTrue();
@@ -2963,7 +2950,6 @@ public class AccreditationApplicationEndpointsTests
     private static AddOverseasSiteRequest ValidAddOrsRequest() =>
         new()
         {
-            OrsId = "001",
             SiteName = "Test Recycling GmbH",
             AddressLine1 = "Industriestrasse 42",
             TownOrCity = "Hamburg",
@@ -3155,7 +3141,6 @@ public class AccreditationApplicationEndpointsTests
 
         var request = new AddOverseasSiteRequest
         {
-            OrsId = "001",
             SiteName = "",
             AddressLine1 = "Test St",
             TownOrCity = "Hamburg",
@@ -3313,8 +3298,11 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(expectedStatus);
     }
 
+    // RA-482: OrsId is server-generated now, so the client can no longer supply a colliding
+    // value -- this supersedes the old "client sends a duplicate OrsId" 409 test. The
+    // equivalent case today is that generation skips past an existing id rather than reusing it.
     [Fact]
-    public async Task AddOverseasSite_DuplicateOrsId_Returns409()
+    public async Task AddOverseasSite_ExistingSiteHasOrsId001_NextSiteGetsOrsId002()
     {
         Reset();
         var app = SeedApplication(configure: a =>
@@ -3338,7 +3326,158 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.OrsId.Should().Be("002");
+    }
+
+    // RA-482: OrsId uniqueness spans every application under the same RegistrationId, not just
+    // the current one -- a prior year's application (a separate AccreditationApplicationModel,
+    // same RegistrationId) already holds "005", so the new site on THIS year's application must
+    // continue from there rather than restarting at "001".
+    [Fact]
+    public async Task AddOverseasSite_PriorYearApplicationSharesRegistrationId_ContinuesItsSequence()
+    {
+        Reset();
+        SeedApplication(configure: a =>
+        {
+            a.RegistrationId = "reg-1";
+            a.Year = 2025;
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Prior Year",
+                        OrsId = "005",
+                    },
+                ],
+            };
+        });
+        var thisYearApp = SeedApplication(configure: a =>
+        {
+            a.RegistrationId = "reg-1";
+            a.Year = 2026;
+        });
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{thisYearApp.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.OrsId.Should().Be("006");
+    }
+
+    // A different registration must not see another registration's ids, even for the same org.
+    [Fact]
+    public async Task AddOverseasSite_DifferentRegistrationIdSameOrg_HasIndependentSequence()
+    {
+        Reset();
+        SeedApplication(configure: a =>
+        {
+            a.RegistrationId = "reg-other";
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Other Reg",
+                        OrsId = "009",
+                    },
+                ],
+            };
+        });
+        var app = SeedApplication(configure: a => a.RegistrationId = "reg-1");
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.OrsId.Should().Be("001");
+    }
+
+    // A deselected site was never removed from the persisted list (only flagged), so it must
+    // still count toward the max -- otherwise a re-add could reissue its id.
+    [Fact]
+    public async Task AddOverseasSite_ExistingSiteIsDeselected_StillCountsTowardMax()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Deselected",
+                        OrsId = "003",
+                        Selected = false,
+                    },
+                ],
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.OrsId.Should().Be("004");
+    }
+
+    // RA-482 capacity guard: the 3-digit format caps at "999" -- generating past it must fail
+    // loudly rather than silently emit a 4-digit value that breaks the format contract.
+    [Fact]
+    public async Task AddOverseasSite_ExistingMaxIs999_Returns422CapacityError()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "At Capacity",
+                        OrsId = "999",
+                    },
+                ],
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
     [Fact]

@@ -49,9 +49,11 @@ public class PatchOverseasSitesRequest
     public List<OverseasSiteModel>? Sites { get; set; }
 }
 
+// RA-482: OrsId is deliberately absent -- the server now generates it authoritatively
+// (see OrsIdGenerator / AddOverseasSite), closing the race condition inherent in trusting
+// a client-computed value.
 public record AddOverseasSiteRequest
 {
-    public required string OrsId { get; set; }
     public required string SiteName { get; set; }
     public required string AddressLine1 { get; set; }
     public string? AddressLine2 { get; set; }
