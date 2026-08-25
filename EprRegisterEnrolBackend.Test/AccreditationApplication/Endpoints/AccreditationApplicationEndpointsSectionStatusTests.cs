@@ -142,6 +142,24 @@ public class AccreditationApplicationEndpointsSectionStatusTests
     }
 
     [Fact]
+    public async Task PatchPrns_RequestedQueried_Returns422AndLeavesStatusUnchanged()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new PatchPrnsRequest { SectionStatus = SectionStatus.Queried };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/prns",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var stored = await Refetch(app);
+        stored.Prns.SectionStatus.Should().Be(SectionStatus.NotStarted);
+    }
+
+    [Fact]
     public async Task PatchPrns_WhenQueried_IgnoresRequestedStatusAndStaysQueried()
     {
         Reset();
@@ -292,6 +310,28 @@ public class AccreditationApplicationEndpointsSectionStatusTests
     }
 
     [Fact]
+    public async Task PatchBusinessPlan_RequestedQueried_Returns422AndLeavesStatusUnchanged()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new PatchBusinessPlanRequest
+        {
+            IsPartialSave = true,
+            SectionStatus = SectionStatus.Queried,
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/business-plan",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var stored = await Refetch(app);
+        stored.BusinessPlan.SectionStatus.Should().Be(SectionStatus.NotStarted);
+    }
+
+    [Fact]
     public async Task PatchBusinessPlan_WhenQueried_IgnoresRequestedStatusAndStaysQueried()
     {
         Reset();
@@ -410,6 +450,24 @@ public class AccreditationApplicationEndpointsSectionStatusTests
     }
 
     [Fact]
+    public async Task PatchSamplingPlan_RequestedQueried_Returns422AndLeavesStatusUnchanged()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var request = new PatchSamplingPlanRequest { SectionStatus = SectionStatus.Queried };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/sampling-plan",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var stored = await Refetch(app);
+        stored.SamplingPlan.SectionStatus.Should().Be(SectionStatus.NotStarted);
+    }
+
+    [Fact]
     public async Task PatchSamplingPlan_WhenQueried_IgnoresRequestedStatusAndStaysQueried()
     {
         Reset();
@@ -514,6 +572,30 @@ public class AccreditationApplicationEndpointsSectionStatusTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.OverseasSites!.SectionStatus.Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_RequestedQueried_Returns422AndLeavesStatusUnchanged()
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "Site", Selected = true }],
+                }
+        );
+
+        var request = new PatchOverseasSitesRequest { SectionStatus = SectionStatus.Queried };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var stored = await Refetch(app);
+        stored.OverseasSites!.SectionStatus.Should().Be(SectionStatus.NotStarted);
     }
 
     [Fact]

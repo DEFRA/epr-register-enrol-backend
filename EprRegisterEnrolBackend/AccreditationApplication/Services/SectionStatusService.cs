@@ -94,6 +94,9 @@ public static class SectionStatusService
         if (!requestedStatus.HasValue)
             return (compute(), null);
 
+        if (requestedStatus.Value == SectionStatus.Queried)
+            return (null, $"{sectionDisplayName} section status cannot be set to Queried directly.");
+
         if (requestedStatus.Value == SectionStatus.Completed && compute() != SectionStatus.Completed)
             return (
                 null,
