@@ -20,6 +20,7 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50006 = ObjectId.Parse("aaa000000000000000050006");
     public static readonly ObjectId Reg50013 = ObjectId.Parse("aaa000000000000000050013");
     public static readonly ObjectId Reg50014 = ObjectId.Parse("aaa000000000000000050014");
+    public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
 
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
@@ -453,6 +454,72 @@ public class FakeOrganisationPersistence
                         WasteManagementPermits =
                         [
                             new WasteManagementPermitModel { PermitNumber = "WML50014" },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        // RA-481 regression-guard org: exists for the same reason as orgs 50013 and 50014
+        // above — exporter-accreditation.e2e.js's "Exporter Accreditation - Full Journey
+        // (Plastic 2027)" describe block used to run its entire suite of tests (adding ORS/
+        // interim sites, submitting the application, navigating back and forth) against
+        // shared org 50005, which is exactly the shape of repeated, cross-test reuse the
+        // org-50005 Seed race (documented above) corrupts under concurrent wdio workers.
+        // RA-481 made this newly observable: locking a Submitted application read-only means
+        // a test landing on the "wrong" duplicate (an untouched, isExporter-derived-correctly
+        // but otherwise-fresh copy) now visibly diverges from the one earlier tests actually
+        // progressed, instead of just silently tolerating two equally-editable copies as
+        // before. Giving the whole spec its own org sidesteps the race entirely rather than
+        // relying on test ordering within a shared one.
+        //
+        // Mirrors org 50005's OverseasSites = ["900010", "900011"] (Germany/France) rather
+        // than org 50014's empty-list pattern: this spec's pre-RA-481 tests already assumed a
+        // couple of pre-seeded, pre-accredited sites exist (e.g. continuing past the overseas-
+        // sites task without having added one yet), so starting empty would change behaviour
+        // this fix is not meant to touch.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50015,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "Exporter Accreditation Test Exports Ltd",
+                    TradingName = "Exporter Accreditation Test Exports",
+                    RegistrationNumber = "EXP-50015",
+                    CompaniesHouseNumber = "12345015",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "Export House",
+                        Town = "Southampton",
+                        Postcode = "SO14 2AQ",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Export Manager",
+                    Email = "info@exporteraccreditationtestexports.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50015,
+                        SiteId = "REG015",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeExporter,
+                        OverseasSites = ["900010", "900011"],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50015" },
                         ],
                     },
                 ],
