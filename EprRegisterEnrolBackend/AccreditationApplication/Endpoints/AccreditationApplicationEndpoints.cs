@@ -1132,6 +1132,10 @@ public static class AccreditationApplicationEndpoints
         // computed id. Bounded, not unlimited, so a genuinely stuck conflict fails loudly.
         const int maxOrsIdAttempts = 3;
 
+        // Callers already guarantee this before calling in, but that guarantee doesn't cross
+        // the method boundary for the compiler's nullable flow analysis -- assert it locally too.
+        application.OverseasSites ??= new AccreditationApplicationOverseasSites();
+
         for (var attempt = 1; attempt <= maxOrsIdAttempts; attempt++)
         {
             var scope = await OrsIdScope(persistence, organisationId, application);
