@@ -161,6 +161,47 @@ public class HttpReExApiAdapterTests
         result.Value!.CompaniesHouseNumber.Should().Be("09876543");
     }
 
+    // RA-480: submitterContactDetails is org-wide (the original registration submitter), not
+    // per-registration — same rationale as companiesHouseNumber above.
+    [Fact]
+    public async Task GetAccreditationAsync_MapsSubmitterContactDetails()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        var submitterContactDetails = result.Value!.SubmitterContactDetails;
+        submitterContactDetails.Should().NotBeNull();
+        submitterContactDetails!.FullName.Should().Be("Barton Deckow");
+        submitterContactDetails.Email.Should().Be("REEXServiceTeam@defra.gov.uk");
+        submitterContactDetails.Phone.Should().Be("0111 478 4919");
+        submitterContactDetails.JobTitle.Should().Be("Human Infrastructure Architect");
+    }
+
+    // RA-480: ReEx omits submitterContactDetails entirely for some organisations — must map to
+    // null, not throw or default to empty strings.
+    [Fact]
+    public async Task GetAccreditationAsync_NoSubmitterContactDetails_ReturnsNull()
+    {
+        var sut = BuildSut(OrganisationJsonReprocessorNoSite);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.SubmitterContactDetails.Should().BeNull();
+    }
+
     // RA-434: only the PermitNumber strings are extracted — a permit with no permitNumber (e.g.
     // a waste exemption) must be dropped rather than surfaced as a null/blank entry.
     [Fact]
@@ -818,6 +859,12 @@ public class HttpReExApiAdapterTests
               "country": "UK",
               "town": "Exampleton"
             }
+          },
+          "submitterContactDetails": {
+            "fullName": "Barton Deckow",
+            "email": "REEXServiceTeam@defra.gov.uk",
+            "phone": "0111 478 4919",
+            "jobTitle": "Human Infrastructure Architect"
           },
           "submittedToRegulator": "ea",
           "registrations": [

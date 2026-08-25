@@ -296,6 +296,15 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                     Authorisers = authorisers,
                 },
                 BusinessPlan = businessPlan,
+                SubmitterContactDetails = org.SubmitterContactDetails is { } submitterContact
+                    ? new SubmitterContactDetailsDto
+                    {
+                        FullName = submitterContact.FullName,
+                        Email = submitterContact.Email,
+                        Phone = submitterContact.Phone,
+                        JobTitle = submitterContact.JobTitle,
+                    }
+                    : null,
             },
             200
         );
