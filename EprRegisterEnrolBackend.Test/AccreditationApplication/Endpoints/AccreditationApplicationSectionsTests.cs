@@ -11,13 +11,21 @@ public class AccreditationApplicationSectionsTests
     [Theory]
     [InlineData(ApplicationStatus.Saved, SectionStatus.NotStarted, true)]
     [InlineData(ApplicationStatus.Started, SectionStatus.InProgress, true)]
-    [InlineData(ApplicationStatus.Submitted, SectionStatus.Completed, true)]
     [InlineData(ApplicationStatus.Approved, SectionStatus.Completed, true)]
     [InlineData(ApplicationStatus.Rejected, SectionStatus.Completed, true)]
-    [InlineData(ApplicationStatus.Updated, SectionStatus.Completed, true)]
     [InlineData(ApplicationStatus.Queried, SectionStatus.Queried, true)]
     [InlineData(ApplicationStatus.Queried, SectionStatus.NotStarted, false)]
     [InlineData(ApplicationStatus.Queried, SectionStatus.Completed, false)]
+    // RA-481: Submitted/DulyMade/Updated/AwaitingDecision are "locked" statuses — editable only
+    // when the section itself is still Queried, same as the Queried application status above.
+    [InlineData(ApplicationStatus.Submitted, SectionStatus.Completed, false)]
+    [InlineData(ApplicationStatus.Submitted, SectionStatus.Queried, true)]
+    [InlineData(ApplicationStatus.DulyMade, SectionStatus.Completed, false)]
+    [InlineData(ApplicationStatus.DulyMade, SectionStatus.Queried, true)]
+    [InlineData(ApplicationStatus.Updated, SectionStatus.Completed, false)]
+    [InlineData(ApplicationStatus.Updated, SectionStatus.Queried, true)]
+    [InlineData(ApplicationStatus.AwaitingDecision, SectionStatus.Completed, false)]
+    [InlineData(ApplicationStatus.AwaitingDecision, SectionStatus.Queried, true)]
     public void IsSectionEditable_ReturnsExpected(
         ApplicationStatus appStatus,
         SectionStatus sectionStatus,
