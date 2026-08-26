@@ -22,6 +22,7 @@ public class HttpCaseWorkingApiAdapterTests
         return new AccreditationApplicationModel
         {
             OrganisationId = "12345",
+            OrgId = 500500,
             OrganisationName = "Acme Recycling Ltd",
             Year = 2026,
             RegistrationId = "reg-001",
@@ -96,7 +97,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_Success_ReturnsApplicationReferenceFromManagementBeResponse()
     {
         var (adapter, _) = CreateAdapter();
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        var result = await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
         result.ApplicationReference.Should().Be(TestApplicationReference);
     }
 
@@ -126,7 +130,10 @@ public class HttpCaseWorkingApiAdapterTests
             EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        var result = await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         result.WorkItemId.Should().Be(expectedId);
     }
@@ -261,7 +268,10 @@ public class HttpCaseWorkingApiAdapterTests
             EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        var result = await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         result.ApplicationReference.Should().Be(TestApplicationReference);
         result.WorkItemId.Should().BeNull();
@@ -271,7 +281,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_MapsPayloadCorrectly()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         handler.CapturedRequestBody.Should().NotBeNullOrEmpty();
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
@@ -287,6 +300,7 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("previousAccreditationYear").GetInt32().Should().Be(2025);
         payload.GetProperty("complianceIssuesReported").GetInt32().Should().Be(0);
         payload.GetProperty("operatorOrganisationId").GetString().Should().Be("12345");
+        payload.GetProperty("operatorOrgNumber").GetInt32().Should().Be(500500);
         payload.GetProperty("operatorRegistrationId").GetString().Should().Be("reg-001");
         payload.GetProperty("operatorEmail").GetString().Should().Be("jane@example.com");
         payload.GetProperty("siteAddressPostcode").GetString().Should().Be("SW1A 1AA");
@@ -318,6 +332,23 @@ public class HttpCaseWorkingApiAdapterTests
             .GetString()
             .Should()
             .Be("Human Infrastructure Architect");
+    }
+
+    // RA-503: OrgId is resolved fresh from ReEx immediately before submission (see the Submit
+    // endpoint) and can be null on a lookup failure - the payload must omit operatorOrgNumber
+    // rather than send a fabricated value, same as every other nullable field here.
+    [Fact]
+    public async Task SubmitApplicationAsync_NullOrgId_OmitsOperatorOrgNumberFromPayload()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var application = CreateTestApplication();
+        application.OrgId = null;
+
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var payload = doc.RootElement.GetProperty("payload");
+        payload.TryGetProperty("operatorOrgNumber", out _).Should().BeFalse();
     }
 
     // RA-480
@@ -390,7 +421,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_NonGlassMaterial_OmitsGlassRecyclingProcessFromPayload()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var payload = doc.RootElement.GetProperty("payload");
@@ -717,7 +751,9 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var payload = await CapturedSubmitPayload(ApplicationWithRa292Data());
 
-        Canonical(payload.GetProperty("prns").GetRawText()).Should().Be(Canonical(ExpectedPrnsJson));
+        Canonical(payload.GetProperty("prns").GetRawText())
+            .Should()
+            .Be(Canonical(ExpectedPrnsJson));
     }
 
     [Fact]
@@ -744,7 +780,9 @@ public class HttpCaseWorkingApiAdapterTests
             "authority-to-issue"
         );
 
-        Canonical(sections.GetProperty("Prns").GetRawText()).Should().Be(Canonical(ExpectedPrnsJson));
+        Canonical(sections.GetProperty("Prns").GetRawText())
+            .Should()
+            .Be(Canonical(ExpectedPrnsJson));
     }
 
     [Theory]
@@ -859,7 +897,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_SetsAuthHeaders()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         handler.CapturedRequest.Should().NotBeNull();
         var request = handler.CapturedRequest!;
@@ -911,7 +952,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_WithSharedSecret_SetsHmacHeaders()
     {
         var (adapter, handler) = CreateAdapter(sharedSecret: "test-secret-key");
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var request = handler.CapturedRequest!;
         request.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
@@ -930,7 +974,10 @@ public class HttpCaseWorkingApiAdapterTests
     {
         const string secret = "test-secret-key";
         var (adapter, handler) = CreateAdapter(sharedSecret: secret);
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var request = handler.CapturedRequest!;
         var timestamp = request.Headers.GetValues("x-cdp-auth-timestamp").Single();
@@ -953,7 +1000,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_WithoutSharedSecret_DoesNotSetHmacHeaders()
     {
         var (adapter, handler) = CreateAdapter(sharedSecret: null);
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var request = handler.CapturedRequest!;
         request.Headers.Contains("x-cdp-auth-signature").Should().BeFalse();
@@ -991,7 +1041,10 @@ public class HttpCaseWorkingApiAdapterTests
         // sends, so the backend must not send one at all — sending a value it knows will be
         // silently discarded is misleading about where the reference actually comes from.
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         doc.RootElement.TryGetProperty("applicationReference", out _).Should().BeFalse();
@@ -1027,7 +1080,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_PostsToCorrectUrl()
     {
         var (adapter, handler) = CreateAdapter(url: "http://my-mgmt-be:9090");
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         handler
             .CapturedRequest!.RequestUri!.ToString()
@@ -1076,7 +1132,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = null;
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1118,7 +1177,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().Be("sent");
         handler
@@ -1150,7 +1212,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.SlaDueDate.Should().Be(slaDueDate);
     }
@@ -1173,7 +1238,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1195,7 +1263,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1208,7 +1279,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1249,7 +1323,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1664,7 +1741,14 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = null;
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
+        await adapter.NotifySiteAddedAsync(
+            app,
+            "ors",
+            "001",
+            null,
+            true,
+            TestContext.Current.CancellationToken
+        );
 
         handler.CapturedRequest.Should().BeNull();
     }
@@ -1677,7 +1761,14 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
+        await adapter.NotifySiteAddedAsync(
+            app,
+            "ors",
+            "001",
+            null,
+            true,
+            TestContext.Current.CancellationToken
+        );
 
         handler
             .CapturedRequest!.RequestUri!.ToString()
@@ -1701,7 +1792,14 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        await adapter.NotifySiteAddedAsync(app, "interim", "001", "SN-0002", true, TestContext.Current.CancellationToken);
+        await adapter.NotifySiteAddedAsync(
+            app,
+            "interim",
+            "001",
+            "SN-0002",
+            true,
+            TestContext.Current.CancellationToken
+        );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var root = doc.RootElement;
@@ -1719,7 +1817,14 @@ public class HttpCaseWorkingApiAdapterTests
         app.SubmittedBy = null;
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
+        await adapter.NotifySiteAddedAsync(
+            app,
+            "ors",
+            "001",
+            null,
+            true,
+            TestContext.Current.CancellationToken
+        );
 
         var request = handler.CapturedRequest!;
         request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("12345");
@@ -1925,7 +2030,10 @@ public class HttpCaseWorkingApiAdapterTests
         // The chosen missing-band behaviour: omit the field, never throw. The submission itself
         // must still succeed — a display-only field must not be able to block accreditation.
         var (adapter, handler) = CreateAdapter();
-        var result = await adapter.SubmitApplicationAsync(ApplicationWithCharge(null, 2), TestContext.Current.CancellationToken);
+        var result = await adapter.SubmitApplicationAsync(
+            ApplicationWithCharge(null, 2),
+            TestContext.Current.CancellationToken
+        );
 
         result.ApplicationReference.Should().Be(TestApplicationReference);
 

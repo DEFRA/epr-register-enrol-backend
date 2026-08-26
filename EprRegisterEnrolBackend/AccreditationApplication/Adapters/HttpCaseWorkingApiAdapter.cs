@@ -548,7 +548,11 @@ public class HttpCaseWorkingApiAdapter(
             permitNumbers = application.PermitNumbers,
             wasteProcessingType = application.WasteProcessingType,
             operatorApplicationId = application.ApplicationId,
+            // RA-503: operatorOrganisationId is ReEx's internal ObjectId - kept unchanged here for
+            // any existing consumer, but it must never be treated as the operator/regulator-facing
+            // organisation number. operatorOrgNumber (below) is the new field carrying that value.
             operatorOrganisationId = application.OrganisationId,
+            operatorOrgNumber = application.OrgId,
             operatorRegistrationId = application.RegistrationId,
             operatorEmail = application.SubmittedBy?.Email,
             // RA-316: the charge the operator was shown on the payment-details page, echoed so

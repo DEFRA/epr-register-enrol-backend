@@ -1105,8 +1105,8 @@ public static class AccreditationApplicationEndpoints
             );
 
         if (
-            RecomputeOverseasSitesSectionStatus(application.OverseasSites, request.SectionStatus)
-            is { } statusError
+            RecomputeOverseasSitesSectionStatus(application.OverseasSites, request.SectionStatus) is
+            { } statusError
         )
             return statusError;
 
@@ -2054,6 +2054,7 @@ public static class AccreditationApplicationEndpoints
         SubmitRequest request,
         IAccreditationApplicationPersistence persistence,
         ICaseWorkingApiAdapter caseWorkingAdapter,
+        IReExApiAdapter reExAdapter,
         IValidator<SubmitRequest> validator,
         CancellationToken cancellationToken
     )
@@ -2137,6 +2138,18 @@ public static class AccreditationApplicationEndpoints
                 versionedAt
             );
         }
+
+        // RA-503: resolve ReEx's numeric OrgId (e.g. 500500) fresh, immediately before submission,
+        // so the work-item payload carries the operator/regulator-safe organisation number rather
+        // than the internal ObjectId in OrganisationId. A lookup failure leaves OrgId null rather
+        // than blocking submission - the same fallback-friendly behaviour as ResolveOrgIdAsync.
+        var orgIdResult = await reExAdapter.GetOrganisationNumberAsync(
+            organisationId,
+            cancellationToken
+        );
+        application.OrgId = orgIdResult is { IsSuccess: true, Value: { } orgNumber }
+            ? orgNumber
+            : null;
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
         CaseWorkingSubmissionResult submissionResult;

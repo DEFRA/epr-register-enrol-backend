@@ -148,20 +148,20 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.CompletedTask;
     }
 
+    // RA-503: mirrors the org segment fix applied to ManagementBe's real ApplicationReferenceGenerator
+    // - uses the numeric, operator/regulator-safe OrgId (e.g. 500500) rather than OrganisationId
+    // (ReEx's internal ObjectId), and no longer truncates to a fixed length, since the Application
+    // ID is no longer used as a bank payment reference.
     private static string GenerateReference(AccreditationApplicationModel application)
     {
-        const int maxLength = 18;
         var postcode = HttpCaseWorkingApiAdapter.ExtractPostcode(application.SiteAddress);
         var year = application.Year % 100;
         var agency = ResolveAgencyCode(postcode);
-        var organisationId = application.OrganisationId;
+        var orgNumber = application.OrgId?.ToString("D6") ?? string.Empty;
         var postcodeSuffix = PostcodeSuffix(postcode);
         var materialPrefix = MaterialPrefix(application.MaterialType.ToString());
 
-        var reference =
-            $"AP{year:D2}{agency}{organisationId}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
-
-        return reference.Length > maxLength ? reference[..maxLength] : reference;
+        return $"AP{year:D2}{agency}{orgNumber}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
     }
 
     private static string ResolveAgencyCode(string? postcode)

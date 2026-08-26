@@ -16,6 +16,12 @@ public class AccreditationApplicationModel
 
     public required string OrganisationId { get; set; }
 
+    // RA-503: ReEx's numeric organisation number (e.g. 500500) - the value an operator or
+    // regulator should actually see, resolved fresh from ReEx immediately before submission
+    // (see Submit endpoint). Distinct from OrganisationId above, which is ReEx's own internal
+    // ObjectId and must never be surfaced to an operator or regulator (see OrganisationDto.cs).
+    public int? OrgId { get; set; }
+
     public string? OrganisationName { get; set; }
 
     public required int Year { get; set; }
