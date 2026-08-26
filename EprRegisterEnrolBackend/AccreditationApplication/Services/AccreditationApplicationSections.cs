@@ -226,12 +226,25 @@ public static class AccreditationApplicationSections
         }
     }
 
-    // The only new restriction RA-311 adds: while an application is Queried, only the sections
-    // CM actually queried may be edited — every other non-terminal application status keeps its
-    // existing behaviour completely unchanged. Approved/Rejected/Withdrawn no longer reach this
-    // check at all: AccreditationApplicationEndpoints.RejectIfTerminal rejects writes to those
-    // three statuses up front (RA-415, closing the RA-311 §9 follow-up), so this method only
-    // ever sees a non-terminal status.
+    // RA-311 introduced the Queried restriction; RA-481 extends the same rule to every other
+    // "locked" status an application can be in once it's been submitted: Submitted, DulyMade,
+    // Updated and AwaitingDecision. Across all of these locked statuses (Queried included), only
+    // the section CM actually queried (SectionStatus.Queried) may still be edited — every other
+    // section is read-only until CM raises a query against it or resolves the application.
+    // Saved/Started are unaffected and stay fully editable throughout. Approved/Rejected/Withdrawn
+    // no longer reach this check at all: AccreditationApplicationEndpoints.RejectIfTerminal
+    // rejects writes to those three statuses up front (RA-415, closing the RA-311 §9 follow-up),
+    // so this method only ever sees a non-terminal status.
+    private static readonly IReadOnlySet<ApplicationStatus> LockedStatuses =
+        new HashSet<ApplicationStatus>
+        {
+            ApplicationStatus.Queried,
+            ApplicationStatus.Submitted,
+            ApplicationStatus.DulyMade,
+            ApplicationStatus.Updated,
+            ApplicationStatus.AwaitingDecision,
+        };
+
     public static bool IsSectionEditable(ApplicationStatus appStatus, SectionStatus sectionStatus) =>
-        appStatus != ApplicationStatus.Queried || sectionStatus == SectionStatus.Queried;
+        !LockedStatuses.Contains(appStatus) || sectionStatus == SectionStatus.Queried;
 }

@@ -20,6 +20,8 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50006 = ObjectId.Parse("aaa000000000000000050006");
     public static readonly ObjectId Reg50013 = ObjectId.Parse("aaa000000000000000050013");
     public static readonly ObjectId Reg50014 = ObjectId.Parse("aaa000000000000000050014");
+    public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
+    public static readonly ObjectId Reg50016 = ObjectId.Parse("aaa000000000000000050016");
 
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
@@ -453,6 +455,136 @@ public class FakeOrganisationPersistence
                         WasteManagementPermits =
                         [
                             new WasteManagementPermitModel { PermitNumber = "WML50014" },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        // RA-481 regression-guard org: exists for the same reason as orgs 50013 and 50014
+        // above — exporter-accreditation.e2e.js's "Exporter Accreditation - Full Journey
+        // (Plastic 2027)" describe block used to run its entire suite of tests (adding ORS/
+        // interim sites, submitting the application, navigating back and forth) against
+        // shared org 50005, which is exactly the shape of repeated, cross-test reuse the
+        // org-50005 Seed race (documented above) corrupts under concurrent wdio workers.
+        // RA-481 made this newly observable: locking a Submitted application read-only means
+        // a test landing on the "wrong" duplicate (an untouched, isExporter-derived-correctly
+        // but otherwise-fresh copy) now visibly diverges from the one earlier tests actually
+        // progressed, instead of just silently tolerating two equally-editable copies as
+        // before. Giving the whole spec its own org sidesteps the race entirely rather than
+        // relying on test ordering within a shared one.
+        //
+        // Mirrors org 50005's OverseasSites = ["900010", "900011"] (Germany/France) rather
+        // than org 50014's empty-list pattern: this spec's pre-RA-481 tests already assumed a
+        // couple of pre-seeded, pre-accredited sites exist (e.g. continuing past the overseas-
+        // sites task without having added one yet), so starting empty would change behaviour
+        // this fix is not meant to touch.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50015,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "Exporter Accreditation Test Exports Ltd",
+                    TradingName = "Exporter Accreditation Test Exports",
+                    RegistrationNumber = "EXP-50015",
+                    CompaniesHouseNumber = "12345015",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "Export House",
+                        Town = "Southampton",
+                        Postcode = "SO14 2AQ",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Export Manager",
+                    Email = "info@exporteraccreditationtestexports.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50015,
+                        SiteId = "REG015",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeExporter,
+                        OverseasSites = ["900010", "900011"],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50015" },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        // RA-481 new-coverage org: dedicated to ra-481-section-lock.e2e.js, which asserts
+        // the actual RA-481 behaviour (locked-but-not-queried sections render read-only and
+        // reject direct writes; a queried section stays fully editable) rather than reusing
+        // any other spec's org. It's a plain reprocessor (not an exporter, unlike orgs 50013-
+        // 50015) so the fastest path to Submitted is just PRN tonnage + business plan +
+        // sampling plan — no overseas sites/BES steps to drive through before the read-only
+        // assertions below can run. Kept off every other spec's org for the same reason orgs
+        // 50013-50015 are dedicated above: this spec submits the application and then keeps
+        // re-visiting its sections directly by URL across two `it()` blocks in one file, which
+        // is exactly the shape of repeated, cross-test reuse the org-50005 Seed race documented
+        // above would corrupt under concurrent wdio workers.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50016,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeReprocessor],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "Section Lock Test Recycling Ltd",
+                    TradingName = "Section Lock Test Recycling",
+                    RegistrationNumber = "R26ER5000390068PL",
+                    CompaniesHouseNumber = "12345016",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "Site Lane 016",
+                        Town = "Siteville",
+                        Postcode = "SIT3 OO6",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Site Manager",
+                    Email = "info@sectionlocktestrecycling.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50016,
+                        SiteId = "REG016",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeReprocessor,
+                        SiteAddress = new SiteAddressModel
+                        {
+                            Line1 = "Site Lane 016",
+                            Town = "Siteville",
+                            Postcode = "SIT3 OO6",
+                        },
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50016" },
                         ],
                     },
                 ],
