@@ -48,6 +48,15 @@ public static class AccreditationApplicationEndpoints
         FrontendOnly(
             group.MapPost("{organisationId}/{applicationId}/overseas-sites", AddOverseasSite)
         );
+        // RA-470: in-place "Change" edit of an already-selected overseas site - sibling to
+        // PromoteOverseasSite (below) but never sets Selected/RegisteredNowAccredited, since the
+        // site is already selected/accredited and this isn't a promotion from a registered site.
+        FrontendOnly(
+            group.MapPatch(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}",
+                UpdateOverseasSite
+            )
+        );
         FrontendOnly(
             group.MapPost(
                 "{organisationId}/{applicationId}/overseas-sites/{siteId}/promote",
@@ -397,6 +406,41 @@ public static class AccreditationApplicationEndpoints
         CancellationToken CancellationToken
     );
 
+    // RA-469 AC18 / RA-470 gap 2: application/material-type-aware OperationCodes checks the
+    // request-shape validators (PatchRecyclingOperationsRequestValidator,
+    // PromoteOverseasSiteRequestValidator) can't do alone - see RecyclingOperationCodes' own doc
+    // comment - shared by PatchRecyclingOperations (regulator-driven, below) and
+    // UpdateOverseasSite (operator-driven, RA-470) so the two never drift apart. Needs the loaded
+    // site (for InterimSite) and the application's MaterialType, neither of which a request-shape
+    // validator has access to. Returns null when the codes are valid.
+    private static IResult? ValidateOperationCodesForSite(
+        MaterialType materialType,
+        List<string> operationCodes,
+        OverseasSiteModel site,
+        int siteId
+    )
+    {
+        // A code not offered for this application's material type is rejected even though it's a
+        // member of the overall valid-code set.
+        var applicableCodes = RecyclingOperationCodes.ApplicableCodesFor(materialType);
+        if (operationCodes.Any(c => !applicableCodes.Contains(c)))
+            return Results.BadRequest(
+                $"OperationCodes must each be applicable to material type '{materialType}': {string.Join(", ", applicableCodes)}."
+            );
+
+        // AC11: R12/R13 describe an operation performed in relation to an associated interim
+        // site, so an ORS with none can't carry them.
+        if (
+            operationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
+            && site.InterimSite is null
+        )
+            return Results.BadRequest(
+                $"R12 and R13 require an associated interim site on overseas site '{siteId}'."
+            );
+
+        return null;
+    }
+
     // RA-469 AC18: updates OverseasSiteModel.OperationCodes for exactly one site - nothing else
     // on the application (not SectionStatus, not DateLastEdited, not the submit/resubmit-only
     // Versions snapshot) is touched, since this is a one-off regulator correction outside the
@@ -440,25 +484,16 @@ public static class AccreditationApplicationEndpoints
         if (site is null)
             return Results.NotFound();
 
-        // Application/material-type-aware check the request-shape validator can't do alone (see
-        // RecyclingOperationCodes' own doc comment) - a code not offered for this application's
-        // material type is rejected even though it's a member of the overall valid-code set.
-        var applicableCodes = RecyclingOperationCodes.ApplicableCodesFor(application.MaterialType);
-        if (request.OperationCodes.Any(c => !applicableCodes.Contains(c)))
-            return Results.BadRequest(
-                $"OperationCodes must each be applicable to material type '{application.MaterialType}': {string.Join(", ", applicableCodes)}."
-            );
-
-        // AC11: R12/R13 describe an operation performed in relation to an associated interim
-        // site, so an ORS with none can't carry them - needs the loaded site, so the
-        // request-shape validator (86z) can't enforce this rule itself.
         if (
-            request.OperationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
-            && site.InterimSite is null
+            ValidateOperationCodesForSite(
+                application.MaterialType,
+                request.OperationCodes,
+                site,
+                siteId
+            )
+            is { } codesError
         )
-            return Results.BadRequest(
-                $"R12 and R13 require an associated interim site on overseas site '{siteId}'."
-            );
+            return codesError;
 
         // Snapshotted before mutation, as an independent list - not aliased with the request's
         // own OperationCodes below (RecyclingOperationsAuditPersistence's tests require the
@@ -1340,6 +1375,173 @@ public static class AccreditationApplicationEndpoints
         site.IsOecd = snapshot.IsOecd;
     }
 
+    // Shared by PromoteOverseasSite and UpdateOverseasSite (RA-470): the undo-stack entry pushed
+    // onto PreviousSites before either endpoint overwrites a site's fields - identical field set,
+    // so it's captured once instead of duplicated across both handlers. Never nest a snapshot's
+    // own PreviousSites.
+    private static OverseasSiteModel SnapshotSiteFields(OverseasSiteModel site) =>
+        new()
+        {
+            SiteId = site.SiteId,
+            OrsId = site.OrsId,
+            SiteName = site.SiteName,
+            SiteAddress = site.SiteAddress,
+            AddressLine1 = site.AddressLine1,
+            AddressLine2 = site.AddressLine2,
+            TownOrCity = site.TownOrCity,
+            Country = site.Country,
+            Coordinates = site.Coordinates,
+            ContactName = site.ContactName,
+            ContactEmail = site.ContactEmail,
+            ContactPhone = site.ContactPhone,
+            OperationCodes = site.OperationCodes,
+            Code1 = site.Code1,
+            Code2 = site.Code2,
+            Code3 = site.Code3,
+            RepatriatedLoads = site.RepatriatedLoads,
+            ConditionsOfExport = site.ConditionsOfExport,
+            IsEu = site.IsEu,
+            IsOecd = site.IsOecd,
+            Selected = site.Selected,
+            IsNewSite = site.IsNewSite,
+            RegisteredNowAccredited = site.RegisteredNowAccredited,
+        };
+
+    // Bundles UpdateOverseasSite's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // RecyclingOperationsServices above.
+    private sealed record UpdateOverseasSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<PromoteOverseasSiteRequest> Validator,
+        IRecyclingOperationsAuditPersistence AuditPersistence,
+        HttpContext HttpContext,
+        CancellationToken CancellationToken
+    );
+
+    // RA-470: in-place "Change" edit of an already-selected overseas site - mirrors the frontend's
+    // Add-To-Accreditation/promote wizard flow, reusing PromoteOverseasSiteRequest and its
+    // validator exactly (same request/response contract the frontend agent is coding against
+    // concurrently) rather than introducing a parallel DTO. Differs from PromoteOverseasSite in
+    // three ways: (1) Selected/RegisteredNowAccredited are deliberately left untouched - the site
+    // is already selected/accredited, this isn't a promotion; (2) OperationCodes go through the
+    // same application/material-type-aware ValidateOperationCodesForSite check
+    // PatchRecyclingOperations uses (gap 2), which Promote's validator alone doesn't cover; (3) an
+    // orphaned-interim-site guard (gap 1), a BES-evidence invalidation on Country/
+    // ConditionsOfExport change (gap 5), and an audit record of any operation-code change (gap 3,
+    // matching PatchRecyclingOperations' regulator-driven audit trail).
+    private static async Task<IResult> UpdateOverseasSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PromoteOverseasSiteRequest request,
+        [AsParameters] UpdateOverseasSiteServices services
+    )
+    {
+        var validation = await services.Validator.ValidateAsync(request, services.CancellationToken);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        // Gap 2: the same application/material-type-aware and R12/R13-needs-interim-site checks
+        // PatchRecyclingOperations enforces - PromoteOverseasSiteRequestValidator alone doesn't
+        // cover either.
+        if (
+            ValidateOperationCodesForSite(
+                application.MaterialType,
+                request.OperationCodes,
+                site,
+                siteId
+            )
+            is { } codesError
+        )
+            return codesError;
+
+        // Gap 1: an interim site record can't be left dangling with no R12/R13 justifying it - the
+        // inverse of PatchRecyclingOperations' "R12/R13 needs an interim site" check above.
+        if (
+            site.InterimSite is not null
+            && !request.OperationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
+        )
+            return Results.BadRequest(
+                $"Overseas site '{siteId}' has an associated interim site; at least one of R12/R13 must remain selected."
+            );
+
+        // Gap 5: BES evidence is tied to Country/ConditionsOfExport - either changing makes any
+        // previously uploaded evidence and a Completed section status stale.
+        var besEvidenceInvalidated =
+            site.Country != request.Country || site.ConditionsOfExport != request.ConditionsOfExport;
+
+        // Snapshot current fields (undo target) before overwriting - same as PromoteOverseasSite.
+        site.PreviousSites.Add(SnapshotSiteFields(site));
+
+        // Snapshotted before mutation, as an independent list - not aliased with the request's own
+        // OperationCodes below (matches PatchRecyclingOperations' own before/after handling).
+        var beforeCodes = site.OperationCodes.ToList();
+
+        ApplyPromotedFields(site, request);
+        // Deliberately NOT setting Selected/RegisteredNowAccredited here, unlike Promote - this is
+        // an in-place edit of an already-selected/accredited site, not a promotion.
+
+        if (besEvidenceInvalidated)
+        {
+            site.BesEvidence?.BesEvidenceUploads.Clear();
+            if (application.BesEvidence?.SectionStatus == SectionStatus.Completed)
+                application.BesEvidence.SectionStatus = SectionStatus.InProgress;
+        }
+
+        RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await services.Persistence.UpdateAsync(application);
+        if (updated is null)
+            return Results.Problem("Failed to update overseas site.");
+
+        // Gap 3: audit operator-driven operation-code changes the same way PatchRecyclingOperations
+        // audits regulator-driven ones. Only written when the codes actually changed - unlike
+        // PatchRecyclingOperations (which only ever changes codes), this endpoint edits many other
+        // fields too, and a record with identical BeforeCodes/AfterCodes on every address/contact
+        // edit would dilute an audit trail meant specifically for operation-code changes.
+        if (!beforeCodes.SequenceEqual(request.OperationCodes))
+        {
+            await services.AuditPersistence.RecordAsync(
+                new RecyclingOperationsAuditRecord
+                {
+                    CdpUserId =
+                        services.HttpContext.User.FindFirst("cdp_user_id")?.Value ?? string.Empty,
+                    CdpUserName =
+                        services.HttpContext.User.FindFirst("cdp_user_name")?.Value ?? string.Empty,
+                    OrganisationId = organisationId,
+                    ApplicationId = applicationId,
+                    SiteId = siteId,
+                    BeforeCodes = beforeCodes,
+                    AfterCodes = request.OperationCodes,
+                },
+                services.CancellationToken
+            );
+        }
+
+        return Results.Ok(site);
+    }
+
     private static async Task<IResult> PromoteOverseasSite(
         string organisationId,
         string applicationId,
@@ -1375,34 +1577,7 @@ public static class AccreditationApplicationEndpoints
 
         // Snapshot current fields (undo target) before overwriting — never nest a snapshot's
         // own PreviousSites.
-        site.PreviousSites.Add(
-            new OverseasSiteModel
-            {
-                SiteId = site.SiteId,
-                OrsId = site.OrsId,
-                SiteName = site.SiteName,
-                SiteAddress = site.SiteAddress,
-                AddressLine1 = site.AddressLine1,
-                AddressLine2 = site.AddressLine2,
-                TownOrCity = site.TownOrCity,
-                Country = site.Country,
-                Coordinates = site.Coordinates,
-                ContactName = site.ContactName,
-                ContactEmail = site.ContactEmail,
-                ContactPhone = site.ContactPhone,
-                OperationCodes = site.OperationCodes,
-                Code1 = site.Code1,
-                Code2 = site.Code2,
-                Code3 = site.Code3,
-                RepatriatedLoads = site.RepatriatedLoads,
-                ConditionsOfExport = site.ConditionsOfExport,
-                IsEu = site.IsEu,
-                IsOecd = site.IsOecd,
-                Selected = site.Selected,
-                IsNewSite = site.IsNewSite,
-                RegisteredNowAccredited = site.RegisteredNowAccredited,
-            }
-        );
+        site.PreviousSites.Add(SnapshotSiteFields(site));
 
         ApplyPromotedFields(site, request);
         site.Selected = true;
@@ -1781,10 +1956,17 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus != ApplicationStatus.Started)
             return Results.Conflict("Application must be in 'Started' status to submit.");
 
+        // RA-470 gap 6: OverseasSites/BesEvidence are exporter-only sections (both are null for a
+        // non-exporter application, see AccreditationApplicationModel), so these two checks are
+        // gated on IsExporter - a non-exporter must not be blocked by sections it never has. This
+        // is what gives UpdateOverseasSite's BES-evidence InProgress reset (gap 5) real teeth:
+        // without it, that reset would only change a task-list label, never actually block submit.
         if (
             application.Prns.SectionStatus != SectionStatus.Completed
             || application.BusinessPlan.SectionStatus != SectionStatus.Completed
             || application.SamplingPlan.SectionStatus != SectionStatus.Completed
+            || (application.IsExporter && application.OverseasSites?.SectionStatus != SectionStatus.Completed)
+            || (application.IsExporter && application.BesEvidence?.SectionStatus != SectionStatus.Completed)
         )
         {
             return Results.BadRequest("All sections must be completed before submission.");
