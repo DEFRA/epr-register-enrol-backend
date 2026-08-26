@@ -14,9 +14,15 @@ public class RecyclingOperationsAuditRecord
     [BsonId(IdGenerator = typeof(ObjectIdGenerator))]
     public ObjectId? Id { get; set; }
 
-    // From CaseManagementAuthenticationHandler's "cdp_user_id"/"cdp_user_name" claims (in turn
-    // from the x-cdp-user-id/x-cdp-user-name request headers). Both may be empty when the caller
-    // didn't send them - e.g. the Development header-trust bypass when no shared secret is
+    // For PatchRecyclingOperations (CaseManagement scheme): CaseManagementAuthenticationHandler's
+    // "cdp_user_id"/"cdp_user_name" claims (in turn from the x-cdp-user-id/x-cdp-user-name request
+    // headers) - the real per-caseworker identity. For UpdateOverseasSite (Frontend scheme): no
+    // per-operator identity is available - FrontendAuthenticationHandler is a service-to-service
+    // shared secret only - so CdpUserId carries that scheme's own NameIdentifier claim
+    // ("epr-register-enrol-frontend") and CdpUserName carries an explanatory string rather than a
+    // real name, pending real operator-identity forwarding from the frontend (tracked follow-up,
+    // see UpdateOverseasSite's own audit comment). Both may also be empty when the caller didn't
+    // send them at all - e.g. the Development header-trust bypass when no shared secret is
     // configured - so this is deliberately a plain string, not a required/non-nullable field.
     // The endpoint must not fail to record an edit just because identity is unavailable.
     public string CdpUserId { get; set; } = string.Empty;
