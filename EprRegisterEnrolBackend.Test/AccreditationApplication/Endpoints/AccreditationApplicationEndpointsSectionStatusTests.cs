@@ -677,6 +677,7 @@ public class AccreditationApplicationEndpointsSectionStatusTests
                                         FileId = "f1",
                                         Filename = "f1.pdf",
                                         S3Key = "bes-evidence/f1",
+                                        ScanStatus = "Clean",
                                     },
                                 ],
                             },
@@ -701,6 +702,96 @@ public class AccreditationApplicationEndpointsSectionStatusTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.BesEvidence!.SectionStatus.Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceSection_RequestedCompleted_SiteHasInfectedEvidence_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites =
+                    [
+                        new OverseasSiteModel
+                        {
+                            SiteId = 1,
+                            SiteName = "Site",
+                            BesEvidence = new BesEvidenceModel
+                            {
+                                BesEvidenceUploads =
+                                [
+                                    new BesEvidenceFileModel
+                                    {
+                                        FileId = "f1",
+                                        Filename = "f1.pdf",
+                                        S3Key = "bes-evidence/f1",
+                                        ScanStatus = "Infected",
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                }
+        );
+
+        var request = new PatchBesEvidenceSectionRequest
+        {
+            SectionStatus = SectionStatus.Completed,
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/bes-evidence",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceSection_RequestedCompleted_SiteHasPendingEvidence_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites =
+                    [
+                        new OverseasSiteModel
+                        {
+                            SiteId = 1,
+                            SiteName = "Site",
+                            BesEvidence = new BesEvidenceModel
+                            {
+                                BesEvidenceUploads =
+                                [
+                                    new BesEvidenceFileModel
+                                    {
+                                        FileId = "f1",
+                                        Filename = "f1.pdf",
+                                        S3Key = "bes-evidence/f1",
+                                        ScanStatus = null,
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                }
+        );
+
+        var request = new PatchBesEvidenceSectionRequest
+        {
+            SectionStatus = SectionStatus.Completed,
+        };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/bes-evidence",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
     [Fact]

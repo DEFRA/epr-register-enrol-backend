@@ -94,8 +94,14 @@ public static class SectionStatusService
         if (!requestedStatus.HasValue)
             return (compute(), null);
 
-        if (requestedStatus.Value == SectionStatus.Queried)
-            return (null, $"{sectionDisplayName} section status cannot be set to Queried directly.");
+        if (
+            requestedStatus.Value != SectionStatus.InProgress
+            && requestedStatus.Value != SectionStatus.Completed
+        )
+            return (
+                null,
+                $"{sectionDisplayName} section status must be InProgress or Completed."
+            );
 
         if (requestedStatus.Value == SectionStatus.Completed && compute() != SectionStatus.Completed)
             return (
@@ -111,13 +117,19 @@ public static class SectionStatusService
     // AccreditationApplicationSections.ComputeCurrentStatus). This answers only the completeness
     // half of the same Completed gate ResolveRequestedStatus applies elsewhere: every selected
     // overseas site that needs evidence (not EU/OECD, no conditions-of-export exemption) must
-    // have at least one uploaded file. Vacuously true when there are no such sites, so an
-    // exporter with only EU/OECD sites can still complete the section.
+    // have at least one uploaded file, and every uploaded file on that site must be Clean —
+    // mirroring ComputeSamplingPlan's All(Clean) gate so a still-Pending or Infected upload can't
+    // complete the section. Vacuously true when there are no such sites, so an exporter with only
+    // EU/OECD sites can still complete the section.
     public static bool IsBesEvidenceComplete(AccreditationApplicationOverseasSites? overseasSites)
     {
         var sites = overseasSites?.Sites ?? [];
         return sites
             .Where(s => s.Selected && !s.IsEu && !s.IsOecd && s.ConditionsOfExport != true)
-            .All(s => (s.BesEvidence?.BesEvidenceUploads.Count ?? 0) > 0);
+            .All(s =>
+            {
+                var uploads = s.BesEvidence?.BesEvidenceUploads ?? [];
+                return uploads.Count > 0 && uploads.All(u => u.ScanStatus == "Clean");
+            });
     }
 }

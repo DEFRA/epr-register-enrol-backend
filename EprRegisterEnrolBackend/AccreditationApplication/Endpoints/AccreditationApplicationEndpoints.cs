@@ -1236,9 +1236,12 @@ public static class AccreditationApplicationEndpoints
             return null;
         }
 
-        if (requestedStatus.Value == SectionStatus.Queried)
+        if (
+            requestedStatus.Value != SectionStatus.InProgress
+            && requestedStatus.Value != SectionStatus.Completed
+        )
             return Results.UnprocessableEntity(
-                "Overseas sites section status cannot be set to Queried directly."
+                "Overseas sites section status must be InProgress or Completed."
             );
 
         if (requestedStatus.Value == SectionStatus.Completed && !hasSelectedSite)
