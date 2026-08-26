@@ -118,4 +118,69 @@ public class PromoteOverseasSiteRequestValidatorTests
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor("Code2");
     }
+
+    [Fact]
+    public void NullCoordinates_PassesValidation()
+    {
+        var request = ValidRequest() with { Coordinates = null };
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveValidationErrorFor(r => r.Coordinates);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void EmptyOrWhitespaceCoordinates_PassesValidation(string coordinates)
+    {
+        var request = ValidRequest() with { Coordinates = coordinates };
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveValidationErrorFor(r => r.Coordinates);
+    }
+
+    [Theory]
+    [InlineData("51.5034, -0.1275")]
+    [InlineData("-90.0000, 180.0000")]
+    [InlineData("52.520008,13.404954")]
+    [InlineData("51.5034 , -0.1275")]
+    public void CoordinatesWithAtLeast4DecimalPlaces_PassesValidation(string coordinates)
+    {
+        var request = ValidRequest() with { Coordinates = coordinates };
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveValidationErrorFor(r => r.Coordinates);
+    }
+
+    [Theory]
+    [InlineData("not-valid")]
+    [InlineData("51.5034")]
+    [InlineData("51.503, -0.127")]
+    [InlineData("51.5, -0.1275")]
+    public void CoordinatesWithFewerThan4DecimalPlacesOrBadFormat_FailsValidation(
+        string coordinates
+    )
+    {
+        // RA-479: the promote path writes Coordinates to the same field as add-ORS
+        // (ApplyPromotedFields), so it must enforce the same precision rule — this used
+        // to be the gap where only AddOverseasSiteRequestValidator checked it.
+        var request = ValidRequest() with { Coordinates = coordinates };
+        var result = _validator.TestValidate(request);
+        result
+            .ShouldHaveValidationErrorFor(r => r.Coordinates)
+            .WithErrorMessage(
+                "Coordinates must be latitude and longitude to at least 4 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
+            );
+    }
+
+    [Theory]
+    [InlineData("91.0000, 0.0000")]
+    [InlineData("0.0000, 181.0000")]
+    public void CoordinatesOutOfRange_FailsValidation(string coordinates)
+    {
+        var request = ValidRequest() with { Coordinates = coordinates };
+        var result = _validator.TestValidate(request);
+        result
+            .ShouldHaveValidationErrorFor(r => r.Coordinates)
+            .WithErrorMessage(
+                "Coordinates latitude must be between -90 and 90 and longitude must be between -180 and 180."
+            );
+    }
 }

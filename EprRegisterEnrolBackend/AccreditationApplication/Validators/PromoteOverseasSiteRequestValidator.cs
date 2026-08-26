@@ -43,7 +43,9 @@ public class PromoteOverseasSiteRequestValidator : AbstractValidator<PromoteOver
         RuleFor(r => r.AddressLine2).MaximumLength(200);
         RuleFor(r => r.TownOrCity).NotEmpty().MaximumLength(100);
         RuleFor(r => r.Country).NotEmpty().MaximumLength(100);
-        RuleFor(r => r.Coordinates).MaximumLength(50);
+        RuleFor(r => r.Coordinates)
+            .ValidCoordinates()
+            .When(r => !string.IsNullOrWhiteSpace(r.Coordinates));
         RuleFor(r => r.ContactName).NotEmpty().MaximumLength(200);
         RuleFor(r => r.ContactEmail)
             .NotEmpty()
