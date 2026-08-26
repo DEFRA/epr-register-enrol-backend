@@ -179,6 +179,67 @@ public class AccreditationApplicationEndpointsPatchSectionsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // RA-481: Submitted/DulyMade/Updated/AwaitingDecision lock every section that is not itself
+    // Queried. The Queried case above already had endpoint-level cover; these four reached only
+    // AccreditationApplicationSectionsTests, so the 409 an operator actually receives was never
+    // asserted through an endpoint. RA-415 shipped a real gap in this same endpoint family by
+    // treating helper coverage as endpoint coverage, hence covering the status set here too.
+    [Theory]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.DulyMade)]
+    [InlineData(ApplicationStatus.Updated)]
+    [InlineData(ApplicationStatus.AwaitingDecision)]
+    public async Task PatchTonnage_WhenApplicationLockedAndPrnsSectionNotQueried_Returns409(
+        ApplicationStatus lockedStatus
+    )
+    {
+        Reset();
+        var app = SeedApplication(status: lockedStatus);
+
+        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // The other half of the RA-481 rule: a section that is itself Queried stays editable no
+    // matter which locked status the parent application is in. Without this, the theory above
+    // would still pass against a guard that simply blocked every write on a locked application.
+    [Theory]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.DulyMade)]
+    [InlineData(ApplicationStatus.Updated)]
+    [InlineData(ApplicationStatus.AwaitingDecision)]
+    public async Task PatchTonnage_WhenApplicationLockedButPrnsSectionQueried_Returns200(
+        ApplicationStatus lockedStatus
+    )
+    {
+        Reset();
+        var app = SeedApplication(
+            status: lockedStatus,
+            configure: a => a.Prns.SectionStatus = SectionStatus.Queried
+        );
+
+        var request = new PatchTonnageRequest { PlannedTonnageBand = PlannedTonnageBand.UpTo500 };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/tonnage",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo500);
+        body.ApplicationStatus.Should().Be(lockedStatus);
+    }
+
     [Fact]
     public async Task PatchTonnage_WhenApplicationAlreadyStarted_LeavesApplicationStatusUnchanged()
     {
