@@ -804,6 +804,7 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         IAccreditationApplicationPersistence persistence,
         ICaseWorkingApiAdapter caseWorkingAdapter,
+        IReExApiAdapter reExAdapter,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
@@ -811,6 +812,26 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        // RA-503: backfill OrgId (ReEx's numeric organisation number) for any application read
+        // before Submit's own resolution ran - older applications, or ones that never reached
+        // Submit yet. Resolved once and persisted (application reassigned to the updated
+        // document on success) so later reads skip the ReEx round trip entirely; a lookup
+        // failure leaves OrgId null and is not persisted, so the next read retries rather than
+        // permanently caching a miss.
+        if (application.OrgId is null)
+        {
+            var orgNumber = await ResolveOrgNumberFromReExAsync(
+                organisationId,
+                reExAdapter,
+                cancellationToken
+            );
+            if (orgNumber is not null)
+            {
+                application.OrgId = orgNumber;
+                application = await persistence.UpdateAsync(application) ?? application;
+            }
+        }
 
         // Skip the round-trip entirely when there is nothing to look up (e.g. older
         // applications submitted before the work-item id was persisted, or applications

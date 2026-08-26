@@ -17,15 +17,11 @@ public class AccreditationApplicationModel
     public required string OrganisationId { get; set; }
 
     // RA-503: ReEx's numeric organisation number (e.g. 500500) - the value an operator or
-    // regulator should actually see, resolved fresh from ReEx immediately before submission
-    // (see Submit endpoint) and used only within that same request to build the work-item
-    // payload. Distinct from OrganisationId above, which is ReEx's own internal ObjectId and
-    // must never be surfaced to an operator or regulator (see OrganisationDto.cs).
-    //
-    // [BsonIgnore], same as NotificationStatus/DueDate below: a value resolved fresh per-request
-    // must not be persisted and echoed back stale by GetById/Patch* on some later request - it
-    // would silently drift from ReEx's current truth with nothing to ever refresh it.
-    [BsonIgnore]
+    // regulator should actually see. Distinct from OrganisationId above, which is ReEx's own
+    // internal ObjectId and must never be surfaced to an operator or regulator (see
+    // OrganisationDto.cs). Resolved once and persisted: Submit resolves it fresh on first
+    // submission; GetById backfills it (and stores the result) for any application read
+    // before that resolution has happened, so later reads skip the ReEx round trip entirely.
     public int? OrgId { get; set; }
 
     public string? OrganisationName { get; set; }
