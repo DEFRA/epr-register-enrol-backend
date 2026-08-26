@@ -21,6 +21,7 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50013 = ObjectId.Parse("aaa000000000000000050013");
     public static readonly ObjectId Reg50014 = ObjectId.Parse("aaa000000000000000050014");
     public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
+    public static readonly ObjectId Reg50016 = ObjectId.Parse("aaa000000000000000050016");
 
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
@@ -520,6 +521,70 @@ public class FakeOrganisationPersistence
                         WasteManagementPermits =
                         [
                             new WasteManagementPermitModel { PermitNumber = "WML50015" },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        // RA-481 new-coverage org: dedicated to ra-481-section-lock.e2e.js, which asserts
+        // the actual RA-481 behaviour (locked-but-not-queried sections render read-only and
+        // reject direct writes; a queried section stays fully editable) rather than reusing
+        // any other spec's org. It's a plain reprocessor (not an exporter, unlike orgs 50013-
+        // 50015) so the fastest path to Submitted is just PRN tonnage + business plan +
+        // sampling plan — no overseas sites/BES steps to drive through before the read-only
+        // assertions below can run. Kept off every other spec's org for the same reason orgs
+        // 50013-50015 are dedicated above: this spec submits the application and then keeps
+        // re-visiting its sections directly by URL across two `it()` blocks in one file, which
+        // is exactly the shape of repeated, cross-test reuse the org-50005 Seed race documented
+        // above would corrupt under concurrent wdio workers.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50016,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeReprocessor],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "Section Lock Test Recycling Ltd",
+                    TradingName = "Section Lock Test Recycling",
+                    RegistrationNumber = "R26ER5000390068PL",
+                    CompaniesHouseNumber = "12345016",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "Site Lane 016",
+                        Town = "Siteville",
+                        Postcode = "SIT3 OO6",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Site Manager",
+                    Email = "info@sectionlocktestrecycling.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50016,
+                        SiteId = "REG016",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeReprocessor,
+                        SiteAddress = new SiteAddressModel
+                        {
+                            Line1 = "Site Lane 016",
+                            Town = "Siteville",
+                            Postcode = "SIT3 OO6",
+                        },
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50016" },
                         ],
                     },
                 ],
