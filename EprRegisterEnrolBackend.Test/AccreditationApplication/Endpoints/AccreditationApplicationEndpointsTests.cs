@@ -38,6 +38,7 @@ public class AccreditationApplicationEndpointsTests
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
+        _factory.MockAuditPersistence.ClearSubstitute(ClearOptions.All);
     }
 
     // Simulates a real CDP-uploader webhook callback having already completed for
@@ -2071,6 +2072,173 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // RA-470 gap 6: the completeness gate above only ever checked Prns/BusinessPlan/SamplingPlan.
+    // OverseasSites/BesEvidence are exporter-only sections (both null for a non-exporter, see
+    // AccreditationApplicationModel), so the new checks are gated on IsExporter.
+    [Fact]
+    public async Task Submit_ExporterWithIncompleteOverseasSites_Returns400()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.IsExporter = true;
+                a.Prns.SectionStatus = SectionStatus.Completed;
+                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
+                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    SectionStatus = SectionStatus.InProgress,
+                };
+                a.BesEvidence = new AccreditationApplicationBesEvidence
+                {
+                    SectionStatus = SectionStatus.Completed,
+                };
+            }
+        );
+
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Submit_ExporterWithIncompleteBesEvidence_Returns400()
+    {
+        // RA-470 gap 5/6: this is what gives the endpoint's InProgress reset on a BES-evidence-
+        // invalidating edit real teeth - without this gate the reset would only change a
+        // task-list label, never actually block submission.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.IsExporter = true;
+                a.Prns.SectionStatus = SectionStatus.Completed;
+                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
+                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    SectionStatus = SectionStatus.Completed,
+                };
+                a.BesEvidence = new AccreditationApplicationBesEvidence
+                {
+                    SectionStatus = SectionStatus.InProgress,
+                };
+            }
+        );
+
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Submit_ExporterWithAllSectionsComplete_Returns200()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.IsExporter = true;
+                a.Prns.SectionStatus = SectionStatus.Completed;
+                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
+                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    SectionStatus = SectionStatus.Completed,
+                };
+                a.BesEvidence = new AccreditationApplicationBesEvidence
+                {
+                    SectionStatus = SectionStatus.Completed,
+                };
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                Task.FromResult(new CaseWorkingSubmissionResult("RA-123456789", Guid.NewGuid()))
+            );
+
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Submit_NonExporterWithNullOverseasSitesAndBesEvidence_Unaffected()
+    {
+        // IsExporter = false (SeedApplication's default) leaves OverseasSites/BesEvidence null -
+        // the new gap-6 checks must not block a non-exporter on sections it never has.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Started,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Completed;
+                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
+                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                Task.FromResult(new CaseWorkingSubmissionResult("RA-123456789", Guid.NewGuid()))
+            );
+
+        var request = new SubmitRequest
+        {
+            FullName = "John",
+            JobTitle = "Manager",
+            Email = "j@x.com",
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
     [Fact]
     public async Task Submit_WhenAlreadySent_ReturnsIdempotentOk()
     {
@@ -3903,6 +4071,486 @@ public class AccreditationApplicationEndpointsTests
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // --- UpdateOverseasSite (RA-470) ---
+
+    private static string UpdateOverseasSiteUrl(AccreditationApplicationModel app, int siteId) =>
+        $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/{siteId}";
+
+    // Reuses PromoteOverseasSiteRequest/its validator exactly, per RA-470's contract with the
+    // frontend - OperationCodes is deliberately ["R4"], not Promote's own ["R3"]: the default
+    // SeedApplication MaterialType is Steel, whose applicable codes are R4/R12/R13
+    // (RecyclingOperationCodes.CodesByMaterialType) - R3 would fail UpdateOverseasSite's gap-2
+    // material-type check even though it's fine for Promote (Promote doesn't run that check).
+    private static PromoteOverseasSiteRequest ValidUpdateOverseasSiteRequest() =>
+        new()
+        {
+            SiteName = "Updated Recycling GmbH",
+            AddressLine1 = "Neue Strasse 2",
+            TownOrCity = "Munich",
+            Country = "Germany",
+            ContactName = "Greta Schmidt",
+            ContactEmail = "greta@updatedrecycling.de",
+            OperationCodes = ["R4"],
+            Code1 = "A1181",
+            RepatriatedLoads = "Rejected loads returned within 30 days at our expense.",
+        };
+
+    private static InterimSiteModel TestInterimSite(int siteId = 2) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = "SN-0002",
+            Country = "France",
+            SiteName = "Interim Site",
+            AddressLine1 = "1 Rue Example",
+            TownOrCity = "Paris",
+            ContactName = "Jane Smith",
+            ContactEmail = "jane.smith@example.com",
+            ContactPhone = "+33 1 23 45 67 89",
+        };
+
+    [Fact]
+    public async Task UpdateOverseasSite_ValidRequest_UpdatesFieldsWithoutSettingSelectedOrRegisteredNowAccredited()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            ValidUpdateOverseasSiteRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var site = await response.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+        site!.SiteId.Should().Be(900001);
+        site.SiteName.Should().Be("Updated Recycling GmbH");
+        site.Country.Should().Be("Germany");
+        // RegisteredOnlySite() seeds both false - UpdateOverseasSite must leave them exactly as
+        // found, unlike PromoteOverseasSite which forces both true.
+        site.Selected.Should().BeFalse();
+        site.RegisteredNowAccredited.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_MissingSiteName_Returns400()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var request = ValidUpdateOverseasSiteRequest() with { SiteName = "" };
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            request,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_ApplicationNotFound_Returns404()
+    {
+        Reset();
+
+        var response = await _client.PatchAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/nonexistent-id/overseas-sites/900001",
+            ValidUpdateOverseasSiteRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_SiteNotFound_Returns404()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites { Sites = [] }
+        );
+
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            ValidUpdateOverseasSiteRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task UpdateOverseasSite_WhenTerminal_Returns409(ApplicationStatus status)
+    {
+        Reset();
+        var app = SeedApplication(
+            status: status,
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [RegisteredOnlySite()],
+                }
+        );
+
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            ValidUpdateOverseasSiteRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_WhenQueriedAndOverseasSitesSectionNotQueried_Returns409()
+    {
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.Prns.SectionStatus = SectionStatus.Queried;
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [RegisteredOnlySite()],
+                };
+            }
+        );
+
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            ValidUpdateOverseasSiteRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // Gap 2: shared ValidateOperationCodesForSite catches material-type/interim-site issues that
+    // PromoteOverseasSiteRequestValidator alone never checked.
+    [Fact]
+    public async Task UpdateOverseasSite_CodeNotApplicableToMaterialType_Returns400()
+    {
+        // Default SeedApplication MaterialType is Steel - applicable codes are R4/R12/R13
+        // (RecyclingOperationCodes.CodesByMaterialType) - R3 is a valid code in general but not
+        // offered for Steel.
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var request = ValidUpdateOverseasSiteRequest() with { OperationCodes = ["R3"] };
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            request,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_R12WithNoInterimSite_Returns400()
+    {
+        // AC11, same rule PatchRecyclingOperations enforces via the shared helper -
+        // PromoteOverseasSiteRequestValidator's own R12/R13-accompaniment rule never checks for an
+        // interim site at all, only that R12/R13 isn't selected in isolation.
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            }
+        );
+
+        var request = ValidUpdateOverseasSiteRequest() with { OperationCodes = ["R4", "R12"] };
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            request,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    // Gap 1: an interim site can't be left dangling with no R12/R13 justifying it.
+    [Fact]
+    public async Task UpdateOverseasSite_InterimSitePresent_DroppingR12R13_Returns400()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 900001,
+                        SiteName = "Site With Interim",
+                        Country = "France",
+                        OperationCodes = ["R4", "R12"],
+                        InterimSite = TestInterimSite(),
+                    },
+                ],
+            }
+        );
+
+        // Drops R12/R13 entirely, leaving the interim site with nothing to justify it.
+        var request = ValidUpdateOverseasSiteRequest() with { OperationCodes = ["R4"] };
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            request,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_InterimSitePresent_KeepingR12_Returns200()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 900001,
+                        SiteName = "Site With Interim",
+                        Country = "France",
+                        OperationCodes = ["R4", "R12"],
+                        InterimSite = TestInterimSite(),
+                    },
+                ],
+            }
+        );
+
+        var request = ValidUpdateOverseasSiteRequest() with { OperationCodes = ["R4", "R12"] };
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            request,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // Gap 3: audit operator-driven operation-code changes the same way PatchRecyclingOperations
+    // audits regulator-driven ones.
+    [Fact]
+    public async Task UpdateOverseasSite_OperationCodesChanged_WritesAuditRecordWithBeforeAndAfterCodes()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 900001,
+                        SiteName = "Site With Interim",
+                        Country = "France",
+                        OperationCodes = ["R4"],
+                        InterimSite = TestInterimSite(),
+                    },
+                ],
+            }
+        );
+
+        var request = ValidUpdateOverseasSiteRequest() with { OperationCodes = ["R4", "R12"] };
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            request,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockAuditPersistence.Received(1)
+            .RecordAsync(
+                Arg.Is<RecyclingOperationsAuditRecord>(r =>
+                    r.OrganisationId == app.OrganisationId
+                    && r.ApplicationId == app.ApplicationId
+                    && r.SiteId == 900001
+                    && r.BeforeCodes.SequenceEqual(new[] { "R4" })
+                    && r.AfterCodes.SequenceEqual(new[] { "R4", "R12" })
+                ),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_OperationCodesUnchanged_DoesNotWriteAuditRecord()
+    {
+        // Unlike PatchRecyclingOperations (which only ever changes codes), UpdateOverseasSite
+        // edits many other fields too - a record with identical BeforeCodes/AfterCodes on every
+        // address/contact-only edit would dilute an audit trail meant specifically for
+        // operation-code changes, so it's written only when the codes actually changed.
+        Reset();
+        var app = SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 900001,
+                        SiteName = "Registered Only Site",
+                        Country = "France",
+                        OperationCodes = ["R4"],
+                    },
+                ],
+            }
+        );
+
+        var request = ValidUpdateOverseasSiteRequest() with { OperationCodes = ["R4"] };
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            request,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _factory
+            .MockAuditPersistence.DidNotReceive()
+            .RecordAsync(Arg.Any<RecyclingOperationsAuditRecord>(), Arg.Any<CancellationToken>());
+    }
+
+    // Gap 5: BES evidence is tied to Country/ConditionsOfExport - either changing makes any
+    // previously uploaded evidence, and a Completed section status, stale.
+    [Fact]
+    public async Task UpdateOverseasSite_CountryChanged_ClearsBesEvidenceUploadsAndResetsCompletedStatus()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 900001,
+                        SiteName = "Registered Only Site",
+                        Country = "France",
+                        OperationCodes = ["R4"],
+                        ConditionsOfExport = false,
+                        BesEvidence = new BesEvidenceModel
+                        {
+                            BesEvidenceUploads =
+                            [
+                                new BesEvidenceFileModel
+                                {
+                                    FileId = "file-1",
+                                    Filename = "evidence.pdf",
+                                    S3Key = "bes-evidence/file-1",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            };
+            a.BesEvidence = new AccreditationApplicationBesEvidence
+            {
+                SectionStatus = SectionStatus.Completed,
+            };
+        });
+
+        // ValidUpdateOverseasSiteRequest's Country is "Germany" - differs from the seeded "France".
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            ValidUpdateOverseasSiteRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            app.OrganisationId,
+            app.Id!.Value.ToString()
+        );
+        var storedSite = stored!.OverseasSites!.Sites.Single(s => s.SiteId == 900001);
+        storedSite.BesEvidence!.BesEvidenceUploads.Should().BeEmpty();
+        stored.BesEvidence!.SectionStatus.Should().Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_NoCountryOrConditionsChange_LeavesBesEvidenceUntouched()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 900001,
+                        SiteName = "Registered Only Site",
+                        // Matches ValidUpdateOverseasSiteRequest's Country ("Germany") and
+                        // ConditionsOfExport (unset/null) exactly, so neither changes.
+                        Country = "Germany",
+                        ConditionsOfExport = null,
+                        OperationCodes = ["R4"],
+                        BesEvidence = new BesEvidenceModel
+                        {
+                            BesEvidenceUploads =
+                            [
+                                new BesEvidenceFileModel
+                                {
+                                    FileId = "file-1",
+                                    Filename = "evidence.pdf",
+                                    S3Key = "bes-evidence/file-1",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            };
+            a.BesEvidence = new AccreditationApplicationBesEvidence
+            {
+                SectionStatus = SectionStatus.Completed,
+            };
+        });
+
+        var response = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(app, 900001),
+            ValidUpdateOverseasSiteRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            app.OrganisationId,
+            app.Id!.Value.ToString()
+        );
+        var storedSite = stored!.OverseasSites!.Sites.Single(s => s.SiteId == 900001);
+        storedSite.BesEvidence!.BesEvidenceUploads.Should().ContainSingle();
+        stored.BesEvidence!.SectionStatus.Should().Be(SectionStatus.Completed);
     }
 
     // --- AddInterimSite ---
