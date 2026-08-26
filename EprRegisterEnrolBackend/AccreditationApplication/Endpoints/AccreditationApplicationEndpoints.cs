@@ -813,7 +813,16 @@ public static class AccreditationApplicationEndpoints
             );
 
         if (application.Prns.SectionStatus != SectionStatus.Queried)
-            application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
+        {
+            var (status, error) = SectionStatusService.ResolveRequestedStatus(
+                request.SectionStatus,
+                () => SectionStatusService.ComputePrns(application.Prns),
+                "PRNs"
+            );
+            if (error is not null)
+                return Results.UnprocessableEntity(error);
+            application.Prns.SectionStatus = status!.Value;
+        }
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -865,7 +874,16 @@ public static class AccreditationApplicationEndpoints
             );
 
         if (application.Prns.SectionStatus != SectionStatus.Queried)
-            application.Prns.SectionStatus = SectionStatusService.ComputePrns(application.Prns);
+        {
+            var (status, error) = SectionStatusService.ResolveRequestedStatus(
+                request.SectionStatus,
+                () => SectionStatusService.ComputePrns(application.Prns),
+                "PRNs"
+            );
+            if (error is not null)
+                return Results.UnprocessableEntity(error);
+            application.Prns.SectionStatus = status!.Value;
+        }
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -935,7 +953,16 @@ public static class AccreditationApplicationEndpoints
             bp.OtherDetail = request.OtherDetail;
 
         if (bp.SectionStatus != SectionStatus.Queried)
-            bp.SectionStatus = SectionStatusService.ComputeBusinessPlan(bp);
+        {
+            var (status, error) = SectionStatusService.ResolveRequestedStatus(
+                request.SectionStatus,
+                () => SectionStatusService.ComputeBusinessPlan(bp),
+                "Business plan"
+            );
+            if (error is not null)
+                return Results.UnprocessableEntity(error);
+            bp.SectionStatus = status!.Value;
+        }
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -974,9 +1001,16 @@ public static class AccreditationApplicationEndpoints
             application.SamplingPlan.Files = request.Files;
 
         if (application.SamplingPlan.SectionStatus != SectionStatus.Queried)
-            application.SamplingPlan.SectionStatus = SectionStatusService.ComputeSamplingPlan(
-                application.SamplingPlan
+        {
+            var (status, error) = SectionStatusService.ResolveRequestedStatus(
+                request.SectionStatus,
+                () => SectionStatusService.ComputeSamplingPlan(application.SamplingPlan),
+                "Sampling plan"
             );
+            if (error is not null)
+                return Results.UnprocessableEntity(error);
+            application.SamplingPlan.SectionStatus = status!.Value;
+        }
         application.DateLastEdited = DateTime.UtcNow;
 
         if (application.ApplicationStatus == ApplicationStatus.Saved)
@@ -1022,7 +1056,11 @@ public static class AccreditationApplicationEndpoints
                 request.Sites
             );
 
-        RecomputeOverseasSitesSectionStatus(application.OverseasSites);
+        if (
+            RecomputeOverseasSitesSectionStatus(application.OverseasSites, request.SectionStatus)
+            is { } statusError
+        )
+            return statusError;
 
         application.DateLastEdited = DateTime.UtcNow;
 
@@ -1271,21 +1309,53 @@ public static class AccreditationApplicationEndpoints
     // Shared by AddOverseasSite/PatchOverseasSites/PromoteOverseasSite/RevertOverseasSite so
     // the four don't each duplicate the Queried guard.
     //
-    // Deliberately binary (Completed/NotStarted only, no InProgress): this section has no
-    // partial-completion concept like BusinessPlan/SamplingPlan do — a selected site means the
-    // section is done, matching AccreditationApplicationSections.ComputeCurrentStatus, which the
-    // resubmit-after-query flow uses as the source of truth for this section. So AddOverseasSite
-    // reporting Completed on the very first site (rather than the InProgress it used to report
-    // before it was routed through this helper) is intended, not a regression.
-    private static void RecomputeOverseasSitesSectionStatus(
-        AccreditationApplicationOverseasSites overseasSites
+    // Auto-compute (requestedStatus omitted, as AddOverseasSite/PromoteOverseasSite/
+    // RevertOverseasSite always do) is deliberately binary (Completed/NotStarted only, no
+    // InProgress): this section has no partial-completion concept like BusinessPlan/SamplingPlan
+    // do when left to compute itself — a selected site means the section is done, matching
+    // AccreditationApplicationSections.ComputeCurrentStatus, which the resubmit-after-query flow
+    // uses as the source of truth for this section. So AddOverseasSite reporting Completed on the
+    // very first site (rather than the InProgress it used to report before it was routed through
+    // this helper) is intended, not a regression.
+    //
+    // RA-496: PatchOverseasSites is the one call site that can pass an explicit requestedStatus —
+    // the operator's save intent from the task-list buttons — so it alone gets an InProgress
+    // option ("save and come back later"), gated the same way every other section's Completed
+    // intent is: rejected (not silently downgraded) if no site is actually selected yet. Returns
+    // the conflict/validation IResult to short-circuit on, or null on success.
+    private static IResult? RecomputeOverseasSitesSectionStatus(
+        AccreditationApplicationOverseasSites overseasSites,
+        SectionStatus? requestedStatus = null
     )
     {
         if (overseasSites.SectionStatus == SectionStatus.Queried)
-            return;
-        overseasSites.SectionStatus = overseasSites.Sites.Any(s => s.Selected)
-            ? SectionStatus.Completed
-            : SectionStatus.NotStarted;
+            return null;
+
+        var hasSelectedSite = overseasSites.Sites.Any(s => s.Selected);
+
+        if (!requestedStatus.HasValue)
+        {
+            overseasSites.SectionStatus = hasSelectedSite
+                ? SectionStatus.Completed
+                : SectionStatus.NotStarted;
+            return null;
+        }
+
+        if (
+            requestedStatus.Value != SectionStatus.InProgress
+            && requestedStatus.Value != SectionStatus.Completed
+        )
+            return Results.UnprocessableEntity(
+                "Overseas sites section status must be InProgress or Completed."
+            );
+
+        if (requestedStatus.Value == SectionStatus.Completed && !hasSelectedSite)
+            return Results.UnprocessableEntity(
+                "Overseas sites section cannot be marked Completed until at least one site is selected."
+            );
+
+        overseasSites.SectionStatus = requestedStatus.Value;
+        return null;
     }
 
     private static void ApplyPromotedFields(
@@ -1746,7 +1816,16 @@ public static class AccreditationApplicationEndpoints
             request.SectionStatus.HasValue
             && application.BesEvidence.SectionStatus != SectionStatus.Queried
         )
+        {
+            if (
+                request.SectionStatus.Value == SectionStatus.Completed
+                && !SectionStatusService.IsBesEvidenceComplete(application.OverseasSites)
+            )
+                return Results.UnprocessableEntity(
+                    "BES evidence section cannot be marked Completed until evidence has been uploaded for every site that requires it."
+                );
             application.BesEvidence.SectionStatus = request.SectionStatus.Value;
+        }
 
         application.DateLastEdited = DateTime.UtcNow;
         var updated = await persistence.UpdateAsync(application);
