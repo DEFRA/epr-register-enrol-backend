@@ -132,8 +132,21 @@ public class AddOverseasSiteRequestValidatorTests
     [InlineData("51.5034, -0.1275")]
     [InlineData("-90.0000, 180.0000")]
     [InlineData("52.520008,13.404954")]
+    [InlineData("51.5034 , -0.1275")]
     public void CoordinatesWithAtLeast4DecimalPlaces_PassesValidation(string coordinates)
     {
+        var request = ValidRequest() with { Coordinates = coordinates };
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveValidationErrorFor(r => r.Coordinates);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void EmptyOrWhitespaceCoordinates_PassesValidation(string coordinates)
+    {
+        // Coordinates is optional; the frontend treats it as required on its own form,
+        // but this validator only kicks in once a non-blank value is actually supplied.
         var request = ValidRequest() with { Coordinates = coordinates };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor(r => r.Coordinates);
@@ -150,7 +163,11 @@ public class AddOverseasSiteRequestValidatorTests
     {
         var request = ValidRequest() with { Coordinates = coordinates };
         var result = _validator.TestValidate(request);
-        result.ShouldHaveValidationErrorFor(r => r.Coordinates);
+        result
+            .ShouldHaveValidationErrorFor(r => r.Coordinates)
+            .WithErrorMessage(
+                "Coordinates must be latitude and longitude to at least 4 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
+            );
     }
 
     [Theory]
@@ -160,6 +177,10 @@ public class AddOverseasSiteRequestValidatorTests
     {
         var request = ValidRequest() with { Coordinates = coordinates };
         var result = _validator.TestValidate(request);
-        result.ShouldHaveValidationErrorFor(r => r.Coordinates);
+        result
+            .ShouldHaveValidationErrorFor(r => r.Coordinates)
+            .WithErrorMessage(
+                "Coordinates latitude must be between -90 and 90 and longitude must be between -180 and 180."
+            );
     }
 }

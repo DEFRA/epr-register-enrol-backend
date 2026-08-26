@@ -43,7 +43,18 @@ public class PromoteOverseasSiteRequestValidator : AbstractValidator<PromoteOver
         RuleFor(r => r.AddressLine2).MaximumLength(200);
         RuleFor(r => r.TownOrCity).NotEmpty().MaximumLength(100);
         RuleFor(r => r.Country).NotEmpty().MaximumLength(100);
-        RuleFor(r => r.Coordinates).MaximumLength(50);
+        RuleFor(r => r.Coordinates)
+            .Cascade(CascadeMode.Stop)
+            .MaximumLength(50)
+            .Must(c => CoordinatesValidation.FormatRegex.IsMatch(c!))
+            .WithMessage(
+                "Coordinates must be latitude and longitude to at least 4 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
+            )
+            .Must(c => CoordinatesValidation.IsWithinRange(c!))
+            .WithMessage(
+                "Coordinates latitude must be between -90 and 90 and longitude must be between -180 and 180."
+            )
+            .When(r => !string.IsNullOrWhiteSpace(r.Coordinates));
         RuleFor(r => r.ContactName).NotEmpty().MaximumLength(200);
         RuleFor(r => r.ContactEmail)
             .NotEmpty()
