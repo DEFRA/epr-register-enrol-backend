@@ -4270,12 +4270,88 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
-    [Fact]
-    public async Task UpdateOverseasSite_R12WithNoInterimSite_Returns400()
+    // Mirrors RecyclingOperationsEndpointTests'
+    // PatchRecyclingOperations_MaterialTypeApplicability_MatchesFrontendCodesByMaterialType for
+    // this endpoint - every prior UpdateOverseasSite test above uses the default SeedApplication
+    // MaterialType (Steel) exclusively, so none of them could catch a drift between
+    // RecyclingOperationCodes.CodesByMaterialType and the frontend's own CODES_BY_MATERIAL_TYPE
+    // for any other material - which is exactly the shape of the story's own reported Plastic-
+    // material Change-journey failure. Neither allowedCode nor disallowedCode is R12/R13 for any
+    // material in this table, so this doesn't exercise the interim-site sub-check above.
+    [Theory]
+    [InlineData(MaterialType.Aluminium, "R4", "R3")]
+    [InlineData(MaterialType.Fibre, "R3", "R4")]
+    [InlineData(MaterialType.Glass, "R5", "R3")]
+    [InlineData(MaterialType.Paper, "R3", "R4")]
+    [InlineData(MaterialType.Plastic, "R3", "R4")]
+    [InlineData(MaterialType.Steel, "R4", "R3")]
+    [InlineData(MaterialType.Wood, "R3", "R4")]
+    public async Task UpdateOverseasSite_MaterialTypeApplicability_MatchesFrontendCodesByMaterialType(
+        MaterialType materialType,
+        string allowedCode,
+        string disallowedCode
+    )
     {
-        // AC11, same rule PatchRecyclingOperations enforces via the shared helper -
-        // PromoteOverseasSiteRequestValidator's own R12/R13-accompaniment rule never checks for an
-        // interim site at all, only that R12/R13 isn't selected in isolation.
+        Reset();
+        var allowedApp = SeedApplication(configure: a =>
+        {
+            a.MaterialType = materialType;
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            };
+        });
+
+        var allowedResponse = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(allowedApp, 900001),
+            ValidUpdateOverseasSiteRequest() with
+            {
+                OperationCodes = [allowedCode],
+            },
+            TestContext.Current.CancellationToken
+        );
+
+        allowedResponse
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK, $"{allowedCode} should be applicable for {materialType}");
+
+        var disallowedApp = SeedApplication(configure: a =>
+        {
+            a.MaterialType = materialType;
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = [RegisteredOnlySite()],
+            };
+        });
+
+        var disallowedResponse = await _client.PatchAsJsonAsync(
+            UpdateOverseasSiteUrl(disallowedApp, 900001),
+            ValidUpdateOverseasSiteRequest() with
+            {
+                OperationCodes = [disallowedCode],
+            },
+            TestContext.Current.CancellationToken
+        );
+
+        disallowedResponse
+            .StatusCode.Should()
+            .Be(
+                HttpStatusCode.BadRequest,
+                $"{disallowedCode} should not be applicable for {materialType}"
+            );
+    }
+
+    [Fact]
+    public async Task UpdateOverseasSite_R12WithNoInterimSite_Returns200()
+    {
+        // AC11's "R12/R13 needs an existing interim site" sub-check is deliberately NOT enforced
+        // on UpdateOverseasSite (enforceInterimSiteRequirement: false) - the operator's Change
+        // wizard, exactly like the existing Add/Promote entry points (neither of which calls
+        // ValidateOperationCodesForSite at all), PATCHes the site with R12/R13 selected *before*
+        // redirecting into the separate interim-site sub-wizard that attaches InterimSite.
+        // Enforcing this synchronously here would 400 that handoff every time. Gap 1's own check
+        // (see UpdateOverseasSite_InterimSitePresent_DroppingR12R13_Returns400 below) still guards
+        // the opposite direction - an existing InterimSite left orphaned by dropping R12/R13.
         Reset();
         var app = SeedApplication(configure: a =>
             a.OverseasSites = new AccreditationApplicationOverseasSites
@@ -4291,7 +4367,7 @@ public class AccreditationApplicationEndpointsTests
             TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     // Gap 1: an interim site can't be left dangling with no R12/R13 justifying it.
@@ -4317,7 +4393,10 @@ public class AccreditationApplicationEndpointsTests
         );
 
         // Drops R12/R13 entirely, leaving the interim site with nothing to justify it.
-        var request = ValidUpdateOverseasSiteRequest() with { OperationCodes = ["R4"] };
+        var request = ValidUpdateOverseasSiteRequest() with
+        {
+            OperationCodes = ["R4"],
+        };
         var response = await _client.PatchAsJsonAsync(
             UpdateOverseasSiteUrl(app, 900001),
             request,

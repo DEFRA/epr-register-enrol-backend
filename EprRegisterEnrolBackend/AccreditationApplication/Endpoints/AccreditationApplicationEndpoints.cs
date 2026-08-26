@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
@@ -413,11 +414,22 @@ public static class AccreditationApplicationEndpoints
     // UpdateOverseasSite (operator-driven, RA-470) so the two never drift apart. Needs the loaded
     // site (for InterimSite) and the application's MaterialType, neither of which a request-shape
     // validator has access to. Returns null when the codes are valid.
+    //
+    // enforceInterimSiteRequirement gates the AC11 sub-check only. PatchRecyclingOperations is a
+    // standalone codes-only edit, so R12/R13 must already have their InterimSite in place at the
+    // moment it's called. UpdateOverseasSite backs the operator's Change wizard, which - exactly
+    // like the existing Add/Promote wizard entry points (neither of which calls this method at
+    // all) - submits the site PATCH *before* redirecting into the separate interim-site sub-wizard
+    // when requiresInterimSite() is true; enforcing AC11 there would 400 that handoff every time.
+    // Gap 1's own check below (site.InterimSite is not null but request drops R12/R13) still
+    // applies unconditionally on UpdateOverseasSite - it protects the opposite, already-attached
+    // direction, which this parameter doesn't touch.
     private static IResult? ValidateOperationCodesForSite(
         MaterialType materialType,
         List<string> operationCodes,
         OverseasSiteModel site,
-        int siteId
+        int siteId,
+        bool enforceInterimSiteRequirement = true
     )
     {
         // A code not offered for this application's material type is rejected even though it's a
@@ -431,7 +443,8 @@ public static class AccreditationApplicationEndpoints
         // AC11: R12/R13 describe an operation performed in relation to an associated interim
         // site, so an ORS with none can't carry them.
         if (
-            operationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
+            enforceInterimSiteRequirement
+            && operationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
             && site.InterimSite is null
         )
             return Results.BadRequest(
@@ -490,8 +503,8 @@ public static class AccreditationApplicationEndpoints
                 request.OperationCodes,
                 site,
                 siteId
-            )
-            is { } codesError
+            ) is
+            { } codesError
         )
             return codesError;
 
@@ -1437,7 +1450,10 @@ public static class AccreditationApplicationEndpoints
         [AsParameters] UpdateOverseasSiteServices services
     )
     {
-        var validation = await services.Validator.ValidateAsync(request, services.CancellationToken);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
@@ -1461,17 +1477,21 @@ public static class AccreditationApplicationEndpoints
         if (site is null)
             return Results.NotFound();
 
-        // Gap 2: the same application/material-type-aware and R12/R13-needs-interim-site checks
-        // PatchRecyclingOperations enforces - PromoteOverseasSiteRequestValidator alone doesn't
-        // cover either.
+        // Gap 2: the same application/material-type-aware check PatchRecyclingOperations enforces -
+        // PromoteOverseasSiteRequestValidator alone doesn't cover it. The AC11 R12/R13-needs-
+        // interim-site sub-check is deliberately NOT enforced here (enforceInterimSiteRequirement:
+        // false) - the operator's Change wizard, like the existing Add/Promote entry points, PATCHes
+        // the site before the separate interim-site sub-wizard attaches InterimSite; gap 1 below
+        // still guards the opposite direction (an existing InterimSite left orphaned).
         if (
             ValidateOperationCodesForSite(
                 application.MaterialType,
                 request.OperationCodes,
                 site,
-                siteId
-            )
-            is { } codesError
+                siteId,
+                enforceInterimSiteRequirement: false
+            ) is
+            { } codesError
         )
             return codesError;
 
@@ -1479,7 +1499,9 @@ public static class AccreditationApplicationEndpoints
         // inverse of PatchRecyclingOperations' "R12/R13 needs an interim site" check above.
         if (
             site.InterimSite is not null
-            && !request.OperationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
+            && !request.OperationCodes.Any(
+                RecyclingOperationCodes.CodesRequiringAccompaniment.Contains
+            )
         )
             return Results.BadRequest(
                 $"Overseas site '{siteId}' has an associated interim site; at least one of R12/R13 must remain selected."
@@ -1488,7 +1510,8 @@ public static class AccreditationApplicationEndpoints
         // Gap 5: BES evidence is tied to Country/ConditionsOfExport - either changing makes any
         // previously uploaded evidence and a Completed section status stale.
         var besEvidenceInvalidated =
-            site.Country != request.Country || site.ConditionsOfExport != request.ConditionsOfExport;
+            site.Country != request.Country
+            || site.ConditionsOfExport != request.ConditionsOfExport;
 
         // Snapshot current fields (undo target) before overwriting - same as PromoteOverseasSite.
         site.PreviousSites.Add(SnapshotSiteFields(site));
@@ -1520,15 +1543,31 @@ public static class AccreditationApplicationEndpoints
         // PatchRecyclingOperations (which only ever changes codes), this endpoint edits many other
         // fields too, and a record with identical BeforeCodes/AfterCodes on every address/contact
         // edit would dilute an audit trail meant specifically for operation-code changes.
+        //
+        // Identity: unlike PatchRecyclingOperations (CaseManagement scheme, real per-caseworker
+        // cdp_user_id/cdp_user_name claims from management-be), this endpoint runs under the
+        // Frontend scheme - a plain service-to-service shared secret with no per-operator identity
+        // attached (see FrontendAuthenticationHandler). "cdp_user_id"/"cdp_user_name" claims are
+        // never present here, so reading them would silently write a blank actor on every record.
+        // The one real signal available is the Frontend scheme's own NameIdentifier claim, which
+        // at least identifies the record as operator-driven-via-frontend rather than falsely
+        // implying a per-user lookup happened and came up empty. CdpUserName is left blank with
+        // that same explanation baked into the value, so a reader of the audit trail sees the gap
+        // rather than an unexplained blank. TRACKED FOLLOW-UP: real per-operator attribution needs
+        // the frontend to forward the signed-in operator's own identity (mirroring how management-be
+        // already forwards the caseworker's) and FrontendAuthenticationHandler to surface it as a
+        // claim - out of scope for this endpoint alone.
+        const string OperatorIdentityUnavailableReason =
+            "Frontend scheme carries no per-operator identity - see UpdateOverseasSite audit comment";
         if (!beforeCodes.SequenceEqual(request.OperationCodes))
         {
             await services.AuditPersistence.RecordAsync(
                 new RecyclingOperationsAuditRecord
                 {
                     CdpUserId =
-                        services.HttpContext.User.FindFirst("cdp_user_id")?.Value ?? string.Empty,
-                    CdpUserName =
-                        services.HttpContext.User.FindFirst("cdp_user_name")?.Value ?? string.Empty,
+                        services.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                        ?? string.Empty,
+                    CdpUserName = OperatorIdentityUnavailableReason,
                     OrganisationId = organisationId,
                     ApplicationId = applicationId,
                     SiteId = siteId,
@@ -1965,8 +2004,14 @@ public static class AccreditationApplicationEndpoints
             application.Prns.SectionStatus != SectionStatus.Completed
             || application.BusinessPlan.SectionStatus != SectionStatus.Completed
             || application.SamplingPlan.SectionStatus != SectionStatus.Completed
-            || (application.IsExporter && application.OverseasSites?.SectionStatus != SectionStatus.Completed)
-            || (application.IsExporter && application.BesEvidence?.SectionStatus != SectionStatus.Completed)
+            || (
+                application.IsExporter
+                && application.OverseasSites?.SectionStatus != SectionStatus.Completed
+            )
+            || (
+                application.IsExporter
+                && application.BesEvidence?.SectionStatus != SectionStatus.Completed
+            )
         )
         {
             return Results.BadRequest("All sections must be completed before submission.");
