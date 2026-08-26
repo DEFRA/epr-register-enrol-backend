@@ -2160,6 +2160,9 @@ public static class AccreditationApplicationEndpoints
             JobTitle = request.JobTitle,
             Email = request.Email,
         };
+        // RA-503: the operator's real bank payment reference, as shown on their own
+        // submit-confirmation/view-payment-details pages - see BuildPayload.
+        application.PaymentReference = request.PaymentReference;
 
         // Version 1 for every section that exists on this application — only OverseasSites/
         // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.

@@ -2047,13 +2047,14 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_InitialSubmit_OmitsPaymentReferenceBecauseItDoesNotExistYet()
+    public async Task SubmitApplicationAsync_NoPaymentReferenceSuppliedByOperator_OmitsIt()
     {
-        // ManagementBe generates the application reference and we only learn it from the response
-        // to this very request, so there is genuinely nothing to send on create. It must be
-        // ABSENT rather than an empty string or a stand-in such as registrationReference.
+        // RA-503: PaymentReference is captured from SubmitRequest (the operator's real,
+        // frontend-computed bank reference) - a caller that predates this sends none, and it
+        // must be ABSENT rather than an empty string or a stand-in such as ApplicationReference
+        // or registrationReference.
         var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
-        application.ApplicationReference = null;
+        application.PaymentReference = null;
 
         var payload = await CapturedSubmitPayload(application);
 
@@ -2061,17 +2062,22 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("registrationNumber").GetString().Should().Be("EPR-100023");
     }
 
+    // RA-503: PaymentReference is the operator's real, nation-specific bank reference
+    // (buildPaymentReference in epr-register-enrol-frontend) - it must be sent as-is, never
+    // substituted with the backend-generated ApplicationReference (which is a different value
+    // entirely, and null at initial-submit time regardless).
     [Fact]
-    public async Task SubmitApplicationAsync_WithApplicationReference_SendsItAsPaymentReferenceString()
+    public async Task SubmitApplicationAsync_WithPaymentReference_SendsItAsPaymentReferenceString()
     {
         var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
-        application.ApplicationReference = TestApplicationReference;
+        application.PaymentReference = "PR/PK/REP/500500";
+        application.ApplicationReference = null;
 
         var payload = await CapturedSubmitPayload(application);
 
         var reference = payload.GetProperty("paymentReference");
         reference.ValueKind.Should().Be(JsonValueKind.String);
-        reference.GetString().Should().Be(TestApplicationReference);
+        reference.GetString().Should().Be("PR/PK/REP/500500");
     }
 
     [Fact]
@@ -2082,6 +2088,9 @@ public class HttpCaseWorkingApiAdapterTests
         var application = ApplicationWithCharge(PlannedTonnageBand.Over10000, selectedSites: 1);
         application.CaseManagementWorkItemId = Guid.NewGuid();
         application.ApplicationReference = TestApplicationReference;
+        // RA-503: PaymentReference (the operator's real bank reference, persisted since the
+        // original Submit) must be resent as-is, never the backend-generated ApplicationReference.
+        application.PaymentReference = "PR/PK/REP/500500";
 
         var (adapter, handler) = CreateAdapter();
         await adapter.ResumeFromQueryAsync(
@@ -2100,7 +2109,7 @@ public class HttpCaseWorkingApiAdapterTests
 
         // £3,965 + £328 = £4,293 -> 429300 pence.
         root.GetProperty("chargeAmountPence").GetInt32().Should().Be(429_300);
-        root.GetProperty("paymentReference").GetString().Should().Be(TestApplicationReference);
+        root.GetProperty("paymentReference").GetString().Should().Be("PR/PK/REP/500500");
 
         // Siblings of sections, never entries within it: the sections dictionary is keyed by
         // section name and its projections must stay identical to BuildPayload's (RA-292 AC04).

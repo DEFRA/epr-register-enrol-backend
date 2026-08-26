@@ -282,7 +282,9 @@ public class HttpCaseWorkingApiAdapter(
             // identical to BuildPayload's (RA-292 AC04), so a pseudo-section here would break
             // that contract. The charge is a whole-application value, not a section.
             ChargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
-            PaymentReference = application.ApplicationReference,
+            // RA-503: the operator's real bank payment reference (see BuildPayload), persisted on
+            // the model since the original Submit and still available here.
+            PaymentReference = application.PaymentReference,
         };
 
         var endpoint =
@@ -560,17 +562,15 @@ public class HttpCaseWorkingApiAdapter(
             // it and drifting. Null (band unset) is dropped entirely by JsonOptions'
             // WhenWritingNull, and ManagementBe renders a blank rather than rejecting.
             chargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
-            // RA-316: this is the accreditation reference the operator sees (the legacy FE's
-            // application.accreditationReference, which resolves to ApplicationReference), sent
-            // under an explicit name so the consumer is not guessing which field to use.
-            //
-            // Always null on INITIAL submit and therefore omitted: ManagementBe generates the
-            // application reference and we only learn it from the response to this very request
-            // (see SubmitApplicationAsync, where ApplicationReference is assigned afterwards).
-            // That is intended — ManagementBe falls back to its own generated reference when the
-            // field is absent. Deliberately not substituted with RegistrationReference: a
-            // wrong-but-plausible reference on a payment screen is worse than a blank one.
-            paymentReference = application.ApplicationReference,
+            // RA-503: the operator's real, nation-specific bank payment reference (built by
+            // buildPaymentReference in epr-register-enrol-frontend, e.g. PR/PK/REP/500500) - the
+            // exact string shown to the operator on their submit-confirmation and
+            // view-payment-details pages, captured from SubmitRequest into
+            // application.PaymentReference at Submit time. Null (a caller that predates this)
+            // is dropped by JsonOptions' WhenWritingNull; ManagementBe falls back to its own
+            // generated applicationReference when the field is absent (see WorkItemService.
+            // SubmitAsync) rather than rejecting the submission.
+            paymentReference = application.PaymentReference,
             submittedBy = application.SubmittedBy is null
                 ? null
                 : new
