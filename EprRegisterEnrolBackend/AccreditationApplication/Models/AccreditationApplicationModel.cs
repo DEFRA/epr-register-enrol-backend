@@ -18,8 +18,14 @@ public class AccreditationApplicationModel
 
     // RA-503: ReEx's numeric organisation number (e.g. 500500) - the value an operator or
     // regulator should actually see, resolved fresh from ReEx immediately before submission
-    // (see Submit endpoint). Distinct from OrganisationId above, which is ReEx's own internal
-    // ObjectId and must never be surfaced to an operator or regulator (see OrganisationDto.cs).
+    // (see Submit endpoint) and used only within that same request to build the work-item
+    // payload. Distinct from OrganisationId above, which is ReEx's own internal ObjectId and
+    // must never be surfaced to an operator or regulator (see OrganisationDto.cs).
+    //
+    // [BsonIgnore], same as NotificationStatus/DueDate below: a value resolved fresh per-request
+    // must not be persisted and echoed back stale by GetById/Patch* on some later request - it
+    // would silently drift from ReEx's current truth with nothing to ever refresh it.
+    [BsonIgnore]
     public int? OrgId { get; set; }
 
     public string? OrganisationName { get; set; }
