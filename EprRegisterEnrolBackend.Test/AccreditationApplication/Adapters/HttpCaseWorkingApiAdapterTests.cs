@@ -586,11 +586,23 @@ public class HttpCaseWorkingApiAdapterTests
     // a site with no stored newness must not arrive at the regulator wearing a "new" badge.
     private static OverseasSiteModel BareSite() => new() { SiteId = 3, SiteName = "Sparse Site" };
 
+    // RA-483: what the operator's "remove" journey actually produces — the site stays in the
+    // application record, deselected, rather than being deleted.
+    private static OverseasSiteModel DeselectedSite(int siteId = 9) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteName = "Removed Site",
+            Country = "Germany",
+            Selected = false,
+        };
+
     private const string ExpectedOverseasSitesJson = """
         {
           "sites": [
             {
               "siteId": 1,
+              "selected": true,
               "orsId": "001",
               "siteName": "Overseas Recycling Co",
               "siteAddress": "1 Rue Example, Paris, 75001",
@@ -645,6 +657,7 @@ public class HttpCaseWorkingApiAdapterTests
             },
             {
               "siteId": 3,
+              "selected": true,
               "siteName": "Sparse Site",
               "operationCodes": [],
               "isEu": false,
@@ -889,6 +902,138 @@ public class HttpCaseWorkingApiAdapterTests
             .EnumerateArray()
             .Should()
             .BeEmpty();
+    }
+
+    #endregion
+
+    #region RA-483 removed (deselected) overseas sites
+
+    private static AccreditationApplicationModel ApplicationWithMixedSelection()
+    {
+        var application = CreateTestApplication();
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [FullyPopulatedSite(), DeselectedSite(), BareSite()],
+        };
+        return application;
+    }
+
+    private static AccreditationApplicationModel ApplicationWithAllSitesDeselected()
+    {
+        var application = CreateTestApplication();
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [DeselectedSite(9), DeselectedSite(10)],
+        };
+        return application;
+    }
+
+    private static IEnumerable<int> SiteIds(JsonElement section) =>
+        section
+            .GetProperty("sites")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("siteId").GetInt32());
+
+    [Fact]
+    public async Task SubmitApplicationAsync_DeselectedSite_IsExcludedFromPayload()
+    {
+        // RA-483 AC01: a removed ORS must not reach the regulator's work-item screen at all.
+        var payload = await CapturedSubmitPayload(ApplicationWithMixedSelection());
+
+        SiteIds(payload.GetProperty("overseasSites")).Should().BeEquivalentTo([1, 3]);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_DeselectedSite_IsExcludedFromSectionPayload()
+    {
+        // The resubmit-after-query projection must filter identically, or a removed site would
+        // reappear on the work item the moment the operator answered a query.
+        var sections = await CapturedResumeSections(
+            ApplicationWithMixedSelection(),
+            "overseas-reprocessing-sites"
+        );
+
+        SiteIds(sections.GetProperty("OverseasSites")).Should().BeEquivalentTo([1, 3]);
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_AllSitesDeselected_SendsEmptySiteArray()
+    {
+        // Guard on the filter's edge case: an empty array, never null and never a missing key,
+        // so ManagementBe keeps parsing the section the same way.
+        var payload = await CapturedSubmitPayload(ApplicationWithAllSitesDeselected());
+
+        var sites = payload.GetProperty("overseasSites").GetProperty("sites");
+        sites.ValueKind.Should().Be(JsonValueKind.Array);
+        sites.EnumerateArray().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_AllSitesDeselected_SendsEmptySiteArray()
+    {
+        var sections = await CapturedResumeSections(
+            ApplicationWithAllSitesDeselected(),
+            "overseas-reprocessing-sites"
+        );
+
+        var sites = sections.GetProperty("OverseasSites").GetProperty("sites");
+        sites.ValueKind.Should().Be(JsonValueKind.Array);
+        sites.EnumerateArray().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_EmitsSelectedTrueOnEverySurvivingSite()
+    {
+        // Cross-repo contract: `selected` is a JSON boolean on each element of
+        // payload.overseasSites.sites — absent or true means visible, explicit false means
+        // removed. Emitting it lets management-fe filter defensively on its own.
+        var payload = await CapturedSubmitPayload(ApplicationWithMixedSelection());
+
+        foreach (
+            var site in payload.GetProperty("overseasSites").GetProperty("sites").EnumerateArray()
+        )
+        {
+            site.TryGetProperty("selected", out var selected)
+                .Should()
+                .BeTrue("every projected site must carry the 'selected' flag");
+            selected.ValueKind.Should().Be(JsonValueKind.True);
+        }
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_EmitsSelectedTrueOnEverySurvivingSite()
+    {
+        var sections = await CapturedResumeSections(
+            ApplicationWithMixedSelection(),
+            "overseas-reprocessing-sites"
+        );
+
+        foreach (
+            var site in sections.GetProperty("OverseasSites").GetProperty("sites").EnumerateArray()
+        )
+        {
+            site.TryGetProperty("selected", out var selected)
+                .Should()
+                .BeTrue("every projected site must carry the 'selected' flag");
+            selected.ValueKind.Should().Be(JsonValueKind.True);
+        }
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_MixedSelection_MatchesSubmitPayloadByteForByte()
+    {
+        // The two projections share one helper; this pins that they stay identical under the
+        // RA-483 filter too, so a resubmit can never restore what the submit dropped.
+        var application = ApplicationWithMixedSelection();
+
+        var payload = await CapturedSubmitPayload(application);
+        var sections = await CapturedResumeSections(application, "overseas-reprocessing-sites");
+
+        Canonical(sections.GetProperty("OverseasSites").GetRawText())
+            .Should()
+            .Be(Canonical(payload.GetProperty("overseasSites").GetRawText()));
     }
 
     #endregion
