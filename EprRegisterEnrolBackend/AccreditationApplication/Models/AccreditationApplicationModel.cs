@@ -16,6 +16,14 @@ public class AccreditationApplicationModel
 
     public required string OrganisationId { get; set; }
 
+    // RA-503: ReEx's numeric organisation number (e.g. 500500) - the value an operator or
+    // regulator should actually see. Distinct from OrganisationId above, which is ReEx's own
+    // internal ObjectId and must never be surfaced to an operator or regulator (see
+    // OrganisationDto.cs). Resolved once and persisted: Submit resolves it fresh on first
+    // submission; GetById backfills it (and stores the result) for any application read
+    // before that resolution has happened, so later reads skip the ReEx round trip entirely.
+    public int? OrgId { get; set; }
+
     public string? OrganisationName { get; set; }
 
     public required int Year { get; set; }
@@ -29,7 +37,7 @@ public class AccreditationApplicationModel
     public string? CompanyRegisterAddressPostcode { get; set; }
 
     // RA-424: full formatted UK registered address, used by the frontend to show the exporter's
-    // registered office in place of the (non-existent) overseas site address on the accreditation
+    // registered office in place of the (non-existent) uk based site address on the accreditation
     // application header/landing page.
     public string? CompanyRegisteredAddress { get; set; }
 
@@ -53,6 +61,13 @@ public class AccreditationApplicationModel
     public int? SourceYear { get; set; }
 
     public string? ApplicationReference { get; set; }
+
+    // RA-503: the operator's real, nation-specific bank payment reference (buildPaymentReference
+    // in epr-register-enrol-frontend, e.g. PR/PK/REP/500500) - the exact string shown to the
+    // operator on their submit-confirmation and view-payment-details pages, captured from
+    // SubmitRequest at Submit time and forwarded to management-be so the regulator's duly-making
+    // page shows the same reference the operator was actually told to quote.
+    public string? PaymentReference { get; set; }
 
     public string? CaseManagementReference { get; set; }
 

@@ -18,12 +18,14 @@ public class StubCaseWorkingApiAdapterTests
     private static AccreditationApplicationModel CreateApplication(
         string? siteAddress = "123 High Street, London, SW1A 1AA",
         string organisationId = "12345",
+        int? orgId = null,
         int year = 2026,
         MaterialType materialType = MaterialType.Plastic
     ) =>
         new()
         {
             OrganisationId = organisationId,
+            OrgId = orgId,
             OrganisationName = "Acme Recycling Ltd",
             Year = year,
             RegistrationId = "reg-001",
@@ -39,23 +41,58 @@ public class StubCaseWorkingApiAdapterTests
     {
         var sut = BuildSut();
 
-        var result = await sut.SubmitApplicationAsync(CreateApplication(), TestContext.Current.CancellationToken);
+        var result = await sut.SubmitApplicationAsync(
+            CreateApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         result.ApplicationReference.Should().NotBeNullOrWhiteSpace();
         result.WorkItemId.Should().NotBeNull();
     }
 
+    // RA-503: the Application ID is no longer used as a bank payment reference, so the previous
+    // 18-character truncation was removed - a long OrganisationId (ReEx's internal ObjectId) must
+    // no longer even reach the reference, let alone be truncated. See the OrgId tests below.
     [Fact]
-    public async Task SubmitApplicationAsync_ReferenceIsNoLongerThan18Characters()
+    public async Task SubmitApplicationAsync_ReferenceIsNotTruncated()
     {
         var sut = BuildSut();
 
         var result = await sut.SubmitApplicationAsync(
-            CreateApplication(organisationId: "1234567890123456789"),
+            CreateApplication(organisationId: "1234567890123456789", orgId: 500500),
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Length.Should().BeLessThanOrEqualTo(18);
+        result.ApplicationReference.Should().Be("AP26EA5005001AAPL");
+    }
+
+    // RA-503: the reference must embed the operator/regulator-safe numeric OrgId, never
+    // OrganisationId (ReEx's internal ObjectId) - mirrors the real ApplicationReferenceGenerator fix.
+    [Fact]
+    public async Task SubmitApplicationAsync_ReferenceEmbedsOrgIdNotOrganisationId()
+    {
+        var sut = BuildSut();
+
+        var result = await sut.SubmitApplicationAsync(
+            CreateApplication(organisationId: "6a74a6a12b7c39b0cc15ca55", orgId: 500500),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        result.ApplicationReference.Should().Contain("500500");
+        result.ApplicationReference.Should().NotContain("6A74A6");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_NullOrgId_OmitsOrgSegmentRatherThanFailing()
+    {
+        var sut = BuildSut();
+
+        var result = await sut.SubmitApplicationAsync(
+            CreateApplication(orgId: null),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        result.ApplicationReference.Should().Be("AP26EA1AAPL");
     }
 
     [Theory]
@@ -83,7 +120,10 @@ public class StubCaseWorkingApiAdapterTests
     {
         var sut = BuildSut();
 
-        var result = await sut.SubmitApplicationAsync(CreateApplication(siteAddress: null), TestContext.Current.CancellationToken);
+        var result = await sut.SubmitApplicationAsync(
+            CreateApplication(siteAddress: null),
+            TestContext.Current.CancellationToken
+        );
 
         result.ApplicationReference.Should().Contain("EA");
     }
@@ -103,7 +143,8 @@ public class StubCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should()
+        result
+            .ApplicationReference.Should()
             .EndWith(
                 "9",
                 because: "MaterialPrefix takes the whole raw value verbatim when it's already <= 2 characters"
@@ -115,7 +156,10 @@ public class StubCaseWorkingApiAdapterTests
     {
         var sut = BuildSut();
 
-        var result = await sut.GetNotificationStatusAsync(CreateApplication(), TestContext.Current.CancellationToken);
+        var result = await sut.GetNotificationStatusAsync(
+            CreateApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();

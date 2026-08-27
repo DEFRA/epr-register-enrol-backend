@@ -3,6 +3,11 @@ using MongoDB.Bson.Serialization.Attributes;
 
 namespace EprRegisterEnrolBackend.Organisation.Models;
 
+// Local/dev/test fixture model only - backs FakeOrganisationPersistence, which StubReExApiAdapter
+// uses in place of a real ReEx call. Not on the production ReEx HTTP path (see OrganisationDto in
+// ReEx/Dtos, which the real HttpReExApiAdapter uses) and not kept in exact sync with it: e.g. OrgId
+// here is non-nullable int (vs OrganisationDto's int?) and there is no ObjectId-shaped Id field at
+// all, so this model doesn't reproduce the Id-vs-OrgId distinction at the heart of RA-503.
 public class OrganisationModel
 {
     public int OrgId { get; set; }
