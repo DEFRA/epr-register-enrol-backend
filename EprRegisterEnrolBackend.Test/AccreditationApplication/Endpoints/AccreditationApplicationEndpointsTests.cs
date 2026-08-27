@@ -6356,7 +6356,7 @@ public class AccreditationApplicationEndpointsTests
     )
     {
         // RA-368: these two states used to have no mapping arm and were silently dropped,
-        // leaving OJ pinned at 'DulyMade' while CM had already moved on.
+        // leaving the Registration & Accreditation service pinned at 'DulyMade' while the Case Management service had already moved on.
         Reset();
         var workItemId = Guid.NewGuid();
         SeedApplication(

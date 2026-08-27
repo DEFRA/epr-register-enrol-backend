@@ -253,49 +253,49 @@ public class AccreditationApplicationSectionsTests
             MaterialType = MaterialType.Plastic,
         };
 
-    // --- CmSectionKeysFor (remaining switch arms) ---
+    // --- CaseManagementSectionKeysFor (remaining switch arms) ---
 
     [Fact]
-    public void CmSectionKeysFor_BusinessPlan_ReturnsBusinessPlanKey()
+    public void CaseManagementSectionKeysFor_BusinessPlan_ReturnsBusinessPlanKey()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.BusinessPlan)
+            .CaseManagementSectionKeysFor(OperatorSection.BusinessPlan)
             .Should()
             .BeEquivalentTo(["business-plan"]);
     }
 
     [Fact]
-    public void CmSectionKeysFor_SamplingPlan_ReturnsSamplingAndInspectionPlanKey()
+    public void CaseManagementSectionKeysFor_SamplingPlan_ReturnsSamplingAndInspectionPlanKey()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.SamplingPlan)
+            .CaseManagementSectionKeysFor(OperatorSection.SamplingPlan)
             .Should()
             .BeEquivalentTo(["sampling-and-inspection-plan"]);
     }
 
     [Fact]
-    public void CmSectionKeysFor_BesEvidence_ReturnsBroadlyEquivalentStandardsKey()
+    public void CaseManagementSectionKeysFor_BesEvidence_ReturnsBroadlyEquivalentStandardsKey()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.BesEvidence)
+            .CaseManagementSectionKeysFor(OperatorSection.BesEvidence)
             .Should()
             .BeEquivalentTo(["broadly-equivalent-standards"]);
     }
 
     [Fact]
-    public void CmSectionKeysFor_OverseasSites_ReturnsOverseasReprocessingSitesKey()
+    public void CaseManagementSectionKeysFor_OverseasSites_ReturnsOverseasReprocessingSitesKey()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.OverseasSites)
+            .CaseManagementSectionKeysFor(OperatorSection.OverseasSites)
             .Should()
             .BeEquivalentTo(["overseas-reprocessing-sites"]);
     }
 
     [Fact]
-    public void CmSectionKeysFor_UnknownSection_ReturnsEmpty()
+    public void CaseManagementSectionKeysFor_UnknownSection_ReturnsEmpty()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor((OperatorSection)999)
+            .CaseManagementSectionKeysFor((OperatorSection)999)
             .Should()
             .BeEmpty();
     }

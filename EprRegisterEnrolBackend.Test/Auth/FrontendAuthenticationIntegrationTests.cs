@@ -197,7 +197,7 @@ public class ProductionFactory : WebApplicationFactory<Program>
                     new Dictionary<string, string?>
                     {
                         ["AUTH_SHARED_SECRET:FRONTEND"] = "integration-test-frontend-secret",
-                        ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-test-cm-secret",
+                        ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-test-case-management-secret",
                         ["CaseWorking:UseStub"] = "true",
                     }
                 )

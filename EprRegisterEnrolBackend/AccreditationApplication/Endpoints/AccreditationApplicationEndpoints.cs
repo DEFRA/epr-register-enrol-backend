@@ -2730,7 +2730,7 @@ public static class AccreditationApplicationEndpoints
         // Withdrawn, no later mapped push may move the application again — a withdrawn
         // application re-opening as DulyMade (or an approved one flipping to Rejected) would
         // undo the very gates the terminal statuses exist to enforce. Unmapped pushes (anything
-        // CM adds in future with no arm in the switch above) are exempt: they only update the
+        // the Case Management service adds in future with no arm in the switch above) are exempt: they only update the
         // ordering watermark below, never ApplicationStatus.
         if (mappedStatus is not null && RejectIfTerminal(application) is not null)
         {
