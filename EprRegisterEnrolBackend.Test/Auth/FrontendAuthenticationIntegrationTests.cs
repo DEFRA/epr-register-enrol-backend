@@ -1,16 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using EprRegisterEnrolBackend.Auth;
+using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
-using NSubstitute;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace EprRegisterEnrolBackend.Test.Auth;
 
@@ -20,16 +16,36 @@ namespace EprRegisterEnrolBackend.Test.Auth;
 // suite proves the gate is actually wired onto these routes (the existing endpoint tests all
 // run under AccreditationApplicationTestFactory's Development environment, where the handler's
 // own dev-mode bypass auto-authenticates every request regardless of whether the gate exists).
-public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFactory>
+//
+// Runs on the assembly's ephemeral mongod (via EphemeralMongoTestFactory): the auth gate is
+// upstream of persistence, but this factory builds the full host, so MongoIndexInitializerService
+// (and any request that clears the gate) would otherwise block on a ~30s server-selection
+// timeout with no Mongo reachable.
+public class FrontendAuthenticationIntegrationTests : IDisposable
 {
     private const string ValidSecret = "integration-test-frontend-secret";
-    private readonly ProductionFactory _factory;
+    private readonly EphemeralMongoTestFactory _factory;
     private readonly HttpClient _client;
 
-    public FrontendAuthenticationIntegrationTests(ProductionFactory factory)
+    public FrontendAuthenticationIntegrationTests(MongoIntegrationFixture fixture)
     {
-        _factory = factory;
-        _client = factory.CreateClient();
+        _factory = new EphemeralMongoTestFactory(
+            fixture,
+            "frontend_auth",
+            Environments.Production,
+            new Dictionary<string, string?>
+            {
+                ["AUTH_SHARED_SECRET:FRONTEND"] = ValidSecret,
+                ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-test-cm-secret",
+                ["CaseWorking:UseStub"] = "true",
+            });
+        _client = _factory.CreateClient();
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        _factory.Dispose();
     }
 
     [Fact]
@@ -185,36 +201,5 @@ public class FrontendAuthenticationIntegrationTests : IClassFixture<ProductionFa
                     $"route '{route.RoutePattern.RawText}' should require the Frontend scheme"
                 );
         }
-    }
-}
-
-public class ProductionFactory : WebApplicationFactory<Program>
-{
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
-    {
-        builder.UseEnvironment(Environments.Production);
-        builder.ConfigureAppConfiguration(
-            (_, config) =>
-                config.AddInMemoryCollection(
-                    new Dictionary<string, string?>
-                    {
-                        ["AUTH_SHARED_SECRET:FRONTEND"] = "integration-test-frontend-secret",
-                        ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-test-cm-secret",
-                        ["CaseWorking:UseStub"] = "true",
-                    }
-                )
-        );
-
-        // These tests exercise the auth gate, which sits upstream of any
-        // persistence. Substitute the Mongo-backed persistence so a request
-        // that clears the gate does not construct the real one — its
-        // constructor runs MongoService.EnsureIndexes synchronously, which
-        // blocks on a ~30s server-selection timeout with no Mongo reachable.
-        builder.ConfigureServices(services =>
-        {
-            services.RemoveAll<EprRegisterEnrolBackend.AccreditationApplication.Services.IAccreditationApplicationPersistence>();
-            services.AddSingleton(
-                Substitute.For<EprRegisterEnrolBackend.AccreditationApplication.Services.IAccreditationApplicationPersistence>());
-        });
     }
 }

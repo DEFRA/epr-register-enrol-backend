@@ -1,7 +1,9 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.StubPersistence.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.StubPersistence.Endpoints;
@@ -21,6 +23,15 @@ public class StubApplicationEndpointsTestFactory : WebApplicationFactory<Program
         builder.ConfigureServices(services =>
         {
             services.AddSingleton(MockPersistence);
+
+            // MongoIndexInitializerService resolves these at startup; substitute
+            // them so it does not construct the real MongoService-backed
+            // implementations (and block on a server-selection timeout) in a
+            // suite that has no Mongo.
+            services.RemoveAll<IAccreditationApplicationPersistence>();
+            services.AddSingleton(Substitute.For<IAccreditationApplicationPersistence>());
+            services.RemoveAll<IRecyclingOperationsAuditPersistence>();
+            services.AddSingleton(Substitute.For<IRecyclingOperationsAuditPersistence>());
         });
     }
 }

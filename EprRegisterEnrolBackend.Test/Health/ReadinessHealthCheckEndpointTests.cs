@@ -1,5 +1,6 @@
 using System.Net;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -14,7 +15,10 @@ namespace EprRegisterEnrolBackend.Test.Health;
 // appsettings.Development.json or exempted outright — so it proves nothing about the
 // non-Development path RequiredConfigHealthCheck actually exists for (RA-441). These
 // tests exercise that path directly with a real Production environment.
-public class ReadinessHealthCheckEndpointTests
+//
+// Runs on the assembly's ephemeral mongod: MongoIndexInitializerService builds the full
+// host, so it would otherwise block teardown on a ~30s server-selection timeout.
+public class ReadinessHealthCheckEndpointTests(MongoIntegrationFixture fixture)
 {
     private static readonly Dictionary<string, string?> CompleteConfig = new()
     {
@@ -33,7 +37,7 @@ public class ReadinessHealthCheckEndpointTests
     [Fact]
     public async Task Health_ReturnsHealthy_RegardlessOfConfig()
     {
-        await using var factory = new ProductionFactory(
+        await using var factory = new ProductionFactory(fixture,
             new Dictionary<string, string?> { ["ReExApi:BaseUrl"] = "" }
         );
         var client = factory.CreateClient();
@@ -46,7 +50,7 @@ public class ReadinessHealthCheckEndpointTests
     [Fact]
     public async Task HealthReady_ReturnsHealthy_WhenAllRequiredConfigPresent()
     {
-        await using var factory = new ProductionFactory(CompleteConfig);
+        await using var factory = new ProductionFactory(fixture,CompleteConfig);
         var client = factory.CreateClient();
 
         var response = await client.GetAsync("/health/ready", TestContext.Current.CancellationToken);
@@ -58,7 +62,7 @@ public class ReadinessHealthCheckEndpointTests
     public async Task HealthReady_ReturnsUnhealthy_WhenRequiredConfigMissing()
     {
         var incomplete = new Dictionary<string, string?>(CompleteConfig) { ["App:BaseUrl"] = "" };
-        await using var factory = new ProductionFactory(incomplete);
+        await using var factory = new ProductionFactory(fixture,incomplete);
         var client = factory.CreateClient();
 
         var response = await client.GetAsync("/health/ready", TestContext.Current.CancellationToken);
@@ -68,9 +72,13 @@ public class ReadinessHealthCheckEndpointTests
         body.Should().Contain("App__BaseUrl");
     }
 
-    private sealed class ProductionFactory(IReadOnlyDictionary<string, string?> configOverrides)
+    private sealed class ProductionFactory(
+        MongoIntegrationFixture fixture,
+        IReadOnlyDictionary<string, string?> configOverrides)
         : WebApplicationFactory<Program>
     {
+        private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("readiness");
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment(Environments.Production);
@@ -79,6 +87,8 @@ public class ReadinessHealthCheckEndpointTests
             );
             builder.ConfigureServices(services =>
             {
+                services.UseEphemeralMongoPersistence(fixture, _databaseName);
+
                 // RA-448: this file exercises RequiredConfigHealthCheck specifically, not
                 // RegulatoryNumberBackfillHealthCheck - without this, HealthReady_ReturnsHealthy
                 // would fail regardless of config, since the real backfill has no live Mongo

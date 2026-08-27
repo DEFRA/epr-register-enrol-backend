@@ -1,17 +1,28 @@
 using System.Net;
+using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
 namespace EprRegisterEnrolBackend.Test.Health;
 
-public class HealthCheckEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+// Runs on the assembly's ephemeral mongod: this builds the full host, so
+// MongoIndexInitializerService would otherwise block teardown on a ~30s
+// server-selection timeout with no Mongo reachable.
+public class HealthCheckEndpointTests : IDisposable
 {
+    private readonly EphemeralMongoTestFactory _factory;
     private readonly HttpClient _client;
 
-    public HealthCheckEndpointTests(WebApplicationFactory<Program> factory)
+    public HealthCheckEndpointTests(MongoIntegrationFixture fixture)
     {
-        _client = factory.CreateClient();
+        _factory = new EphemeralMongoTestFactory(fixture, "health");
+        _client = _factory.CreateClient();
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        _factory.Dispose();
     }
 
     [Fact]
