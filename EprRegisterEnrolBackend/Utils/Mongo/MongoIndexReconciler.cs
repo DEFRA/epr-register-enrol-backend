@@ -191,6 +191,11 @@ public static class MongoIndexReconciler
     private static bool IsDuplicateKeyError(MongoCommandException ex) =>
         ex.Code == DuplicateKeyErrorCode;
 
+    // Not guarded against a second replica reconciling the same collection at
+    // the same instant — the DropOne / CreateMany pair is not atomic. CDP's
+    // rolling single-replica deploys make that window vanishingly unlikely, and
+    // the individual-fallback path above tolerates most transient failures; a
+    // genuinely concurrent reconcile would need a distributed lock.
     private static IReadOnlyList<string> DropConflictingIndexes<T>(
         IMongoCollection<T> collection,
         IReadOnlyList<CreateIndexModel<T>> models,

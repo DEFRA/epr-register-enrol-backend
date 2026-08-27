@@ -17,10 +17,12 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // the whole backend. The try/catch means a failure here logs and is retried on
 // the next request / redeploy instead.
 //
-// The resolution runs on a pool thread wrapped in WaitAsync(stoppingToken) so a
-// shutdown while EnsureIndexes is still blocked on an unreachable Mongo tears
-// down promptly instead of holding the host open for the full server-selection
-// timeout — the WebApplicationFactory-based tests depend on this.
+// The resolution runs on a pool thread wrapped in WaitAsync(stoppingToken): on
+// shutdown the awaiting caller returns promptly instead of holding the host open
+// for the full server-selection timeout (the WebApplicationFactory-based tests
+// depend on this). The synchronous resolve on the pool thread cannot itself be
+// aborted mid-flight, so a blocked Mongo call keeps running there until it times
+// out — harmless, since nothing waits on it, but it is not truly cancellable.
 public class MongoIndexInitializerService(
     IServiceProvider serviceProvider,
     ILogger<MongoIndexInitializerService> logger
