@@ -674,12 +674,11 @@ public static class AccreditationApplicationEndpoints
         // live record that still shows up in GET /{organisationId}. Consumers must therefore
         // tolerate duplicates and apply this same newest-first rule rather than assuming
         // uniqueness.
-        // A unique partial index would be the real fix, but it is not available today:
-        // MongoService.EnsureIndexes (Utils/Mongo/MongoService.cs) builds its index models, logs
-        // that it is ensuring them, and then has the Collection.Indexes.CreateMany call commented
-        // out — so no index in this service is ever created, in any environment. A unique index
-        // added here would be silently inert: worse than none, because it would read as a
-        // guarantee that is not enforced at runtime.
+        // A unique partial index would be the real fix. MongoService.EnsureIndexes does now
+        // create the indexes each subclass defines (via MongoIndexReconciler), so one added to
+        // AccreditationApplicationPersistence.DefineIndexes would actually be enforced — but
+        // deciding the exact partial-filter shape (and reconciling it against any existing
+        // duplicates in each environment) is out of scope here and left as follow-up.
         var existing = (await persistence.GetByOrganisationAsync(organisationId))
             .Where(a =>
                 a.RegistrationId == registrationId
