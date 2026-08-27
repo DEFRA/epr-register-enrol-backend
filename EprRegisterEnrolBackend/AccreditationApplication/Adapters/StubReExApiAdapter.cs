@@ -122,8 +122,15 @@ public class StubReExApiAdapter(
                             return new OverseasSiteModel
                             {
                                 SiteId = int.TryParse(id, out var parsed) ? parsed : 900001 + i,
-                                // RA-507: mirrors HttpReExApiAdapter — id is the existing ORS id.
-                                OrsId = id,
+                                // RA-507: NOT `OrsId = id` -- unlike the real ReEx API's key
+                                // (always a genuine 3-digit ORS id, per epr-backend's own
+                                // contract), FakeOrganisationPersistence's OverseasSites entries
+                                // are 6-digit SiteId placeholders (e.g. "900001") with no such
+                                // guarantee. Feeding one straight into OrsIdGenerator as an
+                                // "existing" id made it compute a next-id past its 999 cap and
+                                // fail every AddOverseasSite call for these seeded orgs. Synthesize
+                                // a plausible, correctly-shaped 3-digit id from position instead.
+                                OrsId = (i + 1).ToString("D3"),
                                 SiteName = $"Overseas Site {i + 1} ({country})",
                                 SiteAddress = $"Address {id}",
                                 Country = country,
