@@ -2122,6 +2122,36 @@ public class HttpCaseWorkingApiAdapterTests
         sections.TryGetProperty("paymentReference", out _).Should().BeFalse();
     }
 
+    // RA-503 PR review (masante): PaymentReference is a brand-new field with no backfill for an
+    // application submitted before this deploy - such an application has ApplicationReference
+    // (populated since its original submission response) but no PaymentReference at all. Without
+    // this fallback, a resume-from-query round trip on that application would regress from
+    // sending its ApplicationReference (the pre-RA-503 behaviour) to sending nothing.
+    [Fact]
+    public async Task ResumeFromQueryAsync_NullPaymentReference_FallsBackToApplicationReference()
+    {
+        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.ApplicationReference = TestApplicationReference;
+        application.PaymentReference = null;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            application,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["prn-tonnage"],
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+        root.GetProperty("paymentReference").GetString().Should().Be(TestApplicationReference);
+    }
+
     [Fact]
     public async Task ResumeFromQueryAsync_NoTonnageBand_OmitsChargeAndStillSucceeds()
     {

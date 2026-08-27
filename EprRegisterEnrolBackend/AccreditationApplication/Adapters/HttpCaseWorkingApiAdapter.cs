@@ -283,8 +283,13 @@ public class HttpCaseWorkingApiAdapter(
             // that contract. The charge is a whole-application value, not a section.
             ChargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
             // RA-503: the operator's real bank payment reference (see BuildPayload), persisted on
-            // the model since the original Submit and still available here.
-            PaymentReference = application.PaymentReference,
+            // the model since the original Submit and still available here. Falls back to
+            // ApplicationReference (unlike at initial Submit, already populated by the time a
+            // resume-from-query round trip happens) for an application submitted before this
+            // field existed - PaymentReference is a brand-new field with no backfill, so without
+            // this fallback a pre-existing application would silently regress from sending its
+            // ApplicationReference (the old behaviour) to sending nothing at all.
+            PaymentReference = application.PaymentReference ?? application.ApplicationReference,
         };
 
         var endpoint =
