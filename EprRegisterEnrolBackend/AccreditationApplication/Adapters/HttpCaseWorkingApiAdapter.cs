@@ -472,7 +472,7 @@ public class HttpCaseWorkingApiAdapter(
         var payload = new Dictionary<string, object?>();
         var sections = sectionKeys
             .Select(key =>
-                AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section)
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section)
                     ? section
                     : (OperatorSection?)null
             )
