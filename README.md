@@ -85,17 +85,17 @@ await createAccreditationApplicationsCollection(
 
 Base path: `api/v1/accreditation-applications/{organisationId}`
 
-| Method   | Path                                               | Description                                                                       |
-| -------- | -------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `POST`   | `/{organisationId}/seed`                           | Create a new application (optionally pre-populated from prior year via ReEx stub) |
-| `GET`    | `/{organisationId}`                                | List all applications for an organisation                                         |
-| `GET`    | `/{organisationId}/{applicationId}`                | Get a single application                                                          |
-| `PATCH`  | `/{organisationId}/{applicationId}/prns`           | Update the PRNs section                                                           |
-| `PATCH`  | `/{organisationId}/{applicationId}/business-plan`  | Update the business plan section                                                  |
-| `PATCH`  | `/{organisationId}/{applicationId}/sampling-plan`  | Update the sampling plan section                                                  |
-| `POST`   | `/{organisationId}/{applicationId}/files`          | Add a file to the sampling plan                                                   |
-| `DELETE` | `/{organisationId}/{applicationId}/files/{fileId}` | Remove a file from the sampling plan                                              |
-| `POST`   | `/{organisationId}/{applicationId}/submit`         | Submit the application (requires all sections `Completed`)                        |
+| Method   | Path                                               | Description                                                                                                      |
+| -------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/{organisationId}/seed`                           | Create a new application (optionally pre-populated from prior year via ReEx stub)                                |
+| `GET`    | `/{organisationId}`                                | List all applications for an organisation                                                                        |
+| `GET`    | `/{organisationId}/{applicationId}`                | Get a single application                                                                                         |
+| `PATCH`  | `/{organisationId}/{applicationId}/prns`           | Update the PRNs section                                                                                          |
+| `PATCH`  | `/{organisationId}/{applicationId}/business-plan`  | Update the business plan section                                                                                 |
+| `PATCH`  | `/{organisationId}/{applicationId}/sampling-plan`  | Update the sampling plan section                                                                                 |
+| `POST`   | `/{organisationId}/{applicationId}/files`          | Add a file to the sampling plan                                                                                  |
+| `DELETE` | `/{organisationId}/{applicationId}/files/{fileId}` | Remove a file from the sampling plan                                                                             |
+| `POST`   | `/{organisationId}/{applicationId}/submit`         | Submit the application (requires all sections `Completed`)                                                       |
 | `POST`   | `/case-management/{workItemId}/status`             | Push a Case Management service work-item status change onto `ApplicationStatus` (Case Management service caller) |
 
 #### Seed request body

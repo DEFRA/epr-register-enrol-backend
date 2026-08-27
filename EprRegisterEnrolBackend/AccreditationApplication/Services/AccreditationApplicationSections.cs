@@ -249,7 +249,6 @@ public static class AccreditationApplicationSections
             ApplicationStatus.AwaitingDecision,
         };
 
-
     public static bool IsSectionEditable(ApplicationStatus appStatus, SectionStatus sectionStatus) =>
         !LockedStatuses.Contains(appStatus) || sectionStatus == SectionStatus.Queried;
 }
