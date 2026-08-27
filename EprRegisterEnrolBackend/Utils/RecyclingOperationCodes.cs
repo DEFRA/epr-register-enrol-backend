@@ -57,7 +57,7 @@ public static class RecyclingOperationCodes
         [MaterialType.Wood] = new HashSet<string> { "R3", "R12", "R13" },
     };
 
-    // RA-486 AC: an ORS's OperationCodes must include at least one material code (R3/R4/R5);
+    // RA-486 AC: an ORS's OperationCodes must include at least one material code - R3, R4 or R5.
     // R12/R13 are optional on the ORS. Replaces the old "R12/R13 can't be selected in isolation"
     // rule with an equivalent-in-effect but explicit mandatory-code rule now that R12/R13 no
     // longer implies an interim site is attached.
