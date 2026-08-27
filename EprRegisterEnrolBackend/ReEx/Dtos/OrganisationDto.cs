@@ -5,8 +5,23 @@ namespace EprRegisterEnrolBackend.ReEx.Dtos;
 
 public class OrganisationDto
 {
+    /// <summary>
+    /// ReEx's own document id (Mongo ObjectId shape). Internal/log use only —
+    /// never surface this to an operator or regulator. Do not confuse with
+    /// <see cref="OrgId"/> below or with <see cref="LinkedDefraOrganisationDto.OrgId"/>,
+    /// which is a third, differently-scoped identifier (see RA-503).
+    /// </summary>
     public string? Id { get; init; }
     public int SchemaVersion { get; init; }
+
+    /// <summary>
+    /// The numeric organisation number (e.g. 500500) — this is the value an
+    /// operator or regulator should actually see, and the one
+    /// RegulatoryNumberGenerator embeds into accreditation/registration
+    /// numbers. Do not confuse with <see cref="Id"/> above (internal-only
+    /// ObjectId) or with the identically-named but UUID-typed
+    /// <see cref="LinkedDefraOrganisationDto.OrgId"/> (RA-503).
+    /// </summary>
     public int? OrgId { get; init; }
     public JsonElement? FormSubmission { get; init; }
     public List<string> WasteProcessingTypes { get; init; } = [];
@@ -28,6 +43,13 @@ public class OrganisationDto
 /// </summary>
 public class LinkedDefraOrganisationDto
 {
+    /// <summary>
+    /// A Defra Customer org id (UUID), used only to authorise Defra ID
+    /// relationships — internal only, never surface this to an operator or
+    /// regulator. This is NOT the same field as <see cref="OrganisationDto.OrgId"/>
+    /// (the numeric, operator/regulator-safe organisation number) despite
+    /// sharing the property name "OrgId" — see RA-503.
+    /// </summary>
     public string? OrgId { get; init; }
 }
 

@@ -282,7 +282,14 @@ public class HttpCaseWorkingApiAdapter(
             // identical to BuildPayload's (RA-292 AC04), so a pseudo-section here would break
             // that contract. The charge is a whole-application value, not a section.
             ChargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
-            PaymentReference = application.ApplicationReference,
+            // RA-503: the operator's real bank payment reference (see BuildPayload), persisted on
+            // the model since the original Submit and still available here. Falls back to
+            // ApplicationReference (unlike at initial Submit, already populated by the time a
+            // resume-from-query round trip happens) for an application submitted before this
+            // field existed - PaymentReference is a brand-new field with no backfill, so without
+            // this fallback a pre-existing application would silently regress from sending its
+            // ApplicationReference (the old behaviour) to sending nothing at all.
+            PaymentReference = application.PaymentReference ?? application.ApplicationReference,
         };
 
         var endpoint =
@@ -548,7 +555,11 @@ public class HttpCaseWorkingApiAdapter(
             permitNumbers = application.PermitNumbers,
             wasteProcessingType = application.WasteProcessingType,
             operatorApplicationId = application.ApplicationId,
+            // RA-503: operatorOrganisationId is ReEx's internal ObjectId - kept unchanged here for
+            // any existing consumer, but it must never be treated as the operator/regulator-facing
+            // organisation number. operatorOrgNumber (below) is the new field carrying that value.
             operatorOrganisationId = application.OrganisationId,
+            operatorOrgNumber = application.OrgId,
             operatorRegistrationId = application.RegistrationId,
             operatorEmail = application.SubmittedBy?.Email,
             // RA-316: the charge the operator was shown on the payment-details page, echoed so
@@ -556,17 +567,15 @@ public class HttpCaseWorkingApiAdapter(
             // it and drifting. Null (band unset) is dropped entirely by JsonOptions'
             // WhenWritingNull, and ManagementBe renders a blank rather than rejecting.
             chargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
-            // RA-316: this is the accreditation reference the operator sees (the legacy FE's
-            // application.accreditationReference, which resolves to ApplicationReference), sent
-            // under an explicit name so the consumer is not guessing which field to use.
-            //
-            // Always null on INITIAL submit and therefore omitted: ManagementBe generates the
-            // application reference and we only learn it from the response to this very request
-            // (see SubmitApplicationAsync, where ApplicationReference is assigned afterwards).
-            // That is intended — ManagementBe falls back to its own generated reference when the
-            // field is absent. Deliberately not substituted with RegistrationReference: a
-            // wrong-but-plausible reference on a payment screen is worse than a blank one.
-            paymentReference = application.ApplicationReference,
+            // RA-503: the operator's real, nation-specific bank payment reference (built by
+            // buildPaymentReference in epr-register-enrol-frontend, e.g. PR/PK/REP/500500) - the
+            // exact string shown to the operator on their submit-confirmation and
+            // view-payment-details pages, captured from SubmitRequest into
+            // application.PaymentReference at Submit time. Null (a caller that predates this)
+            // is dropped by JsonOptions' WhenWritingNull; ManagementBe falls back to its own
+            // generated applicationReference when the field is absent (see WorkItemService.
+            // SubmitAsync) rather than rejecting the submission.
+            paymentReference = application.PaymentReference,
             submittedBy = application.SubmittedBy is null
                 ? null
                 : new
@@ -628,13 +637,22 @@ public class HttpCaseWorkingApiAdapter(
     // flags behind the "new" markers, and the nested interim site. Every field added here is
     // optional on the consumer side — work items created before RA-292 simply do not have them,
     // and null-valued fields are dropped entirely by JsonOptions' WhenWritingNull.
+    //
+    // RA-483 AC01: the operator's "remove" journey deselects rather than deletes, so a removed ORS
+    // stays in the application record with Selected = false. Filtering it out here is what keeps
+    // it off the regulator's work-item screen. `selected` is still projected onto the sites that
+    // do survive the filter so consumers can defend independently — the cross-repo contract is
+    // "absent or true => visible, explicit false => removed", so this only ever emits true today
+    // but pins the field name for management-fe and management-be.
     private static object BuildOverseasSitesSection(AccreditationApplicationModel application) =>
         new
         {
             sites = (application.OverseasSites?.Sites ?? [])
+                .Where(s => s.Selected)
                 .Select(s => new
                 {
                     siteId = s.SiteId,
+                    selected = s.Selected,
                     orsId = s.OrsId,
                     siteName = s.SiteName,
                     siteAddress = s.SiteAddress,

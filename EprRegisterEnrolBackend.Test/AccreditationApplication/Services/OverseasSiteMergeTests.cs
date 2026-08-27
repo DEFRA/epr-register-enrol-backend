@@ -108,7 +108,11 @@ public class OverseasSiteMergeTests
     [Fact]
     public void Merge_NullPersistedList_TreatsEverySiteAsNew()
     {
-        OverseasSiteMerge.Merge(null, [Site(1)]).Should().ContainSingle().Which.IsNewSite.Should()
+        OverseasSiteMerge
+            .Merge(null, [Site(1)])
+            .Should()
+            .ContainSingle()
+            .Which.IsNewSite.Should()
             .BeTrue();
     }
 
@@ -297,7 +301,7 @@ public class OverseasSiteMergeTests
         OverseasSiteMerge.Merge([Site(1)], [Site(99)])[0].PreviousSites.Should().BeEmpty();
     }
 
-    // --- OrsId: the epr-2uxy remediation discriminator ---
+    // --- OrsId: server-owned, protected across merge ---
 
     [Fact]
     public void Merge_ClientOmitsOrsId_PreservesThePersistedOne()
@@ -323,25 +327,26 @@ public class OverseasSiteMergeTests
     }
 
     [Fact]
-    public void Merge_ReExSourcedSiteHasNoOrsId_ClientCannotInventOne()
+    public void Merge_KnownSiteWithNullPersistedOrsId_ClientCannotInventOne()
     {
-        // The load-bearing case. A null OrsId is what marks a site as ReEx-sourced, which is how
-        // the epr-2uxy remediation tells a defaulted isNewSite=true from a genuine one. If a
-        // client could supply one, an affected site would stop looking affected.
-        var reExSourced = Site(1);
-        reExSourced.OrsId.Should().BeNull("precondition: ReEx never sets OrsId");
+        // RA-507: a null persisted OrsId happens for legacy documents saved before
+        // HttpReExApiAdapter started populating it, or for a site whose OrsId genuinely wasn't
+        // known yet. Either way it's still the persisted value, and the client must not be able
+        // to override it via PATCH.
+        var persisted = Site(1);
+        persisted.OrsId.Should().BeNull("precondition: no OrsId persisted for this site");
 
         var incoming = Site(1);
         incoming.OrsId = "001";
 
-        OverseasSiteMerge.Merge([reExSourced], [incoming])[0].OrsId.Should().BeNull();
+        OverseasSiteMerge.Merge([persisted], [incoming])[0].OrsId.Should().BeNull();
     }
 
     [Fact]
     public void Merge_UnknownSite_KeepsTheSuppliedOrsId()
     {
-        // No persisted value to restore. Forcing null would destroy data and, worse, make the site
-        // masquerade as ReEx-sourced under the remediation discriminator.
+        // No persisted value to restore. Forcing null would destroy data the client legitimately
+        // sent for a site the server has never seen.
         var incoming = Site(99);
         incoming.OrsId = "007";
 
@@ -372,7 +377,8 @@ public class OverseasSiteMergeTests
         var incoming = Site(1);
         incoming.RegisteredNowAccredited.Should().BeFalse("precondition: the omitted-key state");
 
-        OverseasSiteMerge.Merge([persisted], [incoming])[0]
+        OverseasSiteMerge
+            .Merge([persisted], [incoming])[0]
             .RegisteredNowAccredited.Should()
             .BeTrue();
     }
@@ -383,7 +389,8 @@ public class OverseasSiteMergeTests
         var incoming = Site(1);
         incoming.RegisteredNowAccredited = true;
 
-        OverseasSiteMerge.Merge([Site(1)], [incoming])[0]
+        OverseasSiteMerge
+            .Merge([Site(1)], [incoming])[0]
             .RegisteredNowAccredited.Should()
             .BeFalse();
     }
@@ -396,7 +403,8 @@ public class OverseasSiteMergeTests
         var incoming = Site(99);
         incoming.RegisteredNowAccredited = true;
 
-        OverseasSiteMerge.Merge([Site(1)], [incoming])[0]
+        OverseasSiteMerge
+            .Merge([Site(1)], [incoming])[0]
             .RegisteredNowAccredited.Should()
             .BeFalse();
     }

@@ -22,6 +22,7 @@ public class HttpCaseWorkingApiAdapterTests
         return new AccreditationApplicationModel
         {
             OrganisationId = "12345",
+            OrgId = 500500,
             OrganisationName = "Acme Recycling Ltd",
             Year = 2026,
             RegistrationId = "reg-001",
@@ -96,7 +97,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_Success_ReturnsApplicationReferenceFromManagementBeResponse()
     {
         var (adapter, _) = CreateAdapter();
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        var result = await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
         result.ApplicationReference.Should().Be(TestApplicationReference);
     }
 
@@ -126,7 +130,10 @@ public class HttpCaseWorkingApiAdapterTests
             EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        var result = await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         result.WorkItemId.Should().Be(expectedId);
     }
@@ -261,7 +268,10 @@ public class HttpCaseWorkingApiAdapterTests
             EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
         );
 
-        var result = await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        var result = await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         result.ApplicationReference.Should().Be(TestApplicationReference);
         result.WorkItemId.Should().BeNull();
@@ -271,7 +281,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_MapsPayloadCorrectly()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         handler.CapturedRequestBody.Should().NotBeNullOrEmpty();
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
@@ -287,6 +300,7 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("previousAccreditationYear").GetInt32().Should().Be(2025);
         payload.GetProperty("complianceIssuesReported").GetInt32().Should().Be(0);
         payload.GetProperty("operatorOrganisationId").GetString().Should().Be("12345");
+        payload.GetProperty("operatorOrgNumber").GetInt32().Should().Be(500500);
         payload.GetProperty("operatorRegistrationId").GetString().Should().Be("reg-001");
         payload.GetProperty("operatorEmail").GetString().Should().Be("jane@example.com");
         payload.GetProperty("siteAddressPostcode").GetString().Should().Be("SW1A 1AA");
@@ -318,6 +332,23 @@ public class HttpCaseWorkingApiAdapterTests
             .GetString()
             .Should()
             .Be("Human Infrastructure Architect");
+    }
+
+    // RA-503: OrgId is resolved fresh from ReEx immediately before submission (see the Submit
+    // endpoint) and can be null on a lookup failure - the payload must omit operatorOrgNumber
+    // rather than send a fabricated value, same as every other nullable field here.
+    [Fact]
+    public async Task SubmitApplicationAsync_NullOrgId_OmitsOperatorOrgNumberFromPayload()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var application = CreateTestApplication();
+        application.OrgId = null;
+
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
+        var payload = doc.RootElement.GetProperty("payload");
+        payload.TryGetProperty("operatorOrgNumber", out _).Should().BeFalse();
     }
 
     // RA-480
@@ -390,7 +421,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_NonGlassMaterial_OmitsGlassRecyclingProcessFromPayload()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var payload = doc.RootElement.GetProperty("payload");
@@ -553,11 +587,23 @@ public class HttpCaseWorkingApiAdapterTests
     // a site with no stored newness must not arrive at the regulator wearing a "new" badge.
     private static OverseasSiteModel BareSite() => new() { SiteId = 3, SiteName = "Sparse Site" };
 
+    // RA-483: what the operator's "remove" journey actually produces — the site stays in the
+    // application record, deselected, rather than being deleted.
+    private static OverseasSiteModel DeselectedSite(int siteId = 9) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteName = "Removed Site",
+            Country = "Germany",
+            Selected = false,
+        };
+
     private const string ExpectedOverseasSitesJson = """
         {
           "sites": [
             {
               "siteId": 1,
+              "selected": true,
               "orsId": "001",
               "siteName": "Overseas Recycling Co",
               "siteAddress": "1 Rue Example, Paris, 75001",
@@ -613,6 +659,7 @@ public class HttpCaseWorkingApiAdapterTests
             },
             {
               "siteId": 3,
+              "selected": true,
               "siteName": "Sparse Site",
               "operationCodes": [],
               "isEu": false,
@@ -719,7 +766,9 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var payload = await CapturedSubmitPayload(ApplicationWithRa292Data());
 
-        Canonical(payload.GetProperty("prns").GetRawText()).Should().Be(Canonical(ExpectedPrnsJson));
+        Canonical(payload.GetProperty("prns").GetRawText())
+            .Should()
+            .Be(Canonical(ExpectedPrnsJson));
     }
 
     [Fact]
@@ -746,7 +795,9 @@ public class HttpCaseWorkingApiAdapterTests
             "authority-to-issue"
         );
 
-        Canonical(sections.GetProperty("Prns").GetRawText()).Should().Be(Canonical(ExpectedPrnsJson));
+        Canonical(sections.GetProperty("Prns").GetRawText())
+            .Should()
+            .Be(Canonical(ExpectedPrnsJson));
     }
 
     [Theory]
@@ -857,11 +908,146 @@ public class HttpCaseWorkingApiAdapterTests
 
     #endregion
 
+    #region RA-483 removed (deselected) overseas sites
+
+    private static AccreditationApplicationModel ApplicationWithMixedSelection()
+    {
+        var application = CreateTestApplication();
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [FullyPopulatedSite(), DeselectedSite(), BareSite()],
+        };
+        return application;
+    }
+
+    private static AccreditationApplicationModel ApplicationWithAllSitesDeselected()
+    {
+        var application = CreateTestApplication();
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [DeselectedSite(9), DeselectedSite(10)],
+        };
+        return application;
+    }
+
+    private static IEnumerable<int> SiteIds(JsonElement section) =>
+        section
+            .GetProperty("sites")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("siteId").GetInt32());
+
+    [Fact]
+    public async Task SubmitApplicationAsync_DeselectedSite_IsExcludedFromPayload()
+    {
+        // RA-483 AC01: a removed ORS must not reach the regulator's work-item screen at all.
+        var payload = await CapturedSubmitPayload(ApplicationWithMixedSelection());
+
+        SiteIds(payload.GetProperty("overseasSites")).Should().BeEquivalentTo([1, 3]);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_DeselectedSite_IsExcludedFromSectionPayload()
+    {
+        // The resubmit-after-query projection must filter identically, or a removed site would
+        // reappear on the work item the moment the operator answered a query.
+        var sections = await CapturedResumeSections(
+            ApplicationWithMixedSelection(),
+            "overseas-reprocessing-sites"
+        );
+
+        SiteIds(sections.GetProperty("OverseasSites")).Should().BeEquivalentTo([1, 3]);
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_AllSitesDeselected_SendsEmptySiteArray()
+    {
+        // Guard on the filter's edge case: an empty array, never null and never a missing key,
+        // so ManagementBe keeps parsing the section the same way.
+        var payload = await CapturedSubmitPayload(ApplicationWithAllSitesDeselected());
+
+        var sites = payload.GetProperty("overseasSites").GetProperty("sites");
+        sites.ValueKind.Should().Be(JsonValueKind.Array);
+        sites.EnumerateArray().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_AllSitesDeselected_SendsEmptySiteArray()
+    {
+        var sections = await CapturedResumeSections(
+            ApplicationWithAllSitesDeselected(),
+            "overseas-reprocessing-sites"
+        );
+
+        var sites = sections.GetProperty("OverseasSites").GetProperty("sites");
+        sites.ValueKind.Should().Be(JsonValueKind.Array);
+        sites.EnumerateArray().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_EmitsSelectedTrueOnEverySurvivingSite()
+    {
+        // Cross-repo contract: `selected` is a JSON boolean on each element of
+        // payload.overseasSites.sites — absent or true means visible, explicit false means
+        // removed. Emitting it lets management-fe filter defensively on its own.
+        var payload = await CapturedSubmitPayload(ApplicationWithMixedSelection());
+
+        foreach (
+            var site in payload.GetProperty("overseasSites").GetProperty("sites").EnumerateArray()
+        )
+        {
+            site.TryGetProperty("selected", out var selected)
+                .Should()
+                .BeTrue("every projected site must carry the 'selected' flag");
+            selected.ValueKind.Should().Be(JsonValueKind.True);
+        }
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_EmitsSelectedTrueOnEverySurvivingSite()
+    {
+        var sections = await CapturedResumeSections(
+            ApplicationWithMixedSelection(),
+            "overseas-reprocessing-sites"
+        );
+
+        foreach (
+            var site in sections.GetProperty("OverseasSites").GetProperty("sites").EnumerateArray()
+        )
+        {
+            site.TryGetProperty("selected", out var selected)
+                .Should()
+                .BeTrue("every projected site must carry the 'selected' flag");
+            selected.ValueKind.Should().Be(JsonValueKind.True);
+        }
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_MixedSelection_MatchesSubmitPayloadByteForByte()
+    {
+        // The two projections share one helper; this pins that they stay identical under the
+        // RA-483 filter too, so a resubmit can never restore what the submit dropped.
+        var application = ApplicationWithMixedSelection();
+
+        var payload = await CapturedSubmitPayload(application);
+        var sections = await CapturedResumeSections(application, "overseas-reprocessing-sites");
+
+        Canonical(sections.GetProperty("OverseasSites").GetRawText())
+            .Should()
+            .Be(Canonical(payload.GetProperty("overseasSites").GetRawText()));
+    }
+
+    #endregion
+
     [Fact]
     public async Task SubmitApplicationAsync_SetsAuthHeaders()
     {
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         handler.CapturedRequest.Should().NotBeNull();
         var request = handler.CapturedRequest!;
@@ -913,7 +1099,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_WithSharedSecret_SetsHmacHeaders()
     {
         var (adapter, handler) = CreateAdapter(sharedSecret: "test-secret-key");
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var request = handler.CapturedRequest!;
         request.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
@@ -932,7 +1121,10 @@ public class HttpCaseWorkingApiAdapterTests
     {
         const string secret = "test-secret-key";
         var (adapter, handler) = CreateAdapter(sharedSecret: secret);
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var request = handler.CapturedRequest!;
         var timestamp = request.Headers.GetValues("x-cdp-auth-timestamp").Single();
@@ -955,7 +1147,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_WithoutSharedSecret_DoesNotSetHmacHeaders()
     {
         var (adapter, handler) = CreateAdapter(sharedSecret: null);
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var request = handler.CapturedRequest!;
         request.Headers.Contains("x-cdp-auth-signature").Should().BeFalse();
@@ -993,7 +1188,10 @@ public class HttpCaseWorkingApiAdapterTests
         // sends, so the backend must not send one at all — sending a value it knows will be
         // silently discarded is misleading about where the reference actually comes from.
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         doc.RootElement.TryGetProperty("applicationReference", out _).Should().BeFalse();
@@ -1029,7 +1227,10 @@ public class HttpCaseWorkingApiAdapterTests
     public async Task SubmitApplicationAsync_PostsToCorrectUrl()
     {
         var (adapter, handler) = CreateAdapter(url: "http://my-mgmt-be:9090");
-        await adapter.SubmitApplicationAsync(CreateTestApplication(), TestContext.Current.CancellationToken);
+        await adapter.SubmitApplicationAsync(
+            CreateTestApplication(),
+            TestContext.Current.CancellationToken
+        );
 
         handler
             .CapturedRequest!.RequestUri!.ToString()
@@ -1078,7 +1279,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = null;
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1120,7 +1324,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().Be("sent");
         handler
@@ -1152,7 +1359,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.SlaDueDate.Should().Be(slaDueDate);
     }
@@ -1175,7 +1385,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1197,7 +1410,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1210,7 +1426,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1251,7 +1470,10 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.GetNotificationStatusAsync(app, TestContext.Current.CancellationToken);
+        var result = await adapter.GetNotificationStatusAsync(
+            app,
+            TestContext.Current.CancellationToken
+        );
 
         result.NotificationStatus.Should().BeNull();
         result.SlaDueDate.Should().BeNull();
@@ -1666,7 +1888,14 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = null;
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
+        await adapter.NotifySiteAddedAsync(
+            app,
+            "ors",
+            "001",
+            null,
+            true,
+            TestContext.Current.CancellationToken
+        );
 
         handler.CapturedRequest.Should().BeNull();
     }
@@ -1679,7 +1908,14 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
+        await adapter.NotifySiteAddedAsync(
+            app,
+            "ors",
+            "001",
+            null,
+            true,
+            TestContext.Current.CancellationToken
+        );
 
         handler
             .CapturedRequest!.RequestUri!.ToString()
@@ -1703,7 +1939,14 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = workItemId;
 
-        await adapter.NotifySiteAddedAsync(app, "interim", "001", "SN-0002", true, TestContext.Current.CancellationToken);
+        await adapter.NotifySiteAddedAsync(
+            app,
+            "interim",
+            "001",
+            "SN-0002",
+            true,
+            TestContext.Current.CancellationToken
+        );
 
         var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
         var root = doc.RootElement;
@@ -1721,7 +1964,14 @@ public class HttpCaseWorkingApiAdapterTests
         app.SubmittedBy = null;
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true, TestContext.Current.CancellationToken);
+        await adapter.NotifySiteAddedAsync(
+            app,
+            "ors",
+            "001",
+            null,
+            true,
+            TestContext.Current.CancellationToken
+        );
 
         var request = handler.CapturedRequest!;
         request.Headers.GetValues("x-cdp-user-id").Should().ContainSingle("12345");
@@ -1927,7 +2177,10 @@ public class HttpCaseWorkingApiAdapterTests
         // The chosen missing-band behaviour: omit the field, never throw. The submission itself
         // must still succeed — a display-only field must not be able to block accreditation.
         var (adapter, handler) = CreateAdapter();
-        var result = await adapter.SubmitApplicationAsync(ApplicationWithCharge(null, 2), TestContext.Current.CancellationToken);
+        var result = await adapter.SubmitApplicationAsync(
+            ApplicationWithCharge(null, 2),
+            TestContext.Current.CancellationToken
+        );
 
         result.ApplicationReference.Should().Be(TestApplicationReference);
 
@@ -1941,13 +2194,14 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_InitialSubmit_OmitsPaymentReferenceBecauseItDoesNotExistYet()
+    public async Task SubmitApplicationAsync_NoPaymentReferenceSuppliedByOperator_OmitsIt()
     {
-        // ManagementBe generates the application reference and we only learn it from the response
-        // to this very request, so there is genuinely nothing to send on create. It must be
-        // ABSENT rather than an empty string or a stand-in such as registrationReference.
+        // RA-503: PaymentReference is captured from SubmitRequest (the operator's real,
+        // frontend-computed bank reference) - a caller that predates this sends none, and it
+        // must be ABSENT rather than an empty string or a stand-in such as ApplicationReference
+        // or registrationReference.
         var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
-        application.ApplicationReference = null;
+        application.PaymentReference = null;
 
         var payload = await CapturedSubmitPayload(application);
 
@@ -1955,17 +2209,22 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("registrationNumber").GetString().Should().Be("EPR-100023");
     }
 
+    // RA-503: PaymentReference is the operator's real, nation-specific bank reference
+    // (buildPaymentReference in epr-register-enrol-frontend) - it must be sent as-is, never
+    // substituted with the backend-generated ApplicationReference (which is a different value
+    // entirely, and null at initial-submit time regardless).
     [Fact]
-    public async Task SubmitApplicationAsync_WithApplicationReference_SendsItAsPaymentReferenceString()
+    public async Task SubmitApplicationAsync_WithPaymentReference_SendsItAsPaymentReferenceString()
     {
         var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
-        application.ApplicationReference = TestApplicationReference;
+        application.PaymentReference = "PR/PK/REP/500500";
+        application.ApplicationReference = null;
 
         var payload = await CapturedSubmitPayload(application);
 
         var reference = payload.GetProperty("paymentReference");
         reference.ValueKind.Should().Be(JsonValueKind.String);
-        reference.GetString().Should().Be(TestApplicationReference);
+        reference.GetString().Should().Be("PR/PK/REP/500500");
     }
 
     [Fact]
@@ -1976,6 +2235,9 @@ public class HttpCaseWorkingApiAdapterTests
         var application = ApplicationWithCharge(PlannedTonnageBand.Over10000, selectedSites: 1);
         application.CaseManagementWorkItemId = Guid.NewGuid();
         application.ApplicationReference = TestApplicationReference;
+        // RA-503: PaymentReference (the operator's real bank reference, persisted since the
+        // original Submit) must be resent as-is, never the backend-generated ApplicationReference.
+        application.PaymentReference = "PR/PK/REP/500500";
 
         var (adapter, handler) = CreateAdapter();
         await adapter.ResumeFromQueryAsync(
@@ -1994,7 +2256,7 @@ public class HttpCaseWorkingApiAdapterTests
 
         // £3,965 + £328 = £4,293 -> 429300 pence.
         root.GetProperty("chargeAmountPence").GetInt32().Should().Be(429_300);
-        root.GetProperty("paymentReference").GetString().Should().Be(TestApplicationReference);
+        root.GetProperty("paymentReference").GetString().Should().Be("PR/PK/REP/500500");
 
         // Siblings of sections, never entries within it: the sections dictionary is keyed by
         // section name and its projections must stay identical to BuildPayload's (RA-292 AC04).
@@ -2005,6 +2267,36 @@ public class HttpCaseWorkingApiAdapterTests
             .BeTrue("otherwise the absence assertions below would pass vacuously");
         sections.TryGetProperty("chargeAmountPence", out _).Should().BeFalse();
         sections.TryGetProperty("paymentReference", out _).Should().BeFalse();
+    }
+
+    // RA-503 PR review (masante): PaymentReference is a brand-new field with no backfill for an
+    // application submitted before this deploy - such an application has ApplicationReference
+    // (populated since its original submission response) but no PaymentReference at all. Without
+    // this fallback, a resume-from-query round trip on that application would regress from
+    // sending its ApplicationReference (the pre-RA-503 behaviour) to sending nothing.
+    [Fact]
+    public async Task ResumeFromQueryAsync_NullPaymentReference_FallsBackToApplicationReference()
+    {
+        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        application.ApplicationReference = TestApplicationReference;
+        application.PaymentReference = null;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            application,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["prn-tonnage"],
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+        root.GetProperty("paymentReference").GetString().Should().Be(TestApplicationReference);
     }
 
     [Fact]

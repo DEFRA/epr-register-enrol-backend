@@ -186,6 +186,28 @@ public static class AccreditationApplicationEndpoints
             : null;
 
     /// <summary>
+    /// RA-475/RA-503: the ReEx lookup shared by every caller that needs the numeric
+    /// organisation id (<c>OrganisationDto.OrgId</c>) behind a ReEx organisation id
+    /// (<c>organisationId</c>, a UUID). Returns null on any lookup failure/absence -
+    /// callers that have a fallback value of their own (see <see cref="ResolveOrgIdAsync"/>)
+    /// apply it on top of this; <see cref="Submit"/> has none, so null propagates
+    /// straight through to <c>AccreditationApplicationModel.OrgId</c>.
+    /// </summary>
+    private static async Task<int?> ResolveOrgNumberFromReExAsync(
+        string organisationId,
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
+    )
+    {
+        var reExResult = await reExAdapter.GetOrganisationNumberAsync(
+            organisationId,
+            cancellationToken
+        );
+
+        return reExResult is { IsSuccess: true, Value: { } orgNumber } ? orgNumber : null;
+    }
+
+    /// <summary>
     /// RA-475: resolve the numeric organisation id the <c>{OrgId:D6}</c> segment
     /// of a regulatory number is built from.
     ///
@@ -213,12 +235,12 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var reExResult = await reExAdapter.GetOrganisationNumberAsync(
+        var orgNumber = await ResolveOrgNumberFromReExAsync(
             organisationId,
+            reExAdapter,
             cancellationToken
         );
-
-        return reExResult is { IsSuccess: true, Value: { } orgNumber } ? orgNumber : request.OrgId;
+        return orgNumber ?? request.OrgId;
     }
 
     // RA-448 AC1/AC5/AC6/AC7/AC9. Nation and Year stay caller-supplied (see
@@ -628,12 +650,11 @@ public static class AccreditationApplicationEndpoints
         // live record that still shows up in GET /{organisationId}. Consumers must therefore
         // tolerate duplicates and apply this same newest-first rule rather than assuming
         // uniqueness.
-        // A unique partial index would be the real fix, but it is not available today:
-        // MongoService.EnsureIndexes (Utils/Mongo/MongoService.cs) builds its index models, logs
-        // that it is ensuring them, and then has the Collection.Indexes.CreateMany call commented
-        // out — so no index in this service is ever created, in any environment. A unique index
-        // added here would be silently inert: worse than none, because it would read as a
-        // guarantee that is not enforced at runtime.
+        // A unique partial index would be the real fix. MongoService.EnsureIndexes does now
+        // create the indexes each subclass defines (via MongoIndexReconciler), so one added to
+        // AccreditationApplicationPersistence.DefineIndexes would actually be enforced — but
+        // deciding the exact partial-filter shape (and reconciling it against any existing
+        // duplicates in each environment) is out of scope here and left as follow-up.
         var existing = (await persistence.GetByOrganisationAsync(organisationId))
             .Where(a =>
                 a.RegistrationId == registrationId
@@ -758,6 +779,7 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         IAccreditationApplicationPersistence persistence,
         ICaseWorkingApiAdapter caseWorkingAdapter,
+        IReExApiAdapter reExAdapter,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
@@ -765,6 +787,26 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        // RA-503: backfill OrgId (ReEx's numeric organisation number) for any application read
+        // before Submit's own resolution ran - older applications, or ones that never reached
+        // Submit yet. Resolved once and persisted (application reassigned to the updated
+        // document on success) so later reads skip the ReEx round trip entirely; a lookup
+        // failure leaves OrgId null and is not persisted, so the next read retries rather than
+        // permanently caching a miss.
+        if (application.OrgId is null)
+        {
+            var orgNumber = await ResolveOrgNumberFromReExAsync(
+                organisationId,
+                reExAdapter,
+                cancellationToken
+            );
+            if (orgNumber is not null)
+            {
+                application.OrgId = orgNumber;
+                application = await persistence.UpdateAsync(application) ?? application;
+            }
+        }
 
         // Skip the round-trip entirely when there is nothing to look up (e.g. older
         // applications submitted before the work-item id was persisted, or applications
@@ -1081,8 +1123,8 @@ public static class AccreditationApplicationEndpoints
             );
 
         if (
-            RecomputeOverseasSitesSectionStatus(application.OverseasSites, request.SectionStatus)
-            is { } statusError
+            RecomputeOverseasSitesSectionStatus(application.OverseasSites, request.SectionStatus) is
+            { } statusError
         )
             return statusError;
 
@@ -2008,21 +2050,33 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(updated);
     }
 
+    // RA-503: bundles Submit's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning
+    // as RegulatoryNumberServices/RecyclingOperationsServices above. A positional record, not
+    // bare `{ get; init; }` auto-properties, for the same S3459/S1144 reason given there.
+    private sealed record SubmitServices(
+        IAccreditationApplicationPersistence Persistence,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IReExApiAdapter ReExAdapter,
+        IValidator<SubmitRequest> Validator,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> Submit(
         string organisationId,
         string applicationId,
         SubmitRequest request,
-        IAccreditationApplicationPersistence persistence,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        IValidator<SubmitRequest> validator,
-        CancellationToken cancellationToken
+        [AsParameters] SubmitServices services
     )
     {
-        var validation = await validator.ValidateAsync(request, cancellationToken);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
 
@@ -2065,6 +2119,9 @@ public static class AccreditationApplicationEndpoints
             JobTitle = request.JobTitle,
             Email = request.Email,
         };
+        // RA-503: the operator's real bank payment reference, as shown on their own
+        // submit-confirmation/view-payment-details pages - see BuildPayload.
+        application.PaymentReference = request.PaymentReference;
 
         // Version 1 for every section that exists on this application — only OverseasSites/
         // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.
@@ -2098,13 +2155,24 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
+        // RA-503: resolve ReEx's numeric OrgId (e.g. 500500) fresh, immediately before submission,
+        // so the work-item payload carries the operator/regulator-safe organisation number rather
+        // than the internal ObjectId in OrganisationId. Unlike ResolveOrgIdAsync's callers, Submit
+        // has no caller-supplied fallback value to apply - a lookup failure leaves OrgId null
+        // rather than blocking submission.
+        application.OrgId = await ResolveOrgNumberFromReExAsync(
+            organisationId,
+            services.ReExAdapter,
+            services.CancellationToken
+        );
+
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
         CaseWorkingSubmissionResult submissionResult;
         try
         {
-            submissionResult = await caseWorkingAdapter.SubmitApplicationAsync(
+            submissionResult = await services.CaseWorkingAdapter.SubmitApplicationAsync(
                 application,
-                cancellationToken
+                services.CancellationToken
             );
         }
         catch (CaseWorkingApiTimeoutException)
@@ -2124,7 +2192,7 @@ public static class AccreditationApplicationEndpoints
         application.ApplicationReference = submissionResult.ApplicationReference;
         application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to submit accreditation application.")
             : Results.Ok(

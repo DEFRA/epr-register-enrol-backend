@@ -1,8 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -13,7 +11,11 @@ namespace EprRegisterEnrolBackend.Test.Config;
 // convention — flat UPPER_SNAKE_CASE, not the nested CaseManagementAuth__*
 // form ExpectedClientId uses), rather than CaseManagementAuth:SharedSecret.
 // See Program.cs and CaseManagementAuthConfig.cs.
-public class CaseManagementAuthConfigBindingTests
+//
+// Runs on the assembly's ephemeral mongod: accessing factory.Services starts the
+// host, so MongoIndexInitializerService would otherwise block teardown on a ~30s
+// server-selection timeout.
+public class CaseManagementAuthConfigBindingTests(MongoIntegrationFixture fixture)
 {
     [Fact]
     public async Task SharedSecret_BindsFromAuthSharedSecretManagementBeConfigKey()
@@ -22,7 +24,10 @@ public class CaseManagementAuthConfigBindingTests
         // ClientSecrets_bind_from_real_double_underscore_environment_variable
         // (below) proves the real, double-underscore-named env var reaches
         // this same config key via EnvironmentVariablesConfigurationProvider.
-        await using var factory = new BindingTestFactory(
+        await using var factory = new EphemeralMongoTestFactory(
+            fixture,
+            "casemgmt_cfg",
+            "Development",
             new Dictionary<string, string?>
             {
                 ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "test-secret",
@@ -47,7 +52,10 @@ public class CaseManagementAuthConfigBindingTests
         // hasn't migrated their secret's env var name yet would be silently
         // unsigned (empty SharedSecret) rather than getting a clear signal
         // that the old name no longer works.
-        await using var factory = new BindingTestFactory(
+        await using var factory = new EphemeralMongoTestFactory(
+            fixture,
+            "casemgmt_cfg",
+            "Development",
             new Dictionary<string, string?>
             {
                 ["CaseManagementAuth:SharedSecret"] = "should-not-be-used",
@@ -60,18 +68,6 @@ public class CaseManagementAuthConfigBindingTests
             .Value;
 
         config.SharedSecret.Should().BeNullOrEmpty();
-    }
-
-    private sealed class BindingTestFactory(IReadOnlyDictionary<string, string?> configOverrides)
-        : WebApplicationFactory<Program>
-    {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Development");
-            builder.ConfigureAppConfiguration(
-                (_, config) => config.AddInMemoryCollection(configOverrides)
-            );
-        }
     }
 }
 
@@ -93,7 +89,7 @@ public sealed class CaseManagementAuthEnvVarMutationCollection
 // cannot prove the real env var actually binds. This sets and reads a real
 // process environment variable to prove it does.
 [Collection(CaseManagementAuthEnvVarMutationCollection.Name)]
-public class CaseManagementAuthConfigEnvVarBindingTests
+public class CaseManagementAuthConfigEnvVarBindingTests(MongoIntegrationFixture fixture)
 {
     [Fact]
     public async Task SharedSecret_binds_from_the_real_double_underscore_environment_variable()
@@ -103,9 +99,8 @@ public class CaseManagementAuthConfigEnvVarBindingTests
         try
         {
             Environment.SetEnvironmentVariable(envVarName, "real-env-var-secret");
-            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(
-                builder => builder.UseEnvironment("Development")
-            );
+            await using var factory = new EphemeralMongoTestFactory(
+                fixture, "casemgmt_envvar", "Development");
             using var scope = factory.Services.CreateScope();
 
             var config = scope

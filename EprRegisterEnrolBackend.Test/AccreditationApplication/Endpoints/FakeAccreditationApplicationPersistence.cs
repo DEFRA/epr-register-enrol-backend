@@ -114,6 +114,10 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         {
             Id = src.Id,
             OrganisationId = src.OrganisationId,
+            // RA-503: was missing entirely - GetByIdAsync silently dropped OrgId on every read
+            // through this fake, latent until GetById's backfill-and-persist logic needed to see
+            // a previously-stored value survive a round trip through this test double.
+            OrgId = src.OrgId,
             Year = src.Year,
             RegistrationId = src.RegistrationId,
             IsExporter = src.IsExporter,

@@ -1003,6 +1003,110 @@ public class AccreditationApplicationEndpointsTests
         body.DueDate.Should().BeNull();
     }
 
+    // RA-503: GetById backfills OrgId (ReEx's numeric organisation number) for an application
+    // read before Submit's own resolution ran, and persists the result so later reads skip the
+    // ReEx round trip entirely.
+    [Fact]
+    public async Task GetById_OrgIdNotYetResolved_BackfillsFromReExAndPersists()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.OrgId = null);
+        _factory
+            .MockReExAdapter.GetOrganisationNumberAsync("org-123", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<int?>.Success(500500, 200)));
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.OrgId.Should().Be(500500);
+
+        // Persisted, not just returned once: a second read must show the same value even if
+        // ReEx would now return something different (proving GetById skips ReEx once resolved).
+        _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
+        _factory
+            .MockReExAdapter.GetOrganisationNumberAsync("org-123", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<int?>.Success(999999, 200)));
+        var second = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var secondBody = await second.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        secondBody!.OrgId.Should().Be(500500);
+    }
+
+    [Fact]
+    public async Task GetById_OrgIdAlreadyResolved_DoesNotCallReEx()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.OrgId = 500500);
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.OrgId.Should().Be(500500);
+        await _factory
+            .MockReExAdapter.DidNotReceive()
+            .GetOrganisationNumberAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetById_ReExLookupFails_OrgIdStaysNullAndIsNotPermanentlyCached()
+    {
+        Reset();
+        var app = SeedApplication(configure: a => a.OrgId = null);
+        _factory
+            .MockReExAdapter.GetOrganisationNumberAsync("org-123", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult(
+                    ReExResult<int?>.Fail(new ReExError(ReExErrorKind.ServerError, "down"), 500)
+                )
+            );
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.OrgId.Should().BeNull();
+
+        // A failure must not be cached as a permanent null: the next read retries ReEx.
+        _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
+        _factory
+            .MockReExAdapter.GetOrganisationNumberAsync("org-123", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<int?>.Success(500500, 200)));
+        var second = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var secondBody = await second.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        secondBody!.OrgId.Should().Be(500500);
+    }
+
     // --- PatchPrns ---
 
     [Fact]
@@ -1640,11 +1744,11 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task PatchOverseasSites_ReExSourcedSite_ClientCannotInventAnOrsId()
+    public async Task PatchOverseasSites_KnownSiteWithNoPersistedOrsId_ClientCannotInventOne()
     {
-        // A null OrsId marks a site as ReEx-sourced, which is the discriminator the epr-2uxy
-        // remediation relies on to identify wrongly-defaulted isNewSite values. A client that
-        // could supply one would make an affected site stop looking affected.
+        // RA-507: a site with no persisted OrsId (e.g. a legacy document predating
+        // HttpReExApiAdapter populating it) is still server-owned once persisted — a client
+        // supplying one on PATCH must not be able to set it.
         Reset();
         var app = SeedApplicationWithSites(
             new OverseasSiteModel { SiteId = 1, SiteName = "ReEx Registered Site" }
