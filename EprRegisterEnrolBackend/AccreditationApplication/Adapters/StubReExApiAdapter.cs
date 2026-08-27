@@ -97,11 +97,11 @@ public class StubReExApiAdapter(
                 wasteProcessingType?.Equals("exporter", StringComparison.OrdinalIgnoreCase) == true;
             // Mirrors HttpReExApiAdapter: only reprocessors have a UK processing
             // site, so exporters always get a null SiteAddress from the real API.
-            siteAddress = isExporter
-                ? null
+            siteAddress =
+                isExporter ? null
                 : registration?.SiteAddress is { } addr
                     ? $"{addr.Line1}, {addr.Town}, {addr.Postcode}"
-                    : "1 Stub Lane, Stubton, ST1 1AB";
+                : "1 Stub Lane, Stubton, ST1 1AB";
 
             permitNumbers = (registration?.WasteManagementPermits ?? [])
                 .Select(p => p.PermitNumber)
@@ -122,6 +122,8 @@ public class StubReExApiAdapter(
                             return new OverseasSiteModel
                             {
                                 SiteId = int.TryParse(id, out var parsed) ? parsed : 900001 + i,
+                                // RA-507: mirrors HttpReExApiAdapter — id is the existing ORS id.
+                                OrsId = id,
                                 SiteName = $"Overseas Site {i + 1} ({country})",
                                 SiteAddress = $"Address {id}",
                                 Country = country,
@@ -146,8 +148,8 @@ public class StubReExApiAdapter(
             SiteAddress = siteAddress,
             IsExporter = isExporter,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
-            CompanyRegisteredAddress = companyRegisteredAddress
-                ?? "1 Stub Registered Office, Stubton, ST1 1AB",
+            CompanyRegisteredAddress =
+                companyRegisteredAddress ?? "1 Stub Registered Office, Stubton, ST1 1AB",
             CompaniesHouseNumber = companiesHouseNumber ?? "00000001",
             PermitNumbers = permitNumbers,
             WasteProcessingType = wasteProcessingType ?? (isExporter ? "exporter" : "reprocessor"),

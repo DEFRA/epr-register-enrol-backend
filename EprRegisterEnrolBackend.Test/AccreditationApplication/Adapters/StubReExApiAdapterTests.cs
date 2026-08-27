@@ -264,6 +264,9 @@ public class StubReExApiAdapterTests
         firstSite
             .SiteId.Should()
             .Be(900001, because: "a non-numeric raw site id falls back to 900001 + its index (0)");
+        firstSite
+            .OrsId.Should()
+            .Be("not-a-number", because: "OrsId is the raw id regardless of parse success");
 
         var fifthSite = result.Value!.OverseasSites[4];
         fifthSite
@@ -272,6 +275,7 @@ public class StubReExApiAdapterTests
         fifthSite.IsEu.Should().BeFalse();
         fifthSite.IsOecd.Should().BeFalse();
         fifthSite.SiteId.Should().Be(900005, because: "\"900005\" parses cleanly as an int");
+        fifthSite.OrsId.Should().Be("900005");
     }
 
     // ---------------- RA-475: GetOrganisationNumberAsync ----------------

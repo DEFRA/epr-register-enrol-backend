@@ -76,13 +76,12 @@ public static class OverseasSiteMerge
                 // it, and RestoreSnapshotFields doesn't restore it. So a PATCH altering it is
                 // always wrong.
                 //
-                // This one is load-bearing beyond the operator journey. A null OrsId is the marker
-                // that a site came from ReEx rather than the operator (HttpReExApiAdapter has
-                // never set it), which is the discriminator the epr-2uxy remediation uses to tell
-                // a defaulted isNewSite=true from a genuine one. Leaving it clobberable would mean
-                // the remediation's correctness rested on the same accidental round-trip this
-                // whole story exists to eliminate. Restoring it also protects the OrsId-uniqueness
-                // invariant that AddOverseasSite enforces at line ~570.
+                // This one is load-bearing beyond the operator journey. RA-507: HttpReExApiAdapter
+                // now populates OrsId from ReEx's own three-digit ORS id for every ReEx-sourced
+                // site, so a null OrsId here only ever means a legacy document persisted before
+                // that fix -- it is no longer a live discriminator between ReEx-sourced and
+                // operator-added sites. Restoring the persisted value regardless protects the
+                // OrsId-uniqueness invariant that AddOverseasSite enforces at line ~570 either way.
                 site.OrsId = knownSite.OrsId;
 
                 site.IsNewSite = knownSite.IsNewSite;
@@ -110,9 +109,8 @@ public static class OverseasSiteMerge
                 site.RegisteredNowAccredited = false;
 
                 // OrsId is deliberately left as supplied here. There is no persisted value to
-                // restore, and forcing it to null would not only destroy data but would make the
-                // site masquerade as ReEx-sourced under the epr-2uxy discriminator — turning a
-                // defensive measure into the exact false-negative it exists to prevent.
+                // restore, and forcing it to null would destroy data the client legitimately sent
+                // for a site the server has never seen.
             }
 
             if (site.InterimSite is not null)
