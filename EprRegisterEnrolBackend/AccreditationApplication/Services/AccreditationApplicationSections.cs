@@ -232,8 +232,9 @@ public static class AccreditationApplicationSections
     // RA-311 introduced the Queried restriction; RA-481 extends the same rule to every other
     // "locked" status an application can be in once it's been submitted: Submitted, DulyMade,
     // Updated and AwaitingDecision. Across all of these locked statuses (Queried included), only
-    // the section the Case Management service actually queried (SectionStatus.Queried) may still be edited — every other
-    // section is read-only until the Case Management service raises a query against it or resolves the application.
+    // the section the Case Management service actually queried (SectionStatus.Queried) may still
+    // be edited — every other section is read-only until the Case Management service raises a
+    // query against it or resolves the application.
     // Saved/Started are unaffected and stay fully editable throughout. Approved/Rejected/Withdrawn
     // no longer reach this check at all: AccreditationApplicationEndpoints.RejectIfTerminal
     // rejects writes to those three statuses up front (RA-415, closing the RA-311 §9 follow-up),

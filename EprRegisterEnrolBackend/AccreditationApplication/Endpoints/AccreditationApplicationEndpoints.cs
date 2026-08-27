@@ -2726,12 +2726,12 @@ public static class AccreditationApplicationEndpoints
         var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
 
         // Terminal-status guard: once the Registration & Accreditation service has recorded a
-        // Case Management service push as Approved, Rejected or
-        // Withdrawn, no later mapped push may move the application again — a withdrawn
-        // application re-opening as DulyMade (or an approved one flipping to Rejected) would
-        // undo the very gates the terminal statuses exist to enforce. Unmapped pushes (anything
-        // the Case Management service adds in future with no arm in the switch above) are exempt: they only update the
-        // ordering watermark below, never ApplicationStatus.
+        // Case Management service push as Approved, Rejected or Withdrawn, no later mapped push
+        // may move the application again — a withdrawn application re-opening as DulyMade (or an
+        // approved one flipping to Rejected) would undo the very gates the terminal statuses
+        // exist to enforce. Unmapped pushes (anything the Case Management service adds in future
+        // with no arm in the switch above) are exempt: they only update the ordering watermark
+        // below, never ApplicationStatus.
         if (mappedStatus is not null && RejectIfTerminal(application) is not null)
         {
             logger.LogWarning(
