@@ -19,23 +19,6 @@ public class PromoteOverseasSiteRequestValidator : AbstractValidator<PromoteOver
         TimeSpan.FromMilliseconds(100)
     );
 
-    private static readonly string[] ValidOperationCodes =
-    [
-        "R1",
-        "R2",
-        "R3",
-        "R4",
-        "R5",
-        "R6",
-        "R7",
-        "R8",
-        "R9",
-        "R10",
-        "R11",
-        "R12",
-        "R13",
-    ];
-
     public PromoteOverseasSiteRequestValidator()
     {
         RuleFor(r => r.SiteName).NotEmpty().MaximumLength(200);
@@ -55,17 +38,14 @@ public class PromoteOverseasSiteRequestValidator : AbstractValidator<PromoteOver
         RuleFor(r => r.ContactPhone).MaximumLength(30);
         RuleFor(r => r.OperationCodes).NotEmpty().WithMessage("OperationCodes must not be empty.");
         RuleForEach(r => r.OperationCodes)
-            .Must(c => ValidOperationCodes.Contains(c))
+            .Must(c => RecyclingOperationCodes.AllCodes.Contains(c))
             .WithMessage(
-                $"OperationCodes must each be one of: {string.Join(", ", ValidOperationCodes)}."
+                $"OperationCodes must each be one of: {string.Join(", ", RecyclingOperationCodes.AllCodes)}."
             );
         RuleFor(r => r.OperationCodes)
-            .Must(codes =>
-                !(codes.Contains("R12") || codes.Contains("R13"))
-                || codes.Any(c => c != "R12" && c != "R13")
-            )
+            .Must(RecyclingOperationCodes.HasMandatoryOrsCode)
             .WithMessage(
-                "R12 and R13 cannot be selected in isolation and must be accompanied by at least one other applicable R code."
+                $"OperationCodes must include at least one of: {string.Join(", ", RecyclingOperationCodes.MaterialCodes)}."
             );
         RuleFor(r => r.Code1)
             .NotEmpty()

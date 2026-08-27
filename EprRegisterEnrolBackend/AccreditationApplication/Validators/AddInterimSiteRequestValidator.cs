@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Utils;
 using FluentValidation;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Validators;
@@ -44,5 +45,16 @@ public class AddInterimSiteRequestValidator : AbstractValidator<AddInterimSiteRe
             .MaximumLength(30)
             .Matches(PhoneRegex)
             .WithMessage("ContactPhone must be a valid phone number.");
+        RuleFor(r => r.OperationCodes).NotEmpty().WithMessage("OperationCodes must not be empty.");
+        RuleForEach(r => r.OperationCodes)
+            .Must(c => RecyclingOperationCodes.AllCodes.Contains(c))
+            .WithMessage(
+                $"OperationCodes must each be one of: {string.Join(", ", RecyclingOperationCodes.AllCodes)}."
+            );
+        RuleFor(r => r.OperationCodes)
+            .Must(RecyclingOperationCodes.HasMandatoryInterimCode)
+            .WithMessage(
+                $"OperationCodes must include at least one of: {string.Join(", ", RecyclingOperationCodes.InterimCodes)}."
+            );
     }
 }

@@ -111,6 +111,9 @@ public record PromoteOverseasSiteRequest
     public bool? ConditionsOfExport { get; set; }
 }
 
+// RA-486: OperationCodes is required here - unlike InterimSiteModel's own default-to-empty list,
+// which exists purely because the model is also used to represent legacy/pre-RA-486 persisted
+// data that predates this field.
 public record AddInterimSiteRequest
 {
     public required string Country { get; set; }
@@ -123,6 +126,7 @@ public record AddInterimSiteRequest
     public required string ContactName { get; set; }
     public required string ContactEmail { get; set; }
     public required string ContactPhone { get; set; }
+    public required List<string> OperationCodes { get; set; }
 }
 
 // FileId/Filename/ContentType/ScanStatus/S3Key/S3Bucket are deliberately NOT here:

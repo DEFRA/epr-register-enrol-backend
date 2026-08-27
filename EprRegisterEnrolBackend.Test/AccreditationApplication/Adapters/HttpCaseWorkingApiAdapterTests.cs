@@ -543,6 +543,7 @@ public class HttpCaseWorkingApiAdapterTests
                 ContactName = "Marie Curie",
                 ContactEmail = "marie@example.com",
                 ContactPhone = "+33 4 11 22 33 44",
+                OperationCodes = ["R12"],
                 IsNewSite = true,
             },
         };
@@ -591,7 +592,8 @@ public class HttpCaseWorkingApiAdapterTests
                 "postcode": "69001",
                 "contactName": "Marie Curie",
                 "contactEmail": "marie@example.com",
-                "contactPhone": "+33 4 11 22 33 44"
+                "contactPhone": "+33 4 11 22 33 44",
+                "operationCodes": ["R12"]
               },
               "besEvidence": {
                 "files": [

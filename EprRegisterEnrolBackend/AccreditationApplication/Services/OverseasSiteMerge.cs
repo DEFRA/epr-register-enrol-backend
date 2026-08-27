@@ -115,6 +115,12 @@ public static class OverseasSiteMerge
                 // defensive measure into the exact false-negative it exists to prevent.
             }
 
+            // RA-486: InterimSiteModel.OperationCodes is an operator-entered field, like SiteName/
+            // Address above - it needs no restoring here and carries through untouched as part of
+            // the incoming InterimSite object. The `is not null` guard below is also what makes a
+            // PATCH body with InterimSite: null genuinely clear an existing interim site: nothing
+            // downstream of this method re-populates it, so an incoming null stays null on the
+            // merged site with no side effects on any of its other fields.
             if (site.InterimSite is not null)
             {
                 site.InterimSite.IsNewSite =

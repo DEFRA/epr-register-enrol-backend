@@ -3,11 +3,14 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 namespace EprRegisterEnrolBackend.Utils;
 
 /// <summary>
-/// Single source of truth for overseas-site recycling operation codes (RA-469), shared by
-/// <c>PatchRecyclingOperationsRequestValidator</c> (request-shape checks only - it has no access
-/// to the application's MaterialType) and the PATCH recycling-operations endpoint in
-/// <c>AccreditationApplicationEndpoints.cs</c> (the application/material-type-aware checks).
-/// Mirrors epr-register-enrol-frontend's
+/// Single source of truth for overseas-site recycling operation codes (RA-469, reworked by
+/// RA-486), shared by <c>PatchRecyclingOperationsRequestValidator</c>/
+/// <c>AddOverseasSiteRequestValidator</c>/<c>PromoteOverseasSiteRequestValidator</c>/
+/// <c>AddInterimSiteRequestValidator</c> (request-shape checks only - none of them has access to
+/// the application's MaterialType) and the PATCH recycling-operations endpoint in
+/// <c>AccreditationApplicationEndpoints.cs</c> (the application/material-type-aware checks, ORS
+/// only - an interim site's OperationCodes are never checked against MaterialType, see
+/// HasMandatoryInterimCode below). Mirrors epr-register-enrol-frontend's
 /// src/server/accreditation/add-overseas-site/recycling-operation-details/controller.js
 /// CODES_BY_MATERIAL_TYPE - kept in sync manually, there is no shared package between the repos.
 /// </summary>
@@ -25,15 +28,20 @@ public static class RecyclingOperationCodes
         "R13",
     };
 
-    // R12/R13 describe an operation performed in relation to an associated interim site and can
-    // never be selected without at least one of R3/R4/R5 (an operation performed at the ORS
-    // itself) alongside them - enforced operator-side by requiresAccompanyingCode/
-    // CODES_REQUIRING_ACCOMPANIMENT in the frontend controller referenced above.
-    public static readonly IReadOnlySet<string> CodesRequiringAccompaniment = new HashSet<string>
+    // RA-486: R12/R13 describe an operation performed at an interim site, R3/R4/R5 an operation
+    // performed at the ORS itself. The two are independent designations, not a required pairing -
+    // an ORS's mandatory codes are the material ones (HasMandatoryOrsCode below); an interim
+    // site's mandatory codes are these (HasMandatoryInterimCode below). Kept as distinct sets
+    // (rather than inferring one from AllCodes minus the other) so a future third designation
+    // doesn't silently fall into the wrong bucket.
+    public static readonly IReadOnlySet<string> MaterialCodes = new HashSet<string>
     {
-        "R12",
-        "R13",
+        "R3",
+        "R4",
+        "R5",
     };
+
+    public static readonly IReadOnlySet<string> InterimCodes = new HashSet<string> { "R12", "R13" };
 
     public static readonly IReadOnlyDictionary<
         MaterialType,
@@ -49,15 +57,18 @@ public static class RecyclingOperationCodes
         [MaterialType.Wood] = new HashSet<string> { "R3", "R12", "R13" },
     };
 
-    // AC10 / requiresAccompanyingCode: true only when R12/R13 is present with nothing else -
-    // codes is otherwise assumed non-empty (NotEmpty is the validator's job).
-    public static bool RequiresAccompanyingCode(IEnumerable<string> codes)
-    {
-        var list = codes as ICollection<string> ?? codes.ToList();
-        var hasAccompanimentCode = list.Any(CodesRequiringAccompaniment.Contains);
-        var hasOtherCode = list.Any(c => !CodesRequiringAccompaniment.Contains(c));
-        return hasAccompanimentCode && !hasOtherCode;
-    }
+    // RA-486 AC: an ORS's OperationCodes must include at least one material code (R3/R4/R5);
+    // R12/R13 are optional on the ORS. Replaces the old "R12/R13 can't be selected in isolation"
+    // rule with an equivalent-in-effect but explicit mandatory-code rule now that R12/R13 no
+    // longer implies an interim site is attached.
+    public static bool HasMandatoryOrsCode(IEnumerable<string> codes) =>
+        codes.Any(MaterialCodes.Contains);
+
+    // RA-486 AC: an interim site's OperationCodes must include at least one of R12/R13; R3/R4/R5
+    // are optional on the interim site (material type is inherited from the parent ORS, not
+    // re-validated here).
+    public static bool HasMandatoryInterimCode(IEnumerable<string> codes) =>
+        codes.Any(InterimCodes.Contains);
 
     // AC-material-type: codes not offered for the application's material type are rejected.
     // Falls back to AllCodes when materialType has no explicit mapping (shouldn't happen -
