@@ -14,8 +14,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // RegulatoryNumberSequenceBackfillService's posture: the generic host awaits
 // StartAsync before it considers the app "started", so a blocking
 // implementation that threw on a transient Mongo issue at boot would crash-loop
-// the whole backend. ExecuteAsync's try/catch means a failure here logs and is
-// retried on the next request / redeploy instead.
+// the whole backend. The try/catch means a failure here logs and is retried on
+// the next request / redeploy instead.
 //
 // The resolution runs on a pool thread wrapped in WaitAsync(stoppingToken) so a
 // shutdown while EnsureIndexes is still blocked on an unreachable Mongo tears
@@ -30,7 +30,13 @@ public class MongoIndexInitializerService(
     {
         // Yield so host startup is never held up by anything below.
         await Task.Yield();
+        await InitializeAsync(stoppingToken);
+    }
 
+    // Extracted so tests can await it deterministically — BackgroundService's
+    // StartAsync only kicks ExecuteAsync off as a background task.
+    internal async Task InitializeAsync(CancellationToken cancellationToken)
+    {
         try
         {
             await Task.Run(
@@ -41,9 +47,9 @@ public class MongoIndexInitializerService(
                         _ = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
                         _ = serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
                     },
-                    stoppingToken
+                    cancellationToken
                 )
-                .WaitAsync(stoppingToken);
+                .WaitAsync(cancellationToken);
 
             logger.LogInformation("MongoIndexInitializerService: index initialisation complete");
         }

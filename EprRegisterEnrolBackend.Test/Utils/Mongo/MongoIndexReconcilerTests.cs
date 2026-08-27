@@ -137,11 +137,4 @@ public sealed class MongoIndexReconcilerTests : IDisposable
         Assert.DoesNotContain(indexes, i => i["key"].AsBsonDocument.Contains("applicationReference"));
     }
 
-    // Not covered: the options-conflict branch *inside* EnsureIndexesIndividually
-    // (MongoIndexReconciler.cs). The server validates every index spec in a
-    // createIndexes batch before building any of them, so a batch that would hit
-    // an options conflict during the individual retry raises code 85/86 on the
-    // very first CreateMany and never reaches the duplicate-key fallback. The
-    // branch is defensive only; epr-register-enrol-management-be leaves it
-    // uncovered for the same reason.
 }

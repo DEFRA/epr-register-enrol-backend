@@ -29,9 +29,13 @@ namespace EprRegisterEnrolBackend.Utils.Mongo;
 /// </para>
 ///
 /// <para>
-/// Ported verbatim (bar namespace) from
-/// <c>epr-register-enrol-management-be</c>, where it was introduced by the
-/// RA-219 PR review for exactly this scenario. Kept in sync deliberately.
+/// Ported from <c>epr-register-enrol-management-be</c>, where it was introduced
+/// by the RA-219 PR review for exactly this scenario. One deliberate
+/// divergence: <see cref="EnsureIndexesIndividually{T}"/> here has no
+/// options-conflict handler, because that branch is unreachable — the server
+/// validates every index spec in a <c>createIndexes</c> batch before building
+/// any of them, so a spec that would conflict raises code 85/86 on the first
+/// <c>CreateMany</c> and never reaches the per-index duplicate-key fallback.
 /// </para>
 /// </summary>
 public static class MongoIndexReconciler
@@ -135,34 +139,27 @@ public static class MongoIndexReconciler
                 "Unique index build failed on collection {Collection} because existing documents already " +
                     "violate the constraint; creating indexes individually so this does not block startup.",
                 collection.CollectionNamespace.CollectionName);
-            return EnsureIndexesIndividually(collection, models, logger);
+            EnsureIndexesIndividually(collection, models, logger);
+            return Array.Empty<string>();
         }
     }
 
     /// <summary>
-    /// Same contract as <see cref="EnsureIndexes{T}"/> but one model at a
-    /// time, used once a batched <c>CreateMany</c> has already failed with a
-    /// duplicate-key error so the offending index can be isolated: every
-    /// other index in the set still gets created, and the dirty one is
-    /// skipped with a logged error rather than failing startup.
+    /// Create the models one at a time, used once a batched <c>CreateMany</c>
+    /// has already failed with a duplicate-key error so the offending index can
+    /// be isolated: every clean index in the set still gets created, and the
+    /// dirty one is skipped with a logged error rather than failing startup.
     /// </summary>
-    private static IReadOnlyList<string> EnsureIndexesIndividually<T>(
+    private static void EnsureIndexesIndividually<T>(
         IMongoCollection<T> collection,
         IReadOnlyList<CreateIndexModel<T>> models,
         ILogger logger)
     {
-        var dropped = new List<string>();
-
         foreach (var model in models)
         {
             var single = new List<CreateIndexModel<T>> { model };
             try
             {
-                collection.Indexes.CreateMany(single);
-            }
-            catch (MongoCommandException ex) when (IsIndexDefinitionConflict(ex))
-            {
-                dropped.AddRange(DropConflictingIndexes(collection, single, logger));
                 collection.Indexes.CreateMany(single);
             }
             catch (MongoCommandException ex) when (IsDuplicateKeyError(ex))
@@ -176,8 +173,6 @@ public static class MongoIndexReconciler
                     collection.CollectionNamespace.CollectionName);
             }
         }
-
-        return dropped;
     }
 
     /// <summary>
