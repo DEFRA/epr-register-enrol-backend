@@ -266,6 +266,10 @@ export async function createAccreditationApplicationsCollection(
                 { applicationReference: 1 },
                 { unique: true, sparse: true },
             ),
+            collection.createIndex(
+                { caseManagementWorkItemId: 1 },
+                { unique: true, sparse: true },
+            ),
         ]);
 
         console.log("All indexes created successfully");

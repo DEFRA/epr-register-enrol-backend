@@ -35,6 +35,12 @@ public abstract class MongoService<T>
                 Collection.CollectionNamespace.CollectionName,
                 Collection.Database.DatabaseNamespace);
         }
-        //Collection.Indexes.CreateMany(indexes);
+
+        // Delegate to the reconciler (ported from epr-register-enrol-management-be)
+        // so a deploy that tightens an existing index's options, or that adds a
+        // unique index to a collection whose existing documents already violate
+        // it, does not crash startup — EnsureIndexes runs in the persistence
+        // constructor.
+        MongoIndexReconciler.EnsureIndexes(Collection, indexes, Logger);
     }
 }

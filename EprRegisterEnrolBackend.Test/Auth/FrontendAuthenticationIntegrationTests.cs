@@ -8,7 +8,9 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.Auth;
 
@@ -202,5 +204,17 @@ public class ProductionFactory : WebApplicationFactory<Program>
                     }
                 )
         );
+
+        // These tests exercise the auth gate, which sits upstream of any
+        // persistence. Substitute the Mongo-backed persistence so a request
+        // that clears the gate does not construct the real one — its
+        // constructor runs MongoService.EnsureIndexes synchronously, which
+        // blocks on a ~30s server-selection timeout with no Mongo reachable.
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<EprRegisterEnrolBackend.AccreditationApplication.Services.IAccreditationApplicationPersistence>();
+            services.AddSingleton(
+                Substitute.For<EprRegisterEnrolBackend.AccreditationApplication.Services.IAccreditationApplicationPersistence>());
+        });
     }
 }
