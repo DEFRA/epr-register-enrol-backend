@@ -344,8 +344,8 @@ public class FakeOrganisationPersistence
         // read-then-create check before either had written its result, each pass the "no
         // existing application" check, and both create a live application for the same
         // (org, registrationId, materialType, year) — Seed has no transaction and no unique
-        // index (MongoService.EnsureIndexes never actually runs — see its commented-out
-        // Collection.Indexes.CreateMany call). Whichever duplicate a later
+        // index (AccreditationApplicationPersistence.DefineIndexes does not declare one for that
+        // key tuple). Whichever duplicate a later
         // resolveLandingApplication() list-and-pick call landed on then depended on Mongo's
         // ObjectId tiebreak, not on which one the test had actually progressed — causing
         // exporter-accreditation.e2e.js's later tests to read back a fresh, untouched

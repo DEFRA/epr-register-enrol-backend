@@ -19,11 +19,10 @@ public class RecyclingOperationsAuditPersistence
     {
         // No custom index needed: this collection is write-only (no queries are made against it
         // from this backend, see IRecyclingOperationsAuditPersistence), so the default
-        // built-in unique index on _id is sufficient. Deliberately no
-        // Collection.Indexes.CreateOne/CreateMany call here either way - see
-        // RegulatoryNumberSequenceCounterPersistence's constructor comment: that would be a real,
-        // blocking Mongo network call at DI-construction time, which breaks
-        // WebApplicationFactory-based tests that don't override this interface.
+        // built-in unique index on _id is sufficient. DefineIndexes returns [] below, so
+        // EnsureIndexes short-circuits before any Mongo call and this constructor stays
+        // network-safe to build (the property WebApplicationFactory-based tests that don't
+        // override this interface rely on).
     }
 
     public async Task RecordAsync(

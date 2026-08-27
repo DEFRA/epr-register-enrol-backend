@@ -251,6 +251,11 @@ export async function createAccreditationApplicationsCollection(
 
         const collection = db.collection(collectionName);
 
+        // Keep this list in sync with
+        // AccreditationApplicationPersistence.DefineIndexes — that is the source
+        // of truth. MongoService.EnsureIndexes reconciles any drift at startup
+        // (dropping and recreating an index whose options no longer match), so a
+        // mismatch here is silently corrected at runtime rather than surfaced.
         await Promise.all([
             collection.createIndex({ organisationId: 1 }),
             collection.createIndex({ applicationStatus: 1 }),
@@ -264,6 +269,10 @@ export async function createAccreditationApplicationsCollection(
             }),
             collection.createIndex(
                 { applicationReference: 1 },
+                { unique: true, sparse: true },
+            ),
+            collection.createIndex(
+                { caseManagementWorkItemId: 1 },
                 { unique: true, sparse: true },
             ),
         ]);
