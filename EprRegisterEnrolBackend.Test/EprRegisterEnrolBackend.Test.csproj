@@ -27,4 +27,8 @@
   <ItemGroup>
     <ProjectReference Include="..\EprRegisterEnrolBackend\EprRegisterEnrolBackend.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\tools\AcronymAnalyzer\AcronymAnalyzer.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
 </Project>
