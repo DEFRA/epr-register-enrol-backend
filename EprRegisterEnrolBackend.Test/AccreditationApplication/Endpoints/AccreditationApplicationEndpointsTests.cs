@@ -1744,11 +1744,11 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task PatchOverseasSites_ReExSourcedSite_ClientCannotInventAnOrsId()
+    public async Task PatchOverseasSites_KnownSiteWithNoPersistedOrsId_ClientCannotInventOne()
     {
-        // A null OrsId marks a site as ReEx-sourced, which is the discriminator the epr-2uxy
-        // remediation relies on to identify wrongly-defaulted isNewSite values. A client that
-        // could supply one would make an affected site stop looking affected.
+        // RA-507: a site with no persisted OrsId (e.g. a legacy document predating
+        // HttpReExApiAdapter populating it) is still server-owned once persisted — a client
+        // supplying one on PATCH must not be able to set it.
         Reset();
         var app = SeedApplicationWithSites(
             new OverseasSiteModel { SiteId = 1, SiteName = "ReEx Registered Site" }

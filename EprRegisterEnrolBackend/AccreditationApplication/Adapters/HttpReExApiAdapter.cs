@@ -389,6 +389,11 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         new()
         {
             SiteId = int.TryParse(key, out var id) ? id : 0,
+            // RA-507: key is the existing ORS id ReEx already assigned this site (ReEx's own
+            // overseas-sites endpoint keys its response by "the three-digit ORS id"), not just a
+            // local site index. Populating it here lets OrsIdGenerator see ReEx-assigned ids when
+            // computing the next one for an operator-added site, avoiding duplicate ORS ids.
+            OrsId = key,
             SiteName = dto.Name ?? string.Empty,
             SiteAddress = dto.Address is { } addr
                 ? $"{addr.Line1}, {addr.TownOrCity}".Trim(',', ' ')
@@ -415,8 +420,8 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             ? null
             : string.Join(
                 ", ",
-                new[] { addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode }.Where(
-                    s => !string.IsNullOrWhiteSpace(s)
+                new[] { addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode }.Where(s =>
+                    !string.IsNullOrWhiteSpace(s)
                 )
             );
 }
