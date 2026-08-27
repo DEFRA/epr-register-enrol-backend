@@ -158,6 +158,12 @@ public class SubmitRequest
     public required string FullName { get; set; }
     public required string JobTitle { get; set; }
     public string? Email { get; set; }
+
+    // RA-503: the operator's nation-specific bank payment reference, computed by
+    // buildPaymentReference in epr-register-enrol-frontend and forwarded so management-be
+    // can show the regulator the same reference the operator was shown. Optional so a caller
+    // that predates this (or doesn't compute one) doesn't fail submission.
+    public string? PaymentReference { get; set; }
 }
 
 // Pushed by ManagementBe when CM raises a query (RA-311 §3/§5/§6). SectionKeys use CM's own
