@@ -266,6 +266,34 @@ public class OverseasSiteMergeTests
         result[0].InterimSite!.OperationCodes.Should().BeEquivalentTo(["R12", "R3"]);
     }
 
+    // RA-486 fix: OperationCodes is not `required` on InterimSiteModel (it defaults to `[]` so
+    // pre-RA-486 documents still deserialise), so a bulk PATCH body that omits it binds to an
+    // empty list rather than failing model binding. Without restoring from the persisted value,
+    // that empty list would silently overwrite the persisted codes, dropping the interim site
+    // below the >=1-of-R12/R13 minimum this PR introduced.
+    [Fact]
+    public void Merge_IncomingInterimSiteHasEmptyOperationCodes_RestoresPersistedCodes()
+    {
+        var result = OverseasSiteMerge.Merge(
+            [Site(1, interimSite: Interim(2, operationCodes: ["R12", "R3"]))],
+            [Site(1, interimSite: Interim(2, operationCodes: []))]
+        );
+
+        result[0].InterimSite!.OperationCodes.Should().BeEquivalentTo(["R12", "R3"]);
+    }
+
+    [Fact]
+    public void Merge_UnknownInterimSiteHasEmptyOperationCodes_StaysEmpty()
+    {
+        // No persisted interim site to restore from - nothing to fall back on.
+        var result = OverseasSiteMerge.Merge(
+            [Site(1)],
+            [Site(1, interimSite: Interim(2, operationCodes: []))]
+        );
+
+        result[0].InterimSite!.OperationCodes.Should().BeEmpty();
+    }
+
     [Fact]
     public void Merge_InterimIdLookupIsSeparateFromSiteIdLookup()
     {

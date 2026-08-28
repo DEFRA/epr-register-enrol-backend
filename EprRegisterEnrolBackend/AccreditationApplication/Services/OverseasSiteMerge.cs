@@ -51,14 +51,14 @@ public static class OverseasSiteMerge
             return [];
 
         var persistedSites = new Dictionary<int, OverseasSiteModel>();
-        var persistedInterimIsNew = new Dictionary<int, bool>();
+        var persistedInterimSites = new Dictionary<int, InterimSiteModel>();
         foreach (var site in persisted ?? [])
         {
             // First entry wins if the persisted list somehow holds the same id twice.
             persistedSites.TryAdd(site.SiteId, site);
             if (site.InterimSite is not null)
             {
-                persistedInterimIsNew.TryAdd(site.InterimSite.SiteId, site.InterimSite.IsNewSite);
+                persistedInterimSites.TryAdd(site.InterimSite.SiteId, site.InterimSite);
             }
         }
 
@@ -113,19 +113,30 @@ public static class OverseasSiteMerge
                 // for a site the server has never seen.
             }
 
-            // RA-486: InterimSiteModel.OperationCodes is an operator-entered field, like SiteName/
-            // Address above - it needs no restoring here and carries through untouched as part of
-            // the incoming InterimSite object. The `is not null` guard below is also what makes a
-            // PATCH body with InterimSite: null genuinely clear an existing interim site: nothing
-            // downstream of this method re-populates it, so an incoming null stays null on the
-            // merged site with no side effects on any of its other fields.
+            // The `is not null` guard below is what makes a PATCH body with InterimSite: null
+            // genuinely clear an existing interim site: nothing downstream of this method
+            // re-populates it, so an incoming null stays null on the merged site with no side
+            // effects on any of its other fields.
             if (site.InterimSite is not null)
             {
-                site.InterimSite.IsNewSite =
-                    !persistedInterimIsNew.TryGetValue(
-                        site.InterimSite.SiteId,
-                        out var interimPreviouslyNew
-                    ) || interimPreviouslyNew;
+                var hasPersistedInterim = persistedInterimSites.TryGetValue(
+                    site.InterimSite.SiteId,
+                    out var persistedInterim
+                );
+
+                site.InterimSite.IsNewSite = !hasPersistedInterim || persistedInterim!.IsNewSite;
+
+                // RA-486: unlike SiteName/AddressLine1/ContactName, OperationCodes is not
+                // `required` on InterimSiteModel — it defaults to `[]` so pre-RA-486 persisted
+                // documents still deserialise. That means a PATCH body that omits it (or carries
+                // an empty list) binds to [] rather than failing model binding, and would
+                // otherwise wipe the persisted codes below the ≥1-of-R12/R13 minimum. Restore from
+                // the persisted value whenever the incoming list is empty, mirroring OrsId/
+                // RegisteredNowAccredited/PreviousSites above.
+                if (site.InterimSite.OperationCodes.Count == 0 && hasPersistedInterim)
+                {
+                    site.InterimSite.OperationCodes = persistedInterim!.OperationCodes;
+                }
             }
         }
 

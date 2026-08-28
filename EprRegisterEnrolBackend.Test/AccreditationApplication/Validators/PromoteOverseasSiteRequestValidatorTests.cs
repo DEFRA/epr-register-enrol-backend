@@ -183,4 +183,55 @@ public class PromoteOverseasSiteRequestValidatorTests
                 "Coordinates latitude must be between -90 and 90 and longitude must be between -180 and 180."
             );
     }
+
+    // RA-486: OperationCodes moved onto RecyclingOperationCodes.AllCodes (R3/R4/R5/R12/R13),
+    // narrowing what this endpoint accepts from the old hardcoded R1-R13. R1/R2/R6-R11 are now
+    // rejected where they previously passed.
+
+    [Fact]
+    public void EmptyOperationCodes_FailsValidation()
+    {
+        var request = ValidRequest() with { OperationCodes = [] };
+        var result = _validator.TestValidate(request);
+        result.ShouldHaveValidationErrorFor(r => r.OperationCodes);
+    }
+
+    [Theory]
+    [InlineData("R1")]
+    [InlineData("R2")]
+    [InlineData("R6")]
+    [InlineData("BOGUS")]
+    public void OperationCodesWithCodeOutsideAllCodes_FailsValidation(string code)
+    {
+        var request = ValidRequest() with { OperationCodes = [code] };
+        var result = _validator.TestValidate(request);
+        result.ShouldHaveValidationErrorFor(r => r.OperationCodes);
+    }
+
+    [Fact]
+    public void OperationCodesWithOnlyR12AndR13_FailsValidation()
+    {
+        var request = ValidRequest() with { OperationCodes = ["R12", "R13"] };
+        var result = _validator.TestValidate(request);
+        result.ShouldHaveValidationErrorFor(r => r.OperationCodes);
+    }
+
+    [Theory]
+    [InlineData("R3")]
+    [InlineData("R4")]
+    [InlineData("R5")]
+    public void OperationCodesWithMandatoryOrsCode_PassesValidation(string code)
+    {
+        var request = ValidRequest() with { OperationCodes = [code] };
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveValidationErrorFor(r => r.OperationCodes);
+    }
+
+    [Fact]
+    public void OperationCodesWithMandatoryOrsCodeAndOptionalCode_PassesValidation()
+    {
+        var request = ValidRequest() with { OperationCodes = ["R3", "R12"] };
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveValidationErrorFor(r => r.OperationCodes);
+    }
 }
