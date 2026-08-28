@@ -115,6 +115,83 @@ public class AccreditationApplicationPersistenceTests
         result.Should().BeSameAs(application);
     }
 
+    // RA-516: the filter must additionally require Version to still equal what was read, so a
+    // concurrent writer that already moved it on makes this filter match nothing instead of
+    // silently overwriting their change.
+    [Fact]
+    public async Task UpdateAsync_SendsFilterGuardingAgainstAVersionThatHasMovedOn()
+    {
+        var sut = CreateSut(out var collection);
+        var applicationId = MongoDB.Bson.ObjectId.GenerateNewId();
+        var application = new AccreditationApplicationModel
+        {
+            Id = applicationId,
+            OrganisationId = "org-1",
+            Year = 2026,
+            MaterialType = MaterialType.Steel,
+            Version = 3,
+        };
+
+        FilterDefinition<AccreditationApplicationModel>? captured = null;
+        collection
+            .ReplaceOneAsync(
+                Arg.Do<FilterDefinition<AccreditationApplicationModel>>(f => captured = f),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<ReplaceOptions>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new ReplaceOneResult.Acknowledged(
+                    matchedCount: 1,
+                    modifiedCount: 1,
+                    upsertedId: null
+                )
+            );
+
+        await sut.UpdateAsync(application);
+
+        captured.Should().NotBeNull();
+        var rendered = RenderFilter(captured!);
+        rendered.Should().ContainEquivalentOf("version", "the guard is keyed on the Version field");
+        rendered
+            .Should()
+            .Contain("3", "the guard must require the version last read, not the new one");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ReplaceModifiesDocument_IncrementsVersion()
+    {
+        var sut = CreateSut(out var collection);
+        var application = new AccreditationApplicationModel
+        {
+            Id = MongoDB.Bson.ObjectId.GenerateNewId(),
+            OrganisationId = "org-1",
+            Year = 2026,
+            MaterialType = MaterialType.Steel,
+            Version = 5,
+        };
+
+        collection
+            .ReplaceOneAsync(
+                Arg.Any<FilterDefinition<AccreditationApplicationModel>>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<ReplaceOptions>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new ReplaceOneResult.Acknowledged(
+                    matchedCount: 1,
+                    modifiedCount: 1,
+                    upsertedId: null
+                )
+            );
+
+        var result = await sut.UpdateAsync(application);
+
+        result.Should().NotBeNull();
+        result!.Version.Should().Be(6);
+    }
+
     [Fact]
     public async Task UpdateAsync_ReplaceModifiesNoDocument_ReturnsNull()
     {
@@ -298,7 +375,9 @@ public class AccreditationApplicationPersistenceTests
 
         captured.Should().NotBeNull();
         var rendered = RenderFilter(captured!);
-        rendered.Should().Contain(applicationId.ToString(), "the write must still target this document");
+        rendered
+            .Should()
+            .Contain(applicationId.ToString(), "the write must still target this document");
         rendered
             .Should()
             .Contain("$elemMatch", "the guard inspects the OverseasSites.Sites array element-wise");
@@ -306,6 +385,9 @@ public class AccreditationApplicationPersistenceTests
             .Should()
             .ContainEquivalentOf("orsId", "the guard is keyed on the site's OrsId field");
         rendered.Should().Contain("007", "the guard must be scoped to the id being claimed");
+        rendered
+            .Should()
+            .ContainEquivalentOf("version", "shares ReplaceIfMatchAsync's version guard too");
     }
 
     [Fact]
