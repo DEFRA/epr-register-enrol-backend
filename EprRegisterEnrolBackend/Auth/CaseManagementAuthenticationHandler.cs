@@ -30,7 +30,8 @@ public class CaseManagementAuthenticationHandler(
     // Guards the nonce check-then-set below across concurrent requests on this instance.
     private static readonly object NonceLock = new();
 
-    // Header the CM BE push hook sends on every request for cross-service tracing (RA-311).
+    // Header the Case Management service BE push hook sends on every request for
+    // cross-service tracing (RA-311).
     // Purely a diagnostic aid: absence must never fail the request.
     private const string CorrelationIdHeaderName = "X-Correlation-Id";
 

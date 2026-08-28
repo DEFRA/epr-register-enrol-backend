@@ -57,12 +57,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddHttpContextAccessor();
     builder.Host.UseSerilog(CdpLogging.Configuration);
 
-    // Default HTTP Client. Used (among other things) for the OJ BE -> ManagementBe submit call
-    // (HttpCaseWorkingApiAdapter.SubmitApplicationAsync). Without an explicit Timeout this
-    // defaults to .NET's 100s, which can leave OJ BE still waiting long after OJ FE's own
-    // ~20s submit-call budget has already given up, producing a false-failure page for the
-    // operator (RA-311). 15s keeps this comfortably under that budget with margin; it is a
-    // principled starting point, not measured CM BE latency.
+    // Default HTTP Client. Used (among other things) for the Registration & Accreditation
+    // service BE -> ManagementBe submit call (HttpCaseWorkingApiAdapter.SubmitApplicationAsync).
+    // Without an explicit Timeout this defaults to .NET's 100s, which can leave the
+    // Registration & Accreditation service BE still waiting long after the Registration &
+    // Accreditation service FE's own ~20s submit-call budget has already given up, producing a
+    // false-failure page for the operator (RA-311). 15s keeps this comfortably under that
+    // budget with margin; it is a principled starting point, not measured Case Management
+    // service BE latency.
     builder
         .Services.AddHttpClient(
             "DefaultClient",

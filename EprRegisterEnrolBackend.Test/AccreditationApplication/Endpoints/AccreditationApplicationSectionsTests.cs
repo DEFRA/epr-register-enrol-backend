@@ -38,7 +38,7 @@ public class AccreditationApplicationSectionsTests
             .Be(expected);
     }
 
-    // --- CM key <-> operator section mapping ---
+    // --- Case Management service key <-> operator section mapping ---
 
     [Theory]
     [InlineData("authority-to-issue", OperatorSection.Prns)]
@@ -47,41 +47,41 @@ public class AccreditationApplicationSectionsTests
     [InlineData("sampling-and-inspection-plan", OperatorSection.SamplingPlan)]
     [InlineData("broadly-equivalent-standards", OperatorSection.BesEvidence)]
     [InlineData("overseas-reprocessing-sites", OperatorSection.OverseasSites)]
-    public void TryMapCmKeyToSection_KnownKey_MapsToExpectedSection(
+    public void TryMapCaseManagementKeyToSection_KnownKey_MapsToExpectedSection(
         string key,
         OperatorSection expected
     )
     {
-        AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section).Should().BeTrue();
+        AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section).Should().BeTrue();
         section.Should().Be(expected);
     }
 
     [Fact]
-    public void TryMapCmKeyToSection_UnknownKey_ReturnsFalse()
+    public void TryMapCaseManagementKeyToSection_UnknownKey_ReturnsFalse()
     {
         AccreditationApplicationSections
-            .TryMapCmKeyToSection("not-a-real-key", out _)
+            .TryMapCaseManagementKeyToSection("not-a-real-key", out _)
             .Should()
             .BeFalse();
     }
 
     [Fact]
-    public void CmSectionKeysFor_Prns_ReturnsBothCollapsedKeys()
+    public void CaseManagementSectionKeysFor_Prns_ReturnsBothCollapsedKeys()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.Prns)
+            .CaseManagementSectionKeysFor(OperatorSection.Prns)
             .Should()
             .BeEquivalentTo(["authority-to-issue", "prn-tonnage"]);
     }
 
     [Fact]
-    public void ExporterOnlyCmSectionKeys_IsBesEvidenceAndOverseasSitesOnly()
+    public void ExporterOnlyCaseManagementSectionKeys_IsBesEvidenceAndOverseasSitesOnly()
     {
         // authority-to-issue/prn-tonnage (Prns) apply to every application; only BES
         // evidence/overseas sites are exporter-specific (OverseasSites is only ever created
         // when IsExporter is true — see AccreditationApplicationEndpoints.Seed).
         AccreditationApplicationSections
-            .ExporterOnlyCmSectionKeys.Should()
+            .ExporterOnlyCaseManagementSectionKeys.Should()
             .BeEquivalentTo(["broadly-equivalent-standards", "overseas-reprocessing-sites"]);
     }
 
@@ -253,49 +253,49 @@ public class AccreditationApplicationSectionsTests
             MaterialType = MaterialType.Plastic,
         };
 
-    // --- CmSectionKeysFor (remaining switch arms) ---
+    // --- CaseManagementSectionKeysFor (remaining switch arms) ---
 
     [Fact]
-    public void CmSectionKeysFor_BusinessPlan_ReturnsBusinessPlanKey()
+    public void CaseManagementSectionKeysFor_BusinessPlan_ReturnsBusinessPlanKey()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.BusinessPlan)
+            .CaseManagementSectionKeysFor(OperatorSection.BusinessPlan)
             .Should()
             .BeEquivalentTo(["business-plan"]);
     }
 
     [Fact]
-    public void CmSectionKeysFor_SamplingPlan_ReturnsSamplingAndInspectionPlanKey()
+    public void CaseManagementSectionKeysFor_SamplingPlan_ReturnsSamplingAndInspectionPlanKey()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.SamplingPlan)
+            .CaseManagementSectionKeysFor(OperatorSection.SamplingPlan)
             .Should()
             .BeEquivalentTo(["sampling-and-inspection-plan"]);
     }
 
     [Fact]
-    public void CmSectionKeysFor_BesEvidence_ReturnsBroadlyEquivalentStandardsKey()
+    public void CaseManagementSectionKeysFor_BesEvidence_ReturnsBroadlyEquivalentStandardsKey()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.BesEvidence)
+            .CaseManagementSectionKeysFor(OperatorSection.BesEvidence)
             .Should()
             .BeEquivalentTo(["broadly-equivalent-standards"]);
     }
 
     [Fact]
-    public void CmSectionKeysFor_OverseasSites_ReturnsOverseasReprocessingSitesKey()
+    public void CaseManagementSectionKeysFor_OverseasSites_ReturnsOverseasReprocessingSitesKey()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor(OperatorSection.OverseasSites)
+            .CaseManagementSectionKeysFor(OperatorSection.OverseasSites)
             .Should()
             .BeEquivalentTo(["overseas-reprocessing-sites"]);
     }
 
     [Fact]
-    public void CmSectionKeysFor_UnknownSection_ReturnsEmpty()
+    public void CaseManagementSectionKeysFor_UnknownSection_ReturnsEmpty()
     {
         AccreditationApplicationSections
-            .CmSectionKeysFor((OperatorSection)999)
+            .CaseManagementSectionKeysFor((OperatorSection)999)
             .Should()
             .BeEmpty();
     }
