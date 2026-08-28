@@ -290,6 +290,82 @@ public class FakeOrganisationPersistenceTests
     }
 
     [Fact]
+    public async Task Constructor_SeedsPerfTestReprocessors_100OrgsWithOneRegistrationEach()
+    {
+        var sut = new FakeOrganisationPersistence();
+
+        var all = (await sut.GetAllAsync()).ToList();
+        var reprocessors = all.Where(o => o.OrgId is >= 60001 and <= 60100).ToList();
+
+        reprocessors.Should().HaveCount(100);
+        reprocessors
+            .Should()
+            .OnlyContain(o =>
+                o.WasteProcessingTypes!.Count == 1
+                && o.WasteProcessingTypes![0] == "reprocessor"
+            );
+
+        foreach (var summary in reprocessors)
+        {
+            var org = await sut.GetByOrgIdAsync(summary.OrgId);
+            org!.Registrations.Should().ContainSingle();
+        }
+    }
+
+    [Fact]
+    public async Task Constructor_SeedsPerfTestExporters_100OrgsWithOverseasSites()
+    {
+        var sut = new FakeOrganisationPersistence();
+
+        var all = (await sut.GetAllAsync()).ToList();
+        var exporters = all.Where(o => o.OrgId is >= 61001 and <= 61100).ToList();
+
+        exporters.Should().HaveCount(100);
+        exporters
+            .Should()
+            .OnlyContain(o =>
+                o.WasteProcessingTypes!.Count == 1 && o.WasteProcessingTypes![0] == "exporter"
+            );
+
+        foreach (var summary in exporters)
+        {
+            var org = await sut.GetByOrgIdAsync(summary.OrgId);
+            var registration = org!.Registrations.Should().ContainSingle().Subject;
+            registration.OverseasSites.Should().HaveCountGreaterThanOrEqualTo(2);
+            registration.OverseasSites.Should().HaveCountLessThanOrEqualTo(4);
+        }
+    }
+
+    [Fact]
+    public async Task Constructor_PerfTestOrgIds_DoNotCollideWithExistingSeededOrgs()
+    {
+        var sut = new FakeOrganisationPersistence();
+        int[] existingSeededOrgIds =
+        [
+            1,
+            2,
+            3,
+            50001,
+            50002,
+            50005,
+            50006,
+            50013,
+            50014,
+            50015,
+            50016,
+        ];
+
+        var all = (await sut.GetAllAsync()).ToList();
+        var perfTestOrgIds = all.Where(o => o.OrgId is (>= 60001 and <= 60100) or (>= 61001 and <= 61100))
+            .Select(o => o.OrgId)
+            .ToList();
+
+        perfTestOrgIds.Should().HaveCount(200);
+        perfTestOrgIds.Should().OnlyHaveUniqueItems();
+        perfTestOrgIds.Should().NotContain(existingSeededOrgIds);
+    }
+
+    [Fact]
     public async Task SearchByValueAsync_MatchesEmail_WhenCompanyDetailsIsNull()
     {
         // Company-detail conditions (Name/TradingName/RegistrationNumber) must all
