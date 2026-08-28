@@ -133,6 +133,7 @@ public class AccreditationApplicationEndpointsSitesFilesTests
             ContactName = "Jane Smith",
             ContactEmail = "jane.smith@example.com",
             ContactPhone = "+33 1 23 45 67 89",
+            OperationCodes = ["R12"],
         };
 
     private static OverseasSiteModel RegisteredOnlySite(int siteId = 900001) =>

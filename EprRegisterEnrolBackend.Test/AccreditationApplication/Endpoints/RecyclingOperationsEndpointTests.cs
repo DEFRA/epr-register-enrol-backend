@@ -201,8 +201,10 @@ public class RecyclingOperationsEndpointTests : IClassFixture<AccreditationAppli
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // RA-486: an ORS's R12/R13 no longer require an attached interim site - the two are
+    // independent now. Supersedes the old AC11 "R12/R13 needs an interim site" 400.
     [Fact]
-    public async Task PatchRecyclingOperations_R12WithNullInterimSite_Returns400()
+    public async Task PatchRecyclingOperations_R12WithNullInterimSite_Returns200()
     {
         Reset();
         var app = SeedApplicationWithOverseasSite(interimSite: null);
@@ -213,7 +215,7 @@ public class RecyclingOperationsEndpointTests : IClassFixture<AccreditationAppli
             TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]

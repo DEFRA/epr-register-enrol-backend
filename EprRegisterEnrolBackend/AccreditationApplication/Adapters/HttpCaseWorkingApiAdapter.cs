@@ -691,6 +691,7 @@ public class HttpCaseWorkingApiAdapter(
                             contactName = s.InterimSite.ContactName,
                             contactEmail = s.InterimSite.ContactEmail,
                             contactPhone = s.InterimSite.ContactPhone,
+                            operationCodes = s.InterimSite.OperationCodes,
                         },
                     besEvidence = new
                     {
