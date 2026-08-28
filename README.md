@@ -4,6 +4,7 @@ Core delivery C# ASP.NET backend template.
 
 - [Install MongoDB](#install-mongodb)
 - [Inspect MongoDB](#inspect-mongodb)
+- [Configuration](#configuration)
 - [Testing](#testing)
 - [Running](#running)
 - [Accreditation Applications API](#accreditation-applications-api)
@@ -63,6 +64,54 @@ mongosh
 ```
 
 You can use the CDP Terminal to access the environments' MongoDB.
+
+### Configuration
+
+Config is loaded via ASP.NET Core's standard configuration providers
+(`appsettings.json` → `appsettings.{Environment}.json` → environment
+variables). Nested `Section:Key` config binds from the env var form
+`SECTION__KEY` (double underscore); the CDP-secrets-tab items instead use a
+flat `UPPER_SNAKE_CASE` name — see the comments in
+[`EprRegisterEnrolBackend/Program.cs`](EprRegisterEnrolBackend/Program.cs)
+for why.
+
+| Variable | Secret? | Local default | Description |
+| --- | --- | --- | --- |
+| `Mongo__DatabaseUri` | No | `mongodb://127.0.0.1:27017` | MongoDB connection string (AWS IAM auth in deployed environments) |
+| `Mongo__DatabaseName` | No | `epr` | MongoDB database name |
+| `App__BaseUrl` | No | `http://localhost:5000` | This service's own public base URL, used for CDP callback/status URLs |
+| `CdpUploader__Url` | No | `http://localhost:7337` | Base URL of the CDP Uploader service |
+| `CdpUploader__SamplingPlanBucket` | No | `sampling-plans` | S3 bucket for sampling-plan uploads |
+| `CdpUploader__BesEvidenceBucket` | No | `bes-evidence` | S3 bucket for BES-evidence uploads |
+| `CdpUploader__GenericFilesBucket` | No | `file-uploads` | S3 bucket for other file uploads |
+| `ReExApi__BaseUrl` | No | _(blank)_ | Base URL of the external ReEx accreditation/organisations API |
+| `REEX_API_BASIC_AUTH_USERNAME` | **Yes** | _(blank — stub adapter used instead)_ | Basic Auth username for the ReEx API above |
+| `REEX_API_BASIC_AUTH_PASSWORD` | **Yes** | _(blank)_ | Basic Auth password for the ReEx API above |
+| `CaseWorking__Url` | No | `http://localhost:8085` | Base URL of `epr-register-enrol-management-be` |
+| `CaseWorking__UseStub` | No | `false` (Development) | When `true`, submissions to management-be are stubbed instead of sent |
+| `CASE_MANAGEMENT_API_SHARED_SECRET` | **Yes** | _(blank)_ | HMAC secret this service signs its outbound calls to management-be with — must match management-be's `AUTH_SHARED_SECRET__BACKEND` exactly |
+| `CaseManagementAuth__ExpectedClientId` | No | `epr-register-enrol-management-be` | Expected `x-cdp-client-id` on inbound calls from management-be |
+| `AUTH_SHARED_SECRET__MANAGEMENT_BE` | **Yes** | _(blank)_ | Verifies inbound calls from management-be — must match management-be's `OPERATOR_BACKEND_SHARED_SECRET` exactly |
+| `AUTH_SHARED_SECRET__FRONTEND` | **Yes** | _(blank)_ | Verifies inbound calls from `epr-register-enrol-frontend` — must match frontend's `AUTH_SHARED_SECRET__BACKEND` exactly |
+
+All five secret-shaped values above (`*_SHARED_SECRET*` and the two
+`REEX_API_BASIC_AUTH_*` vars) are optional in Development — the affected
+handlers fall back to a stub adapter or header-trust mode when blank — but
+required in every other environment. `GET /health/ready` reports any that
+are missing by name via `RequiredConfigHealthCheck`.
+
+`compose.yml` sets `REEX_API_BASIC_AUTH_USERNAME`/`REEX_API_BASIC_AUTH_PASSWORD`
+to empty strings by default, so `docker compose up` runs against the stub
+ReEx adapter; override them (and `ReExApi__BaseUrl`) in `compose.yml` or via
+an env file for a real integration test. Example local/testing values:
+
+```bash
+CASE_MANAGEMENT_API_SHARED_SECRET=local-dev-case-management-secret-not-real
+AUTH_SHARED_SECRET__MANAGEMENT_BE=local-dev-management-be-secret-not-real
+AUTH_SHARED_SECRET__FRONTEND=local-dev-frontend-secret-not-real
+REEX_API_BASIC_AUTH_USERNAME=local-dev-user
+REEX_API_BASIC_AUTH_PASSWORD=local-dev-fake-password
+```
 
 ### Accreditation Applications API
 
