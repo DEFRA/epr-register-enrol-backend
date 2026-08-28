@@ -1,4 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Auth;
+using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.StubPersistence.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -32,6 +34,10 @@ public class StubApplicationEndpointsTestFactory : WebApplicationFactory<Program
             services.AddSingleton(Substitute.For<IAccreditationApplicationPersistence>());
             services.RemoveAll<IRecyclingOperationsAuditPersistence>();
             services.AddSingleton(Substitute.For<IRecyclingOperationsAuditPersistence>());
+            services.RemoveAll<IPendingUploadService>();
+            services.AddSingleton(Substitute.For<IPendingUploadService>());
+            services.RemoveAll<ICaseManagementAuthNonceStore>();
+            services.AddSingleton(Substitute.For<ICaseManagementAuthNonceStore>());
         });
     }
 }

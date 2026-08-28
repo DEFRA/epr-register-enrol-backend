@@ -5,7 +5,6 @@ using System.Text;
 using System.Text.Encodings.Web;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.Auth;
@@ -19,16 +18,13 @@ public class CaseManagementAuthenticationHandler(
     ILoggerFactory logger,
     UrlEncoder encoder,
     IOptions<CaseManagementAuthConfig> authConfig,
-    IMemoryCache nonceCache,
+    ICaseManagementAuthNonceStore nonceStore,
     IHostEnvironment environment
 ) : AuthenticationHandler<CaseManagementAuthenticationOptions>(options, logger, encoder)
 {
     public const string SchemeName = "CaseManagement";
 
     private static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(5);
-
-    // Guards the nonce check-then-set below across concurrent requests on this instance.
-    private static readonly object NonceLock = new();
 
     // Header the CM BE push hook sends on every request for cross-service tracing (RA-311).
     // Purely a diagnostic aid: absence must never fail the request.
@@ -37,7 +33,7 @@ public class CaseManagementAuthenticationHandler(
     // Logged in place of the correlation id when that header was not sent.
     private const string AbsentCorrelationId = "(absent)";
 
-    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var config = authConfig.Value;
         var correlationId = GetCorrelationId();
@@ -66,9 +62,7 @@ public class CaseManagementAuthenticationHandler(
                     environment.EnvironmentName,
                     correlationId ?? AbsentCorrelationId
                 );
-                return Task.FromResult(
-                    AuthenticateResult.Fail("CaseManagement shared secret is not configured.")
-                );
+                return AuthenticateResult.Fail("CaseManagement shared secret is not configured.");
             }
 
             var devPrincipal = new ClaimsPrincipal(new ClaimsIdentity(SchemeName));
@@ -79,9 +73,7 @@ public class CaseManagementAuthenticationHandler(
                     correlationId ?? AbsentCorrelationId
                 );
             }
-            return Task.FromResult(
-                AuthenticateResult.Success(new AuthenticationTicket(devPrincipal, SchemeName))
-            );
+            return AuthenticateResult.Success(new AuthenticationTicket(devPrincipal, SchemeName));
         }
 
         if (Logger.IsEnabled(LogLevel.Information))
@@ -93,18 +85,18 @@ public class CaseManagementAuthenticationHandler(
         }
 
         if (!Request.Headers.TryGetValue("x-cdp-client-id", out var clientIdValues))
-            return Task.FromResult(Fail("Missing x-cdp-client-id header."));
+            return Fail("Missing x-cdp-client-id header.");
 
         var clientId = clientIdValues.ToString();
         if (!string.Equals(clientId, config.ExpectedClientId, StringComparison.Ordinal))
-            return Task.FromResult(Fail("Unrecognised x-cdp-client-id."));
+            return Fail("Unrecognised x-cdp-client-id.");
 
         if (!Request.Headers.TryGetValue("x-cdp-auth-signature", out var signatureValues))
-            return Task.FromResult(Fail("Missing x-cdp-auth-signature header."));
+            return Fail("Missing x-cdp-auth-signature header.");
         if (!Request.Headers.TryGetValue("x-cdp-auth-timestamp", out var timestampValues))
-            return Task.FromResult(Fail("Missing x-cdp-auth-timestamp header."));
+            return Fail("Missing x-cdp-auth-timestamp header.");
         if (!Request.Headers.TryGetValue("x-cdp-auth-nonce", out var nonceValues))
-            return Task.FromResult(Fail("Missing x-cdp-auth-nonce header."));
+            return Fail("Missing x-cdp-auth-nonce header.");
 
         var signature = signatureValues.ToString();
         var timestamp = timestampValues.ToString();
@@ -124,12 +116,10 @@ public class CaseManagementAuthenticationHandler(
                 out var requestTime
             )
         )
-            return Task.FromResult(Fail("Invalid x-cdp-auth-timestamp header."));
+            return Fail("Invalid x-cdp-auth-timestamp header.");
 
         if ((DateTime.UtcNow - requestTime).Duration() > ClockSkew)
-            return Task.FromResult(
-                Fail("Request timestamp is outside the allowed clock-skew window.")
-            );
+            return Fail("Request timestamp is outside the allowed clock-skew window.");
 
         var expectedSignature = ComputeSignature(
             config.SharedSecret,
@@ -144,19 +134,19 @@ public class CaseManagementAuthenticationHandler(
             Encoding.UTF8.GetBytes(expectedSignature)
         );
         if (!signatureValid)
-            return Task.FromResult(Fail("Invalid signature."));
+            return Fail("Invalid signature.");
 
-        // TryGetValue + Set is check-then-act; without the lock, two requests racing on the
-        // same nonce could both observe "not present" and both proceed, defeating single-use
-        // replay protection. IMemoryCache (incl. the GetOrCreate extension) has no atomic
-        // add-if-absent primitive, so the critical section is serialised explicitly.
-        var nonceCacheKey = $"case-management-auth-nonce:{nonce}";
-        lock (NonceLock)
-        {
-            if (nonceCache.TryGetValue(nonceCacheKey, out _))
-                return Task.FromResult(Fail("Nonce has already been used."));
-            nonceCache.Set(nonceCacheKey, true, ClockSkew);
-        }
+        // An insert against the nonce store's unique index is itself the atomic
+        // check-and-set primitive (see CaseManagementAuthNonceStore), so replay
+        // protection here needs no external lock — and, unlike the old
+        // IMemoryCache version, is now shared across every running instance.
+        var nonceIsFresh = await nonceStore.TryConsumeAsync(
+            nonce,
+            ClockSkew,
+            Context.RequestAborted
+        );
+        if (!nonceIsFresh)
+            return Fail("Nonce has already been used.");
 
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, clientId) };
         if (!string.IsNullOrEmpty(userId))
@@ -173,9 +163,7 @@ public class CaseManagementAuthenticationHandler(
                 correlationId ?? AbsentCorrelationId
             );
         }
-        return Task.FromResult(
-            AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName))
-        );
+        return AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName));
     }
 
     private string? GetCorrelationId() =>

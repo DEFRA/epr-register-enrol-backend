@@ -1,41 +1,56 @@
-using System.Collections.Concurrent;
 using EprRegisterEnrolBackend.CdpUploader.Models;
-using Microsoft.Extensions.Logging;
+using EprRegisterEnrolBackend.Utils.Mongo;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.CdpUploader.Services;
 
-public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendingUploadService
+// Mongo-backed replacement for the old ConcurrentDictionary singleton
+// (epr-register-enrol-backend-6y2): state now survives a restart and is shared
+// correctly across multiple running instances, which the in-memory version
+// could not provide.
+public class PendingUploadService : MongoService<PendingUploadDocument>, IPendingUploadService
 {
-    private record PendingUpload(
-        string CdpStatusUrl,
-        string? CdpUploadId,
-        string? S3Bucket,
-        string? S3Path,
-        CdpCallbackFile? ScanResult,
-        FileProcessingStatus Status
-    );
+    // Cleanup window for abandoned uploads, not a business rule - real CDP scans
+    // resolve in seconds/minutes. Generous enough that a slow scan never loses
+    // its pending record out from under it.
+    private static readonly TimeSpan DocumentTtl = TimeSpan.FromHours(24);
 
-    private readonly ConcurrentDictionary<string, PendingUpload> _uploads = new();
+    public PendingUploadService(
+        IMongoDbClientFactory connectionFactory,
+        ILoggerFactory loggerFactory
+    )
+        : base(connectionFactory, "pendingUploads", loggerFactory) { }
 
-    public void Create(
+    public async Task CreateAsync(
         string fileUploadId,
         string cdpStatusUrl,
         string? cdpUploadId = null,
         string? s3Bucket = null,
-        string? s3Path = null
+        string? s3Path = null,
+        CancellationToken ct = default
     )
     {
-        _uploads[fileUploadId] = new PendingUpload(
-            cdpStatusUrl,
-            cdpUploadId,
-            s3Bucket,
-            s3Path,
-            null,
-            FileProcessingStatus.Preprocessing
-        );
-        if (logger.IsEnabled(LogLevel.Information))
+        var document = new PendingUploadDocument
         {
-            logger.LogInformation(
+            Id = fileUploadId,
+            CdpStatusUrl = cdpStatusUrl,
+            CdpUploadId = cdpUploadId,
+            S3Bucket = s3Bucket,
+            S3Path = s3Path,
+            Status = FileProcessingStatus.Preprocessing,
+            ExpiresAt = DateTime.UtcNow.Add(DocumentTtl),
+        };
+
+        await Collection.ReplaceOneAsync(
+            Builders<PendingUploadDocument>.Filter.Eq(u => u.Id, fileUploadId),
+            document,
+            new ReplaceOptions { IsUpsert = true },
+            ct
+        );
+
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
                 "Upload {FileUploadId} state → {Status}",
                 fileUploadId,
                 FileProcessingStatus.Preprocessing
@@ -43,11 +58,13 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
         }
     }
 
-    public PendingUploadDetails? TryGetPendingUploadDetails(string fileUploadId)
+    public async Task<PendingUploadDetails?> TryGetPendingUploadDetailsAsync(
+        string fileUploadId,
+        CancellationToken ct = default
+    )
     {
-        if (!_uploads.TryGetValue(fileUploadId, out var upload))
-            return null;
-        if (upload.Status != FileProcessingStatus.Preprocessing)
+        var upload = await Collection.Find(u => u.Id == fileUploadId).FirstOrDefaultAsync(ct);
+        if (upload is null || upload.Status != FileProcessingStatus.Preprocessing)
             return null;
 
         return new PendingUploadDetails(
@@ -58,22 +75,34 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
         );
     }
 
-    public void Complete(string fileUploadId, CdpCallbackFile fileResult)
+    public async Task CompleteAsync(
+        string fileUploadId,
+        CdpCallbackFile fileResult,
+        CancellationToken ct = default
+    )
     {
         var newStatus =
             fileResult.FileStatus == "complete"
                 ? FileProcessingStatus.Validated
                 : FileProcessingStatus.Rejected;
 
-        _uploads.AddOrUpdate(
-            fileUploadId,
-            _ => new PendingUpload(string.Empty, null, null, null, fileResult, newStatus),
-            (_, existing) => existing with { ScanResult = fileResult, Status = newStatus }
-        );
+        // Set(...) always applies; SetOnInsert(...) only takes effect on the insert
+        // branch, mirroring the old AddOrUpdate's two branches - an update leaves
+        // CdpStatusUrl/CdpUploadId/S3Bucket/S3Path/ExpiresAt from the original
+        // Create untouched, an insert (a callback that raced ahead of Create)
+        // gets the same empty-string CdpStatusUrl the old code used.
+        var filter = Builders<PendingUploadDocument>.Filter.Eq(u => u.Id, fileUploadId);
+        var update = Builders<PendingUploadDocument>
+            .Update.Set(u => u.ScanResult, fileResult)
+            .Set(u => u.Status, newStatus)
+            .SetOnInsert(u => u.CdpStatusUrl, string.Empty)
+            .SetOnInsert(u => u.ExpiresAt, DateTime.UtcNow.Add(DocumentTtl));
 
-        if (logger.IsEnabled(LogLevel.Information))
+        await Collection.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }, ct);
+
+        if (Logger.IsEnabled(LogLevel.Information))
         {
-            logger.LogInformation(
+            Logger.LogInformation(
                 "Upload {FileUploadId} state → {Status} (fileStatus={FileStatus})",
                 fileUploadId,
                 newStatus,
@@ -82,17 +111,25 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
         }
     }
 
-    public IReadOnlyList<string> GetPendingUploadIds()
+    public async Task<IReadOnlyList<string>> GetPendingUploadIdsAsync(
+        CancellationToken ct = default
+    )
     {
-        return _uploads
-            .Where(kvp => kvp.Value.Status == FileProcessingStatus.Preprocessing)
-            .Select(kvp => kvp.Key)
-            .ToList();
+        var filter = Builders<PendingUploadDocument>.Filter.Eq(
+            u => u.Status,
+            FileProcessingStatus.Preprocessing
+        );
+
+        return await Collection.Find(filter).Project(u => u.Id).ToListAsync(ct);
     }
 
-    public CdpStatusResponse GetStatus(string fileUploadId)
+    public async Task<CdpStatusResponse> GetStatusAsync(
+        string fileUploadId,
+        CancellationToken ct = default
+    )
     {
-        if (!_uploads.TryGetValue(fileUploadId, out var upload))
+        var upload = await Collection.Find(u => u.Id == fileUploadId).FirstOrDefaultAsync(ct);
+        if (upload is null)
         {
             return new CdpStatusResponse
             {
@@ -127,4 +164,15 @@ public class PendingUploadService(ILogger<PendingUploadService> logger) : IPendi
             },
         };
     }
+
+    protected override List<CreateIndexModel<PendingUploadDocument>> DefineIndexes(
+        IndexKeysDefinitionBuilder<PendingUploadDocument> builder
+    ) =>
+        [
+            new CreateIndexModel<PendingUploadDocument>(
+                builder.Ascending(u => u.ExpiresAt),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }
+            ),
+            new CreateIndexModel<PendingUploadDocument>(builder.Ascending(u => u.Status)),
+        ];
 }
