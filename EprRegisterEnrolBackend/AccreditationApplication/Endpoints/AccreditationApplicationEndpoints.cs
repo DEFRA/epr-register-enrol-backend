@@ -2181,12 +2181,13 @@ public static class AccreditationApplicationEndpoints
         }
         catch (CaseWorkingApiTimeoutException)
         {
-            // OJ FE's apiClient gives the whole submit POST a ~5s budget; without this, the
-            // caller would instead see a generic 500 from ExceptionLoggingHandler only once
-            // the "DefaultClient" HttpClient's own 15s Timeout (Program.cs) finally elapses,
-            // long after OJ FE has already given up (RA-311). 504 + a distinct title lets OJ
-            // FE's error handling distinguish "downstream timed out, maybe retry" from a
-            // generic server error.
+            // The Registration & Accreditation service FE's apiClient gives the whole submit
+            // POST a ~5s budget; without this, the caller would instead see a generic 500 from
+            // ExceptionLoggingHandler only once the "DefaultClient" HttpClient's own 15s
+            // Timeout (Program.cs) finally elapses, long after the Registration & Accreditation
+            // service FE has already given up (RA-311). 504 + a distinct title lets the
+            // Registration & Accreditation service FE's error handling distinguish "downstream
+            // timed out, maybe retry" from a generic server error.
             return Results.Problem(
                 statusCode: StatusCodes.Status504GatewayTimeout,
                 title: "Case working service timed out",
@@ -2226,7 +2227,7 @@ public static class AccreditationApplicationEndpoints
         var sectionKeys = application.Query?.QueriedSectionKeys ?? [];
         var queriedSections = sectionKeys
             .Select(key =>
-                AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section)
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section)
                     ? section
                     : (OperatorSection?)null
             )
@@ -2245,7 +2246,7 @@ public static class AccreditationApplicationEndpoints
         // Call adapter before persisting: if the call fails, leave ApplicationStatus at Queried
         // so the operator can retry — this matters more here than on the raise-side fire-and-
         // forget hook, since a failure after persisting Updated would lock the application with
-        // CM never told.
+        // the Case Management service never told.
         var result = await caseWorkingAdapter.ResumeFromQueryAsync(
             application,
             contactDetails,
@@ -2292,7 +2293,8 @@ public static class AccreditationApplicationEndpoints
         application.ApplicationStatus = ApplicationStatus.Updated;
         application.DateLastEdited = versionedAt;
         // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
-        // single CaseManagementStatusUpdatedAt orders every CM-driven status write, resubmit or not.
+        // single CaseManagementStatusUpdatedAt orders every Case Management service-driven status
+        // write, resubmit or not.
         application.CaseManagementStatusUpdatedAt = versionedAt;
 
         var updated = await persistence.UpdateAsync(application);
@@ -2311,8 +2313,9 @@ public static class AccreditationApplicationEndpoints
     )
     {
         var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
-        // CM BE's push hook sends this on every request for cross-service tracing (RA-311).
-        // Purely a diagnostic aid — absence must never fail the request.
+        // The Case Management service BE's push hook sends this on every request for
+        // cross-service tracing (RA-311). Purely a diagnostic aid — absence must never fail the
+        // request.
         var correlationId = httpContext.Request.Headers.TryGetValue(
             "X-Correlation-Id",
             out var correlationValues
@@ -2354,7 +2357,7 @@ public static class AccreditationApplicationEndpoints
 
         // A second query while one is already open is rejected rather than merged into the
         // existing QueriedSectionKeys (RA-311 §3) — the operator must resubmit the open query
-        // before CM can raise another.
+        // before the Case Management service can raise another.
         if (application.ApplicationStatus == ApplicationStatus.Queried)
         {
             logger.LogWarning(
@@ -2391,7 +2394,7 @@ public static class AccreditationApplicationEndpoints
         if (
             !application.IsExporter
             && request.SectionKeys.Any(
-                AccreditationApplicationSections.ExporterOnlyCmSectionKeys.Contains
+                AccreditationApplicationSections.ExporterOnlyCaseManagementSectionKeys.Contains
             )
         )
         {
@@ -2406,11 +2409,11 @@ public static class AccreditationApplicationEndpoints
         }
 
         // Every key is already known-valid — the validator above rejects anything outside the
-        // six-key set (AllCmSectionKeys), which is exactly what TryMapCmKeyToSection recognises.
+        // six-key set (AllCaseManagementSectionKeys), which is exactly what TryMapCaseManagementKeyToSection recognises.
         var sections = request
             .SectionKeys.Select(key =>
             {
-                AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section);
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section);
                 return section;
             })
             .ToHashSet();
@@ -2422,7 +2425,7 @@ public static class AccreditationApplicationEndpoints
                 SectionStatus.Queried
             );
 
-        // Note: QueryNote is user/CM-supplied free text and is intentionally never interpolated
+        // Note: QueryNote is user/Case Management service-supplied free text and is intentionally never interpolated
         // into a log message (RA-311 security note) — only structured, server-known values are.
         application.Query ??= new AccreditationApplicationQuery();
         application.Query.QueryNote = request.QueryNote;
@@ -2432,7 +2435,8 @@ public static class AccreditationApplicationEndpoints
         application.ApplicationStatus = ApplicationStatus.Queried;
         application.DateLastEdited = queriedAt;
         // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
-        // single CaseManagementStatusUpdatedAt orders every CM-driven status write, query or not.
+        // single CaseManagementStatusUpdatedAt orders every Case Management service-driven status
+        // write, query or not.
         application.CaseManagementStatusUpdatedAt = queriedAt;
 
         var updated = await persistence.UpdateAsync(application);
@@ -2579,8 +2583,9 @@ public static class AccreditationApplicationEndpoints
         return updated is null ? Results.Problem("Failed to delete file.") : Results.Ok();
     }
 
-    // Raw CM state id -> the ApplicationStatus it projects onto in OJ (RA-368 §4.3). States with
-    // no entry (anything CM adds in future) are a deliberate no-op for ApplicationStatus — the
+    // Raw Case Management service state id -> the ApplicationStatus it projects onto in the
+    // Registration & Accreditation service (RA-368 §4.3). States with no entry (anything the Case
+    // Management service adds in future) are a deliberate no-op for ApplicationStatus — the
     // push still updates CaseManagementStatusUpdatedAt for ordering purposes. "queried"/"withdrawn"
     // are never sent here: query keeps its own richer /query endpoint, and withdrawal is entirely
     // out of scope for this plan (§4.1, §4.5).
@@ -2630,8 +2635,9 @@ public static class AccreditationApplicationEndpoints
     )
     {
         var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
-        // CM BE's push hook sends this on every request for cross-service tracing (RA-311/RA-368).
-        // Purely a diagnostic aid — absence must never fail the request.
+        // The Case Management service BE's push hook sends this on every request for
+        // cross-service tracing (RA-311/RA-368). Purely a diagnostic aid — absence must never
+        // fail the request.
         var correlationId = httpContext.Request.Headers.TryGetValue(
             "X-Correlation-Id",
             out var correlationValues
@@ -2682,12 +2688,13 @@ public static class AccreditationApplicationEndpoints
 
         var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
 
-        // Terminal-status guard: once OJ has recorded a CM push as Approved, Rejected or
-        // Withdrawn, no later mapped push may move the application again — a withdrawn
-        // application re-opening as DulyMade (or an approved one flipping to Rejected) would
-        // undo the very gates the terminal statuses exist to enforce. Unmapped pushes (anything
-        // CM adds in future with no arm in the switch above) are exempt: they only update the
-        // ordering watermark below, never ApplicationStatus.
+        // Terminal-status guard: once the Registration & Accreditation service has recorded a
+        // Case Management service push as Approved, Rejected or Withdrawn, no later mapped push
+        // may move the application again — a withdrawn application re-opening as DulyMade (or an
+        // approved one flipping to Rejected) would undo the very gates the terminal statuses
+        // exist to enforce. Unmapped pushes (anything the Case Management service adds in future
+        // with no arm in the switch above) are exempt: they only update the ordering watermark
+        // below, never ApplicationStatus.
         if (mappedStatus is not null && RejectIfTerminal(application) is not null)
         {
             logger.LogWarning(
@@ -2817,7 +2824,7 @@ public static class AccreditationApplicationEndpoints
         {
             var queriedSections = (application.Query?.QueriedSectionKeys ?? [])
                 .Select(key =>
-                    AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section)
+                    AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section)
                         ? section
                         : (OperatorSection?)null
                 )

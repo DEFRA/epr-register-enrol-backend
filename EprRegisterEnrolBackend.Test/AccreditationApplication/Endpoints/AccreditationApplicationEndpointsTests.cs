@@ -5519,8 +5519,8 @@ public class AccreditationApplicationEndpointsTests
     [Fact]
     public async Task QueryFromCaseManagement_UpdatedStatus_Succeeds()
     {
-        // Updated = a prior query was already resolved via resubmit; CM must be able to raise
-        // a fresh query against the same application.
+        // Updated = a prior query was already resolved via resubmit; the Case Management service
+        // must be able to raise a fresh query against the same application.
         Reset();
         var workItemId = Guid.NewGuid();
         SeedApplication(
@@ -6330,8 +6330,9 @@ public class AccreditationApplicationEndpointsTests
     [Fact]
     public async Task StatusChangedFromCaseManagement_ContinueReviewDuringDulyMaking_DowngradesFromUpdatedToSubmitted()
     {
-        // Mirrors CM's continue-review-during-duly-making action, which can push CM (and
-        // therefore OJ) back to 'submitted' from 'updated' — ordering is timestamp-based, not
+        // Mirrors the Case Management service's continue-review-during-duly-making action, which
+        // can push the Case Management service (and therefore the Registration & Accreditation
+        // service) back to 'submitted' from 'updated' — ordering is timestamp-based, not
         // state-precedence-based (RA-368 §4.3).
         Reset();
         var workItemId = Guid.NewGuid();
@@ -6410,7 +6411,8 @@ public class AccreditationApplicationEndpointsTests
     )
     {
         // RA-368: these two states used to have no mapping arm and were silently dropped,
-        // leaving OJ pinned at 'DulyMade' while CM had already moved on.
+        // leaving the Registration & Accreditation service pinned at 'DulyMade' while the Case
+        // Management service had already moved on.
         Reset();
         var workItemId = Guid.NewGuid();
         SeedApplication(

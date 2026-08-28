@@ -97,8 +97,9 @@ public class AccreditationApplicationModel
     public SubmittedByModel? SubmittedBy { get; set; }
 
     // RA-480: the original registration submitter's contact details, sourced from ReEx at Seed
-    // time. Distinct from SubmittedBy (captured at CM submit time, a different person) and
-    // AccreditationApplicationQuery.QuerySubmitterContactDetails (the query/withdrawal responder).
+    // time. Distinct from SubmittedBy (captured at Case Management service submit time, a
+    // different person) and AccreditationApplicationQuery.QuerySubmitterContactDetails (the
+    // query/withdrawal responder).
     public SubmitterContactDetailsModel? SubmitterContactDetails { get; set; }
 
     public string? WithdrawalReason { get; set; }
@@ -134,9 +135,9 @@ public class AccreditationApplicationModel
     public string? NotificationStatus { get; set; }
 
     // RA-415: live-derived on GetById from the linked ManagementBe work item's SLA due date —
-    // OJ has no due date of its own, CM's work item is the single source of truth. Never
-    // persisted (same rationale as NotificationStatus above); null when there is no linked
-    // work item yet.
+    // the Registration & Accreditation service has no due date of its own, the Case Management
+    // service's work item is the single source of truth. Never persisted (same rationale as
+    // NotificationStatus above); null when there is no linked work item yet.
     [BsonIgnore]
     public DateTime? DueDate { get; set; }
 }

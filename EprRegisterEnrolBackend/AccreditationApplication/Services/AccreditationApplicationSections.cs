@@ -11,7 +11,8 @@ public enum OperatorSection
     BesEvidence,
 }
 
-// Maps CM's closed six-key vocabulary onto the five operator sections (RA-311 §2), and centralises
+// Maps the Case Management service's closed six-key vocabulary onto the five operator sections
+// (RA-311 §2), and centralises
 // the SectionStatus read/write per section so both the inbound query endpoint, the new status
 // gate, and the resubmit endpoint share one definition of "which section does this affect".
 public static class AccreditationApplicationSections
@@ -23,7 +24,7 @@ public static class AccreditationApplicationSections
     public const string BroadlyEquivalentStandardsKey = "broadly-equivalent-standards";
     public const string OverseasReprocessingSitesKey = "overseas-reprocessing-sites";
 
-    public static readonly IReadOnlySet<string> AllCmSectionKeys = new HashSet<string>
+    public static readonly IReadOnlySet<string> AllCaseManagementSectionKeys = new HashSet<string>
     {
         AuthorityToIssueKey,
         PrnTonnageKey,
@@ -36,15 +37,15 @@ public static class AccreditationApplicationSections
     // BES evidence / overseas sites only exist for exporter applications (OverseasSites is only
     // ever created when IsExporter is true — see Seed). authority-to-issue/prn-tonnage (Prns)
     // apply to every application regardless of IsExporter.
-    public static readonly IReadOnlySet<string> ExporterOnlyCmSectionKeys = new HashSet<string>
+    public static readonly IReadOnlySet<string> ExporterOnlyCaseManagementSectionKeys = new HashSet<string>
     {
         BroadlyEquivalentStandardsKey,
         OverseasReprocessingSitesKey,
     };
 
-    public static bool TryMapCmKeyToSection(string cmKey, out OperatorSection section)
+    public static bool TryMapCaseManagementKeyToSection(string caseManagementKey, out OperatorSection section)
     {
-        switch (cmKey)
+        switch (caseManagementKey)
         {
             case AuthorityToIssueKey:
             case PrnTonnageKey:
@@ -68,9 +69,10 @@ public static class AccreditationApplicationSections
         }
     }
 
-    // Reverse of TryMapCmKeyToSection — Prns collapses two CM keys onto one section, so both are
+    // Reverse of TryMapCaseManagementKeyToSection — Prns collapses two Case Management service
+    // keys onto one section, so both are
     // reported back on resubmit since which one(s) were originally raised isn't tracked separately.
-    public static IReadOnlyList<string> CmSectionKeysFor(OperatorSection section) =>
+    public static IReadOnlyList<string> CaseManagementSectionKeysFor(OperatorSection section) =>
         section switch
         {
             OperatorSection.Prns => [AuthorityToIssueKey, PrnTonnageKey],
@@ -155,8 +157,9 @@ public static class AccreditationApplicationSections
         };
 
     // Appends a version snapshot of the section's current values — called on Submit (version 1,
-    // all 5 sections) and on each resubmit-after-query (the resubmitted sections only). CM's
-    // "latest data" need is served by the resubmit push itself; nothing else reads Versions back.
+    // all 5 sections) and on each resubmit-after-query (the resubmitted sections only). The Case
+    // Management service's "latest data" need is served by the resubmit push itself; nothing
+    // else reads Versions back.
     public static void SnapshotSection(
         AccreditationApplicationModel application,
         OperatorSection section,
@@ -229,8 +232,9 @@ public static class AccreditationApplicationSections
     // RA-311 introduced the Queried restriction; RA-481 extends the same rule to every other
     // "locked" status an application can be in once it's been submitted: Submitted, DulyMade,
     // Updated and AwaitingDecision. Across all of these locked statuses (Queried included), only
-    // the section CM actually queried (SectionStatus.Queried) may still be edited — every other
-    // section is read-only until CM raises a query against it or resolves the application.
+    // the section the Case Management service actually queried (SectionStatus.Queried) may still
+    // be edited — every other section is read-only until the Case Management service raises a
+    // query against it or resolves the application.
     // Saved/Started are unaffected and stay fully editable throughout. Approved/Rejected/Withdrawn
     // no longer reach this check at all: AccreditationApplicationEndpoints.RejectIfTerminal
     // rejects writes to those three statuses up front (RA-415, closing the RA-311 §9 follow-up),

@@ -23,6 +23,17 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
     public static readonly ObjectId Reg50016 = ObjectId.Parse("aaa000000000000000050016");
 
+    private static readonly string[] PerfTestMaterials =
+    [
+        "plastic",
+        "glass",
+        "steel",
+        "aluminium",
+        "paper",
+        "wood",
+        "fibre",
+    ];
+
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
 
@@ -590,6 +601,143 @@ public class FakeOrganisationPersistence
                 ],
             }
         );
+
+        // RA-512: perftest fixtures, generated (not hand-written) because 200
+        // near-identical literals would be unreviewable. See Impl-RA-512.md.
+        AddPerfTestReprocessors();
+        AddPerfTestExporters();
+    }
+
+    private void AddPerfTestReprocessors()
+    {
+        for (var i = 1; i <= 100; i++)
+        {
+            var orgId = 60000 + i;
+            var material = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
+            var registrationId = ObjectId.Parse($"aaa{orgId:000000000000000000000}");
+
+            _store.Add(
+                new OrganisationModel
+                {
+                    OrgId = orgId,
+                    SchemaVersion = 1,
+                    Version = 1,
+                    BusinessType = BusinessTypeUnincorporated,
+                    WasteProcessingTypes = [WasteProcessingTypeReprocessor],
+                    ReprocessingNations = [NationEngland],
+                    CompanyDetails = new CompanyDetailsModel
+                    {
+                        Name = $"PerfTest Reprocessor {i:000}",
+                        TradingName = $"PerfTest Reprocessor {i:000}",
+                        RegistrationNumber = $"PERF-{orgId}",
+                        CompaniesHouseNumber = $"PERF{orgId}",
+                        RegisteredAddress = new RegisteredAddressModel
+                        {
+                            Line1 = $"Unit {i}",
+                            Town = "Perftown",
+                            Postcode = "PT1 1AA",
+                        },
+                    },
+                    ContactDetails = new ContactDetailsModel
+                    {
+                        FullName = "Site Manager",
+                        Email = $"info@perftest-reprocessor-{i}.co.uk",
+                    },
+                    Users = [],
+                    Accreditations = [],
+                    Registrations =
+                    [
+                        new RegistrationModel
+                        {
+                            Id = registrationId,
+                            SiteId = $"REG{orgId}",
+                            Status = RegistrationStatusCreated,
+                            Material = material,
+                            WasteProcessingType = WasteProcessingTypeReprocessor,
+                            SiteAddress = new SiteAddressModel
+                            {
+                                Line1 = $"Unit {i}",
+                                Town = "Perftown",
+                                Postcode = "PT1 1AA",
+                            },
+                            WasteManagementPermits =
+                            [
+                                new WasteManagementPermitModel
+                                {
+                                    PermitNumber = $"WML{orgId}",
+                                },
+                            ],
+                        },
+                    ],
+                }
+            );
+        }
+    }
+
+    private void AddPerfTestExporters()
+    {
+        for (var i = 1; i <= 100; i++)
+        {
+            var orgId = 61000 + i;
+            var material = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
+            var registrationId = ObjectId.Parse($"aaa{orgId:000000000000000000000}");
+            var overseasSiteCount = 2 + (i % 3);
+            var overseasSites = Enumerable
+                .Range(1, overseasSiteCount)
+                .Select(n => $"9{orgId}{n:00}")
+                .ToList();
+
+            _store.Add(
+                new OrganisationModel
+                {
+                    OrgId = orgId,
+                    SchemaVersion = 1,
+                    Version = 1,
+                    BusinessType = BusinessTypeUnincorporated,
+                    WasteProcessingTypes = [WasteProcessingTypeExporter],
+                    ReprocessingNations = [NationEngland],
+                    CompanyDetails = new CompanyDetailsModel
+                    {
+                        Name = $"PerfTest Exporter {i:000}",
+                        TradingName = $"PerfTest Exporter {i:000}",
+                        RegistrationNumber = $"PERF-{orgId}",
+                        CompaniesHouseNumber = $"PERF{orgId}",
+                        RegisteredAddress = new RegisteredAddressModel
+                        {
+                            Line1 = $"Export House {i}",
+                            Town = "Perftown",
+                            Postcode = "PT2 2AA",
+                        },
+                    },
+                    ContactDetails = new ContactDetailsModel
+                    {
+                        FullName = "Export Manager",
+                        Email = $"info@perftest-exporter-{i}.co.uk",
+                    },
+                    Users = [],
+                    Accreditations = [],
+                    Registrations =
+                    [
+                        new RegistrationModel
+                        {
+                            Id = registrationId,
+                            SiteId = $"REG{orgId}",
+                            Status = RegistrationStatusCreated,
+                            Material = material,
+                            WasteProcessingType = WasteProcessingTypeExporter,
+                            OverseasSites = overseasSites,
+                            WasteManagementPermits =
+                            [
+                                new WasteManagementPermitModel
+                                {
+                                    PermitNumber = $"WML{orgId}",
+                                },
+                            ],
+                        },
+                    ],
+                }
+            );
+        }
     }
 
     public Task<bool> CreateAsync(OrganisationModel organisation)

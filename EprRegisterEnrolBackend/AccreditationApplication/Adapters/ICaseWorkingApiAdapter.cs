@@ -10,8 +10,9 @@ public interface ICaseWorkingApiAdapter
     );
 
     // NotificationStatus is null | "sent" | "failed", derived from the linked work item's audit
-    // log; SlaDueDate (RA-415) comes straight off the same work item response — CM's SLA due
-    // date is OJ's single source of truth for "Due date", so no separate lookup is needed.
+    // log; SlaDueDate (RA-415) comes straight off the same work item response — the Case
+    // Management service's SLA due date is the Registration & Accreditation service's single
+    // source of truth for "Due date", so no separate lookup is needed.
     // Must never throw: a missing link, an unreachable ManagementBe, or a malformed response
     // all degrade to an all-null result rather than failing the caller's GetById response
     // (RA102-j7s).

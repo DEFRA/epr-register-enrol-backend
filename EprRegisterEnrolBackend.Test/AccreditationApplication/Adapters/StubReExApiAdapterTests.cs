@@ -179,7 +179,7 @@ public class StubReExApiAdapterTests
         await fakeOrgs.CreateAsync(
             new OrganisationModel
             {
-                OrgId = 60001,
+                OrgId = 70001,
                 CompanyDetails = new CompanyDetailsModel { Name = "Glass Unknown Ltd" },
                 Registrations =
                 [
@@ -202,7 +202,7 @@ public class StubReExApiAdapterTests
         var sut = new StubReExApiAdapter(fakeOrgs, EnabledNullLogger<StubReExApiAdapter>.Instance);
 
         var result = await sut.GetAccreditationAsync(
-            "60001",
+            "70001",
             registrationId.ToString(),
             MaterialType.Glass,
             2027
@@ -233,7 +233,7 @@ public class StubReExApiAdapterTests
         await fakeOrgs.CreateAsync(
             new OrganisationModel
             {
-                OrgId = 60002,
+                OrgId = 70002,
                 CompanyDetails = new CompanyDetailsModel { Name = "Many Sites Exports Ltd" },
                 Registrations =
                 [
@@ -251,7 +251,7 @@ public class StubReExApiAdapterTests
         var sut = new StubReExApiAdapter(fakeOrgs, EnabledNullLogger<StubReExApiAdapter>.Instance);
 
         var result = await sut.GetAccreditationAsync(
-            "60002",
+            "70002",
             registrationId.ToString(),
             MaterialType.Plastic,
             2027
