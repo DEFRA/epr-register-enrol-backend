@@ -43,6 +43,8 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
     private void Reset()
     {
         _factory.FakePersistence.Clear();
+        _factory.FakePendingUploadService.Clear();
+        _factory.FakeCaseManagementAuthNonceStore.Clear();
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);

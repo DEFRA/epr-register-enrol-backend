@@ -15,6 +15,8 @@ public class FakeCaseManagementAuthNonceStore : ICaseManagementAuthNonceStore
 {
     private readonly ConcurrentDictionary<string, byte> _consumed = new();
 
+    public void Clear() => _consumed.Clear();
+
     public Task<bool> TryConsumeAsync(string nonce, TimeSpan ttl, CancellationToken ct = default) =>
         Task.FromResult(_consumed.TryAdd(nonce, 0));
 }
