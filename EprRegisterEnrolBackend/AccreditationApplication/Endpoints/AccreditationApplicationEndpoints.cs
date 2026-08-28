@@ -582,13 +582,16 @@ public static class AccreditationApplicationEndpoints
     // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
     // from the server-held PendingUploadService record, populated only by the real
     // CDP-uploader webhook callback — never trusted verbatim from the client request body.
-    private static IResult? TryResolveScannedFile(
+    private static async Task<(
+        IResult? Error,
+        CdpCallbackFile? ScannedFile
+    )> TryResolveScannedFileAsync(
         string fileUploadId,
         IPendingUploadService pendingUploadService,
-        out CdpCallbackFile scannedFile
+        CancellationToken cancellationToken
     )
     {
-        var status = pendingUploadService.GetStatus(fileUploadId);
+        var status = await pendingUploadService.GetStatusAsync(fileUploadId, cancellationToken);
         var file = status.Form?.File;
         if (
             status.ProcessingStatus != "validated"
@@ -600,14 +603,15 @@ public static class AccreditationApplicationEndpoints
             || string.IsNullOrWhiteSpace(file.S3Key)
         )
         {
-            scannedFile = null!;
-            return Results.UnprocessableEntity(
-                "No completed, scanned upload was found for the supplied FileUploadId."
+            return (
+                Results.UnprocessableEntity(
+                    "No completed, scanned upload was found for the supplied FileUploadId."
+                ),
+                null
             );
         }
 
-        scannedFile = file;
-        return null;
+        return (null, file);
     }
 
     private static async Task<IResult> Seed(
@@ -1851,31 +1855,41 @@ public static class AccreditationApplicationEndpoints
         return Results.Created(string.Empty, interimSite);
     }
 
+    // Bundles AddBesEvidenceFile's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // UpdateOverseasSiteServices above.
+    private sealed record AddBesEvidenceFileServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddBesEvidenceFileRequest> Validator,
+        IPendingUploadService PendingUploadService,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> AddBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         AddBesEvidenceFileRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<AddBesEvidenceFileRequest> validator,
-        IPendingUploadService pendingUploadService
+        [AsParameters] AddBesEvidenceFileServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        if (
-            TryResolveScannedFile(
-                request.FileUploadId,
-                pendingUploadService,
-                out var scannedFile
-            ) is
-            { } uploadError
-        )
+        var (uploadError, resolvedFile) = await TryResolveScannedFileAsync(
+            request.FileUploadId,
+            services.PendingUploadService,
+            services.CancellationToken
+        );
+        if (uploadError is not null)
             return uploadError;
+        var scannedFile = resolvedFile!;
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1913,7 +1927,7 @@ public static class AccreditationApplicationEndpoints
         );
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to add BES evidence file.")
             : Results.Created(string.Empty, site.BesEvidence);
@@ -2223,7 +2237,10 @@ public static class AccreditationApplicationEndpoints
         var sectionKeys = application.Query?.QueriedSectionKeys ?? [];
         var queriedSections = sectionKeys
             .Select(key =>
-                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section)
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                    key,
+                    out var section
+                )
                     ? section
                     : (OperatorSection?)null
             )
@@ -2409,7 +2426,10 @@ public static class AccreditationApplicationEndpoints
         var sections = request
             .SectionKeys.Select(key =>
             {
-                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section);
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                    key,
+                    out var section
+                );
                 return section;
             })
             .ToHashSet();
@@ -2465,22 +2485,22 @@ public static class AccreditationApplicationEndpoints
         FileUploadRequest request,
         IAccreditationApplicationPersistence persistence,
         IValidator<FileUploadRequest> validator,
-        IPendingUploadService pendingUploadService
+        IPendingUploadService pendingUploadService,
+        CancellationToken cancellationToken
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        if (
-            TryResolveScannedFile(
-                request.FileUploadId,
-                pendingUploadService,
-                out var scannedFile
-            ) is
-            { } uploadError
-        )
+        var (uploadError, resolvedFile) = await TryResolveScannedFileAsync(
+            request.FileUploadId,
+            pendingUploadService,
+            cancellationToken
+        );
+        if (uploadError is not null)
             return uploadError;
+        var scannedFile = resolvedFile!;
 
         var contentType = scannedFile.ContentType ?? scannedFile.DetectedContentType;
         if (
@@ -2820,7 +2840,10 @@ public static class AccreditationApplicationEndpoints
         {
             var queriedSections = (application.Query?.QueriedSectionKeys ?? [])
                 .Select(key =>
-                    AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section)
+                    AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                        key,
+                        out var section
+                    )
                         ? section
                         : (OperatorSection?)null
                 )
@@ -2956,12 +2979,13 @@ public static class AccreditationApplicationEndpoints
         };
 
         var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
-        pendingUploadService.Create(
+        await pendingUploadService.CreateAsync(
             fileUploadId,
             cdpResponse.StatusUrl,
             cdpResponse.UploadId,
             cdpRequest.S3Bucket,
-            cdpRequest.S3Path
+            cdpRequest.S3Path,
+            cancellationToken
         );
 
         return Results.Ok(
@@ -2974,9 +2998,10 @@ public static class AccreditationApplicationEndpoints
         );
     }
 
-    private static IResult UploadCompleted(
+    private static async Task<IResult> UploadCompleted(
         CdpCallbackPayload payload,
-        IPendingUploadService pendingUploadService
+        IPendingUploadService pendingUploadService,
+        CancellationToken cancellationToken
     )
     {
         var fileUploadId = payload.Metadata?.GetValueOrDefault("fileUploadId");
@@ -2987,16 +3012,17 @@ public static class AccreditationApplicationEndpoints
         if (file is null)
             return Results.BadRequest("Missing file in callback payload.");
 
-        pendingUploadService.Complete(fileUploadId, file);
+        await pendingUploadService.CompleteAsync(fileUploadId, file, cancellationToken);
         return Results.Ok();
     }
 
-    private static IResult GetUploadStatus(
+    private static async Task<IResult> GetUploadStatus(
         string fileUploadId,
-        IPendingUploadService pendingUploadService
+        IPendingUploadService pendingUploadService,
+        CancellationToken cancellationToken
     )
     {
-        var status = pendingUploadService.GetStatus(fileUploadId);
+        var status = await pendingUploadService.GetStatusAsync(fileUploadId, cancellationToken);
         return Results.Ok(status);
     }
 }

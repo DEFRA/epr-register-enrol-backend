@@ -6,6 +6,8 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Test.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Test.Auth;
+using EprRegisterEnrolBackend.Test.CdpUploader;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -190,6 +192,13 @@ public class SignedCaseManagementTestFactory : WebApplicationFactory<Program>
     public IRecyclingOperationsAuditPersistence MockAuditPersistence { get; } =
         Substitute.For<IRecyclingOperationsAuditPersistence>();
 
+    // epr-register-enrol-backend-0i1: the real ICaseManagementAuthNonceStore is Mongo-backed,
+    // and unlike the other fakes here it's actually exercised at request time by the real
+    // CaseManagementAuthenticationHandler this factory deliberately runs unmocked - without
+    // this override the handler would try to hit a real (unreachable) Mongo mid-request.
+    public FakeCaseManagementAuthNonceStore FakeNonceStore { get; } = new();
+    public FakePendingUploadService FakePendingUploadService { get; } = new();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment(Environments.Production);
@@ -211,6 +220,8 @@ public class SignedCaseManagementTestFactory : WebApplicationFactory<Program>
             services.AddSingleton(MockCaseWorkingAdapter);
             services.AddSingleton(MockCdpUploaderService);
             services.AddSingleton(MockAuditPersistence);
+            services.AddSingleton<ICaseManagementAuthNonceStore>(FakeNonceStore);
+            services.AddSingleton<IPendingUploadService>(FakePendingUploadService);
         });
     }
 }

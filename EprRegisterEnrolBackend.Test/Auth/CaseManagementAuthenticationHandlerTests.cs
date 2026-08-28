@@ -4,7 +4,6 @@ using EprRegisterEnrolBackend.Auth;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -22,7 +21,7 @@ public class CaseManagementAuthenticationHandlerTests
         HttpContext context,
         string? sharedSecret = TestSecret,
         bool isDevelopment = false,
-        IMemoryCache? cache = null,
+        ICaseManagementAuthNonceStore? nonceStore = null,
         ILoggerFactory? loggerFactory = null
     )
     {
@@ -44,7 +43,7 @@ public class CaseManagementAuthenticationHandlerTests
             loggerFactory ?? NullLoggerFactory.Instance,
             UrlEncoder.Default,
             authConfig,
-            cache ?? new MemoryCache(new MemoryCacheOptions()),
+            nonceStore ?? new FakeCaseManagementAuthNonceStore(),
             environment
         );
 
@@ -195,9 +194,7 @@ public class CaseManagementAuthenticationHandlerTests
     [Fact]
     public async Task ExpiredTimestamp_Fails()
     {
-        var staleTimestamp = DateTime
-            .UtcNow.AddMinutes(-10)
-            .ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var staleTimestamp = DateTime.UtcNow.AddMinutes(-10).ToString("yyyy-MM-ddTHH:mm:ssZ");
         var context = CreateValidRequestContext(timestampOverride: staleTimestamp);
 
         var result = await AuthenticateAsync(context);
@@ -220,7 +217,7 @@ public class CaseManagementAuthenticationHandlerTests
     [Fact]
     public async Task ReplayedNonce_SecondRequestFails()
     {
-        var cache = new MemoryCache(new MemoryCacheOptions());
+        var nonceStore = new FakeCaseManagementAuthNonceStore();
         var nonce = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var signature = CaseManagementAuthenticationHandler.ComputeSignature(
@@ -237,7 +234,7 @@ public class CaseManagementAuthenticationHandlerTests
             nonceOverride: nonce,
             signatureOverride: signature
         );
-        var firstResult = await AuthenticateAsync(firstContext, cache: cache);
+        var firstResult = await AuthenticateAsync(firstContext, nonceStore: nonceStore);
         firstResult.Succeeded.Should().BeTrue();
 
         var secondContext = CreateValidRequestContext(
@@ -245,7 +242,7 @@ public class CaseManagementAuthenticationHandlerTests
             nonceOverride: nonce,
             signatureOverride: signature
         );
-        var secondResult = await AuthenticateAsync(secondContext, cache: cache);
+        var secondResult = await AuthenticateAsync(secondContext, nonceStore: nonceStore);
 
         secondResult.Succeeded.Should().BeFalse();
     }
@@ -253,11 +250,11 @@ public class CaseManagementAuthenticationHandlerTests
     [Fact]
     public async Task ReplayedNonce_ConcurrentRequests_OnlyOneSucceeds()
     {
-        // Nonce reuse is checked via TryGetValue+Set, which is not atomic on its own — two
-        // requests racing on the same nonce could otherwise both observe "not present" and
-        // both be authenticated. Fire a batch of identical requests concurrently and assert
-        // single-use is still enforced under contention.
-        var cache = new MemoryCache(new MemoryCacheOptions());
+        // Nonce reuse is now checked via an atomic insert-if-absent on the nonce store (see
+        // CaseManagementAuthNonceStore/FakeCaseManagementAuthNonceStore) rather than a
+        // TryGetValue+Set pair guarded by an external lock. Fire a batch of identical
+        // requests concurrently and assert single-use is still enforced under contention.
+        var nonceStore = new FakeCaseManagementAuthNonceStore();
         var nonce = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var signature = CaseManagementAuthenticationHandler.ComputeSignature(
@@ -278,7 +275,7 @@ public class CaseManagementAuthenticationHandlerTests
                         nonceOverride: nonce,
                         signatureOverride: signature
                     ),
-                    cache: cache
+                    nonceStore: nonceStore
                 )
             )
             .ToArray();
@@ -360,9 +357,7 @@ public class CaseManagementAuthenticationHandlerTests
         var result = await AuthenticateAsync(context, loggerFactory: loggerFactory);
 
         result.Succeeded.Should().BeTrue();
-        loggerFactory
-            .Logger.Entries.Should()
-            .Contain(e => e.Message.Contains("corr-success-123"));
+        loggerFactory.Logger.Entries.Should().Contain(e => e.Message.Contains("corr-success-123"));
     }
 
     [Fact]

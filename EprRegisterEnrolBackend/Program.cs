@@ -185,7 +185,10 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // "AUTH_SHARED_SECRET:MANAGEMENT_BE" — a GetValue call using the literal
     // double-underscore string never matches it (see ManagementBe's own
     // ClientIdAuthentication BuildClientSecrets for the same gotcha).
-    builder.Services.AddMemoryCache();
+    // epr-register-enrol-backend-0i1: nonce replay protection moved from IMemoryCache to a
+    // Mongo-backed store (CaseManagementAuthNonceStore) so it survives a restart and is shared
+    // across instances - AddMemoryCache() is no longer needed anywhere in this service.
+    builder.Services.AddSingleton<ICaseManagementAuthNonceStore, CaseManagementAuthNonceStore>();
     builder.Services.Configure<CaseManagementAuthConfig>(config =>
     {
         builder.Configuration.GetSection("CaseManagementAuth").Bind(config);
