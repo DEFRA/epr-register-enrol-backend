@@ -21,6 +21,7 @@ public class AddInterimSiteRequestValidatorTests
             ContactName = "Jane Smith",
             ContactEmail = "jane.smith@example.com",
             ContactPhone = "+33 1 23 45 67 89",
+            OperationCodes = ["R12"],
         };
 
     [Fact]
@@ -122,5 +123,62 @@ public class AddInterimSiteRequestValidatorTests
         request.ContactPhone = phone;
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor(r => r.ContactPhone);
+    }
+
+    // RA-486: mandatory ≥1 of R12/R13, optional R3/R4/R5 - the inverse of the ORS's own mandatory/
+    // optional split.
+
+    [Fact]
+    public void EmptyOperationCodes_FailsValidation()
+    {
+        var request = ValidRequest();
+        request.OperationCodes = [];
+        var result = _validator.TestValidate(request);
+        result.ShouldHaveValidationErrorFor(r => r.OperationCodes);
+    }
+
+    [Fact]
+    public void OperationCodesWithBogusCode_FailsValidation()
+    {
+        var request = ValidRequest();
+        request.OperationCodes = ["R3", "BOGUS"];
+        var result = _validator.TestValidate(request);
+        result.ShouldHaveValidationErrorFor(r => r.OperationCodes);
+    }
+
+    [Fact]
+    public void OperationCodesWithOnlyMaterialCodes_FailsValidation()
+    {
+        var request = ValidRequest();
+        request.OperationCodes = ["R3", "R4", "R5"];
+        var result = _validator.TestValidate(request);
+        result.ShouldHaveValidationErrorFor(r => r.OperationCodes);
+    }
+
+    [Fact]
+    public void OperationCodesWithR12Alone_PassesValidation()
+    {
+        var request = ValidRequest();
+        request.OperationCodes = ["R12"];
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveAnyValidationErrors();
+    }
+
+    [Fact]
+    public void OperationCodesWithR13Alone_PassesValidation()
+    {
+        var request = ValidRequest();
+        request.OperationCodes = ["R13"];
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveAnyValidationErrors();
+    }
+
+    [Fact]
+    public void OperationCodesWithR12AndMaterialCode_PassesValidation()
+    {
+        var request = ValidRequest();
+        request.OperationCodes = ["R12", "R3"];
+        var result = _validator.TestValidate(request);
+        result.ShouldNotHaveAnyValidationErrors();
     }
 }
