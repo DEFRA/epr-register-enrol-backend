@@ -637,13 +637,22 @@ public class HttpCaseWorkingApiAdapter(
     // flags behind the "new" markers, and the nested interim site. Every field added here is
     // optional on the consumer side — work items created before RA-292 simply do not have them,
     // and null-valued fields are dropped entirely by JsonOptions' WhenWritingNull.
+    //
+    // RA-483 AC01: the operator's "remove" journey deselects rather than deletes, so a removed ORS
+    // stays in the application record with Selected = false. Filtering it out here is what keeps
+    // it off the regulator's work-item screen. `selected` is still projected onto the sites that
+    // do survive the filter so consumers can defend independently — the cross-repo contract is
+    // "absent or true => visible, explicit false => removed", so this only ever emits true today
+    // but pins the field name for management-fe and management-be.
     private static object BuildOverseasSitesSection(AccreditationApplicationModel application) =>
         new
         {
             sites = (application.OverseasSites?.Sites ?? [])
+                .Where(s => s.Selected)
                 .Select(s => new
                 {
                     siteId = s.SiteId,
+                    selected = s.Selected,
                     orsId = s.OrsId,
                     siteName = s.SiteName,
                     siteAddress = s.SiteAddress,
@@ -682,6 +691,7 @@ public class HttpCaseWorkingApiAdapter(
                             contactName = s.InterimSite.ContactName,
                             contactEmail = s.InterimSite.ContactEmail,
                             contactPhone = s.InterimSite.ContactPhone,
+                            operationCodes = s.InterimSite.OperationCodes,
                         },
                     besEvidence = new
                     {

@@ -264,6 +264,14 @@ public class StubReExApiAdapterTests
         firstSite
             .SiteId.Should()
             .Be(900001, because: "a non-numeric raw site id falls back to 900001 + its index (0)");
+        firstSite
+            .OrsId.Should()
+            .Be(
+                "001",
+                because: "OrsId is synthesized from position (1-indexed, 3-digit), not the raw "
+                    + "site id -- the seed data's 6-digit placeholders are not real ORS ids and "
+                    + "would blow OrsIdGenerator's 999 cap if used directly"
+            );
 
         var fifthSite = result.Value!.OverseasSites[4];
         fifthSite
@@ -272,6 +280,7 @@ public class StubReExApiAdapterTests
         fifthSite.IsEu.Should().BeFalse();
         fifthSite.IsOecd.Should().BeFalse();
         fifthSite.SiteId.Should().Be(900005, because: "\"900005\" parses cleanly as an int");
+        fifthSite.OrsId.Should().Be("005", because: "the 5th site synthesizes OrsId \"005\"");
     }
 
     // ---------------- RA-475: GetOrganisationNumberAsync ----------------

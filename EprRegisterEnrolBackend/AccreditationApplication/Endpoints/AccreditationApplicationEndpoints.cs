@@ -429,29 +429,21 @@ public static class AccreditationApplicationEndpoints
         CancellationToken CancellationToken
     );
 
-    // RA-469 AC18 / RA-470 gap 2: application/material-type-aware OperationCodes checks the
+    // RA-469 AC18 / RA-470 gap 2: application/material-type-aware OperationCodes check the
     // request-shape validators (PatchRecyclingOperationsRequestValidator,
     // PromoteOverseasSiteRequestValidator) can't do alone - see RecyclingOperationCodes' own doc
     // comment - shared by PatchRecyclingOperations (regulator-driven, below) and
-    // UpdateOverseasSite (operator-driven, RA-470) so the two never drift apart. Needs the loaded
-    // site (for InterimSite) and the application's MaterialType, neither of which a request-shape
-    // validator has access to. Returns null when the codes are valid.
+    // UpdateOverseasSite (operator-driven, RA-470) so the two never drift apart. Needs the
+    // application's MaterialType, which a request-shape validator has no access to. Returns null
+    // when the codes are valid.
     //
-    // enforceInterimSiteRequirement gates the AC11 sub-check only. PatchRecyclingOperations is a
-    // standalone codes-only edit, so R12/R13 must already have their InterimSite in place at the
-    // moment it's called. UpdateOverseasSite backs the operator's Change wizard, which - exactly
-    // like the existing Add/Promote wizard entry points (neither of which calls this method at
-    // all) - submits the site PATCH *before* redirecting into the separate interim-site sub-wizard
-    // when requiresInterimSite() is true; enforcing AC11 there would 400 that handoff every time.
-    // Gap 1's own check below (site.InterimSite is not null but request drops R12/R13) still
-    // applies unconditionally on UpdateOverseasSite - it protects the opposite, already-attached
-    // direction, which this parameter doesn't touch.
+    // RA-486: the old AC11 "R12/R13 needs an associated interim site" sub-check (and its Gap 1
+    // inverse on UpdateOverseasSite, "an interim site needs R12/R13 kept selected") have both been
+    // removed - an ORS and its interim site are independent now, so this method no longer needs
+    // the site or an enforceInterimSiteRequirement switch at all.
     private static IResult? ValidateOperationCodesForSite(
         MaterialType materialType,
-        List<string> operationCodes,
-        OverseasSiteModel site,
-        int siteId,
-        bool enforceInterimSiteRequirement = true
+        List<string> operationCodes
     )
     {
         // A code not offered for this application's material type is rejected even though it's a
@@ -460,17 +452,6 @@ public static class AccreditationApplicationEndpoints
         if (operationCodes.Any(c => !applicableCodes.Contains(c)))
             return Results.BadRequest(
                 $"OperationCodes must each be applicable to material type '{materialType}': {string.Join(", ", applicableCodes)}."
-            );
-
-        // AC11: R12/R13 describe an operation performed in relation to an associated interim
-        // site, so an ORS with none can't carry them.
-        if (
-            enforceInterimSiteRequirement
-            && operationCodes.Any(RecyclingOperationCodes.CodesRequiringAccompaniment.Contains)
-            && site.InterimSite is null
-        )
-            return Results.BadRequest(
-                $"R12 and R13 require an associated interim site on overseas site '{siteId}'."
             );
 
         return null;
@@ -520,12 +501,7 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
 
         if (
-            ValidateOperationCodesForSite(
-                application.MaterialType,
-                request.OperationCodes,
-                site,
-                siteId
-            ) is
+            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
             { } codesError
         )
             return codesError;
@@ -674,12 +650,11 @@ public static class AccreditationApplicationEndpoints
         // live record that still shows up in GET /{organisationId}. Consumers must therefore
         // tolerate duplicates and apply this same newest-first rule rather than assuming
         // uniqueness.
-        // A unique partial index would be the real fix, but it is not available today:
-        // MongoService.EnsureIndexes (Utils/Mongo/MongoService.cs) builds its index models, logs
-        // that it is ensuring them, and then has the Collection.Indexes.CreateMany call commented
-        // out — so no index in this service is ever created, in any environment. A unique index
-        // added here would be silently inert: worse than none, because it would read as a
-        // guarantee that is not enforced at runtime.
+        // A unique partial index would be the real fix. MongoService.EnsureIndexes does now
+        // create the indexes each subclass defines (via MongoIndexReconciler), so one added to
+        // AccreditationApplicationPersistence.DefineIndexes would actually be enforced — but
+        // deciding the exact partial-filter shape (and reconciling it against any existing
+        // duplicates in each environment) is out of scope here and left as follow-up.
         var existing = (await persistence.GetByOrganisationAsync(organisationId))
             .Where(a =>
                 a.RegistrationId == registrationId
@@ -1551,10 +1526,11 @@ public static class AccreditationApplicationEndpoints
     // three ways: (1) Selected/RegisteredNowAccredited are deliberately left untouched - the site
     // is already selected/accredited, this isn't a promotion; (2) OperationCodes go through the
     // same application/material-type-aware ValidateOperationCodesForSite check
-    // PatchRecyclingOperations uses (gap 2), which Promote's validator alone doesn't cover; (3) an
-    // orphaned-interim-site guard (gap 1), a BES-evidence invalidation on Country/
-    // ConditionsOfExport change (gap 5), and an audit record of any operation-code change (gap 3,
-    // matching PatchRecyclingOperations' regulator-driven audit trail).
+    // PatchRecyclingOperations uses (gap 2), which Promote's validator alone doesn't cover; (3) a
+    // BES-evidence invalidation on Country/ConditionsOfExport change (gap 5), and an audit record
+    // of any operation-code change (gap 3, matching PatchRecyclingOperations' regulator-driven
+    // audit trail). RA-486 removed the old gap 1 orphaned-interim-site guard - the ORS's
+    // OperationCodes and any attached interim site are independent now.
     private static async Task<IResult> UpdateOverseasSite(
         string organisationId,
         string applicationId,
@@ -1591,34 +1567,16 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
 
         // Gap 2: the same application/material-type-aware check PatchRecyclingOperations enforces -
-        // PromoteOverseasSiteRequestValidator alone doesn't cover it. The AC11 R12/R13-needs-
-        // interim-site sub-check is deliberately NOT enforced here (enforceInterimSiteRequirement:
-        // false) - the operator's Change wizard, like the existing Add/Promote entry points, PATCHes
-        // the site before the separate interim-site sub-wizard attaches InterimSite; gap 1 below
-        // still guards the opposite direction (an existing InterimSite left orphaned).
+        // PromoteOverseasSiteRequestValidator alone doesn't cover it. RA-486 removed the old AC11
+        // R12/R13-needs-interim-site sub-check (and its Gap 1 inverse, "an interim site needs
+        // R12/R13 kept selected on the ORS") entirely - the ORS and any attached interim site are
+        // independent now, so dropping/keeping R12/R13 here never depends on, or is constrained
+        // by, site.InterimSite.
         if (
-            ValidateOperationCodesForSite(
-                application.MaterialType,
-                request.OperationCodes,
-                site,
-                siteId,
-                enforceInterimSiteRequirement: false
-            ) is
+            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
             { } codesError
         )
             return codesError;
-
-        // Gap 1: an interim site record can't be left dangling with no R12/R13 justifying it - the
-        // inverse of PatchRecyclingOperations' "R12/R13 needs an interim site" check above.
-        if (
-            site.InterimSite is not null
-            && !request.OperationCodes.Any(
-                RecyclingOperationCodes.CodesRequiringAccompaniment.Contains
-            )
-        )
-            return Results.BadRequest(
-                $"Overseas site '{siteId}' has an associated interim site; at least one of R12/R13 must remain selected."
-            );
 
         // Gap 5: BES evidence is tied to Country/ConditionsOfExport - either changing makes any
         // previously uploaded evidence and a Completed section status stale.
@@ -1852,6 +1810,7 @@ public static class AccreditationApplicationEndpoints
             ContactName = request.ContactName,
             ContactEmail = request.ContactEmail,
             ContactPhone = request.ContactPhone,
+            OperationCodes = request.OperationCodes,
             IsNewSite = true,
         };
 

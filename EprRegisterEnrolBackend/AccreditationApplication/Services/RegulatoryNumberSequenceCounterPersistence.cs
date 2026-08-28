@@ -17,12 +17,9 @@ public class RegulatoryNumberSequenceCounterPersistence
         // No custom index needed for AC2's uniqueness guarantee: RegulatoryNumberSequenceCounter.Id
         // is annotated [BsonId], so it maps to Mongo's _id field, which already carries a mandatory
         // built-in unique index on every collection - a custom CreateIndexModel would be redundant.
-        // (An earlier version of this constructor called Collection.Indexes.CreateOne explicitly,
-        // which made real, blocking Mongo network calls at DI-construction time - the one thing
-        // every other MongoService<T> subclass in this codebase avoids, since EnsureIndexes'
-        // Collection.Indexes.CreateMany call is dead code. That broke every WebApplicationFactory
-        // test that doesn't override this interface, since DI singletons here must stay
-        // network-safe to construct.)
+        // DefineIndexes returns [] below, so EnsureIndexes short-circuits before any Mongo call and
+        // this constructor stays network-safe (the property WebApplicationFactory tests that don't
+        // override this interface rely on).
     }
 
     public async Task<int> IncrementAsync(string key, CancellationToken ct = default)

@@ -159,6 +159,10 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // with one already in the real register. Idempotent, safe on every startup.
     builder.Services.AddHostedService<RegulatoryNumberSequenceBackfillService>();
 
+    // Build the Mongo-backed persistences' indexes at startup (off the request
+    // path) rather than on whichever request first resolves the singleton.
+    builder.Services.AddHostedService<MongoIndexInitializerService>();
+
     // CDP Uploader
     builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
     builder.Services.Configure<AppConfig>(builder.Configuration.GetSection("App"));

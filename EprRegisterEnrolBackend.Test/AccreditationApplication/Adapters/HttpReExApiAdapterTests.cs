@@ -287,6 +287,36 @@ public class HttpReExApiAdapterTests
     }
 
     [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_PopulatesOrsIdFromResponseKey()
+    {
+        // RA-507: ReEx's overseas-sites endpoint keys its response by the site's existing,
+        // three-digit ORS id (not just an arbitrary index) -- that key must be captured as
+        // OrsId, not just SiteId, so OrsIdGenerator can see it when computing the next id for a
+        // new operator-added site.
+        const string overseasSitesJson = """
+            {
+              "003": {
+                "name": "Overseas Recycling Co",
+                "country": "France",
+                "address": { "line1": "1 Rue Example", "townOrCity": "Paris" }
+              }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OverseasSites.Should().ContainSingle();
+        result.Value!.OverseasSites[0].OrsId.Should().Be("003");
+    }
+
+    [Fact]
     public async Task GetAccreditationAsync_ExporterRegistration_NoRegisteredOfficePostcode_FailsRatherThanSubmittingMalformedPayload()
     {
         var sut = BuildSut(OrganisationJsonNoCompanyPostcode);
@@ -720,6 +750,11 @@ public class HttpReExApiAdapterTests
         var site = result.Value!.OverseasSites[0];
         site.SiteId.Should()
             .Be(0, because: "a non-numeric overseas site key has no id to fall back to");
+        site.OrsId.Should()
+            .Be(
+                "site-A",
+                because: "OrsId is the raw key regardless of whether it parses as an int"
+            );
         site.SiteAddress.Should().BeNull(because: "the site had no address in the ReEx payload");
     }
 

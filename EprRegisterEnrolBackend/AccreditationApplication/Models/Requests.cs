@@ -70,10 +70,34 @@ public class PatchOverseasSitesRequest
     public SectionStatus? SectionStatus { get; set; }
 }
 
+// Common shape shared by AddOverseasSiteRequest and PromoteOverseasSiteRequest -
+// the two requests differ only in what the endpoint DOES with a matching site
+// (create vs. attach-to-existing), not in what an ORS site itself looks like.
+// Lets AddOverseasSiteRequestValidator and PromoteOverseasSiteRequestValidator
+// share one rule set via OverseasSiteRequestValidatorBase<T> instead of keeping
+// two near-identical copies in sync by hand.
+public interface IOverseasSiteRequestFields
+{
+    string SiteName { get; }
+    string AddressLine1 { get; }
+    string? AddressLine2 { get; }
+    string TownOrCity { get; }
+    string Country { get; }
+    string? Coordinates { get; }
+    string ContactName { get; }
+    string ContactEmail { get; }
+    string? ContactPhone { get; }
+    List<string> OperationCodes { get; }
+    string Code1 { get; }
+    string? Code2 { get; }
+    string? Code3 { get; }
+    string RepatriatedLoads { get; }
+}
+
 // RA-482: OrsId is deliberately absent -- the server now generates it authoritatively
 // (see OrsIdGenerator / AddOverseasSite), closing the race condition inherent in trusting
 // a client-computed value.
-public record AddOverseasSiteRequest
+public record AddOverseasSiteRequest : IOverseasSiteRequestFields
 {
     public required string SiteName { get; set; }
     public required string AddressLine1 { get; set; }
@@ -92,7 +116,7 @@ public record AddOverseasSiteRequest
     public bool? ConditionsOfExport { get; set; }
 }
 
-public record PromoteOverseasSiteRequest
+public record PromoteOverseasSiteRequest : IOverseasSiteRequestFields
 {
     public required string SiteName { get; set; }
     public required string AddressLine1 { get; set; }
@@ -111,6 +135,9 @@ public record PromoteOverseasSiteRequest
     public bool? ConditionsOfExport { get; set; }
 }
 
+// RA-486: OperationCodes is required here - unlike InterimSiteModel's own default-to-empty list,
+// which exists purely because the model is also used to represent legacy/pre-RA-486 persisted
+// data that predates this field.
 public record AddInterimSiteRequest
 {
     public required string Country { get; set; }
@@ -123,6 +150,7 @@ public record AddInterimSiteRequest
     public required string ContactName { get; set; }
     public required string ContactEmail { get; set; }
     public required string ContactPhone { get; set; }
+    public required List<string> OperationCodes { get; set; }
 }
 
 // FileId/Filename/ContentType/ScanStatus/S3Key/S3Bucket are deliberately NOT here:

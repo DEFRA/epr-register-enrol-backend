@@ -22,7 +22,11 @@ public class OverseasSiteMergeTests
             InterimSite = interimSite,
         };
 
-    private static InterimSiteModel Interim(int siteId, bool isNewSite = false) =>
+    private static InterimSiteModel Interim(
+        int siteId,
+        bool isNewSite = false,
+        List<string>? operationCodes = null
+    ) =>
         new()
         {
             SiteId = siteId,
@@ -34,6 +38,7 @@ public class OverseasSiteMergeTests
             ContactName = "Marie Curie",
             ContactEmail = "marie@example.com",
             ContactPhone = "0033111222333",
+            OperationCodes = operationCodes ?? ["R12"],
             IsNewSite = isNewSite,
         };
 
@@ -103,7 +108,11 @@ public class OverseasSiteMergeTests
     [Fact]
     public void Merge_NullPersistedList_TreatsEverySiteAsNew()
     {
-        OverseasSiteMerge.Merge(null, [Site(1)]).Should().ContainSingle().Which.IsNewSite.Should()
+        OverseasSiteMerge
+            .Merge(null, [Site(1)])
+            .Should()
+            .ContainSingle()
+            .Which.IsNewSite.Should()
             .BeTrue();
     }
 
@@ -220,6 +229,71 @@ public class OverseasSiteMergeTests
         result[0].InterimSite.Should().BeNull();
     }
 
+    // RA-486 gap fix: PATCH .../overseas-sites is the only way to remove an interim site (there is
+    // no dedicated DELETE route) - a site payload with InterimSite: null must clear it cleanly,
+    // with no side effects on the rest of that site's fields and no other merge step re-populating
+    // it. This was previously untested - no caller sent InterimSite: null before RA-486.
+    [Fact]
+    public void Merge_InterimSiteRemovedByClient_HasNoSideEffectsOnOtherSiteFields()
+    {
+        var persisted = Site(1, isNewSite: false, siteName: "ORS With Interim");
+        persisted.InterimSite = Interim(2, isNewSite: true);
+        persisted.OrsId = "001";
+        persisted.RegisteredNowAccredited = true;
+
+        var incoming = Site(1, isNewSite: false, siteName: "ORS With Interim");
+        incoming.InterimSite = null;
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result.Should().ContainSingle();
+        result[0].InterimSite.Should().BeNull();
+        result[0].SiteId.Should().Be(1);
+        result[0].SiteName.Should().Be("ORS With Interim");
+        result[0].IsNewSite.Should().BeFalse();
+        result[0].OrsId.Should().Be("001");
+        result[0].RegisteredNowAccredited.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Merge_KnownInterimSiteId_CarriesOperationCodesThroughFromIncoming()
+    {
+        var result = OverseasSiteMerge.Merge(
+            [Site(1, interimSite: Interim(2, operationCodes: ["R12"]))],
+            [Site(1, interimSite: Interim(2, operationCodes: ["R12", "R3"]))]
+        );
+
+        result[0].InterimSite!.OperationCodes.Should().BeEquivalentTo(["R12", "R3"]);
+    }
+
+    // RA-486 fix: OperationCodes is not `required` on InterimSiteModel (it defaults to `[]` so
+    // pre-RA-486 documents still deserialise), so a bulk PATCH body that omits it binds to an
+    // empty list rather than failing model binding. Without restoring from the persisted value,
+    // that empty list would silently overwrite the persisted codes, dropping the interim site
+    // below the >=1-of-R12/R13 minimum this PR introduced.
+    [Fact]
+    public void Merge_IncomingInterimSiteHasEmptyOperationCodes_RestoresPersistedCodes()
+    {
+        var result = OverseasSiteMerge.Merge(
+            [Site(1, interimSite: Interim(2, operationCodes: ["R12", "R3"]))],
+            [Site(1, interimSite: Interim(2, operationCodes: []))]
+        );
+
+        result[0].InterimSite!.OperationCodes.Should().BeEquivalentTo(["R12", "R3"]);
+    }
+
+    [Fact]
+    public void Merge_UnknownInterimSiteHasEmptyOperationCodes_StaysEmpty()
+    {
+        // No persisted interim site to restore from - nothing to fall back on.
+        var result = OverseasSiteMerge.Merge(
+            [Site(1)],
+            [Site(1, interimSite: Interim(2, operationCodes: []))]
+        );
+
+        result[0].InterimSite!.OperationCodes.Should().BeEmpty();
+    }
+
     [Fact]
     public void Merge_InterimIdLookupIsSeparateFromSiteIdLookup()
     {
@@ -255,7 +329,7 @@ public class OverseasSiteMergeTests
         OverseasSiteMerge.Merge([Site(1)], [Site(99)])[0].PreviousSites.Should().BeEmpty();
     }
 
-    // --- OrsId: the epr-2uxy remediation discriminator ---
+    // --- OrsId: server-owned, protected across merge ---
 
     [Fact]
     public void Merge_ClientOmitsOrsId_PreservesThePersistedOne()
@@ -281,25 +355,26 @@ public class OverseasSiteMergeTests
     }
 
     [Fact]
-    public void Merge_ReExSourcedSiteHasNoOrsId_ClientCannotInventOne()
+    public void Merge_KnownSiteWithNullPersistedOrsId_ClientCannotInventOne()
     {
-        // The load-bearing case. A null OrsId is what marks a site as ReEx-sourced, which is how
-        // the epr-2uxy remediation tells a defaulted isNewSite=true from a genuine one. If a
-        // client could supply one, an affected site would stop looking affected.
-        var reExSourced = Site(1);
-        reExSourced.OrsId.Should().BeNull("precondition: ReEx never sets OrsId");
+        // RA-507: a null persisted OrsId happens for legacy documents saved before
+        // HttpReExApiAdapter started populating it, or for a site whose OrsId genuinely wasn't
+        // known yet. Either way it's still the persisted value, and the client must not be able
+        // to override it via PATCH.
+        var persisted = Site(1);
+        persisted.OrsId.Should().BeNull("precondition: no OrsId persisted for this site");
 
         var incoming = Site(1);
         incoming.OrsId = "001";
 
-        OverseasSiteMerge.Merge([reExSourced], [incoming])[0].OrsId.Should().BeNull();
+        OverseasSiteMerge.Merge([persisted], [incoming])[0].OrsId.Should().BeNull();
     }
 
     [Fact]
     public void Merge_UnknownSite_KeepsTheSuppliedOrsId()
     {
-        // No persisted value to restore. Forcing null would destroy data and, worse, make the site
-        // masquerade as ReEx-sourced under the remediation discriminator.
+        // No persisted value to restore. Forcing null would destroy data the client legitimately
+        // sent for a site the server has never seen.
         var incoming = Site(99);
         incoming.OrsId = "007";
 
@@ -330,7 +405,8 @@ public class OverseasSiteMergeTests
         var incoming = Site(1);
         incoming.RegisteredNowAccredited.Should().BeFalse("precondition: the omitted-key state");
 
-        OverseasSiteMerge.Merge([persisted], [incoming])[0]
+        OverseasSiteMerge
+            .Merge([persisted], [incoming])[0]
             .RegisteredNowAccredited.Should()
             .BeTrue();
     }
@@ -341,7 +417,8 @@ public class OverseasSiteMergeTests
         var incoming = Site(1);
         incoming.RegisteredNowAccredited = true;
 
-        OverseasSiteMerge.Merge([Site(1)], [incoming])[0]
+        OverseasSiteMerge
+            .Merge([Site(1)], [incoming])[0]
             .RegisteredNowAccredited.Should()
             .BeFalse();
     }
@@ -354,7 +431,8 @@ public class OverseasSiteMergeTests
         var incoming = Site(99);
         incoming.RegisteredNowAccredited = true;
 
-        OverseasSiteMerge.Merge([Site(1)], [incoming])[0]
+        OverseasSiteMerge
+            .Merge([Site(1)], [incoming])[0]
             .RegisteredNowAccredited.Should()
             .BeFalse();
     }

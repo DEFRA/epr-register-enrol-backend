@@ -75,6 +75,11 @@ public class InterimSiteModel
     public required string ContactEmail { get; set; }
     public required string ContactPhone { get; set; }
 
+    // RA-486: mandatory ≥1 of R12/R13, optional R3/R4/R5 (the inverse mandatory/optional split
+    // from the parent ORS's OperationCodes) - see RecyclingOperationCodes.HasMandatoryInterimCode.
+    // Material type is inherited from the parent ORS and is not re-validated here.
+    public List<string> OperationCodes { get; set; } = [];
+
     // RA-292 AC02 — same reasoning as OverseasSiteModel.IsNewSite above. Set explicitly by
     // AddInterimSite, preserved across PATCH by OverseasSiteMerge.
     public bool IsNewSite { get; set; }

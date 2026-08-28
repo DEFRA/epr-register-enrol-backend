@@ -1744,11 +1744,11 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task PatchOverseasSites_ReExSourcedSite_ClientCannotInventAnOrsId()
+    public async Task PatchOverseasSites_KnownSiteWithNoPersistedOrsId_ClientCannotInventOne()
     {
-        // A null OrsId marks a site as ReEx-sourced, which is the discriminator the epr-2uxy
-        // remediation relies on to identify wrongly-defaulted isNewSite values. A client that
-        // could supply one would make an affected site stop looking affected.
+        // RA-507: a site with no persisted OrsId (e.g. a legacy document predating
+        // HttpReExApiAdapter populating it) is still server-owned once persisted — a client
+        // supplying one on PATCH must not be able to set it.
         Reset();
         var app = SeedApplicationWithSites(
             new OverseasSiteModel { SiteId = 1, SiteName = "ReEx Registered Site" }
@@ -4448,14 +4448,9 @@ public class AccreditationApplicationEndpointsTests
     [Fact]
     public async Task UpdateOverseasSite_R12WithNoInterimSite_Returns200()
     {
-        // AC11's "R12/R13 needs an existing interim site" sub-check is deliberately NOT enforced
-        // on UpdateOverseasSite (enforceInterimSiteRequirement: false) - the operator's Change
-        // wizard, exactly like the existing Add/Promote entry points (neither of which calls
-        // ValidateOperationCodesForSite at all), PATCHes the site with R12/R13 selected *before*
-        // redirecting into the separate interim-site sub-wizard that attaches InterimSite.
-        // Enforcing this synchronously here would 400 that handoff every time. Gap 1's own check
-        // (see UpdateOverseasSite_InterimSitePresent_DroppingR12R13_Returns400 below) still guards
-        // the opposite direction - an existing InterimSite left orphaned by dropping R12/R13.
+        // RA-486: R12/R13 no longer imply an interim site must exist - the old AC11 "R12/R13
+        // needs an existing interim site" sub-check has been removed entirely, not just skipped
+        // for this endpoint.
         Reset();
         var app = SeedApplication(configure: a =>
             a.OverseasSites = new AccreditationApplicationOverseasSites
@@ -4474,9 +4469,12 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
-    // Gap 1: an interim site can't be left dangling with no R12/R13 justifying it.
+    // RA-486: the ORS's OperationCodes and any attached interim site are independent now -
+    // dropping R12/R13 from the ORS no longer disturbs an existing interim site (whose own
+    // mandatory-code rule lives on InterimSiteModel.OperationCodes instead). Supersedes the old
+    // Gap 1 "an interim site can't be left dangling with no R12/R13 justifying it" 400.
     [Fact]
-    public async Task UpdateOverseasSite_InterimSitePresent_DroppingR12R13_Returns400()
+    public async Task UpdateOverseasSite_InterimSitePresent_DroppingR12R13_Returns200()
     {
         Reset();
         var app = SeedApplication(configure: a =>
@@ -4496,7 +4494,6 @@ public class AccreditationApplicationEndpointsTests
             }
         );
 
-        // Drops R12/R13 entirely, leaving the interim site with nothing to justify it.
         var request = ValidUpdateOverseasSiteRequest() with
         {
             OperationCodes = ["R4"],
@@ -4507,7 +4504,7 @@ public class AccreditationApplicationEndpointsTests
             TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]
@@ -4748,6 +4745,7 @@ public class AccreditationApplicationEndpointsTests
             ContactName = "Jane Smith",
             ContactEmail = "jane.smith@example.com",
             ContactPhone = "+33 1 23 45 67 89",
+            OperationCodes = ["R12"],
         };
 
     [Fact]
@@ -4772,6 +4770,34 @@ public class AccreditationApplicationEndpointsTests
         interimSite.IsNewSite.Should().BeTrue();
         interimSite.SiteId.Should().Be(2);
         interimSite.SiteNumber.Should().Be("SN-0002");
+        interimSite.OperationCodes.Should().BeEquivalentTo(["R12"]);
+    }
+
+    // RA-486: interim site OperationCodes must include at least one of R12/R13 - R3/R4/R5 are
+    // optional on the interim site (material type is inherited from the parent ORS).
+    [Theory]
+    [InlineData(new string[] { }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R3" }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R99" }, HttpStatusCode.BadRequest)]
+    [InlineData(new[] { "R12" }, HttpStatusCode.Created)]
+    [InlineData(new[] { "R13" }, HttpStatusCode.Created)]
+    [InlineData(new[] { "R3", "R12" }, HttpStatusCode.Created)]
+    public async Task AddInterimSite_OperationCodesMandatoryRule_MatchesAc(
+        string[] operationCodes,
+        HttpStatusCode expectedStatus
+    )
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var request = ValidAddInterimSiteRequest() with { OperationCodes = [.. operationCodes] };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(expectedStatus);
     }
 
     [Fact]

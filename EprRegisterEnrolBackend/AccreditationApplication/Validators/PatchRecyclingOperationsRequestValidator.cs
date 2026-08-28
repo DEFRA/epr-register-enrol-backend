@@ -4,10 +4,11 @@ using FluentValidation;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Validators;
 
-// RA-469 AC10/AC12: stateless, request-shape-only checks - this validator has no access to the
-// application's MaterialType, so it cannot enforce the material-type-applicability rule; that,
-// and the InterimSite-presence rule (AC11), are checked in the endpoint once the application/site
-// are loaded (see AccreditationApplicationEndpoints.PatchRecyclingOperations).
+// RA-469 AC10/AC12, reworked by RA-486: stateless, request-shape-only checks - this validator has
+// no access to the application's MaterialType, so it cannot enforce the material-type-
+// applicability rule; that is checked in the endpoint once the application/site are loaded (see
+// AccreditationApplicationEndpoints.PatchRecyclingOperations). RA-486 removed the old
+// InterimSite-presence rule (AC11) entirely - R12/R13 no longer require an attached interim site.
 public class PatchRecyclingOperationsRequestValidator
     : AbstractValidator<PatchRecyclingOperationsRequest>
 {
@@ -20,9 +21,9 @@ public class PatchRecyclingOperationsRequestValidator
                 $"OperationCodes must each be one of: {string.Join(", ", RecyclingOperationCodes.AllCodes)}."
             );
         RuleFor(r => r.OperationCodes)
-            .Must(codes => !RecyclingOperationCodes.RequiresAccompanyingCode(codes))
+            .Must(RecyclingOperationCodes.HasMandatoryOrsCode)
             .WithMessage(
-                "R12 and R13 cannot be selected in isolation and must be accompanied by at least one other applicable R code."
+                $"OperationCodes must include at least one of: {string.Join(", ", RecyclingOperationCodes.MaterialCodes)}."
             );
     }
 }
