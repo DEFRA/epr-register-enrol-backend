@@ -26,10 +26,6 @@ public class CaseManagementAuthenticationHandler(
 
     private static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(5);
 
-
-    // Guards the nonce check-then-set below across concurrent requests on this instance.
-    private static readonly object NonceLock = new();
-
     // Header the Case Management service BE push hook sends on every request for
     // cross-service tracing (RA-311).
     // Purely a diagnostic aid: absence must never fail the request.

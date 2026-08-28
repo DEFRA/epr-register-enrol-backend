@@ -30,7 +30,7 @@ public class DevScanAutoCompleteServiceTests
     public async Task TryCompleteFromCdpStatus_RealCdpResponseShape_CompletesAsCleanNotRejected()
     {
         _pendingUploadService
-            .TryGetPendingUploadDetailsAsync("upload-1")
+            .TryGetPendingUploadDetailsAsync("upload-1", Arg.Any<CancellationToken>())
             .Returns(
                 new PendingUploadDetails(
                     "http://cdp-uploader/status/upload-1",
@@ -69,7 +69,8 @@ public class DevScanAutoCompleteServiceTests
             .Received(1)
             .CompleteAsync(
                 "upload-1",
-                Arg.Is<CdpCallbackFile>(f => f.FileId == "file-abc" && f.FileStatus == "complete")
+                Arg.Is<CdpCallbackFile>(f => f.FileId == "file-abc" && f.FileStatus == "complete"),
+                Arg.Any<CancellationToken>()
             );
     }
 
@@ -77,7 +78,7 @@ public class DevScanAutoCompleteServiceTests
     public async Task TryCompleteFromCdpStatus_RealRejectedFile_CompletesAsRejected()
     {
         _pendingUploadService
-            .TryGetPendingUploadDetailsAsync("upload-2")
+            .TryGetPendingUploadDetailsAsync("upload-2", Arg.Any<CancellationToken>())
             .Returns(
                 new PendingUploadDetails("http://cdp-uploader/status/upload-2", null, null, null)
             );
@@ -104,14 +105,18 @@ public class DevScanAutoCompleteServiceTests
 
         await _pendingUploadService
             .Received(1)
-            .CompleteAsync("upload-2", Arg.Is<CdpCallbackFile>(f => f.FileStatus == "rejected"));
+            .CompleteAsync(
+                "upload-2",
+                Arg.Is<CdpCallbackFile>(f => f.FileStatus == "rejected"),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
     public async Task TryCompleteFromCdpStatus_UploadNotPending_DoesNotPollOrComplete()
     {
         _pendingUploadService
-            .TryGetPendingUploadDetailsAsync("upload-3")
+            .TryGetPendingUploadDetailsAsync("upload-3", Arg.Any<CancellationToken>())
             .Returns((PendingUploadDetails?)null);
 
         var sut = BuildSut();
@@ -122,14 +127,18 @@ public class DevScanAutoCompleteServiceTests
             .GetStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _pendingUploadService
             .DidNotReceive()
-            .CompleteAsync(Arg.Any<string>(), Arg.Any<CdpCallbackFile>());
+            .CompleteAsync(
+                Arg.Any<string>(),
+                Arg.Any<CdpCallbackFile>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
     public async Task TryCompleteFromCdpStatus_CdpNotReadyYet_DoesNotComplete()
     {
         _pendingUploadService
-            .TryGetPendingUploadDetailsAsync("upload-4")
+            .TryGetPendingUploadDetailsAsync("upload-4", Arg.Any<CancellationToken>())
             .Returns(
                 new PendingUploadDetails("http://cdp-uploader/status/upload-4", null, null, null)
             );
@@ -142,6 +151,10 @@ public class DevScanAutoCompleteServiceTests
 
         await _pendingUploadService
             .DidNotReceive()
-            .CompleteAsync(Arg.Any<string>(), Arg.Any<CdpCallbackFile>());
+            .CompleteAsync(
+                Arg.Any<string>(),
+                Arg.Any<CdpCallbackFile>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 }

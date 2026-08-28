@@ -1855,31 +1855,41 @@ public static class AccreditationApplicationEndpoints
         return Results.Created(string.Empty, interimSite);
     }
 
+    // Bundles AddBesEvidenceFile's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // UpdateOverseasSiteServices above.
+    private sealed record AddBesEvidenceFileServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddBesEvidenceFileRequest> Validator,
+        IPendingUploadService PendingUploadService,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> AddBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         AddBesEvidenceFileRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<AddBesEvidenceFileRequest> validator,
-        IPendingUploadService pendingUploadService,
-        CancellationToken cancellationToken
+        [AsParameters] AddBesEvidenceFileServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
         var (uploadError, resolvedFile) = await TryResolveScannedFileAsync(
             request.FileUploadId,
-            pendingUploadService,
-            cancellationToken
+            services.PendingUploadService,
+            services.CancellationToken
         );
         if (uploadError is not null)
             return uploadError;
         var scannedFile = resolvedFile!;
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1917,7 +1927,7 @@ public static class AccreditationApplicationEndpoints
         );
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to add BES evidence file.")
             : Results.Created(string.Empty, site.BesEvidence);
@@ -2227,7 +2237,10 @@ public static class AccreditationApplicationEndpoints
         var sectionKeys = application.Query?.QueriedSectionKeys ?? [];
         var queriedSections = sectionKeys
             .Select(key =>
-                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section)
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                    key,
+                    out var section
+                )
                     ? section
                     : (OperatorSection?)null
             )
@@ -2413,7 +2426,10 @@ public static class AccreditationApplicationEndpoints
         var sections = request
             .SectionKeys.Select(key =>
             {
-                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section);
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                    key,
+                    out var section
+                );
                 return section;
             })
             .ToHashSet();
@@ -2473,7 +2489,7 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
@@ -2824,7 +2840,10 @@ public static class AccreditationApplicationEndpoints
         {
             var queriedSections = (application.Query?.QueriedSectionKeys ?? [])
                 .Select(key =>
-                    AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section)
+                    AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                        key,
+                        out var section
+                    )
                         ? section
                         : (OperatorSection?)null
                 )
