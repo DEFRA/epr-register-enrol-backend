@@ -26,7 +26,7 @@ public class DevScanAutoCompleteService(
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var pendingIds = pendingUploadService.GetPendingUploadIds();
+            var pendingIds = await pendingUploadService.GetPendingUploadIdsAsync(stoppingToken);
 
             foreach (var fileUploadId in pendingIds)
             {
@@ -53,7 +53,10 @@ public class DevScanAutoCompleteService(
         CancellationToken cancellationToken
     )
     {
-        var details = pendingUploadService.TryGetPendingUploadDetails(fileUploadId);
+        var details = await pendingUploadService.TryGetPendingUploadDetailsAsync(
+            fileUploadId,
+            cancellationToken
+        );
         if (details is null)
             return;
 
@@ -103,7 +106,7 @@ public class DevScanAutoCompleteService(
             S3Key = s3Key,
         };
 
-        pendingUploadService.Complete(fileUploadId, result);
+        await pendingUploadService.CompleteAsync(fileUploadId, result, cancellationToken);
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(

@@ -57,12 +57,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddHttpContextAccessor();
     builder.Host.UseSerilog(CdpLogging.Configuration);
 
-    // Default HTTP Client. Used (among other things) for the OJ BE -> ManagementBe submit call
-    // (HttpCaseWorkingApiAdapter.SubmitApplicationAsync). Without an explicit Timeout this
-    // defaults to .NET's 100s, which can leave OJ BE still waiting long after OJ FE's own
-    // ~20s submit-call budget has already given up, producing a false-failure page for the
-    // operator (RA-311). 15s keeps this comfortably under that budget with margin; it is a
-    // principled starting point, not measured CM BE latency.
+    // Default HTTP Client. Used (among other things) for the Registration & Accreditation
+    // service BE -> ManagementBe submit call (HttpCaseWorkingApiAdapter.SubmitApplicationAsync).
+    // Without an explicit Timeout this defaults to .NET's 100s, which can leave the
+    // Registration & Accreditation service BE still waiting long after the Registration &
+    // Accreditation service FE's own ~20s submit-call budget has already given up, producing a
+    // false-failure page for the operator (RA-311). 15s keeps this comfortably under that
+    // budget with margin; it is a principled starting point, not measured Case Management
+    // service BE latency.
     builder
         .Services.AddHttpClient(
             "DefaultClient",
@@ -183,7 +185,10 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // "AUTH_SHARED_SECRET:MANAGEMENT_BE" — a GetValue call using the literal
     // double-underscore string never matches it (see ManagementBe's own
     // ClientIdAuthentication BuildClientSecrets for the same gotcha).
-    builder.Services.AddMemoryCache();
+    // epr-register-enrol-backend-0i1: nonce replay protection moved from IMemoryCache to a
+    // Mongo-backed store (CaseManagementAuthNonceStore) so it survives a restart and is shared
+    // across instances - AddMemoryCache() is no longer needed anywhere in this service.
+    builder.Services.AddSingleton<ICaseManagementAuthNonceStore, CaseManagementAuthNonceStore>();
     builder.Services.Configure<CaseManagementAuthConfig>(config =>
     {
         builder.Configuration.GetSection("CaseManagementAuth").Bind(config);

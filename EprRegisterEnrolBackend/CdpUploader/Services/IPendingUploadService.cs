@@ -11,15 +11,23 @@ public record PendingUploadDetails(
 
 public interface IPendingUploadService
 {
-    void Create(
+    Task CreateAsync(
         string fileUploadId,
         string cdpStatusUrl,
         string? cdpUploadId = null,
         string? s3Bucket = null,
-        string? s3Path = null
+        string? s3Path = null,
+        CancellationToken ct = default
     );
-    void Complete(string fileUploadId, CdpCallbackFile fileResult);
-    CdpStatusResponse GetStatus(string fileUploadId);
-    IReadOnlyList<string> GetPendingUploadIds();
-    PendingUploadDetails? TryGetPendingUploadDetails(string fileUploadId);
+    Task CompleteAsync(
+        string fileUploadId,
+        CdpCallbackFile fileResult,
+        CancellationToken ct = default
+    );
+    Task<CdpStatusResponse> GetStatusAsync(string fileUploadId, CancellationToken ct = default);
+    Task<IReadOnlyList<string>> GetPendingUploadIdsAsync(CancellationToken ct = default);
+    Task<PendingUploadDetails?> TryGetPendingUploadDetailsAsync(
+        string fileUploadId,
+        CancellationToken ct = default
+    );
 }

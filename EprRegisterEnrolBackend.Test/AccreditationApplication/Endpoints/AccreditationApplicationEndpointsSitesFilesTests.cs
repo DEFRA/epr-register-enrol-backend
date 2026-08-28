@@ -49,7 +49,7 @@ public class AccreditationApplicationEndpointsSitesFilesTests
     // Simulates a real CDP-uploader webhook callback having already completed for
     // fileUploadId, so AddFile can resolve it via the real IPendingUploadService singleton
     // instead of trusting client-supplied file fields.
-    private string SeedValidatedUpload(
+    private async Task<string> SeedValidatedUpload(
         string fileId,
         string filename,
         string s3Key,
@@ -60,8 +60,8 @@ public class AccreditationApplicationEndpointsSitesFilesTests
     {
         var fileUploadId = $"upload-{fileId}";
         var pendingUploadService = _factory.Services.GetRequiredService<IPendingUploadService>();
-        pendingUploadService.Create(fileUploadId, "https://cdp.example/status");
-        pendingUploadService.Complete(
+        await pendingUploadService.CreateAsync(fileUploadId, "https://cdp.example/status");
+        await pendingUploadService.CompleteAsync(
             fileUploadId,
             new CdpCallbackFile
             {
@@ -465,7 +465,7 @@ public class AccreditationApplicationEndpointsSitesFilesTests
     public async Task AddFile_ApplicationNotFound_Returns404()
     {
         Reset();
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "file-missing-app",
             "plan.pdf",
             "sampling-plans/file-missing-app"
@@ -490,7 +490,7 @@ public class AccreditationApplicationEndpointsSitesFilesTests
     {
         Reset();
         var app = SeedApplication();
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "file-update-fails",
             "plan.pdf",
             "sampling-plans/file-update-fails"

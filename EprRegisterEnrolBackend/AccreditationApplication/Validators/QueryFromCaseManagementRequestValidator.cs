@@ -12,7 +12,7 @@ public class QueryFromCaseManagementRequestValidator
         RuleFor(r => r.SectionKeys).NotEmpty().WithMessage("At least one section key is required.");
 
         RuleForEach(r => r.SectionKeys)
-            .Must(key => AccreditationApplicationSections.AllCmSectionKeys.Contains(key))
-            .WithMessage("Section key is not one of the recognised CM section keys.");
+            .Must(key => AccreditationApplicationSections.AllCaseManagementSectionKeys.Contains(key))
+            .WithMessage("Section key is not one of the recognised Case Management service section keys.");
     }
 }

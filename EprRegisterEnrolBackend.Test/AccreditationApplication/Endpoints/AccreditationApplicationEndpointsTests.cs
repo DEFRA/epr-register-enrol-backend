@@ -35,6 +35,8 @@ public class AccreditationApplicationEndpointsTests
     private void Reset()
     {
         _factory.FakePersistence.Clear();
+        _factory.FakePendingUploadService.Clear();
+        _factory.FakeCaseManagementAuthNonceStore.Clear();
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
@@ -44,7 +46,7 @@ public class AccreditationApplicationEndpointsTests
     // Simulates a real CDP-uploader webhook callback having already completed for
     // fileUploadId, so AddFile/AddBesEvidenceFile can resolve it via the real
     // IPendingUploadService singleton instead of trusting client-supplied file fields.
-    private string SeedValidatedUpload(
+    private async Task<string> SeedValidatedUpload(
         string fileId,
         string filename,
         string s3Key,
@@ -55,8 +57,8 @@ public class AccreditationApplicationEndpointsTests
     {
         var fileUploadId = $"upload-{fileId}";
         var pendingUploadService = _factory.Services.GetRequiredService<IPendingUploadService>();
-        pendingUploadService.Create(fileUploadId, "https://cdp.example/status");
-        pendingUploadService.Complete(
+        await pendingUploadService.CreateAsync(fileUploadId, "https://cdp.example/status");
+        await pendingUploadService.CompleteAsync(
             fileUploadId,
             new CdpCallbackFile
             {
@@ -2709,7 +2711,11 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var fileUploadId = SeedValidatedUpload("file-001", "plan.pdf", "sampling-plans/file-001");
+        var fileUploadId = await SeedValidatedUpload(
+            "file-001",
+            "plan.pdf",
+            "sampling-plans/file-001"
+        );
         var request = new FileUploadRequest
         {
             FileUploadId = fileUploadId,
@@ -2733,7 +2739,11 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication(status: status);
 
-        var fileUploadId = SeedValidatedUpload("file-004", "plan.pdf", "sampling-plans/file-004");
+        var fileUploadId = await SeedValidatedUpload(
+            "file-004",
+            "plan.pdf",
+            "sampling-plans/file-004"
+        );
         var request = new FileUploadRequest
         {
             FileUploadId = fileUploadId,
@@ -2771,7 +2781,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "file-002",
             "../../etc/passwd",
             "sampling-plans/file-002"
@@ -2796,7 +2806,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "file-003",
             "script.js",
             "sampling-plans/file-003",
@@ -2835,7 +2845,11 @@ public class AccreditationApplicationEndpointsTests
                 );
         });
 
-        var fileUploadId = SeedValidatedUpload("file-new", "new.pdf", "sampling-plans/file-new");
+        var fileUploadId = await SeedValidatedUpload(
+            "file-new",
+            "new.pdf",
+            "sampling-plans/file-new"
+        );
         var request = new FileUploadRequest
         {
             FileUploadId = fileUploadId,
@@ -2856,7 +2870,11 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var fileUploadId = SeedValidatedUpload("file-005", "plan.pdf", "sampling-plans/file-005");
+        var fileUploadId = await SeedValidatedUpload(
+            "file-005",
+            "plan.pdf",
+            "sampling-plans/file-005"
+        );
         var request = new FileUploadRequest { FileUploadId = fileUploadId };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -2881,7 +2899,11 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var fileUploadId = SeedValidatedUpload("file-008", "plan.pdf", "sampling-plans/file-008");
+        var fileUploadId = await SeedValidatedUpload(
+            "file-008",
+            "plan.pdf",
+            "sampling-plans/file-008"
+        );
         var request = new { FileUploadId = fileUploadId, DocumentType = 99 };
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
@@ -2898,7 +2920,11 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var fileUploadId = SeedValidatedUpload("file-006", "plan.pdf", "sampling-plans/file-006");
+        var fileUploadId = await SeedValidatedUpload(
+            "file-006",
+            "plan.pdf",
+            "sampling-plans/file-006"
+        );
         var request = new FileUploadRequest
         {
             FileUploadId = fileUploadId,
@@ -2927,7 +2953,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "file-007",
             "evidence.pdf",
             "sampling-plans/file-007"
@@ -2963,7 +2989,11 @@ public class AccreditationApplicationEndpointsTests
             configure: a => a.Prns.SectionStatus = SectionStatus.Queried
         );
 
-        var fileUploadId = SeedValidatedUpload("file-009", "plan.pdf", "sampling-plans/file-009");
+        var fileUploadId = await SeedValidatedUpload(
+            "file-009",
+            "plan.pdf",
+            "sampling-plans/file-009"
+        );
         var request = new FileUploadRequest
         {
             FileUploadId = fileUploadId,
@@ -2987,7 +3017,11 @@ public class AccreditationApplicationEndpointsTests
             configure: a => a.SamplingPlan.SectionStatus = SectionStatus.Queried
         );
 
-        var fileUploadId = SeedValidatedUpload("file-010", "plan.pdf", "sampling-plans/file-010");
+        var fileUploadId = await SeedValidatedUpload(
+            "file-010",
+            "plan.pdf",
+            "sampling-plans/file-010"
+        );
         var request = new FileUploadRequest
         {
             FileUploadId = fileUploadId,
@@ -4494,10 +4528,7 @@ public class AccreditationApplicationEndpointsTests
             }
         );
 
-        var request = ValidUpdateOverseasSiteRequest() with
-        {
-            OperationCodes = ["R4"],
-        };
+        var request = ValidUpdateOverseasSiteRequest() with { OperationCodes = ["R4"] };
         var response = await _client.PatchAsJsonAsync(
             UpdateOverseasSiteUrl(app, 900001),
             request,
@@ -5079,7 +5110,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplicationWithOverseasSite();
 
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "bes-file-001",
             "evidence.pdf",
             "bes-evidence/bes-file-001"
@@ -5116,7 +5147,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplicationWithOverseasSite();
 
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "bes-file-003",
             "../../etc/passwd",
             "bes-evidence/bes-file-003"
@@ -5490,8 +5521,8 @@ public class AccreditationApplicationEndpointsTests
     [Fact]
     public async Task QueryFromCaseManagement_UpdatedStatus_Succeeds()
     {
-        // Updated = a prior query was already resolved via resubmit; CM must be able to raise
-        // a fresh query against the same application.
+        // Updated = a prior query was already resolved via resubmit; the Case Management service
+        // must be able to raise a fresh query against the same application.
         Reset();
         var workItemId = Guid.NewGuid();
         SeedApplication(
@@ -5575,7 +5606,7 @@ public class AccreditationApplicationEndpointsTests
                 }
         );
 
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "bes-file-001",
             "evidence.pdf",
             "bes-evidence/bes-file-001"
@@ -5606,7 +5637,7 @@ public class AccreditationApplicationEndpointsTests
                 }
         );
 
-        var fileUploadId = SeedValidatedUpload(
+        var fileUploadId = await SeedValidatedUpload(
             "bes-file-002",
             "evidence.pdf",
             "bes-evidence/bes-file-002"
@@ -6301,8 +6332,9 @@ public class AccreditationApplicationEndpointsTests
     [Fact]
     public async Task StatusChangedFromCaseManagement_ContinueReviewDuringDulyMaking_DowngradesFromUpdatedToSubmitted()
     {
-        // Mirrors CM's continue-review-during-duly-making action, which can push CM (and
-        // therefore OJ) back to 'submitted' from 'updated' — ordering is timestamp-based, not
+        // Mirrors the Case Management service's continue-review-during-duly-making action, which
+        // can push the Case Management service (and therefore the Registration & Accreditation
+        // service) back to 'submitted' from 'updated' — ordering is timestamp-based, not
         // state-precedence-based (RA-368 §4.3).
         Reset();
         var workItemId = Guid.NewGuid();
@@ -6381,7 +6413,8 @@ public class AccreditationApplicationEndpointsTests
     )
     {
         // RA-368: these two states used to have no mapping arm and were silently dropped,
-        // leaving OJ pinned at 'DulyMade' while CM had already moved on.
+        // leaving the Registration & Accreditation service pinned at 'DulyMade' while the Case
+        // Management service had already moved on.
         Reset();
         var workItemId = Guid.NewGuid();
         SeedApplication(

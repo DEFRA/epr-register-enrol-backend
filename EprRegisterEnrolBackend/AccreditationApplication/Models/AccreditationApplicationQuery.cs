@@ -6,7 +6,7 @@ public class AccreditationApplicationQuery
 
     public List<QuerySubmission> QuerySubmissions { get; set; } = [];
 
-    // CM section keys from the most recent raise, still outstanding. Needed because editing a
+    // Case Management service section keys from the most recent raise, still outstanding. Needed because editing a
     // queried section clears its own SectionStatus away from Queried immediately (on the very
     // next PATCH, not deferred to resubmit) — so by resubmit time, a touched section no longer
     // reads Queried at all and can't be identified from live section state alone. Overwritten on

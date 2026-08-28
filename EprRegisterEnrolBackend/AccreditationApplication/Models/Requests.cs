@@ -194,16 +194,18 @@ public class SubmitRequest
     public string? PaymentReference { get; set; }
 }
 
-// Pushed by ManagementBe when CM raises a query (RA-311 §3/§5/§6). SectionKeys use CM's own
-// closed six-key vocabulary, not operator section names — see AccreditationApplicationSections.
+// Pushed by ManagementBe when the Case Management service raises a query (RA-311 §3/§5/§6).
+// SectionKeys use the Case Management service's own closed six-key vocabulary, not operator
+// section names — see AccreditationApplicationSections.
 public class QueryFromCaseManagementRequest
 {
     public string? QueryNote { get; set; }
     public List<string> SectionKeys { get; set; } = [];
 }
 
-// Pushed by ManagementBe on every generic work-item transition (RA-368) — the OJ-facing
-// projection of CM's progress. ToStateId is CM's raw, stable wire-contract state id.
+// Pushed by ManagementBe on every generic work-item transition (RA-368) — the Registration &
+// Accreditation service-facing projection of the Case Management service's progress. ToStateId
+// is the Case Management service's raw, stable wire-contract state id.
 public class StatusChangedFromCaseManagementRequest
 {
     public required string ToStateId { get; set; }

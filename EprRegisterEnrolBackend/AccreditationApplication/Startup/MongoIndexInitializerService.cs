@@ -1,4 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.Auth;
+using EprRegisterEnrolBackend.CdpUploader.Services;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
@@ -46,8 +48,12 @@ public class MongoIndexInitializerService(
                     {
                         // Resolving each singleton runs its MongoService<T>
                         // constructor, which is where EnsureIndexes lives.
-                        _ = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
-                        _ = serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
+                        _ =
+                            serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
+                        _ =
+                            serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
+                        _ = serviceProvider.GetRequiredService<IPendingUploadService>();
+                        _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
                     },
                     cancellationToken
                 )

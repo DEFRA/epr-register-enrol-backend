@@ -36,5 +36,8 @@
     <InternalsVisibleTo Include="EprRegisterEnrolBackend.Test" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\tools\CustomAnalyzers\CustomAnalyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
 
 </Project>

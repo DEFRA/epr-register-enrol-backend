@@ -582,13 +582,16 @@ public static class AccreditationApplicationEndpoints
     // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
     // from the server-held PendingUploadService record, populated only by the real
     // CDP-uploader webhook callback — never trusted verbatim from the client request body.
-    private static IResult? TryResolveScannedFile(
+    private static async Task<(
+        IResult? Error,
+        CdpCallbackFile? ScannedFile
+    )> TryResolveScannedFileAsync(
         string fileUploadId,
         IPendingUploadService pendingUploadService,
-        out CdpCallbackFile scannedFile
+        CancellationToken cancellationToken
     )
     {
-        var status = pendingUploadService.GetStatus(fileUploadId);
+        var status = await pendingUploadService.GetStatusAsync(fileUploadId, cancellationToken);
         var file = status.Form?.File;
         if (
             status.ProcessingStatus != "validated"
@@ -600,14 +603,15 @@ public static class AccreditationApplicationEndpoints
             || string.IsNullOrWhiteSpace(file.S3Key)
         )
         {
-            scannedFile = null!;
-            return Results.UnprocessableEntity(
-                "No completed, scanned upload was found for the supplied FileUploadId."
+            return (
+                Results.UnprocessableEntity(
+                    "No completed, scanned upload was found for the supplied FileUploadId."
+                ),
+                null
             );
         }
 
-        scannedFile = file;
-        return null;
+        return (null, file);
     }
 
     private static async Task<IResult> Seed(
@@ -1851,31 +1855,41 @@ public static class AccreditationApplicationEndpoints
         return Results.Created(string.Empty, interimSite);
     }
 
+    // Bundles AddBesEvidenceFile's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // UpdateOverseasSiteServices above.
+    private sealed record AddBesEvidenceFileServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddBesEvidenceFileRequest> Validator,
+        IPendingUploadService PendingUploadService,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> AddBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         AddBesEvidenceFileRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<AddBesEvidenceFileRequest> validator,
-        IPendingUploadService pendingUploadService
+        [AsParameters] AddBesEvidenceFileServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await services.Validator.ValidateAsync(
+            request,
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        if (
-            TryResolveScannedFile(
-                request.FileUploadId,
-                pendingUploadService,
-                out var scannedFile
-            ) is
-            { } uploadError
-        )
+        var (uploadError, resolvedFile) = await TryResolveScannedFileAsync(
+            request.FileUploadId,
+            services.PendingUploadService,
+            services.CancellationToken
+        );
+        if (uploadError is not null)
             return uploadError;
+        var scannedFile = resolvedFile!;
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1913,7 +1927,7 @@ public static class AccreditationApplicationEndpoints
         );
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to add BES evidence file.")
             : Results.Created(string.Empty, site.BesEvidence);
@@ -2177,12 +2191,13 @@ public static class AccreditationApplicationEndpoints
         }
         catch (CaseWorkingApiTimeoutException)
         {
-            // OJ FE's apiClient gives the whole submit POST a ~5s budget; without this, the
-            // caller would instead see a generic 500 from ExceptionLoggingHandler only once
-            // the "DefaultClient" HttpClient's own 15s Timeout (Program.cs) finally elapses,
-            // long after OJ FE has already given up (RA-311). 504 + a distinct title lets OJ
-            // FE's error handling distinguish "downstream timed out, maybe retry" from a
-            // generic server error.
+            // The Registration & Accreditation service FE's apiClient gives the whole submit
+            // POST a ~5s budget; without this, the caller would instead see a generic 500 from
+            // ExceptionLoggingHandler only once the "DefaultClient" HttpClient's own 15s
+            // Timeout (Program.cs) finally elapses, long after the Registration & Accreditation
+            // service FE has already given up (RA-311). 504 + a distinct title lets the
+            // Registration & Accreditation service FE's error handling distinguish "downstream
+            // timed out, maybe retry" from a generic server error.
             return Results.Problem(
                 statusCode: StatusCodes.Status504GatewayTimeout,
                 title: "Case working service timed out",
@@ -2222,7 +2237,10 @@ public static class AccreditationApplicationEndpoints
         var sectionKeys = application.Query?.QueriedSectionKeys ?? [];
         var queriedSections = sectionKeys
             .Select(key =>
-                AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section)
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                    key,
+                    out var section
+                )
                     ? section
                     : (OperatorSection?)null
             )
@@ -2241,7 +2259,7 @@ public static class AccreditationApplicationEndpoints
         // Call adapter before persisting: if the call fails, leave ApplicationStatus at Queried
         // so the operator can retry — this matters more here than on the raise-side fire-and-
         // forget hook, since a failure after persisting Updated would lock the application with
-        // CM never told.
+        // the Case Management service never told.
         var result = await caseWorkingAdapter.ResumeFromQueryAsync(
             application,
             contactDetails,
@@ -2288,7 +2306,8 @@ public static class AccreditationApplicationEndpoints
         application.ApplicationStatus = ApplicationStatus.Updated;
         application.DateLastEdited = versionedAt;
         // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
-        // single CaseManagementStatusUpdatedAt orders every CM-driven status write, resubmit or not.
+        // single CaseManagementStatusUpdatedAt orders every Case Management service-driven status
+        // write, resubmit or not.
         application.CaseManagementStatusUpdatedAt = versionedAt;
 
         var updated = await persistence.UpdateAsync(application);
@@ -2307,8 +2326,9 @@ public static class AccreditationApplicationEndpoints
     )
     {
         var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
-        // CM BE's push hook sends this on every request for cross-service tracing (RA-311).
-        // Purely a diagnostic aid — absence must never fail the request.
+        // The Case Management service BE's push hook sends this on every request for
+        // cross-service tracing (RA-311). Purely a diagnostic aid — absence must never fail the
+        // request.
         var correlationId = httpContext.Request.Headers.TryGetValue(
             "X-Correlation-Id",
             out var correlationValues
@@ -2350,7 +2370,7 @@ public static class AccreditationApplicationEndpoints
 
         // A second query while one is already open is rejected rather than merged into the
         // existing QueriedSectionKeys (RA-311 §3) — the operator must resubmit the open query
-        // before CM can raise another.
+        // before the Case Management service can raise another.
         if (application.ApplicationStatus == ApplicationStatus.Queried)
         {
             logger.LogWarning(
@@ -2387,7 +2407,7 @@ public static class AccreditationApplicationEndpoints
         if (
             !application.IsExporter
             && request.SectionKeys.Any(
-                AccreditationApplicationSections.ExporterOnlyCmSectionKeys.Contains
+                AccreditationApplicationSections.ExporterOnlyCaseManagementSectionKeys.Contains
             )
         )
         {
@@ -2402,11 +2422,14 @@ public static class AccreditationApplicationEndpoints
         }
 
         // Every key is already known-valid — the validator above rejects anything outside the
-        // six-key set (AllCmSectionKeys), which is exactly what TryMapCmKeyToSection recognises.
+        // six-key set (AllCaseManagementSectionKeys), which is exactly what TryMapCaseManagementKeyToSection recognises.
         var sections = request
             .SectionKeys.Select(key =>
             {
-                AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section);
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                    key,
+                    out var section
+                );
                 return section;
             })
             .ToHashSet();
@@ -2418,7 +2441,7 @@ public static class AccreditationApplicationEndpoints
                 SectionStatus.Queried
             );
 
-        // Note: QueryNote is user/CM-supplied free text and is intentionally never interpolated
+        // Note: QueryNote is user/Case Management service-supplied free text and is intentionally never interpolated
         // into a log message (RA-311 security note) — only structured, server-known values are.
         application.Query ??= new AccreditationApplicationQuery();
         application.Query.QueryNote = request.QueryNote;
@@ -2428,7 +2451,8 @@ public static class AccreditationApplicationEndpoints
         application.ApplicationStatus = ApplicationStatus.Queried;
         application.DateLastEdited = queriedAt;
         // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
-        // single CaseManagementStatusUpdatedAt orders every CM-driven status write, query or not.
+        // single CaseManagementStatusUpdatedAt orders every Case Management service-driven status
+        // write, query or not.
         application.CaseManagementStatusUpdatedAt = queriedAt;
 
         var updated = await persistence.UpdateAsync(application);
@@ -2461,22 +2485,22 @@ public static class AccreditationApplicationEndpoints
         FileUploadRequest request,
         IAccreditationApplicationPersistence persistence,
         IValidator<FileUploadRequest> validator,
-        IPendingUploadService pendingUploadService
+        IPendingUploadService pendingUploadService,
+        CancellationToken cancellationToken
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        if (
-            TryResolveScannedFile(
-                request.FileUploadId,
-                pendingUploadService,
-                out var scannedFile
-            ) is
-            { } uploadError
-        )
+        var (uploadError, resolvedFile) = await TryResolveScannedFileAsync(
+            request.FileUploadId,
+            pendingUploadService,
+            cancellationToken
+        );
+        if (uploadError is not null)
             return uploadError;
+        var scannedFile = resolvedFile!;
 
         var contentType = scannedFile.ContentType ?? scannedFile.DetectedContentType;
         if (
@@ -2575,8 +2599,9 @@ public static class AccreditationApplicationEndpoints
         return updated is null ? Results.Problem("Failed to delete file.") : Results.Ok();
     }
 
-    // Raw CM state id -> the ApplicationStatus it projects onto in OJ (RA-368 §4.3). States with
-    // no entry (anything CM adds in future) are a deliberate no-op for ApplicationStatus — the
+    // Raw Case Management service state id -> the ApplicationStatus it projects onto in the
+    // Registration & Accreditation service (RA-368 §4.3). States with no entry (anything the Case
+    // Management service adds in future) are a deliberate no-op for ApplicationStatus — the
     // push still updates CaseManagementStatusUpdatedAt for ordering purposes. "queried"/"withdrawn"
     // are never sent here: query keeps its own richer /query endpoint, and withdrawal is entirely
     // out of scope for this plan (§4.1, §4.5).
@@ -2626,8 +2651,9 @@ public static class AccreditationApplicationEndpoints
     )
     {
         var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
-        // CM BE's push hook sends this on every request for cross-service tracing (RA-311/RA-368).
-        // Purely a diagnostic aid — absence must never fail the request.
+        // The Case Management service BE's push hook sends this on every request for
+        // cross-service tracing (RA-311/RA-368). Purely a diagnostic aid — absence must never
+        // fail the request.
         var correlationId = httpContext.Request.Headers.TryGetValue(
             "X-Correlation-Id",
             out var correlationValues
@@ -2678,12 +2704,13 @@ public static class AccreditationApplicationEndpoints
 
         var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
 
-        // Terminal-status guard: once OJ has recorded a CM push as Approved, Rejected or
-        // Withdrawn, no later mapped push may move the application again — a withdrawn
-        // application re-opening as DulyMade (or an approved one flipping to Rejected) would
-        // undo the very gates the terminal statuses exist to enforce. Unmapped pushes (anything
-        // CM adds in future with no arm in the switch above) are exempt: they only update the
-        // ordering watermark below, never ApplicationStatus.
+        // Terminal-status guard: once the Registration & Accreditation service has recorded a
+        // Case Management service push as Approved, Rejected or Withdrawn, no later mapped push
+        // may move the application again — a withdrawn application re-opening as DulyMade (or an
+        // approved one flipping to Rejected) would undo the very gates the terminal statuses
+        // exist to enforce. Unmapped pushes (anything the Case Management service adds in future
+        // with no arm in the switch above) are exempt: they only update the ordering watermark
+        // below, never ApplicationStatus.
         if (mappedStatus is not null && RejectIfTerminal(application) is not null)
         {
             logger.LogWarning(
@@ -2813,7 +2840,10 @@ public static class AccreditationApplicationEndpoints
         {
             var queriedSections = (application.Query?.QueriedSectionKeys ?? [])
                 .Select(key =>
-                    AccreditationApplicationSections.TryMapCmKeyToSection(key, out var section)
+                    AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                        key,
+                        out var section
+                    )
                         ? section
                         : (OperatorSection?)null
                 )
@@ -2949,12 +2979,13 @@ public static class AccreditationApplicationEndpoints
         };
 
         var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
-        pendingUploadService.Create(
+        await pendingUploadService.CreateAsync(
             fileUploadId,
             cdpResponse.StatusUrl,
             cdpResponse.UploadId,
             cdpRequest.S3Bucket,
-            cdpRequest.S3Path
+            cdpRequest.S3Path,
+            cancellationToken
         );
 
         return Results.Ok(
@@ -2967,9 +2998,10 @@ public static class AccreditationApplicationEndpoints
         );
     }
 
-    private static IResult UploadCompleted(
+    private static async Task<IResult> UploadCompleted(
         CdpCallbackPayload payload,
-        IPendingUploadService pendingUploadService
+        IPendingUploadService pendingUploadService,
+        CancellationToken cancellationToken
     )
     {
         var fileUploadId = payload.Metadata?.GetValueOrDefault("fileUploadId");
@@ -2980,16 +3012,17 @@ public static class AccreditationApplicationEndpoints
         if (file is null)
             return Results.BadRequest("Missing file in callback payload.");
 
-        pendingUploadService.Complete(fileUploadId, file);
+        await pendingUploadService.CompleteAsync(fileUploadId, file, cancellationToken);
         return Results.Ok();
     }
 
-    private static IResult GetUploadStatus(
+    private static async Task<IResult> GetUploadStatus(
         string fileUploadId,
-        IPendingUploadService pendingUploadService
+        IPendingUploadService pendingUploadService,
+        CancellationToken cancellationToken
     )
     {
-        var status = pendingUploadService.GetStatus(fileUploadId);
+        var status = await pendingUploadService.GetStatusAsync(fileUploadId, cancellationToken);
         return Results.Ok(status);
     }
 }
