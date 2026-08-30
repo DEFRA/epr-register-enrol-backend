@@ -25,13 +25,15 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("accreditation_indexes");
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
-        _collection = _factory.GetCollection<AccreditationApplicationModel>("accreditationApplications");
+        _collection = _factory.GetCollection<AccreditationApplicationModel>(
+            "accreditationApplications"
+        );
     }
 
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
 
     [Fact]
-    public async Task Constructor_creates_the_eight_declared_indexes()
+    public async Task Constructor_creates_the_nine_declared_indexes()
     {
         _ = new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance);
 
@@ -42,7 +44,7 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
             .Select(i => i["key"].AsBsonDocument.ToString())
             .ToList();
 
-        Assert.Equal(8, keyDocs.Count);
+        Assert.Equal(9, keyDocs.Count);
 
         Assert.Contains(keyDocs, k => k == "{ \"organisationId\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"applicationStatus\" : 1 }");
@@ -51,9 +53,20 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
         Assert.Contains(keyDocs, k => k == "{ \"sourceReExAccreditationId\" : 1 }");
         Assert.Contains(
             keyDocs,
-            k => k.Contains("\"organisationId\" : 1")
+            k =>
+                k.Contains("\"organisationId\" : 1")
                 && k.Contains("\"materialType\" : 1")
-                && k.Contains("\"year\" : 1"));
+                && k.Contains("\"year\" : 1")
+        );
+        // RA-516: backs the server-side newest-first sort in GetByOrganisationAsync /
+        // GetLiveByRegistrationAsync.
+        Assert.Contains(
+            keyDocs,
+            k =>
+                k.Contains("\"organisationId\" : 1")
+                && k.Contains("\"createdAt\" : -1")
+                && k.Contains("\"_id\" : -1")
+        );
         Assert.Contains(keyDocs, k => k == "{ \"applicationReference\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"caseManagementWorkItemId\" : 1 }");
 
@@ -61,7 +74,9 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
         Assert.True(appRef.GetValue("unique", false).ToBoolean());
         Assert.True(appRef.GetValue("sparse", false).ToBoolean());
 
-        var workItemId = indexes.Single(i => i["key"].AsBsonDocument.Contains("caseManagementWorkItemId"));
+        var workItemId = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("caseManagementWorkItemId")
+        );
         Assert.True(workItemId.GetValue("unique", false).ToBoolean());
         Assert.True(workItemId.GetValue("sparse", false).ToBoolean());
     }
@@ -71,8 +86,9 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
     {
         _ = new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance);
 
-        var ex = Record.Exception(
-            () => new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance));
+        var ex = Record.Exception(() =>
+            new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance)
+        );
 
         Assert.Null(ex);
     }
@@ -86,12 +102,17 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
         // must drop + recreate rather than let it crash the constructor.
         _collection.Indexes.CreateOne(
             new CreateIndexModel<AccreditationApplicationModel>(
-                Builders<AccreditationApplicationModel>.IndexKeys.Ascending(a => a.ApplicationReference),
-                new CreateIndexOptions { Unique = false, Sparse = false }),
-            cancellationToken: TestContext.Current.CancellationToken);
+                Builders<AccreditationApplicationModel>.IndexKeys.Ascending(a =>
+                    a.ApplicationReference
+                ),
+                new CreateIndexOptions { Unique = false, Sparse = false }
+            ),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
-        var ex = Record.Exception(
-            () => new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance));
+        var ex = Record.Exception(() =>
+            new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance)
+        );
         Assert.Null(ex);
 
         var indexes = await ListIndexesAsync();
@@ -101,6 +122,7 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
     }
 
     private async Task<List<MongoDB.Bson.BsonDocument>> ListIndexesAsync() =>
-        await (await _collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
-            .ToListAsync(TestContext.Current.CancellationToken);
+        await (
+            await _collection.Indexes.ListAsync(TestContext.Current.CancellationToken)
+        ).ToListAsync(TestContext.Current.CancellationToken);
 }

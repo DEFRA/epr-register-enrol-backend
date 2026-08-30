@@ -117,6 +117,13 @@ public class AccreditationApplicationModel
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
+    // RA-516: optimistic concurrency token, checked and incremented by
+    // AccreditationApplicationPersistence.ReplaceIfMatchAsync so two concurrent read-modify-write
+    // updates can't silently overwrite each other - the second writer's filter no longer matches
+    // once the first writer's update has moved this on, and ReplaceOneAsync's ModifiedCount==0
+    // already means "did not persist" to every caller.
+    public long Version { get; set; }
+
     public AccreditationApplicationPrns Prns { get; set; } = new();
 
     public AccreditationApplicationBusinessPlan BusinessPlan { get; set; } = new();
