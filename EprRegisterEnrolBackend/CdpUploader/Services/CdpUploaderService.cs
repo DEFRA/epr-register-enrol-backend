@@ -38,9 +38,11 @@ public class CdpUploaderService(
         request.Redirect = ToRelativeUri(request.Redirect);
 
         var requestJson = JsonSerializer.Serialize(request, ResponseJsonOptions);
-        if (logger.IsEnabled(LogLevel.Information))
+        // RA-516: Warn, not Information - see appsettings.json's Serilog:MinimumLevel:Default,
+        // which now defaults to Warning so this full JSON dump isn't noisy in normal operation.
+        if (logger.IsEnabled(LogLevel.Warning))
         {
-            logger.LogInformation(
+            logger.LogWarning(
                 "Calling CDP uploader POST {InitiateUrl} with body: {RequestBody}",
                 initiateUrl,
                 requestJson
@@ -90,9 +92,10 @@ public class CdpUploaderService(
             );
         }
 
-        if (logger.IsEnabled(LogLevel.Information))
+        // RA-516: Warn, not Information - same reasoning as the request-body log above.
+        if (logger.IsEnabled(LogLevel.Warning))
         {
-            logger.LogInformation(
+            logger.LogWarning(
                 "CDP uploader returned {Status} from {InitiateUrl}: {ResponseBody}",
                 (int)response.StatusCode,
                 initiateUrl,

@@ -643,9 +643,9 @@ public static class AccreditationApplicationEndpoints
         // starting again for the same accreditation year, so withdrawn records are excluded here;
         // they are retained untouched for audit (RA-252 keeps them read-only), and the restart falls
         // through to create a brand new application exactly as a first-time seed would.
-        // GetByOrganisationAsync applies no server-side sort, so order the candidates explicitly
-        // (NewestFirst — the shared rule, also used by GetList) rather than relying on incidental
-        // storage order to decide which one is "the live one".
+        // RA-516: GetLiveByRegistrationAsync applies this filter and the newest-first order
+        // server-side (see AccreditationApplicationPersistence), so this no longer fetches every
+        // application for the org just to filter/sort in memory.
         //
         // At most one live application per (org, registrationId, materialType, year) is
         // BEST-EFFORT, not an invariant: this is a read-then-create with no transaction and no
@@ -659,15 +659,12 @@ public static class AccreditationApplicationEndpoints
         // AccreditationApplicationPersistence.DefineIndexes would actually be enforced — but
         // deciding the exact partial-filter shape (and reconciling it against any existing
         // duplicates in each environment) is out of scope here and left as follow-up.
-        var existing = (await persistence.GetByOrganisationAsync(organisationId))
-            .Where(a =>
-                a.RegistrationId == registrationId
-                && a.MaterialType == materialTypeEnum
-                && a.Year == request.Year
-                && a.ApplicationStatus != ApplicationStatus.Withdrawn
-            )
-            .NewestFirst()
-            .FirstOrDefault();
+        var existing = await persistence.GetLiveByRegistrationAsync(
+            organisationId,
+            registrationId,
+            materialTypeEnum,
+            request.Year
+        );
         if (existing is not null)
             return Results.Ok(existing);
 
@@ -767,14 +764,14 @@ public static class AccreditationApplicationEndpoints
     )
     {
         // RA-357: (organisationId, registrationId, materialType, year) is now one-to-many — a
-        // restart after a withdrawal adds a second record for the same key. GetByOrganisationAsync
-        // applies no server-side sort, so order here with NewestFirst — the same shared rule Seed
-        // uses to pick the live application. That gives every consumer a stable list and makes a
-        // naive "first match wins" client land on the newest record rather than an arbitrary one;
-        // FE #204 relies on exactly that. Withdrawn records are deliberately NOT filtered out —
-        // consumers legitimately need to display them; choosing the live one is the caller's
-        // decision.
-        var applications = (await persistence.GetByOrganisationAsync(organisationId)).NewestFirst();
+        // restart after a withdrawal adds a second record for the same key. RA-516:
+        // GetByOrganisationAsync now sorts newest-first server-side (the same shared rule Seed's
+        // GetLiveByRegistrationAsync uses to pick the live application), so no client-side re-sort
+        // is needed here. That gives every consumer a stable list and makes a naive "first match
+        // wins" client land on the newest record rather than an arbitrary one; FE #204 relies on
+        // exactly that. Withdrawn records are deliberately NOT filtered out — consumers
+        // legitimately need to display them; choosing the live one is the caller's decision.
+        var applications = await persistence.GetByOrganisationAsync(organisationId);
         return Results.Ok(applications);
     }
 
@@ -1255,7 +1252,7 @@ public static class AccreditationApplicationEndpoints
 
         for (var attempt = 1; attempt <= maxOrsIdAttempts; attempt++)
         {
-            var scope = await OrsIdScope(persistence, organisationId, application);
+            var scope = await OrsIdScope(persistence, application);
             var generated = OrsIdGenerator.GenerateNext(scope);
             if (generated.CapacityExceeded)
                 return (
@@ -1338,27 +1335,21 @@ public static class AccreditationApplicationEndpoints
     // RA-482: the OrsId allocation scope. A registration is established once and renewed
     // annually via a new AccreditationApplicationModel each year, so RegistrationId (not the
     // non-nullable OrganisationId) is what actually identifies "this registration" across every
-    // year's application — see the RA-482 lesson. GetByOrganisationAsync is the only query
-    // available (no direct by-RegistrationId lookup), so every application for the org is
-    // fetched and filtered in memory. Every OrsId string is included regardless of Selected
-    // status or origin (operator-added or ReEx-seeded) — a deselected site keeps its id
-    // permanently. When RegistrationId is null (no registration established yet for this
-    // application), there is by definition no cross-year history to scope against, so this
-    // falls back to just the current application's own sites.
+    // year's application — see the RA-482 lesson. RA-516: GetOrsIdsByRegistrationAsync filters by
+    // RegistrationId server-side instead of fetching every application for the org. Every OrsId
+    // string is included regardless of Selected status or origin (operator-added or ReEx-seeded)
+    // — a deselected site keeps its id permanently. When RegistrationId is null (no registration
+    // established yet for this application), there is by definition no cross-year history to
+    // scope against, so this falls back to just the current application's own sites.
     private static async Task<IEnumerable<string?>> OrsIdScope(
         IAccreditationApplicationPersistence persistence,
-        string organisationId,
         AccreditationApplicationModel application
     )
     {
         if (application.RegistrationId is null)
             return (application.OverseasSites?.Sites ?? []).Select(s => s.OrsId);
 
-        var allForOrganisation = await persistence.GetByOrganisationAsync(organisationId);
-        return allForOrganisation
-            .Where(a => a.RegistrationId == application.RegistrationId)
-            .SelectMany(a => a.OverseasSites?.Sites ?? [])
-            .Select(s => s.OrsId);
+        return await persistence.GetOrsIdsByRegistrationAsync(application.RegistrationId);
     }
 
     // Site numbers must be unique application-wide across both ORS sites and their nested

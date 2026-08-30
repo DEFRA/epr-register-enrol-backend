@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 
@@ -22,14 +23,94 @@ public class CdpUploaderServiceTests
 
     private static CdpUploaderService BuildSut(
         HttpClient httpClient,
-        string uploaderUrl = "http://localhost:7337"
+        string uploaderUrl = "http://localhost:7337",
+        ILogger<CdpUploaderService>? logger = null
     )
     {
         var factory = Substitute.For<IHttpClientFactory>();
         factory.CreateClient("DefaultClient").Returns(httpClient);
 
         var config = Options.Create(new CdpUploaderConfig { Url = uploaderUrl });
-        return new CdpUploaderService(factory, config, EnabledNullLogger<CdpUploaderService>.Instance);
+        return new CdpUploaderService(
+            factory,
+            config,
+            logger ?? EnabledNullLogger<CdpUploaderService>.Instance
+        );
+    }
+
+    // RA-516: request/response JSON dumps must be logged at Warn, not the more verbose
+    // Information they used to log at - the app's default Serilog level is now Warning (see
+    // appsettings.json), so this is what actually keeps them out of normal-operation noise.
+    [Fact]
+    public async Task InitiateAsync_LogsRequestBody_AtWarningLevel()
+    {
+        var cdpResponse = new CdpInitiateResponse
+        {
+            UploadId = "upload-123",
+            UploadUrl = "http://localhost:7337/upload/upload-123",
+            StatusUrl = "http://localhost:7337/status/upload-123",
+        };
+        var handler = new StubHttpMessageHandler(HttpStatusCode.OK, cdpResponse);
+        using var client = new HttpClient(handler);
+        var logger = new CapturingLogger<CdpUploaderService>();
+        var sut = BuildSut(client, logger: logger);
+
+        await sut.InitiateAsync(
+            new CdpInitiateRequest
+            {
+                Redirect = "http://frontend/redirect",
+                S3Bucket = "my-bucket",
+                S3Path = "uploads/test.csv",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        logger
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Warning && e.Message.Contains("Calling CDP uploader")
+            );
+        logger
+            .Entries.Should()
+            .NotContain(e =>
+                e.LogLevel == LogLevel.Information && e.Message.Contains("Calling CDP uploader")
+            );
+    }
+
+    [Fact]
+    public async Task InitiateAsync_LogsResponseBody_AtWarningLevel()
+    {
+        var cdpResponse = new CdpInitiateResponse
+        {
+            UploadId = "upload-123",
+            UploadUrl = "http://localhost:7337/upload/upload-123",
+            StatusUrl = "http://localhost:7337/status/upload-123",
+        };
+        var handler = new StubHttpMessageHandler(HttpStatusCode.OK, cdpResponse);
+        using var client = new HttpClient(handler);
+        var logger = new CapturingLogger<CdpUploaderService>();
+        var sut = BuildSut(client, logger: logger);
+
+        await sut.InitiateAsync(
+            new CdpInitiateRequest
+            {
+                Redirect = "http://frontend/redirect",
+                S3Bucket = "my-bucket",
+                S3Path = "uploads/test.csv",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        logger
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Warning && e.Message.Contains("CDP uploader returned")
+            );
+        logger
+            .Entries.Should()
+            .NotContain(e =>
+                e.LogLevel == LogLevel.Information && e.Message.Contains("CDP uploader returned")
+            );
     }
 
     [Fact]
@@ -113,7 +194,11 @@ public class CdpUploaderServiceTests
     {
         var factory = Substitute.For<IHttpClientFactory>();
         var config = Options.Create(new CdpUploaderConfig { Url = "" });
-        var sut = new CdpUploaderService(factory, config, EnabledNullLogger<CdpUploaderService>.Instance);
+        var sut = new CdpUploaderService(
+            factory,
+            config,
+            EnabledNullLogger<CdpUploaderService>.Instance
+        );
 
         var act = async () =>
             await sut.InitiateAsync(
@@ -251,7 +336,9 @@ public class CdpUploaderServiceTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        var bytes = await handler.LastRequest!.Content!.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+        var bytes = await handler.LastRequest!.Content!.ReadAsByteArrayAsync(
+            TestContext.Current.CancellationToken
+        );
         var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
         root.GetProperty("redirect").GetString().Should().Be("/frontend/redirect");
@@ -260,6 +347,31 @@ public class CdpUploaderServiceTests
         root.GetProperty("s3Path").GetString().Should().Be("uploads/test.csv");
         root.GetProperty("mimeTypes")[0].GetString().Should().Be("application/pdf");
         root.GetProperty("maxFileSize").GetInt64().Should().Be(1024);
+    }
+
+    // RA-516: mirrors the CapturingLogger<T> pattern already used in
+    // ExceptionLoggingHandlerTests/MongoIndexInitializerServiceTests - EnabledNullLogger discards
+    // output, which is fine for tests that don't care what was logged, but these two logging
+    // tests specifically need to assert which LogLevel a message was emitted at.
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel LogLevel, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            Entries.Add((logLevel, formatter(state, exception)));
+        }
     }
 
     private class StubHttpMessageHandler : HttpMessageHandler

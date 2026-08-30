@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using MongoDB.Bson;
@@ -43,12 +44,47 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult<AccreditationApplicationModel?>(application);
     }
 
+    // RA-516: mirrors AccreditationApplicationPersistence.GetByOrganisationAsync's server-side
+    // newest-first sort, using the same shared AccreditationApplicationOrdering.NewestFirst() rule
+    // the real class's compound index now enforces, so this fake stays a faithful stand-in.
     public Task<IEnumerable<AccreditationApplicationModel>> GetByOrganisationAsync(
         string organisationId
     ) =>
         Task.FromResult<IEnumerable<AccreditationApplicationModel>>(
-            _store.Where(a => a.OrganisationId == organisationId).ToList()
+            _store.Where(a => a.OrganisationId == organisationId).NewestFirst().ToList()
         );
+
+    public Task<AccreditationApplicationModel?> GetLiveByRegistrationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        int year
+    )
+    {
+        var match = _store
+            .Where(a =>
+                a.OrganisationId == organisationId
+                && a.RegistrationId == registrationId
+                && a.MaterialType == materialType
+                && a.Year == year
+                && a.ApplicationStatus != ApplicationStatus.Withdrawn
+            )
+            .NewestFirst()
+            .FirstOrDefault();
+        return Task.FromResult(match is null ? null : ShallowCopy(match));
+    }
+
+    public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId)
+    {
+        IReadOnlyList<string> orsIds = _store
+            .Where(a => a.RegistrationId == registrationId)
+            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+            .Select(s => s.OrsId)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .ToList();
+        return Task.FromResult(orsIds);
+    }
 
     public Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
@@ -82,6 +118,11 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         var idx = _store.FindIndex(a => a.Id == application.Id);
         if (idx < 0)
             return Task.FromResult<AccreditationApplicationModel?>(null);
+        // RA-516: mirrors AccreditationApplicationPersistence.ReplaceIfMatchAsync's optimistic
+        // concurrency check.
+        if (_store[idx].Version != application.Version)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+        application.Version++;
         _store[idx] = application;
         return Task.FromResult<AccreditationApplicationModel?>(application);
     }
@@ -105,6 +146,11 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         if (alreadyPresent)
             return Task.FromResult<AccreditationApplicationModel?>(null);
 
+        // RA-516: mirrors AccreditationApplicationPersistence.ReplaceIfMatchAsync's optimistic
+        // concurrency check.
+        if (_store[idx].Version != application.Version)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+        application.Version++;
         _store[idx] = application;
         return Task.FromResult<AccreditationApplicationModel?>(application);
     }
@@ -151,6 +197,10 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             DateLastEdited = src.DateLastEdited,
             CreatedAt = src.CreatedAt,
             UpdatedAt = src.UpdatedAt,
+            // RA-516: was missing, every read through this fake would silently reset the
+            // concurrency token to 0, making every second update through it look like a version
+            // conflict against the (already-incremented) stored record.
+            Version = src.Version,
             Prns = src.Prns,
             BusinessPlan = src.BusinessPlan,
             SamplingPlan = src.SamplingPlan,
