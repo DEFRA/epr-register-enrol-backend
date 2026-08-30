@@ -121,4 +121,74 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
             .FirstAsync(TestContext.Current.CancellationToken);
         stored["version"].AsInt64.Should().Be(1);
     }
+
+    /// <summary>
+    /// RA-519: proves UpdateFieldsAsync's targeted $set update, against a real mongod, survives a
+    /// concurrent whole-document replace (UpdateAsync, as StatusChangedFromCaseManagement uses)
+    /// that lands in between the targeted writer's read and its own persist - the exact race that
+    /// produced Resubmit/Withdraw's 500. A whole-document ReplaceOneAsync filtered by `_id` (+
+    /// Version, per RA-516) can only ever "win" or get rejected outright; it can never merge. This
+    /// shows the targeted update merges: the field-disjoint change from the earlier whole-document
+    /// write is still present afterwards, and the targeted write itself always succeeds regardless
+    /// of the Version the whole-document write already advanced past.
+    /// </summary>
+    [Fact]
+    public async Task UpdateFieldsAsync_ConcurrentWholeDocumentReplaceLandsFirst_TargetedWriteStillSucceedsAndBothChangesSurvive()
+    {
+        var created = await _sut.CreateAsync(
+            new AccreditationApplicationModel
+            {
+                OrganisationId = "org-1",
+                Year = 2026,
+                MaterialType = MaterialType.Steel,
+                ApplicationStatus = ApplicationStatus.Queried,
+                WithdrawalReason = null,
+            }
+        );
+        created.Should().NotBeNull();
+
+        // The endpoint's own read, before any concurrent write has happened.
+        var endpointsOwnRead = await _sut.GetByIdAsync("org-1", created!.Id!.ToString()!);
+        endpointsOwnRead.Should().NotBeNull();
+
+        // A concurrent whole-document replace (simulating StatusChangedFromCaseManagement) lands
+        // first, moving the document's Version on and touching a field the targeted write below
+        // never names.
+        var webhookRead = await _sut.GetByIdAsync("org-1", created.Id!.ToString()!);
+        webhookRead!.ApplicationReference = "set-by-webhook";
+        var webhookResult = await _sut.UpdateAsync(webhookRead);
+        webhookResult.Should().NotBeNull();
+        webhookResult!.Version.Should().Be(endpointsOwnRead!.Version + 1);
+
+        // The endpoint's own targeted update, built off its pre-webhook read, still using that
+        // stale Version's worth of context - but UpdateFieldsAsync is filtered only by `_id`, so
+        // the document having moved on under it must not matter.
+        var targetedUpdate = Builders<AccreditationApplicationModel>.Update.Set(
+            a => a.ApplicationStatus,
+            ApplicationStatus.Withdrawn
+        );
+        var targetedResult = await _sut.UpdateFieldsAsync(
+            endpointsOwnRead.Id!.Value,
+            targetedUpdate
+        );
+
+        targetedResult
+            .Should()
+            .NotBeNull(
+                "a targeted update filtered only by _id must succeed even though a concurrent whole-document replace already moved the document's Version on"
+            );
+        targetedResult!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        targetedResult
+            .ApplicationReference.Should()
+            .Be(
+                "set-by-webhook",
+                "the targeted update must not have touched (or reverted) a field it never named"
+            );
+
+        var final = await _sut.GetByIdAsync("org-1", created.Id!.ToString()!);
+        final.Should().NotBeNull();
+        final!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        final.ApplicationReference.Should().Be("set-by-webhook");
+        final.Version.Should().Be(webhookResult.Version + 1);
+    }
 }

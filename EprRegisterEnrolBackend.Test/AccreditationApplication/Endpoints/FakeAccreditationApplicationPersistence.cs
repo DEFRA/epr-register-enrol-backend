@@ -2,6 +2,8 @@ using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
@@ -153,6 +155,101 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         application.Version++;
         _store[idx] = application;
         return Task.FromResult<AccreditationApplicationModel?>(application);
+    }
+
+    /// <summary>
+    /// RA-519: real field-level merge for <see cref="IAccreditationApplicationPersistence.UpdateFieldsAsync"/>,
+    /// so tests exercising it through this fake actually distinguish "both concurrent writers'
+    /// changes survived" from "one clobbered the other" - the thing a naive last-write-wins fake
+    /// couldn't tell apart. Renders the UpdateDefinition to the same $set/$push/$inc BsonDocument
+    /// shape the real Mongo driver would send over the wire (via the model's own class-map
+    /// serializer, so element names/representations match production exactly), then applies each
+    /// operator onto a BSON-serialized copy of the stored record and deserializes the result back -
+    /// deliberately not attempting to interpret arbitrary UpdateDefinition shapes generically,
+    /// just the $set/$push/$inc operators AccreditationApplicationSections' Build*Update helpers
+    /// and UpdateFieldsAsync itself ever produce.
+    /// </summary>
+    public Task<AccreditationApplicationModel?> UpdateFieldsAsync(
+        ObjectId id,
+        UpdateDefinition<AccreditationApplicationModel> update,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var idx = _store.FindIndex(a => a.Id == id);
+        if (idx < 0)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+
+        var serializer = BsonSerializer.LookupSerializer<AccreditationApplicationModel>();
+        var renderArgs = new RenderArgs<AccreditationApplicationModel>(
+            serializer,
+            BsonSerializer.SerializerRegistry
+        );
+        var rendered = update.Render(renderArgs).AsBsonDocument;
+
+        var storedDoc = _store[idx].ToBsonDocument();
+
+        if (rendered.TryGetValue("$set", out var setOps))
+            foreach (var el in setOps.AsBsonDocument)
+            {
+                var parent = NavigateToParent(storedDoc, el.Name, out var leaf);
+                parent[leaf] = el.Value;
+            }
+
+        if (rendered.TryGetValue("$inc", out var incOps))
+            foreach (var el in incOps.AsBsonDocument)
+            {
+                var parent = NavigateToParent(storedDoc, el.Name, out var leaf);
+                var current = parent.Contains(leaf) ? parent[leaf].ToInt64() : 0L;
+                parent[leaf] = current + el.Value.ToInt64();
+            }
+
+        if (rendered.TryGetValue("$push", out var pushOps))
+            foreach (var el in pushOps.AsBsonDocument)
+            {
+                var parent = NavigateToParent(storedDoc, el.Name, out var leaf);
+                var array =
+                    parent.Contains(leaf) && parent[leaf] is BsonArray existing
+                        ? existing
+                        : new BsonArray();
+                if (el.Value is BsonDocument pushDoc && pushDoc.Contains("$each"))
+                    array.AddRange(pushDoc["$each"].AsBsonArray);
+                else
+                    array.Add(el.Value);
+                parent[leaf] = array;
+            }
+
+        var deserialized = BsonSerializer.Deserialize<AccreditationApplicationModel>(storedDoc);
+        _store[idx] = deserialized;
+        return Task.FromResult<AccreditationApplicationModel?>(deserialized);
+    }
+
+    // Walks a dotted Mongo field path (e.g. "query.queriedSectionKeys") down `root`, creating any
+    // missing intermediate subdocuments along the way (mirroring how Mongo itself materialises a
+    // dotted $set/$push path server-side), and returns the immediate parent document plus the
+    // final path segment.
+    private static BsonDocument NavigateToParent(
+        BsonDocument root,
+        string dottedPath,
+        out string leafName
+    )
+    {
+        var parts = dottedPath.Split('.');
+        leafName = parts[^1];
+        var current = root;
+        for (var i = 0; i < parts.Length - 1; i++)
+        {
+            if (current.TryGetValue(parts[i], out var child) && child is BsonDocument childDoc)
+            {
+                current = childDoc;
+            }
+            else
+            {
+                var newDoc = new BsonDocument();
+                current[parts[i]] = newDoc;
+                current = newDoc;
+            }
+        }
+        return current;
     }
 
     private static AccreditationApplicationModel ShallowCopy(AccreditationApplicationModel src) =>

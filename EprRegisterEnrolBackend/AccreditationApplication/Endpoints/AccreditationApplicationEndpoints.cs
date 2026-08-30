@@ -11,6 +11,7 @@ using EprRegisterEnrolBackend.Utils;
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 
@@ -2263,10 +2264,26 @@ public static class AccreditationApplicationEndpoints
                 detail: "Failed to resume query with case management."
             );
 
+        // RA-519: built as a targeted $set/$push UpdateDefinition and persisted via
+        // UpdateFieldsAsync below, rather than mutated in-memory and persisted via UpdateAsync's
+        // whole-document replace. ResumeFromQueryAsync above synchronously triggers ManagementBe's
+        // push-back into StatusChangedFromCaseManagement, which does its own read-modify-write
+        // against this same document while this call is still in flight; two whole-document
+        // replaces filtered only by `_id` (Version included) then race and the second writer gets
+        // null back, turning into this endpoint's 500 - a targeted update only touches the fields
+        // this endpoint actually changes, so it survives regardless of what the concurrent webhook
+        // write does to other fields.
         var versionedAt = DateTime.UtcNow;
+        var sectionUpdates = new List<UpdateDefinition<AccreditationApplicationModel>>();
         foreach (var section in queriedSections)
         {
-            AccreditationApplicationSections.SnapshotSection(application, section, versionedAt);
+            sectionUpdates.Add(
+                AccreditationApplicationSections.BuildSnapshotUpdate(
+                    application,
+                    section,
+                    versionedAt
+                )
+            );
 
             // Every queried section is still Queried here — the Patch* endpoints no longer clear
             // it as a side effect of an in-progress edit — so this branch fires for all of them,
@@ -2276,35 +2293,94 @@ public static class AccreditationApplicationEndpoints
                 AccreditationApplicationSections.GetSectionStatus(application, section)
                 == SectionStatus.Queried
             )
-                AccreditationApplicationSections.SetSectionStatus(
-                    application,
-                    section,
-                    AccreditationApplicationSections.ComputeCurrentStatus(application, section)
+                sectionUpdates.Add(
+                    AccreditationApplicationSections.BuildSectionStatusUpdate(
+                        application,
+                        section,
+                        AccreditationApplicationSections.ComputeCurrentStatus(
+                            application,
+                            section
+                        )
+                    )
                 );
         }
 
-        application.Query ??= new AccreditationApplicationQuery();
-        application.Query.QuerySubmissions.Add(
-            new QuerySubmission
-            {
-                QuerySubmissionTime = versionedAt,
-                SectionKeys = sectionKeys,
-                QuerySubmitterContactDetails = contactDetails,
-            }
+        var querySubmission = new QuerySubmission
+        {
+            QuerySubmissionTime = versionedAt,
+            SectionKeys = sectionKeys,
+            QuerySubmitterContactDetails = contactDetails,
+        };
+
+        var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
+            sectionUpdates.Append(BuildQueryResubmitUpdate(application, querySubmission))
+                .Append(
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.ApplicationStatus,
+                        ApplicationStatus.Updated
+                    )
+                )
+                .Append(
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.DateLastEdited,
+                        versionedAt
+                    )
+                )
+                // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3)
+                // so a single CaseManagementStatusUpdatedAt orders every Case Management
+                // service-driven status write, resubmit or not.
+                .Append(
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.CaseManagementStatusUpdatedAt,
+                        versionedAt
+                    )
+                )
         );
-        application.Query.QueriedSectionKeys = [];
 
-        application.ApplicationStatus = ApplicationStatus.Updated;
-        application.DateLastEdited = versionedAt;
-        // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
-        // single CaseManagementStatusUpdatedAt orders every Case Management service-driven status
-        // write, resubmit or not.
-        application.CaseManagementStatusUpdatedAt = versionedAt;
-
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateFieldsAsync(
+            application.Id!.Value,
+            combinedUpdate,
+            cancellationToken
+        );
         return updated is null
             ? Results.Problem("Failed to resubmit accreditation application.")
             : Results.Ok(updated);
+    }
+
+    // RA-519: Query starts out null on some applications (see Resubmit_QueryIsNull_...
+    // regression coverage) - a dotted-path Push/Set against Query.* requires the parent
+    // subdocument to already exist in Mongo, so a still-null Query is Set wholesale instead.
+    private static UpdateDefinition<AccreditationApplicationModel> BuildQueryResubmitUpdate(
+        AccreditationApplicationModel application,
+        QuerySubmission submission
+    )
+    {
+        var update = Builders<AccreditationApplicationModel>.Update;
+        return application.Query is null
+            ? update.Set(
+                a => a.Query,
+                new AccreditationApplicationQuery
+                {
+                    QuerySubmissions = [submission],
+                    QueriedSectionKeys = [],
+                }
+            )
+            : update.Combine(
+                update.Push(a => a.Query!.QuerySubmissions, submission),
+                update.Set(a => a.Query!.QueriedSectionKeys, new List<string>())
+            );
+    }
+
+    // RA-519: same null-parent fallback as BuildQueryResubmitUpdate, for Withdraw's simpler
+    // "just clear the outstanding queried keys" case (no QuerySubmission to append).
+    private static UpdateDefinition<AccreditationApplicationModel> BuildClearQueriedSectionKeysUpdate(
+        AccreditationApplicationModel application
+    )
+    {
+        var update = Builders<AccreditationApplicationModel>.Update;
+        return application.Query is null
+            ? update.Set(a => a.Query, new AccreditationApplicationQuery())
+            : update.Set(a => a.Query!.QueriedSectionKeys, new List<string>());
     }
 
     private static async Task<IResult> QueryFromCaseManagement(
@@ -2827,7 +2903,15 @@ public static class AccreditationApplicationEndpoints
                 "Failed to withdraw accreditation application with the case management service."
             );
 
-        if (application.ApplicationStatus == ApplicationStatus.Queried)
+        // RA-519: same targeted-update migration as Resubmit above, and for the same reason -
+        // WithdrawApplicationAsync above can synchronously trigger ManagementBe's push-back into
+        // StatusChangedFromCaseManagement while this call is still in flight, racing this
+        // endpoint's own persist. A whole-document replace here is only "safe" today because
+        // ManagementBe happens not to push withdrawn transitions back synchronously - an
+        // implementation detail of another repo, not something to rely on (see RA-519).
+        var sectionUpdates = new List<UpdateDefinition<AccreditationApplicationModel>>();
+        var wasQueried = application.ApplicationStatus == ApplicationStatus.Queried;
+        if (wasQueried)
         {
             var queriedSections = (application.Query?.QueriedSectionKeys ?? [])
                 .Select(key =>
@@ -2848,22 +2932,48 @@ public static class AccreditationApplicationEndpoints
                     AccreditationApplicationSections.GetSectionStatus(application, section)
                     == SectionStatus.Queried
                 )
-                    AccreditationApplicationSections.SetSectionStatus(
-                        application,
-                        section,
-                        AccreditationApplicationSections.ComputeCurrentStatus(application, section)
+                    sectionUpdates.Add(
+                        AccreditationApplicationSections.BuildSectionStatusUpdate(
+                            application,
+                            section,
+                            AccreditationApplicationSections.ComputeCurrentStatus(
+                                application,
+                                section
+                            )
+                        )
                     );
             }
 
-            application.Query ??= new AccreditationApplicationQuery();
-            application.Query.QueriedSectionKeys = [];
+            sectionUpdates.Add(BuildClearQueriedSectionKeysUpdate(application));
         }
 
-        application.ApplicationStatus = ApplicationStatus.Withdrawn;
-        application.WithdrawalReason = request.Reason;
-        application.DateLastEdited = DateTime.UtcNow;
+        var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
+            sectionUpdates
+                .Append(
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.ApplicationStatus,
+                        ApplicationStatus.Withdrawn
+                    )
+                )
+                .Append(
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.WithdrawalReason,
+                        request.Reason
+                    )
+                )
+                .Append(
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.DateLastEdited,
+                        DateTime.UtcNow
+                    )
+                )
+        );
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateFieldsAsync(
+            application.Id!.Value,
+            combinedUpdate,
+            cancellationToken
+        );
         return updated is null
             ? Results.Problem("Failed to withdraw accreditation application.")
             : Results.Ok(updated);

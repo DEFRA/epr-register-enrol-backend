@@ -1,4 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
@@ -46,5 +48,22 @@ public interface IAccreditationApplicationPersistence
     Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
         string orsId
+    );
+
+    /// <summary>
+    /// RA-519: targeted (field-level, `$set`/`$push`) update filtered only by `_id`, as opposed to
+    /// <see cref="UpdateAsync"/>'s whole-document replace. Two concurrent writers that each touch
+    /// disjoint fields via this method (or one via this method and one via
+    /// StatusChangedFromCaseManagement's whole-document replace touching different fields) no
+    /// longer clobber each other — a targeted update only ever overwrites the specific fields
+    /// named in <paramref name="update"/>, so it can never lose a concurrent writer's unrelated
+    /// change the way two whole-document replaces filtered only by `_id` can. Stamps
+    /// <c>UpdatedAt</c> and increments <c>Version</c> as part of the same atomic update. Returns
+    /// the updated document, or <c>null</c> if no document with <paramref name="id"/> exists.
+    /// </summary>
+    Task<AccreditationApplicationModel?> UpdateFieldsAsync(
+        ObjectId id,
+        UpdateDefinition<AccreditationApplicationModel> update,
+        CancellationToken cancellationToken = default
     );
 }

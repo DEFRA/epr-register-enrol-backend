@@ -618,6 +618,106 @@ public class AccreditationApplicationEndpointsLifecycleTests
         body.Query!.QuerySubmissions.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task Resubmit_CaseManagementPushesStatusChangeDuringAdapterCall_SucceedsAndKeepsBothWritersChanges()
+    {
+        // RA-519 regression: ManagementBe's resume-from-query handling can synchronously call
+        // back into this service's own case-management/{workItemId}/status webhook while this
+        // endpoint is still awaiting ResumeFromQueryAsync. That webhook does its own
+        // read-modify-write against the very same document. Before RA-519, Resubmit's own persist
+        // was a whole-document replace (guarded only by the RA-516 Version field) — so once the
+        // webhook moved the document's Version on, Resubmit's own write (still working off its
+        // pre-webhook-read copy) was rejected outright and this endpoint 500'd, even though
+        // ManagementBe's transition and the webhook's own Mongo write had both already succeeded.
+        // This proves Resubmit's own write now survives that race instead of failing.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.BusinessPlan.SectionStatus = SectionStatus.Queried;
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify",
+                    QueriedSectionKeys = ["business-plan"],
+                };
+            }
+        );
+
+        _factory
+            .MockCaseWorkingAdapter.ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(async _ =>
+            {
+                // Simulates ManagementBe's synchronous push-back into this service's own webhook,
+                // interleaved between Resubmit's read and its own persist.
+                using var webhookRequest = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    $"/api/v1/accreditation-applications/case-management/{workItemId}/status"
+                )
+                {
+                    Content = JsonContent.Create(
+                        new StatusChangedFromCaseManagementRequest
+                        {
+                            ToStateId = "duly-made",
+                            ActionId = "some-action",
+                            OccurredAt = DateTime.UtcNow,
+                        },
+                        options: JsonOptions
+                    ),
+                };
+                var webhookResponse = await _client.SendAsync(
+                    webhookRequest,
+                    TestContext.Current.CancellationToken
+                );
+                webhookResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+                return new ResumeFromQueryResult(true);
+            });
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest
+            {
+                FullName = "Jane",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response
+            .StatusCode.Should()
+            .Be(
+                HttpStatusCode.OK,
+                "the endpoint's own persist must survive the interleaved webhook write instead of 500ing"
+            );
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        // Resubmit's own fields landed...
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Updated);
+        body.Query!.QueriedSectionKeys.Should().BeEmpty();
+        body.Query.QuerySubmissions.Should().ContainSingle();
+        body.BusinessPlan.SectionStatus.Should().Be(SectionStatus.NotStarted);
+
+        // ...and re-fetching independently (rather than trusting the in-memory response object)
+        // confirms it actually persisted.
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Updated);
+        stored.Query!.QuerySubmissions.Should().ContainSingle();
+        stored.Query.QueriedSectionKeys.Should().BeEmpty();
+    }
+
     // --- Withdraw ---
 
     [Fact]
@@ -758,6 +858,95 @@ public class AccreditationApplicationEndpointsLifecycleTests
         body!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
         body.Query.Should().NotBeNull();
         body.Query!.QueriedSectionKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Withdraw_CaseManagementPushesStatusChangeDuringAdapterCall_SucceedsAndKeepsBothWritersChanges()
+    {
+        // RA-519: Withdraw has the identical read-mutate-whole-document-replace shape as Resubmit
+        // and is equally vulnerable to the same race - it's only not observed in production today
+        // because ManagementBe happens not to push withdrawn transitions back synchronously, which
+        // is an implementation detail of another repo, not something this endpoint should rely on.
+        // This test forces the race deliberately to prove Withdraw is now structurally safe too.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.BusinessPlan.SectionStatus = SectionStatus.Queried;
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify",
+                    QueriedSectionKeys = ["business-plan"],
+                };
+            }
+        );
+
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(async _ =>
+            {
+                // Simulates ManagementBe's synchronous push-back into this service's own webhook,
+                // interleaved between Withdraw's read and its own persist.
+                using var webhookRequest = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    $"/api/v1/accreditation-applications/case-management/{workItemId}/status"
+                )
+                {
+                    Content = JsonContent.Create(
+                        new StatusChangedFromCaseManagementRequest
+                        {
+                            ToStateId = "duly-made",
+                            ActionId = "some-action",
+                            OccurredAt = DateTime.UtcNow,
+                        },
+                        options: JsonOptions
+                    ),
+                };
+                var webhookResponse = await _client.SendAsync(
+                    webhookRequest,
+                    TestContext.Current.CancellationToken
+                );
+                webhookResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+                return new WithdrawResult(true);
+            });
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response
+            .StatusCode.Should()
+            .Be(
+                HttpStatusCode.OK,
+                "the endpoint's own persist must survive the interleaved webhook write instead of 500ing"
+            );
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        body.WithdrawalReason.Should().Be("No longer required");
+        body.Query!.QueriedSectionKeys.Should().BeEmpty();
+        body.BusinessPlan.SectionStatus.Should().Be(SectionStatus.NotStarted);
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        stored.WithdrawalReason.Should().Be("No longer required");
+        stored.Query!.QueriedSectionKeys.Should().BeEmpty();
     }
 
     // --- QueryFromCaseManagement: X-Correlation-Id header present branch ---

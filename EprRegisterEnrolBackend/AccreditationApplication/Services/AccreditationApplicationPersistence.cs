@@ -195,6 +195,42 @@ public class AccreditationApplicationPersistence(
         return result.ModifiedCount > 0 ? application : null;
     }
 
+    // RA-519: the targeted-update counterpart to ReplaceIfMatchAsync above. Resubmit and Withdraw
+    // both used to read-mutate-whole-document-replace, which raced with
+    // StatusChangedFromCaseManagement's own read-mutate-whole-document-replace whenever
+    // ManagementBe's synchronous push-back landed while one of those endpoints was still awaiting
+    // its own outbound adapter call (RA-519 root cause) - two ReplaceOneAsync calls filtered only
+    // by `_id` (or, after RA-516, `_id` + Version) each overwrite the *entire* document, so
+    // whichever writer persists second wins outright and the first writer's fields are lost (or,
+    // post-RA-516, the second writer's version filter no longer matches and it gets null back -
+    // the 500 this fixes). A `$set`/`$push` update filtered only by `_id` only ever touches the
+    // fields named in `update`, so two concurrent writers touching disjoint fields both survive
+    // regardless of ordering. UpdatedAt and Version are stamped/incremented here so every write
+    // path - whole-document replace or targeted update - keeps both current.
+    public async Task<AccreditationApplicationModel?> UpdateFieldsAsync(
+        ObjectId id,
+        UpdateDefinition<AccreditationApplicationModel> update,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var filter = Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, id);
+        var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
+            update,
+            Builders<AccreditationApplicationModel>.Update.Set(a => a.UpdatedAt, DateTime.UtcNow),
+            Builders<AccreditationApplicationModel>.Update.Inc(a => a.Version, 1L)
+        );
+
+        return await Collection.FindOneAndUpdateAsync(
+            filter,
+            combinedUpdate,
+            new FindOneAndUpdateOptions<AccreditationApplicationModel>
+            {
+                ReturnDocument = ReturnDocument.After,
+            },
+            cancellationToken
+        );
+    }
+
     protected override List<CreateIndexModel<AccreditationApplicationModel>> DefineIndexes(
         IndexKeysDefinitionBuilder<AccreditationApplicationModel> builder
     )
