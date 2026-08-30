@@ -242,12 +242,16 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // ReEx API client (org + overseas-sites)
     builder.Services.AddReExClients(builder.Configuration);
 
-    if (builder.Environment.IsDevelopment())
+    // ReExApi:UseStub (default false) lets a deployed non-Development environment
+    // (e.g. perf-test) opt into the stub adapter/fixtures without flipping
+    // ASPNETCORE_ENVIRONMENT, which would also pull in unrelated dev-only surface
+    // area handled by the Development-only block below.
+    var reExConfig = new ReExConfig();
+    builder.Configuration.GetSection("ReExApi").Bind(reExConfig);
+
+    if (builder.Environment.IsDevelopment() || reExConfig.UseStub)
     {
         builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
-
-        builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
-        builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
 
         // Fixtures for StubReExApiAdapter's dev-mode responses — not tied to
         // any persistence interface, this is the only place it's used.
@@ -256,6 +260,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     else
     {
         builder.Services.AddSingleton<IReExApiAdapter, HttpReExApiAdapter>();
+    }
+
+    if (builder.Environment.IsDevelopment())
+    {
+        builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
+        builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
     }
 }
 

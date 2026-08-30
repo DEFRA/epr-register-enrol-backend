@@ -32,9 +32,10 @@ public class RequiredConfigHealthCheck(
     {
         var missing = new List<string>();
 
-        // Development wires up StubReExApiAdapter instead of the real HTTP client
-        // (see Program.cs), so ReEx config is never load-bearing there.
-        if (!environment.IsDevelopment())
+        // Development (or ReExApi:UseStub=true, e.g. perf-test) wires up
+        // StubReExApiAdapter instead of the real HTTP client (see Program.cs), so
+        // ReEx config is never load-bearing in either case.
+        if (!environment.IsDevelopment() && !reExConfig.Value.UseStub)
         {
             if (string.IsNullOrWhiteSpace(reExConfig.Value.BaseUrl))
                 missing.Add("ReExApi__BaseUrl");

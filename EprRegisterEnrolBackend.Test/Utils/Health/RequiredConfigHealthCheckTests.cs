@@ -127,6 +127,28 @@ public class RequiredConfigHealthCheckTests
     }
 
     [Fact]
+    public async Task CheckHealthAsync_Healthy_WhenReExUseStubOutsideDevelopment_EvenWithNoBaseUrlOrCredentials()
+    {
+        // ReExApi:UseStub=true (e.g. perf-test) wires up StubReExApiAdapter without
+        // ASPNETCORE_ENVIRONMENT=Development (see Program.cs), so ReEx config is not
+        // load-bearing in that case either.
+        var check = MakeCheck(
+            new Builder
+            {
+                ReExUseStub = true,
+                ReExBaseUrl = "",
+                ReExUsername = "",
+                ReExPassword = "",
+                IsDevelopment = false
+            }
+        );
+
+        var result = await CheckHealth(check);
+
+        result.Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
     public async Task CheckHealthAsync_ListsEveryMissingKey()
     {
         var check = MakeCheck(
@@ -176,6 +198,7 @@ public class RequiredConfigHealthCheckTests
         public string CaseManagementAuthSharedSecret { get; set; } = "case-management-secret";
         public string FrontendAuthSharedSecret { get; set; } = "frontend-secret";
         public bool UseStub { get; set; } = false;
+        public bool ReExUseStub { get; set; } = false;
         public bool IsDevelopment { get; set; } = false;
     }
 
@@ -189,7 +212,7 @@ public class RequiredConfigHealthCheckTests
             : Environments.Production;
 
         return new RequiredConfigHealthCheck(
-            Options.Create(new ReExConfig { BaseUrl = builder.ReExBaseUrl }),
+            Options.Create(new ReExConfig { BaseUrl = builder.ReExBaseUrl, UseStub = builder.ReExUseStub }),
             Options.Create(
                 new ReExCredentials { Username = builder.ReExUsername, Password = builder.ReExPassword }
             ),
