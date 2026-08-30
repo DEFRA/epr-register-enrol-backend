@@ -3,6 +3,8 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Services;
 
@@ -69,5 +71,51 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
         final
             .Version.Should()
             .Be(readerA.Version, "only the one successful write should have advanced the version");
+    }
+
+    /// <summary>
+    /// RA-516 review follow-up (masante, discussion_r3888905830): every document written before
+    /// this deploy has no "version" field in storage at all - Mongo's equality filter never
+    /// matches a genuinely absent field, so without this the very first post-deploy update of a
+    /// pre-existing application would find zero matching documents and get rejected as a
+    /// permanent, unrecoverable "conflict".
+    /// </summary>
+    [Fact]
+    public async Task PreExistingDocumentWithNoVersionField_CanStillBeUpdated()
+    {
+        var legacyId = ObjectId.GenerateNewId();
+        var rawCollection = _factory.GetCollection<BsonDocument>("accreditationApplications");
+        await rawCollection.InsertOneAsync(
+            new BsonDocument
+            {
+                { "_id", legacyId },
+                { "organisationId", "org-legacy" },
+                { "year", 2025 },
+                { "materialType", "Steel" },
+                { "applicationStatus", "Saved" },
+                { "applicationReference", "legacy-initial" },
+                { "dateLastEdited", DateTime.UtcNow },
+                { "createdAt", DateTime.UtcNow },
+                { "updatedAt", DateTime.UtcNow },
+                // Deliberately no "version" field - simulates a document written before RA-516.
+            }
+        );
+
+        var legacy = await _sut.GetByIdAsync("org-legacy", legacyId.ToString());
+        legacy.Should().NotBeNull();
+        legacy!.Version.Should().Be(0, "a missing version field deserializes to the long default");
+
+        legacy.ApplicationReference = "legacy-updated";
+        var result = await _sut.UpdateAsync(legacy);
+
+        result
+            .Should()
+            .NotBeNull(
+                "a missing version field must be treated as equivalent to 0, not as a permanent, unrecoverable conflict"
+            );
+        result!.Version.Should().Be(1);
+
+        var stored = await rawCollection.Find(new BsonDocument("_id", legacyId)).FirstAsync();
+        stored["version"].AsInt64.Should().Be(1);
     }
 }

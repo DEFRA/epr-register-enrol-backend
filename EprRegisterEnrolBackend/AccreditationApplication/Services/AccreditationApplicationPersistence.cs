@@ -161,15 +161,32 @@ public class AccreditationApplicationPersistence(
     // concurrent writer already moved it on, this filter matches nothing, ModifiedCount is 0, and
     // - exactly like a not-found document today - the caller gets null back rather than silently
     // overwriting the other writer's change.
+    //
+    // Every AccreditationApplicationModel document written before this change has no "version"
+    // field in storage at all (Mongo's equality filter never matches a genuinely absent field), so
+    // an expected version of 0 - the in-memory default for both a brand-new document and one read
+    // back from before this deploy - also accepts a document where the field is missing entirely.
+    // That makes a document's first post-deploy update the point where "version" starts existing
+    // in storage, with no separate backfill/migration step required.
     private async Task<AccreditationApplicationModel?> ReplaceIfMatchAsync(
         AccreditationApplicationModel application,
         FilterDefinition<AccreditationApplicationModel> filter
     )
     {
         var expectedVersion = application.Version;
+        var versionFilter =
+            expectedVersion == 0
+                ? Builders<AccreditationApplicationModel>.Filter.Or(
+                    Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Version, 0L),
+                    Builders<AccreditationApplicationModel>.Filter.Exists(a => a.Version, false)
+                )
+                : Builders<AccreditationApplicationModel>.Filter.Eq(
+                    a => a.Version,
+                    expectedVersion
+                );
         var versionedFilter = Builders<AccreditationApplicationModel>.Filter.And(
             filter,
-            Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Version, expectedVersion)
+            versionFilter
         );
 
         application.UpdatedAt = DateTime.UtcNow;
