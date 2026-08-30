@@ -98,7 +98,8 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
                 { "createdAt", DateTime.UtcNow },
                 { "updatedAt", DateTime.UtcNow },
                 // Deliberately no "version" field - simulates a document written before RA-516.
-            }
+            },
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         var legacy = await _sut.GetByIdAsync("org-legacy", legacyId.ToString());
@@ -115,7 +116,9 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
             );
         result!.Version.Should().Be(1);
 
-        var stored = await rawCollection.Find(new BsonDocument("_id", legacyId)).FirstAsync();
+        var stored = await rawCollection
+            .Find(new BsonDocument("_id", legacyId))
+            .FirstAsync(TestContext.Current.CancellationToken);
         stored["version"].AsInt64.Should().Be(1);
     }
 }
