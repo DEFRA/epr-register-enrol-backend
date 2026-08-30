@@ -169,7 +169,8 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
         );
         var targetedResult = await _sut.UpdateFieldsAsync(
             endpointsOwnRead.Id!.Value,
-            targetedUpdate
+            targetedUpdate,
+            TestContext.Current.CancellationToken
         );
 
         targetedResult
