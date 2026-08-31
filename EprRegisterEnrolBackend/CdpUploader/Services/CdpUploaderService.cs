@@ -51,10 +51,14 @@ public class CdpUploaderService(
         // entirely, since `message` is unconditionally on the allow-list regardless of content.
         if (logger.IsEnabled(LogLevel.Warning))
         {
-            using var scope = logger.BeginScope(
-                new Dictionary<string, object?> { ["http.request.body"] = requestJson }
-            );
-            logger.LogWarning("Calling CDP uploader POST {InitiateUrl}", initiateUrl);
+            using (
+                logger.BeginScope(
+                    new Dictionary<string, object?> { ["http.request.body"] = requestJson }
+                )
+            )
+            {
+                logger.LogWarning("Calling CDP uploader POST {InitiateUrl}", initiateUrl);
+            }
         }
 
         var client = httpClientFactory.CreateClient("DefaultClient");
@@ -75,10 +79,14 @@ public class CdpUploaderService(
         }
         catch (Exception ex)
         {
-            using var scope = logger.BeginScope(
-                new Dictionary<string, object?> { ["http.request.body"] = requestJson }
-            );
-            logger.LogError(ex, "Failed to reach CDP uploader at {InitiateUrl}", initiateUrl);
+            using (
+                logger.BeginScope(
+                    new Dictionary<string, object?> { ["http.request.body"] = requestJson }
+                )
+            )
+            {
+                logger.LogError(ex, "Failed to reach CDP uploader at {InitiateUrl}", initiateUrl);
+            }
             throw;
         }
 
@@ -86,18 +94,22 @@ public class CdpUploaderService(
 
         if (!response.IsSuccessStatusCode)
         {
-            using var scope = logger.BeginScope(
-                new Dictionary<string, object?>
-                {
-                    ["http.request.body"] = requestJson,
-                    ["http.response.body"] = responseBody,
-                }
-            );
-            logger.LogError(
-                "CDP uploader returned {Status} from {InitiateUrl}",
-                (int)response.StatusCode,
-                initiateUrl
-            );
+            using (
+                logger.BeginScope(
+                    new Dictionary<string, object?>
+                    {
+                        ["http.request.body"] = requestJson,
+                        ["http.response.body"] = responseBody,
+                    }
+                )
+            )
+            {
+                logger.LogError(
+                    "CDP uploader returned {Status} from {InitiateUrl}",
+                    (int)response.StatusCode,
+                    initiateUrl
+                );
+            }
             throw new HttpRequestException(
                 $"CDP uploader initiate failed: {(int)response.StatusCode}"
             );
@@ -106,14 +118,18 @@ public class CdpUploaderService(
         // RA-516: Warn, not Information - same reasoning as the request-body log above.
         if (logger.IsEnabled(LogLevel.Warning))
         {
-            using var scope = logger.BeginScope(
-                new Dictionary<string, object?> { ["http.response.body"] = responseBody }
-            );
-            logger.LogWarning(
-                "CDP uploader returned {Status} from {InitiateUrl}",
-                (int)response.StatusCode,
-                initiateUrl
-            );
+            using (
+                logger.BeginScope(
+                    new Dictionary<string, object?> { ["http.response.body"] = responseBody }
+                )
+            )
+            {
+                logger.LogWarning(
+                    "CDP uploader returned {Status} from {InitiateUrl}",
+                    (int)response.StatusCode,
+                    initiateUrl
+                );
+            }
         }
 
         var result = JsonSerializer.Deserialize<CdpInitiateResponse>(
