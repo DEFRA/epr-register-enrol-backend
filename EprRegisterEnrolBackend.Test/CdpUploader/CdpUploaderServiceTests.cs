@@ -196,6 +196,44 @@ public class CdpUploaderServiceTests
     }
 
     [Fact]
+    public async Task InitiateAsync_HttpClientThrows_LogsRequestBodyAsScopedPropertyNotMessage()
+    {
+        // RA-519 follow-up (log-body-message-leak): the catch-block log path (network failure
+        // reaching cdp-uploader, as opposed to a non-success HTTP response) has its own
+        // BeginScope call, separate from the request-log and non-success-response paths already
+        // covered above — this exercises that path specifically.
+        var handler = new ThrowingHttpMessageHandler();
+        using var client = new HttpClient(handler);
+        var logger = new CapturingLogger<CdpUploaderService>();
+        var sut = BuildSut(client, logger: logger);
+
+        var act = async () =>
+            await sut.InitiateAsync(
+                new CdpInitiateRequest
+                {
+                    Redirect = "http://frontend/redirect",
+                    S3Bucket = "my-bucket",
+                    S3Path = "uploads/test.csv",
+                },
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        var errorEntry = logger.Entries.Single(e =>
+            e.LogLevel == LogLevel.Error && e.Message.Contains("Failed to reach CDP uploader")
+        );
+        errorEntry.Message.Should().NotContain("my-bucket");
+        errorEntry
+            .ScopeProperties.Should()
+            .ContainKey("http.request.body")
+            .WhoseValue.Should()
+            .BeOfType<string>()
+            .Which.Should()
+            .Contain("my-bucket");
+    }
+
+    [Fact]
     public async Task InitiateAsync_FailResponse_ThrowsHttpRequestException()
     {
         var handler = new StubHttpMessageHandler(HttpStatusCode.InternalServerError, "error");
@@ -375,10 +413,14 @@ public class CdpUploaderServiceTests
         root.GetProperty("maxFileSize").GetInt64().Should().Be(1024);
     }
 
-    // RA-516: mirrors the CapturingLogger<T> pattern already used in
-    // ExceptionLoggingHandlerTests/MongoIndexInitializerServiceTests - EnabledNullLogger discards
-    // output, which is fine for tests that don't care what was logged, but these two logging
-    // tests specifically need to assert which LogLevel a message was emitted at.
+    private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => throw new HttpRequestException("simulated network failure");
+    }
+
     private class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _status;
