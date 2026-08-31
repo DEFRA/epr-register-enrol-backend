@@ -51,7 +51,7 @@ public class CdpUploaderService(
         // entirely, since `message` is unconditionally on the allow-list regardless of content.
         if (logger.IsEnabled(LogLevel.Warning))
         {
-            using var _ = logger.BeginScope(
+            using var scope = logger.BeginScope(
                 new Dictionary<string, object?> { ["http.request.body"] = requestJson }
             );
             logger.LogWarning("Calling CDP uploader POST {InitiateUrl}", initiateUrl);
@@ -75,7 +75,7 @@ public class CdpUploaderService(
         }
         catch (Exception ex)
         {
-            using var _ = logger.BeginScope(
+            using var scope = logger.BeginScope(
                 new Dictionary<string, object?> { ["http.request.body"] = requestJson }
             );
             logger.LogError(ex, "Failed to reach CDP uploader at {InitiateUrl}", initiateUrl);
@@ -86,7 +86,7 @@ public class CdpUploaderService(
 
         if (!response.IsSuccessStatusCode)
         {
-            using var _ = logger.BeginScope(
+            using var scope = logger.BeginScope(
                 new Dictionary<string, object?>
                 {
                     ["http.request.body"] = requestJson,
@@ -106,7 +106,7 @@ public class CdpUploaderService(
         // RA-516: Warn, not Information - same reasoning as the request-body log above.
         if (logger.IsEnabled(LogLevel.Warning))
         {
-            using var _ = logger.BeginScope(
+            using var scope = logger.BeginScope(
                 new Dictionary<string, object?> { ["http.response.body"] = responseBody }
             );
             logger.LogWarning(
