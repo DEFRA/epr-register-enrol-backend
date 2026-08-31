@@ -27,8 +27,22 @@ public class HttpCaseWorkingApiAdapter(
     // Named HttpClient registered in Program.cs (carries the explicit 15s timeout).
     private const string DefaultHttpClientName = "DefaultClient";
 
-    private const string ManagementBeErrorTemplate =
-        "ManagementBe returned {Status} from {Endpoint}: {Body}";
+    // The response body is attached via BeginScope under a dotted key, not interpolated into
+    // the message template: CDP's OpenSearch ingestion pipeline only recognises the specific
+    // slash-nested ECS paths on its allow-list (for http/response it's only body/bytes size
+    // fields, never body content), so a literally-dotted key like "http.response.body" is
+    // guaranteed to be dropped before it reaches OpenSearch, while still landing in the raw
+    // S3-stored logs for troubleshooting. Interpolating the body into the message string
+    // instead would defeat that filtering entirely, since `message` is unconditionally on the
+    // allow-list regardless of content — and this adapter carries the full accreditation
+    // application, so a validation error can echo submitted applicant data back verbatim.
+    private void LogManagementBeError(LogLevel level, int status, string endpoint, string body)
+    {
+        using var _ = logger.BeginScope(
+            new Dictionary<string, object?> { ["http.response.body"] = body }
+        );
+        logger.Log(level, "ManagementBe returned {Status} from {Endpoint}", status, endpoint);
+    }
 
     public async Task<CaseWorkingSubmissionResult> SubmitApplicationAsync(
         AccreditationApplicationModel application,
@@ -100,12 +114,7 @@ public class HttpCaseWorkingApiAdapter(
         if (!response.IsSuccessStatusCode)
         {
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-            logger.LogError(
-                ManagementBeErrorTemplate,
-                (int)response.StatusCode,
-                endpoint,
-                responseBody
-            );
+            LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
             throw new HttpRequestException(
                 $"ManagementBe work item submission failed: {(int)response.StatusCode}"
             );
@@ -306,12 +315,7 @@ public class HttpCaseWorkingApiAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogError(
-                    ManagementBeErrorTemplate,
-                    (int)response.StatusCode,
-                    endpoint,
-                    responseBody
-                );
+                LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
                 return new ResumeFromQueryResult(false);
             }
 
@@ -365,12 +369,7 @@ public class HttpCaseWorkingApiAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogError(
-                    ManagementBeErrorTemplate,
-                    (int)response.StatusCode,
-                    endpoint,
-                    responseBody
-                );
+                LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
                 return new WithdrawResult(false);
             }
 
@@ -443,12 +442,7 @@ public class HttpCaseWorkingApiAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogWarning(
-                    ManagementBeErrorTemplate,
-                    (int)response.StatusCode,
-                    endpoint,
-                    responseBody
-                );
+                LogManagementBeError(LogLevel.Warning, (int)response.StatusCode, endpoint, responseBody);
             }
         }
         catch (Exception ex)

@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 
@@ -159,6 +160,46 @@ public class HttpCaseWorkingApiAdapterTests
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
 
         await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_NonSuccessResponse_LogsBodyAsScopedPropertyNotInMessage()
+    {
+        // RA-519 follow-up (log-body-message-leak): ManagementBe's error response can echo
+        // submitted applicant data back verbatim (e.g. field-level validation errors), so it
+        // must be attached as a scoped property under a dotted key CDP's OpenSearch allow-list
+        // will drop, never interpolated into the rendered message — `message` is unconditionally
+        // indexed by CDP regardless of content, so interpolating it there would defeat the
+        // allow-list entirely.
+        const string sensitiveResponseBody =
+            """{"error":"Validation failed for jane@example.com, DOB 1990-01-01"}""";
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, ClientId = TestClientId }
+        );
+        var handler = new RawBodyHttpMessageHandler(
+            HttpStatusCode.BadRequest,
+            sensitiveResponseBody
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var logger = new CapturingLogger<HttpCaseWorkingApiAdapter>();
+        var adapter = new HttpCaseWorkingApiAdapter(httpClientFactory, config, logger);
+
+        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        var entry = logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error)
+            .Which;
+        entry.Message.Should().NotContain("jane@example.com");
+        entry.Message.Should().NotContain("Validation failed");
+        entry
+            .ScopeProperties.Should()
+            .ContainKey("http.response.body")
+            .WhoseValue.Should()
+            .Be(sensitiveResponseBody);
     }
 
     [Fact]
