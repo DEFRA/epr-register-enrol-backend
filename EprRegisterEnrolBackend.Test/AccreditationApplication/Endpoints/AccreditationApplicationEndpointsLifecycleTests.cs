@@ -794,7 +794,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
         response
             .StatusCode.Should()
             .Be(
-                HttpStatusCode.InternalServerError,
+                HttpStatusCode.Conflict,
                 "the outer request's own write-time guard must reject it once the nested request already cleared QueriedSectionKeys"
             );
 
@@ -1085,7 +1085,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
         response
             .StatusCode.Should()
             .Be(
-                HttpStatusCode.InternalServerError,
+                HttpStatusCode.Conflict,
                 "the outer request's own write-time guard must reject it once the nested request already withdrew the application"
             );
 

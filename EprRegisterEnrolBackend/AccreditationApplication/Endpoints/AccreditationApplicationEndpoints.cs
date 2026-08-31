@@ -2367,8 +2367,12 @@ public static class AccreditationApplicationEndpoints
             combinedUpdate,
             cancellationToken
         );
+        // A null result here means notAlreadyResubmittedGuard rejected the write - a genuine
+        // rival Resubmit already completed and cleared QueriedSectionKeys first - so this is the
+        // same already-handled-by-another-request case Results.Conflict reports elsewhere in this
+        // method (the status precondition checks above), not an unexpected failure.
         return updated is null
-            ? Results.Problem("Failed to resubmit accreditation application.")
+            ? Results.Conflict("Application has already been resubmitted.")
             : Results.Ok(updated);
     }
 
@@ -3020,8 +3024,12 @@ public static class AccreditationApplicationEndpoints
             combinedUpdate,
             cancellationToken
         );
+        // A null result here means notAlreadyWithdrawnGuard rejected the write - a genuine rival
+        // Withdraw already completed and moved ApplicationStatus to Withdrawn first - the same
+        // already-handled-by-another-request case Results.Conflict reports elsewhere in this
+        // method, not an unexpected failure.
         return updated is null
-            ? Results.Problem("Failed to withdraw accreditation application.")
+            ? Results.Conflict("Application has already been withdrawn.")
             : Results.Ok(updated);
     }
 
