@@ -38,6 +38,11 @@ public class HttpCaseWorkingApiAdapter(
     // application, so a validation error can echo submitted applicant data back verbatim.
     private void LogManagementBeError(LogLevel level, int status, string endpoint, string body)
     {
+        if (!logger.IsEnabled(level))
+        {
+            return;
+        }
+
         using var _ = logger.BeginScope(
             new Dictionary<string, object?> { ["http.response.body"] = body }
         );
