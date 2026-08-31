@@ -7,6 +7,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 
@@ -200,6 +201,30 @@ public class HttpCaseWorkingApiAdapterTests
             .ContainKey("http.response.body")
             .WhoseValue.Should()
             .Be(sensitiveResponseBody);
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_NonSuccessResponse_LoggingDisabled_SkipsScopeAndLogCall()
+    {
+        // Covers LogManagementBeError's IsEnabled guard (CA1873): the scope/Log call must be
+        // skipped entirely, not just discarded downstream, when the level is disabled - proven
+        // here by using the real NullLogger<T> (IsEnabled always false) rather than the
+        // always-enabled EnabledNullLogger<T> test double every other test in this file uses.
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, ClientId = TestClientId }
+        );
+        var handler = new RawBodyHttpMessageHandler(HttpStatusCode.BadRequest, "{}");
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            NullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
+
+        await act.Should().ThrowAsync<HttpRequestException>();
     }
 
     [Fact]
