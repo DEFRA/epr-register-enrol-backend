@@ -174,25 +174,86 @@ public class AccreditationApplicationPersistence(
     )
     {
         var expectedVersion = application.Version;
-        var versionFilter =
-            expectedVersion == 0
-                ? Builders<AccreditationApplicationModel>.Filter.Or(
-                    Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Version, 0L),
-                    Builders<AccreditationApplicationModel>.Filter.Exists(a => a.Version, false)
-                )
-                : Builders<AccreditationApplicationModel>.Filter.Eq(
-                    a => a.Version,
-                    expectedVersion
-                );
         var versionedFilter = Builders<AccreditationApplicationModel>.Filter.And(
             filter,
-            versionFilter
+            VersionFilter(expectedVersion)
         );
 
         application.UpdatedAt = DateTime.UtcNow;
         application.Version = expectedVersion + 1;
         var result = await Collection.ReplaceOneAsync(versionedFilter, application);
         return result.ModifiedCount > 0 ? application : null;
+    }
+
+    // Shared by ReplaceIfMatchAsync above (its own expectedVersion is always the version it just
+    // read) and available to any UpdateFieldsAsync caller that wants the same RA-516 optimistic-
+    // concurrency semantics as a guard filter. Every AccreditationApplicationModel document
+    // written before RA-516 shipped has no "version" field in storage at all (Mongo's equality
+    // filter never matches a genuinely absent field), so an expected version of 0 - the in-memory
+    // default for both a brand-new document and one read back from before this deploy - also
+    // accepts a document where the field is missing entirely.
+    private static FilterDefinition<AccreditationApplicationModel> VersionFilter(
+        long expectedVersion
+    ) =>
+        expectedVersion == 0
+            ? Builders<AccreditationApplicationModel>.Filter.Or(
+                Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Version, 0L),
+                Builders<AccreditationApplicationModel>.Filter.Exists(a => a.Version, false)
+            )
+            : Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Version, expectedVersion);
+
+    // RA-519: the targeted-update counterpart to ReplaceIfMatchAsync above. Resubmit and Withdraw
+    // both used to read-mutate-whole-document-replace, which raced with
+    // StatusChangedFromCaseManagement's own read-mutate-whole-document-replace whenever
+    // ManagementBe's synchronous push-back landed while one of those endpoints was still awaiting
+    // its own outbound adapter call (RA-519 root cause) - two ReplaceOneAsync calls filtered only
+    // by `_id` (or, after RA-516, `_id` + Version) each overwrite the *entire* document, so
+    // whichever writer persists second wins outright and the first writer's fields are lost (or,
+    // post-RA-516, the second writer's version filter no longer matches and it gets null back -
+    // the 500 this fixes). A `$set`/`$push` update filtered only by `_id` only ever touches the
+    // fields named in `update`, so two concurrent writers touching disjoint fields both survive
+    // regardless of ordering.
+    //
+    // That guarantee is one-directional, not symmetric: it protects a targeted writer from being
+    // clobbered by (or clobbering) a concurrent writer touching *different* fields. It does
+    // nothing on its own to stop two callers racing to apply the *same* logical write twice - e.g.
+    // two concurrent Resubmit requests, both reading ApplicationStatus == Queried before either
+    // persists, both then $push-ing their own QuerySubmission. RA-516's plain Version filter can't
+    // be reused as that guard either, since the very race this method exists to survive (the
+    // Case Management service's own webhook write) also moves Version on - a Version-equality guard would
+    // reject the legitimate second writer exactly as often as it rejects a genuine duplicate.
+    // Callers that need to rule out a duplicate must pass a <paramref name="guardFilter"/> scoped
+    // to whichever field(s) only a genuine rival writer (not the expected concurrent side-effect)
+    // would have already changed - see Resubmit's and Withdraw's own call sites for the two
+    // guards this repo currently needs. UpdatedAt and Version are stamped/incremented here so
+    // every write path - whole-document replace or targeted update - keeps both current.
+    public async Task<AccreditationApplicationModel?> UpdateFieldsAsync(
+        ObjectId id,
+        FilterDefinition<AccreditationApplicationModel>? guardFilter,
+        UpdateDefinition<AccreditationApplicationModel> update,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var idFilter = Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, id);
+        var filter =
+            guardFilter is null
+                ? idFilter
+                : Builders<AccreditationApplicationModel>.Filter.And(idFilter, guardFilter);
+        var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
+            update,
+            Builders<AccreditationApplicationModel>.Update.Set(a => a.UpdatedAt, DateTime.UtcNow),
+            Builders<AccreditationApplicationModel>.Update.Inc(a => a.Version, 1L)
+        );
+
+        return await Collection.FindOneAndUpdateAsync(
+            filter,
+            combinedUpdate,
+            new FindOneAndUpdateOptions<AccreditationApplicationModel>
+            {
+                ReturnDocument = ReturnDocument.After,
+            },
+            cancellationToken
+        );
     }
 
     protected override List<CreateIndexModel<AccreditationApplicationModel>> DefineIndexes(

@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
@@ -226,6 +227,127 @@ public static class AccreditationApplicationSections
                     new BesEvidenceSnapshot { VersionedAt = versionedAt }
                 );
                 break;
+        }
+    }
+
+    // RA-519: UpdateDefinition-returning counterpart to SetSectionStatus, for callers migrating
+    // off the whole-document-replace UpdateAsync onto the targeted UpdateFieldsAsync (Resubmit,
+    // Withdraw - see AccreditationApplicationEndpoints). A dotted-path Set requires the parent
+    // subdocument to already exist in Mongo, so OverseasSites/BesEvidence - both nullable,
+    // lazily-created subdocuments - fall back to setting the whole subdocument when
+    // `application.OverseasSites`/`BesEvidence` is still null at the time this is called (mirrors
+    // the `??=` SetSectionStatus does above). Callers only reach this branch when the section's
+    // live status is Queried (see GetSectionStatus), which - for a still-null OverseasSites/
+    // BesEvidence - reads as NotStarted, never Queried, so in practice this whole-subdocument
+    // branch and BuildSnapshotUpdate's equivalent branch are never combined for the same section
+    // in the same request.
+    public static UpdateDefinition<AccreditationApplicationModel> BuildSectionStatusUpdate(
+        AccreditationApplicationModel application,
+        OperatorSection section,
+        SectionStatus status
+    )
+    {
+        var update = Builders<AccreditationApplicationModel>.Update;
+        return section switch
+        {
+            OperatorSection.Prns => update.Set(a => a.Prns.SectionStatus, status),
+            OperatorSection.BusinessPlan => update.Set(a => a.BusinessPlan.SectionStatus, status),
+            OperatorSection.SamplingPlan => update.Set(a => a.SamplingPlan.SectionStatus, status),
+            OperatorSection.OverseasSites => application.OverseasSites is null
+                ? update.Set(
+                    a => a.OverseasSites,
+                    new AccreditationApplicationOverseasSites { SectionStatus = status }
+                )
+                : update.Set(a => a.OverseasSites!.SectionStatus, status),
+            OperatorSection.BesEvidence => application.BesEvidence is null
+                ? update.Set(
+                    a => a.BesEvidence,
+                    new AccreditationApplicationBesEvidence { SectionStatus = status }
+                )
+                : update.Set(a => a.BesEvidence!.SectionStatus, status),
+            _ => update.Combine(),
+        };
+    }
+
+    // RA-519: UpdateDefinition-returning counterpart to SnapshotSection, for the same
+    // UpdateFieldsAsync migration described on BuildSectionStatusUpdate above - field-for-field
+    // mirror of SnapshotSection's switch, appending (Push) the same snapshot shape instead of
+    // mutating the in-memory list. Same null-subdocument fallback for OverseasSites/BesEvidence:
+    // a dotted-path Push also requires the parent to already exist, so a still-null subdocument
+    // gets Set wholesale with a single-entry Versions list instead.
+    public static UpdateDefinition<AccreditationApplicationModel> BuildSnapshotUpdate(
+        AccreditationApplicationModel application,
+        OperatorSection section,
+        DateTime versionedAt
+    )
+    {
+        var update = Builders<AccreditationApplicationModel>.Update;
+        switch (section)
+        {
+            case OperatorSection.Prns:
+                var prnsSnapshot = new PrnsSnapshot
+                {
+                    PlannedTonnageBand = application.Prns.PlannedTonnageBand,
+                    Authorisers = [.. application.Prns.Authorisers],
+                    VersionedAt = versionedAt,
+                };
+                return update.Push(a => a.Prns.Versions, prnsSnapshot);
+            case OperatorSection.BusinessPlan:
+                var bp = application.BusinessPlan;
+                var businessPlanSnapshot = new BusinessPlanSnapshot
+                {
+                    NewInfrastructurePercent = bp.NewInfrastructurePercent,
+                    PriceSupportPercent = bp.PriceSupportPercent,
+                    BusinessCollectionsPercent = bp.BusinessCollectionsPercent,
+                    CommunicationsPercent = bp.CommunicationsPercent,
+                    NewMarketsPercent = bp.NewMarketsPercent,
+                    NewUsesPercent = bp.NewUsesPercent,
+                    OtherPercent = bp.OtherPercent,
+                    NewInfrastructureDetail = bp.NewInfrastructureDetail,
+                    PriceSupportDetail = bp.PriceSupportDetail,
+                    BusinessCollectionsDetail = bp.BusinessCollectionsDetail,
+                    CommunicationsDetail = bp.CommunicationsDetail,
+                    NewMarketsDetail = bp.NewMarketsDetail,
+                    NewUsesDetail = bp.NewUsesDetail,
+                    OtherDetail = bp.OtherDetail,
+                    VersionedAt = versionedAt,
+                };
+                return update.Push(a => a.BusinessPlan.Versions, businessPlanSnapshot);
+            case OperatorSection.SamplingPlan:
+                var samplingPlanSnapshot = new SamplingPlanSnapshot
+                {
+                    Files = [.. application.SamplingPlan.Files],
+                    VersionedAt = versionedAt,
+                };
+                return update.Push(a => a.SamplingPlan.Versions, samplingPlanSnapshot);
+            case OperatorSection.OverseasSites:
+                var overseasSitesSnapshot = new OverseasSitesSnapshot
+                {
+                    Sites = [.. application.OverseasSites?.Sites ?? []],
+                    VersionedAt = versionedAt,
+                };
+                return application.OverseasSites is null
+                    ? update.Set(
+                        a => a.OverseasSites,
+                        new AccreditationApplicationOverseasSites
+                        {
+                            Versions = [overseasSitesSnapshot],
+                        }
+                    )
+                    : update.Push(a => a.OverseasSites!.Versions, overseasSitesSnapshot);
+            case OperatorSection.BesEvidence:
+                var besEvidenceSnapshot = new BesEvidenceSnapshot { VersionedAt = versionedAt };
+                return application.BesEvidence is null
+                    ? update.Set(
+                        a => a.BesEvidence,
+                        new AccreditationApplicationBesEvidence
+                        {
+                            Versions = [besEvidenceSnapshot],
+                        }
+                    )
+                    : update.Push(a => a.BesEvidence!.Versions, besEvidenceSnapshot);
+            default:
+                return update.Combine();
         }
     }
 

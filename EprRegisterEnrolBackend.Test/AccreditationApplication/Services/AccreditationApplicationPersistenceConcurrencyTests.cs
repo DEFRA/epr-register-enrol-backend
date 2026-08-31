@@ -121,4 +121,142 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
             .FirstAsync(TestContext.Current.CancellationToken);
         stored["version"].AsInt64.Should().Be(1);
     }
+
+    /// <summary>
+    /// RA-519: proves UpdateFieldsAsync's targeted $set update, against a real mongod, survives a
+    /// concurrent whole-document replace (UpdateAsync, as StatusChangedFromCaseManagement uses)
+    /// that lands in between the targeted writer's read and its own persist - the exact race that
+    /// produced Resubmit/Withdraw's 500. A whole-document ReplaceOneAsync filtered by `_id` (+
+    /// Version, per RA-516) can only ever "win" or get rejected outright; it can never merge. This
+    /// shows the targeted update merges: the field-disjoint change from the earlier whole-document
+    /// write is still present afterwards, and the targeted write itself always succeeds regardless
+    /// of the Version the whole-document write already advanced past.
+    /// </summary>
+    [Fact]
+    public async Task UpdateFieldsAsync_ConcurrentWholeDocumentReplaceLandsFirst_TargetedWriteStillSucceedsAndBothChangesSurvive()
+    {
+        var created = await _sut.CreateAsync(
+            new AccreditationApplicationModel
+            {
+                OrganisationId = "org-1",
+                Year = 2026,
+                MaterialType = MaterialType.Steel,
+                ApplicationStatus = ApplicationStatus.Queried,
+                WithdrawalReason = null,
+            }
+        );
+        created.Should().NotBeNull();
+
+        // The endpoint's own read, before any concurrent write has happened.
+        var endpointsOwnRead = await _sut.GetByIdAsync("org-1", created!.Id!.ToString()!);
+        endpointsOwnRead.Should().NotBeNull();
+
+        // A concurrent whole-document replace (simulating StatusChangedFromCaseManagement) lands
+        // first, moving the document's Version on and touching a field the targeted write below
+        // never names.
+        var webhookRead = await _sut.GetByIdAsync("org-1", created.Id!.ToString()!);
+        webhookRead!.ApplicationReference = "set-by-webhook";
+        var webhookResult = await _sut.UpdateAsync(webhookRead);
+        webhookResult.Should().NotBeNull();
+        webhookResult!.Version.Should().Be(endpointsOwnRead!.Version + 1);
+
+        // The endpoint's own targeted update, built off its pre-webhook read, still using that
+        // stale Version's worth of context - but UpdateFieldsAsync is filtered only by `_id`, so
+        // the document having moved on under it must not matter.
+        var targetedUpdate = Builders<AccreditationApplicationModel>.Update.Set(
+            a => a.ApplicationStatus,
+            ApplicationStatus.Withdrawn
+        );
+        var targetedResult = await _sut.UpdateFieldsAsync(
+            endpointsOwnRead.Id!.Value,
+            guardFilter: null,
+            targetedUpdate,
+            TestContext.Current.CancellationToken
+        );
+
+        targetedResult
+            .Should()
+            .NotBeNull(
+                "a targeted update filtered only by _id must succeed even though a concurrent whole-document replace already moved the document's Version on"
+            );
+        targetedResult!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        targetedResult
+            .ApplicationReference.Should()
+            .Be(
+                "set-by-webhook",
+                "the targeted update must not have touched (or reverted) a field it never named"
+            );
+
+        var final = await _sut.GetByIdAsync("org-1", created.Id!.ToString()!);
+        final.Should().NotBeNull();
+        final!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        final.ApplicationReference.Should().Be("set-by-webhook");
+        final.Version.Should().Be(webhookResult.Version + 1);
+    }
+
+    /// <summary>
+    /// RA-519 review follow-up (tomhalley): proves, against a real mongod, that
+    /// <see cref="IAccreditationApplicationPersistence.UpdateFieldsAsync"/>'s guardFilter actually
+    /// stops a second concurrent writer from re-applying the same logical write - the gap the
+    /// earlier version of this method left open (two concurrent Resubmit requests both reading
+    /// ApplicationStatus == Queried before either persisted would otherwise both succeed, each
+    /// $push-ing its own QuerySubmission). Mirrors Resubmit's own guard shape exactly: "the
+    /// QueriedSectionKeys array must still be non-empty."
+    /// </summary>
+    [Fact]
+    public async Task UpdateFieldsAsync_GuardFilterNoLongerMatches_ReturnsNullAndDoesNotApplyUpdate()
+    {
+        var created = await _sut.CreateAsync(
+            new AccreditationApplicationModel
+            {
+                OrganisationId = "org-1",
+                Year = 2026,
+                MaterialType = MaterialType.Steel,
+                ApplicationStatus = ApplicationStatus.Queried,
+                Query = new AccreditationApplicationQuery
+                {
+                    QueriedSectionKeys = ["business-plan"],
+                },
+            }
+        );
+        created.Should().NotBeNull();
+
+        var guardFilter = Builders<AccreditationApplicationModel>.Filter.Not(
+            Builders<AccreditationApplicationModel>.Filter.Size(a => a.Query!.QueriedSectionKeys, 0)
+        );
+        var clearQueriedSectionKeys = Builders<AccreditationApplicationModel>.Update.Set(
+            a => a.Query!.QueriedSectionKeys,
+            new List<string>()
+        );
+
+        // First concurrent Resubmit's own write - the guard still matches (QueriedSectionKeys is
+        // still populated), so this succeeds and clears it.
+        var first = await _sut.UpdateFieldsAsync(
+            created!.Id!.Value,
+            guardFilter,
+            clearQueriedSectionKeys,
+            TestContext.Current.CancellationToken
+        );
+        first.Should().NotBeNull("the first writer's guard still matches an unresolved query");
+        first!.Query!.QueriedSectionKeys.Should().BeEmpty();
+
+        // Second concurrent Resubmit's own write - built off the same pre-round-trip read as the
+        // first, so it names the same update, but the guard no longer matches: the array the first
+        // writer already cleared.
+        var second = await _sut.UpdateFieldsAsync(
+            created.Id!.Value,
+            guardFilter,
+            clearQueriedSectionKeys,
+            TestContext.Current.CancellationToken
+        );
+        second
+            .Should()
+            .BeNull(
+                "a second concurrent writer whose guard filter no longer matches must be rejected, not silently re-applied"
+            );
+
+        var final = await _sut.GetByIdAsync("org-1", created.Id!.ToString()!);
+        final!.Query!.QueriedSectionKeys.Should().BeEmpty();
+        final.Version.Should().Be(first.Version, "only the first writer's update should have advanced the version");
+    }
 }
