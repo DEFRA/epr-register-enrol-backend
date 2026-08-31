@@ -2264,6 +2264,16 @@ public static class AccreditationApplicationEndpoints
                 detail: "Failed to resume query with case management."
             );
 
+        // RA-519 follow-up: re-read after the round trip. ResumeFromQueryAsync above can
+        // synchronously trigger ManagementBe's push-back into StatusChangedFromCaseManagement,
+        // and the queried sections stay editable (Patch* no longer clears QueriedSectionKeys as a
+        // side effect) for the whole time that call is in flight — so a section PATCH landing
+        // during the round trip is invisible to the pre-round-trip `application` copy above. The
+        // snapshot/status values below must be derived from this fresh read, not that stale copy,
+        // or they silently overwrite a concurrent edit with outdated content.
+        var freshApplication =
+            await persistence.GetByIdAsync(organisationId, applicationId) ?? application;
+
         // RA-519: built as a targeted $set/$push UpdateDefinition and persisted via
         // UpdateFieldsAsync below, rather than mutated in-memory and persisted via UpdateAsync's
         // whole-document replace. ResumeFromQueryAsync above synchronously triggers ManagementBe's
@@ -2279,7 +2289,7 @@ public static class AccreditationApplicationEndpoints
         {
             sectionUpdates.Add(
                 AccreditationApplicationSections.BuildSnapshotUpdate(
-                    application,
+                    freshApplication,
                     section,
                     versionedAt
                 )
@@ -2290,15 +2300,15 @@ public static class AccreditationApplicationEndpoints
             // touched or not, and ComputeCurrentStatus resolves each to its real value now that
             // the operator is done.
             if (
-                AccreditationApplicationSections.GetSectionStatus(application, section)
+                AccreditationApplicationSections.GetSectionStatus(freshApplication, section)
                 == SectionStatus.Queried
             )
                 sectionUpdates.Add(
                     AccreditationApplicationSections.BuildSectionStatusUpdate(
-                        application,
+                        freshApplication,
                         section,
                         AccreditationApplicationSections.ComputeCurrentStatus(
-                            application,
+                            freshApplication,
                             section
                         )
                     )
@@ -2313,7 +2323,7 @@ public static class AccreditationApplicationEndpoints
         };
 
         var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
-            sectionUpdates.Append(BuildQueryResubmitUpdate(application, querySubmission))
+            sectionUpdates.Append(BuildQueryResubmitUpdate(freshApplication, querySubmission))
                 .Append(
                     Builders<AccreditationApplicationModel>.Update.Set(
                         a => a.ApplicationStatus,
@@ -2352,7 +2362,7 @@ public static class AccreditationApplicationEndpoints
         );
 
         var updated = await persistence.UpdateFieldsAsync(
-            application.Id!.Value,
+            freshApplication.Id!.Value,
             notAlreadyResubmittedGuard,
             combinedUpdate,
             cancellationToken
@@ -2918,6 +2928,13 @@ public static class AccreditationApplicationEndpoints
                 "Failed to withdraw accreditation application with the case management service."
             );
 
+        // RA-519 follow-up: re-read after the round trip, for the same reason as Resubmit above -
+        // WithdrawApplicationAsync can synchronously trigger ManagementBe's push-back while this
+        // call is in flight, and a queried section stays editable throughout it, so the status
+        // values below must reflect this fresh read rather than the pre-round-trip copy.
+        var freshApplication =
+            await persistence.GetByIdAsync(organisationId, applicationId) ?? application;
+
         // RA-519: same targeted-update migration as Resubmit above, and for the same reason -
         // WithdrawApplicationAsync above can synchronously trigger ManagementBe's push-back into
         // StatusChangedFromCaseManagement while this call is still in flight, racing this
@@ -2928,7 +2945,7 @@ public static class AccreditationApplicationEndpoints
         var wasQueried = application.ApplicationStatus == ApplicationStatus.Queried;
         if (wasQueried)
         {
-            var queriedSections = (application.Query?.QueriedSectionKeys ?? [])
+            var queriedSections = (freshApplication.Query?.QueriedSectionKeys ?? [])
                 .Select(key =>
                     AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
                         key,
@@ -2944,22 +2961,22 @@ public static class AccreditationApplicationEndpoints
             foreach (var section in queriedSections)
             {
                 if (
-                    AccreditationApplicationSections.GetSectionStatus(application, section)
+                    AccreditationApplicationSections.GetSectionStatus(freshApplication, section)
                     == SectionStatus.Queried
                 )
                     sectionUpdates.Add(
                         AccreditationApplicationSections.BuildSectionStatusUpdate(
-                            application,
+                            freshApplication,
                             section,
                             AccreditationApplicationSections.ComputeCurrentStatus(
-                                application,
+                                freshApplication,
                                 section
                             )
                         )
                     );
             }
 
-            sectionUpdates.Add(BuildClearQueriedSectionKeysUpdate(application));
+            sectionUpdates.Add(BuildClearQueriedSectionKeysUpdate(freshApplication));
         }
 
         var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
@@ -2998,7 +3015,7 @@ public static class AccreditationApplicationEndpoints
         );
 
         var updated = await persistence.UpdateFieldsAsync(
-            application.Id!.Value,
+            freshApplication.Id!.Value,
             notAlreadyWithdrawnGuard,
             combinedUpdate,
             cancellationToken

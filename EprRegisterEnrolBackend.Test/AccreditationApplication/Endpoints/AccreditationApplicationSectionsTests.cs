@@ -639,13 +639,13 @@ public class AccreditationApplicationSectionsTests
     {
         var application = CreateApplication();
         var bp = application.BusinessPlan;
-        bp.NewInfrastructurePercent = 10;
-        bp.PriceSupportPercent = 20;
-        bp.BusinessCollectionsPercent = 30;
-        bp.CommunicationsPercent = 5;
-        bp.NewMarketsPercent = 15;
-        bp.NewUsesPercent = 10;
-        bp.OtherPercent = 10;
+        bp.NewInfrastructurePercent = 5;
+        bp.PriceSupportPercent = 10;
+        bp.BusinessCollectionsPercent = 15;
+        bp.CommunicationsPercent = 20;
+        bp.NewMarketsPercent = 25;
+        bp.NewUsesPercent = 30;
+        bp.OtherPercent = 35;
         bp.NewInfrastructureDetail = "infra detail";
         bp.PriceSupportDetail = "price detail";
         bp.BusinessCollectionsDetail = "collections detail";
@@ -668,13 +668,13 @@ public class AccreditationApplicationSectionsTests
             .BeEquivalentTo(
                 new BusinessPlanSnapshot
                 {
-                    NewInfrastructurePercent = 10,
-                    PriceSupportPercent = 20,
-                    BusinessCollectionsPercent = 30,
-                    CommunicationsPercent = 5,
-                    NewMarketsPercent = 15,
-                    NewUsesPercent = 10,
-                    OtherPercent = 10,
+                    NewInfrastructurePercent = 5,
+                    PriceSupportPercent = 10,
+                    BusinessCollectionsPercent = 15,
+                    CommunicationsPercent = 20,
+                    NewMarketsPercent = 25,
+                    NewUsesPercent = 30,
+                    OtherPercent = 35,
                     NewInfrastructureDetail = "infra detail",
                     PriceSupportDetail = "price detail",
                     BusinessCollectionsDetail = "collections detail",
