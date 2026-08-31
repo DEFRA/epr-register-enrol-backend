@@ -1,6 +1,9 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using FluentAssertions;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
@@ -531,5 +534,281 @@ public class AccreditationApplicationSectionsTests
         application.BesEvidence.Should().NotBeNull();
         application.BesEvidence!.Versions.Should().ContainSingle();
         application.BesEvidence.Versions[0].VersionedAt.Should().Be(versionedAt);
+    }
+
+    // --- BuildSectionStatusUpdate / BuildSnapshotUpdate ---
+    //
+    // RA-519: UpdateDefinition<T> has no public inspection API beyond Render, so these tests
+    // render each definition to JSON (mirroring
+    // AccreditationApplicationPersistenceTests.RenderFilter) and assert on that shape, rather
+    // than trying to execute the update against a real/fake collection. Lower-cased throughout
+    // (rather than FluentAssertions' ContainEquivalentOf) so a NotContain check reads as plainly
+    // as a Contain one — whether the camelCase element-name convention is active depends on
+    // MongoDbClientFactory having been constructed elsewhere in the same test run, which these
+    // tests deliberately don't do (see RenderFilter's own comment on the same issue).
+    private static string RenderUpdateAsLowerJson(UpdateDefinition<AccreditationApplicationModel> update)
+    {
+        var registry = BsonSerializer.SerializerRegistry;
+        return update
+            .Render(
+                new RenderArgs<AccreditationApplicationModel>(
+                    registry.GetSerializer<AccreditationApplicationModel>(),
+                    registry
+                )
+            )
+            .ToJson()
+            .ToLowerInvariant();
+    }
+
+    [Fact]
+    public void BuildSectionStatusUpdate_SamplingPlan_SetsSamplingPlanSectionStatus()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSectionStatusUpdate(
+            application,
+            OperatorSection.SamplingPlan,
+            SectionStatus.Queried
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("$set");
+        // SectionStatus has no [BsonRepresentation(BsonType.String)], so it serializes as its
+        // numeric ordinal — Queried is 4 (NotStarted, InProgress, Completed, Submitted, Queried).
+        rendered.Should().Contain("samplingplan.sectionstatus\" : 4");
+    }
+
+    [Fact]
+    public void BuildSectionStatusUpdate_OverseasSitesNull_SetsWholeSubdocument()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSectionStatusUpdate(
+            application,
+            OperatorSection.OverseasSites,
+            SectionStatus.Queried
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("overseassites");
+        rendered.Should().Contain("sectionstatus");
+        rendered
+            .Should()
+            .NotContain(
+                "overseassites.sectionstatus",
+                "a null OverseasSites must set the whole subdocument, not a dotted path into a not-yet-existing parent"
+            );
+    }
+
+    [Fact]
+    public void BuildSectionStatusUpdate_OverseasSitesNonNull_SetsNestedSectionStatusOnly()
+    {
+        var application = CreateApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites();
+
+        var update = AccreditationApplicationSections.BuildSectionStatusUpdate(
+            application,
+            OperatorSection.OverseasSites,
+            SectionStatus.Completed
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        // SectionStatus has no [BsonRepresentation(BsonType.String)], so it serializes as its
+        // numeric ordinal — Completed is 2 (NotStarted, InProgress, Completed, Submitted, Queried).
+        rendered.Should().Contain("overseassites.sectionstatus\" : 2");
+    }
+
+    [Fact]
+    public void BuildSectionStatusUpdate_BesEvidenceNull_SetsWholeSubdocument()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSectionStatusUpdate(
+            application,
+            OperatorSection.BesEvidence,
+            SectionStatus.Queried
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("besevidence");
+        rendered.Should().Contain("sectionstatus");
+        rendered
+            .Should()
+            .NotContain(
+                "besevidence.sectionstatus",
+                "a null BesEvidence must set the whole subdocument, not a dotted path into a not-yet-existing parent"
+            );
+    }
+
+    [Fact]
+    public void BuildSectionStatusUpdate_BesEvidenceNonNull_SetsNestedSectionStatusOnly()
+    {
+        var application = CreateApplication();
+        application.BesEvidence = new AccreditationApplicationBesEvidence();
+
+        var update = AccreditationApplicationSections.BuildSectionStatusUpdate(
+            application,
+            OperatorSection.BesEvidence,
+            SectionStatus.Completed
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        // SectionStatus has no [BsonRepresentation(BsonType.String)], so it serializes as its
+        // numeric ordinal — Completed is 2 (NotStarted, InProgress, Completed, Submitted, Queried).
+        rendered.Should().Contain("besevidence.sectionstatus\" : 2");
+    }
+
+    [Fact]
+    public void BuildSectionStatusUpdate_UnknownSection_RendersToEmptyUpdate()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSectionStatusUpdate(
+            application,
+            (OperatorSection)999,
+            SectionStatus.Queried
+        );
+
+        update
+            .Render(
+                new RenderArgs<AccreditationApplicationModel>(
+                    BsonSerializer.SerializerRegistry.GetSerializer<AccreditationApplicationModel>(),
+                    BsonSerializer.SerializerRegistry
+                )
+            )
+            .AsBsonDocument.ElementCount.Should()
+            .Be(0);
+    }
+
+    [Fact]
+    public void BuildSnapshotUpdate_SamplingPlan_PushesSnapshotWithCurrentFiles()
+    {
+        var application = CreateApplication();
+        application.SamplingPlan.Files =
+        [
+            new AccreditationApplicationFile
+            {
+                FileId = "f1",
+                Filename = "plan.pdf",
+                ContentType = "application/pdf",
+                UploadedByUserId = "user-1",
+                S3Key = "s3-key-1",
+            },
+        ];
+
+        var update = AccreditationApplicationSections.BuildSnapshotUpdate(
+            application,
+            OperatorSection.SamplingPlan,
+            DateTime.UtcNow
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("$push");
+        rendered.Should().Contain("samplingplan.versions");
+        rendered.Should().Contain("f1", "the current file should be captured in the snapshot");
+    }
+
+    [Fact]
+    public void BuildSnapshotUpdate_OverseasSitesNull_SetsWholeSubdocumentWithSingleVersion()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSnapshotUpdate(
+            application,
+            OperatorSection.OverseasSites,
+            DateTime.UtcNow
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("overseassites");
+        rendered.Should().Contain("versions");
+        rendered
+            .Should()
+            .NotContain(
+                "overseassites.versions",
+                "a null OverseasSites must set the whole subdocument, not push onto a not-yet-existing parent"
+            );
+    }
+
+    [Fact]
+    public void BuildSnapshotUpdate_OverseasSitesNonNull_PushesSnapshotWithCurrentSites()
+    {
+        var application = CreateApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [new OverseasSiteModel { SiteId = 1, SiteName = "Site 1", Selected = true }],
+        };
+
+        var update = AccreditationApplicationSections.BuildSnapshotUpdate(
+            application,
+            OperatorSection.OverseasSites,
+            DateTime.UtcNow
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("$push");
+        rendered.Should().Contain("overseassites.versions");
+        rendered.Should().Contain("site 1", "the current sites should be captured in the snapshot");
+    }
+
+    [Fact]
+    public void BuildSnapshotUpdate_BesEvidenceNull_SetsWholeSubdocumentWithSingleVersion()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSnapshotUpdate(
+            application,
+            OperatorSection.BesEvidence,
+            DateTime.UtcNow
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("besevidence");
+        rendered.Should().Contain("versions");
+        rendered
+            .Should()
+            .NotContain(
+                "besevidence.versions",
+                "a null BesEvidence must set the whole subdocument, not push onto a not-yet-existing parent"
+            );
+    }
+
+    [Fact]
+    public void BuildSnapshotUpdate_BesEvidenceNonNull_PushesSnapshot()
+    {
+        var application = CreateApplication();
+        application.BesEvidence = new AccreditationApplicationBesEvidence();
+
+        var update = AccreditationApplicationSections.BuildSnapshotUpdate(
+            application,
+            OperatorSection.BesEvidence,
+            DateTime.UtcNow
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("$push");
+        rendered.Should().Contain("besevidence.versions");
+    }
+
+    [Fact]
+    public void BuildSnapshotUpdate_UnknownSection_RendersToEmptyUpdate()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSnapshotUpdate(
+            application,
+            (OperatorSection)999,
+            DateTime.UtcNow
+        );
+
+        update
+            .Render(
+                new RenderArgs<AccreditationApplicationModel>(
+                    BsonSerializer.SerializerRegistry.GetSerializer<AccreditationApplicationModel>(),
+                    BsonSerializer.SerializerRegistry
+                )
+            )
+            .AsBsonDocument.ElementCount.Should()
+            .Be(0);
     }
 }
