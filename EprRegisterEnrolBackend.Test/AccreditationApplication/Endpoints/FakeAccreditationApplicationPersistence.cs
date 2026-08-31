@@ -168,9 +168,17 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     /// deliberately not attempting to interpret arbitrary UpdateDefinition shapes generically,
     /// just the $set/$push/$inc operators AccreditationApplicationSections' Build*Update helpers
     /// and UpdateFieldsAsync itself ever produce.
+    ///
+    /// <paramref name="guardFilter"/>, when supplied, is rendered the same way and evaluated
+    /// against the stored document with <see cref="MatchesFilter"/> - again deliberately scoped to
+    /// just the operators Resubmit's/Withdraw's own guard filters actually produce ($ne, $not +
+    /// $size), rather than a general-purpose filter evaluator. A non-matching guard mirrors a real
+    /// FindOneAndUpdateAsync call matching no document: this method returns null without applying
+    /// <paramref name="update"/> at all.
     /// </summary>
     public Task<AccreditationApplicationModel?> UpdateFieldsAsync(
         ObjectId id,
+        FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
         CancellationToken cancellationToken = default
     )
@@ -184,9 +192,27 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             serializer,
             BsonSerializer.SerializerRegistry
         );
-        var rendered = update.Render(renderArgs).AsBsonDocument;
 
         var storedDoc = _store[idx].ToBsonDocument();
+
+        if (guardFilter is not null)
+        {
+            var renderedGuard = guardFilter.Render(renderArgs).AsBsonDocument;
+            if (!MatchesFilter(storedDoc, renderedGuard))
+                return Task.FromResult<AccreditationApplicationModel?>(null);
+        }
+
+        // Mirrors AccreditationApplicationPersistence.UpdateFieldsAsync combining these into every
+        // call - without them, this fake's Version never moves and every StatusChangedFromCase-
+        // ManagementAsync-vs-Resubmit/Withdraw race test can't tell "webhook read-then-replaced
+        // after this write" from "webhook read-then-replaced before it", since only Version (via
+        // UpdateAsync's own RA-516 check) orders the two.
+        var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
+            update,
+            Builders<AccreditationApplicationModel>.Update.Set(a => a.UpdatedAt, DateTime.UtcNow),
+            Builders<AccreditationApplicationModel>.Update.Inc(a => a.Version, 1L)
+        );
+        var rendered = combinedUpdate.Render(renderArgs).AsBsonDocument;
 
         if (rendered.TryGetValue("$set", out var setOps))
             foreach (var el in setOps.AsBsonDocument)
@@ -221,6 +247,80 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         var deserialized = BsonSerializer.Deserialize<AccreditationApplicationModel>(storedDoc);
         _store[idx] = deserialized;
         return Task.FromResult<AccreditationApplicationModel?>(deserialized);
+    }
+
+    // Evaluates a rendered guard FilterDefinition against a stored (BSON-serialized) document.
+    // Deliberately scoped to just the operators Resubmit's/Withdraw's own guard filters ever
+    // produce - $ne and $not+$size - the same "interpret only what production code actually
+    // generates" scope NavigateToParent/the $set/$inc/$push handling above already keep to; an
+    // unrecognised operator throws rather than silently matching, so a new guard shape added
+    // later fails loudly here instead of passing tests it shouldn't.
+    private static bool MatchesFilter(BsonDocument doc, BsonDocument filter)
+    {
+        foreach (var el in filter)
+        {
+            var actual = GetDottedValue(doc, el.Name);
+            if (!MatchesCondition(actual, el.Value))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool MatchesCondition(BsonValue? actual, BsonValue expected)
+    {
+        if (expected is BsonDocument condDoc && condDoc.ElementCount > 0 && condDoc.Names.All(n => n.StartsWith('$')))
+        {
+            foreach (var condition in condDoc)
+            {
+                switch (condition.Name)
+                {
+                    case "$ne":
+                        if (actual is not null && actual == condition.Value)
+                            return false;
+                        break;
+                    case "$not":
+                        if (MatchesCondition(actual, condition.Value))
+                            return false;
+                        break;
+                    case "$size":
+                        // $size never matches a missing/non-array field, even against 0 - a
+                        // missing array has no size at all, it isn't "an array of size 0". Getting
+                        // this wrong here inverted Not(Size(x, 0))'s result for a genuinely absent
+                        // field (should match - nothing to guard against - but matched the $size
+                        // condition instead, so Not() rejected it).
+                        if (actual is not BsonArray sizedArray)
+                            return false;
+                        if (sizedArray.Count != condition.Value.ToInt32())
+                            return false;
+                        break;
+                    default:
+                        throw new NotSupportedException(
+                            $"FakeAccreditationApplicationPersistence's guard-filter evaluator doesn't "
+                                + $"understand '{condition.Name}' - only $ne/$not/$size are implemented, "
+                                + "matching what Resubmit's/Withdraw's guard filters actually produce."
+                        );
+                }
+            }
+            return true;
+        }
+
+        return actual is not null && actual == expected;
+    }
+
+    // Walks a dotted path down a BsonDocument for reads (the sibling to NavigateToParent's writing
+    // walk above), returning null for any missing intermediate - the same "missing field never
+    // matches $size" semantics Mongo itself applies server-side.
+    private static BsonValue? GetDottedValue(BsonDocument root, string dottedPath)
+    {
+        BsonValue current = root;
+        foreach (var part in dottedPath.Split('.'))
+        {
+            if (current is BsonDocument doc && doc.TryGetValue(part, out var next))
+                current = next;
+            else
+                return null;
+        }
+        return current;
     }
 
     // Walks a dotted Mongo field path (e.g. "query.queriedSectionKeys") down `root`, creating any

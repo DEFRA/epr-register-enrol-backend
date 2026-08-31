@@ -169,6 +169,7 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
         );
         var targetedResult = await _sut.UpdateFieldsAsync(
             endpointsOwnRead.Id!.Value,
+            guardFilter: null,
             targetedUpdate,
             TestContext.Current.CancellationToken
         );
@@ -191,5 +192,71 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
         final!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
         final.ApplicationReference.Should().Be("set-by-webhook");
         final.Version.Should().Be(webhookResult.Version + 1);
+    }
+
+    /// <summary>
+    /// RA-519 review follow-up (tomhalley): proves, against a real mongod, that
+    /// <see cref="IAccreditationApplicationPersistence.UpdateFieldsAsync"/>'s guardFilter actually
+    /// stops a second concurrent writer from re-applying the same logical write - the gap the
+    /// earlier version of this method left open (two concurrent Resubmit requests both reading
+    /// ApplicationStatus == Queried before either persisted would otherwise both succeed, each
+    /// $push-ing its own QuerySubmission). Mirrors Resubmit's own guard shape exactly: "the
+    /// QueriedSectionKeys array must still be non-empty."
+    /// </summary>
+    [Fact]
+    public async Task UpdateFieldsAsync_GuardFilterNoLongerMatches_ReturnsNullAndDoesNotApplyUpdate()
+    {
+        var created = await _sut.CreateAsync(
+            new AccreditationApplicationModel
+            {
+                OrganisationId = "org-1",
+                Year = 2026,
+                MaterialType = MaterialType.Steel,
+                ApplicationStatus = ApplicationStatus.Queried,
+                Query = new AccreditationApplicationQuery
+                {
+                    QueriedSectionKeys = ["business-plan"],
+                },
+            }
+        );
+        created.Should().NotBeNull();
+
+        var guardFilter = Builders<AccreditationApplicationModel>.Filter.Not(
+            Builders<AccreditationApplicationModel>.Filter.Size(a => a.Query!.QueriedSectionKeys, 0)
+        );
+        var clearQueriedSectionKeys = Builders<AccreditationApplicationModel>.Update.Set(
+            a => a.Query!.QueriedSectionKeys,
+            new List<string>()
+        );
+
+        // First concurrent Resubmit's own write - the guard still matches (QueriedSectionKeys is
+        // still populated), so this succeeds and clears it.
+        var first = await _sut.UpdateFieldsAsync(
+            created!.Id!.Value,
+            guardFilter,
+            clearQueriedSectionKeys,
+            TestContext.Current.CancellationToken
+        );
+        first.Should().NotBeNull("the first writer's guard still matches an unresolved query");
+        first!.Query!.QueriedSectionKeys.Should().BeEmpty();
+
+        // Second concurrent Resubmit's own write - built off the same pre-round-trip read as the
+        // first, so it names the same update, but the guard no longer matches: the array the first
+        // writer already cleared.
+        var second = await _sut.UpdateFieldsAsync(
+            created.Id!.Value,
+            guardFilter,
+            clearQueriedSectionKeys,
+            TestContext.Current.CancellationToken
+        );
+        second
+            .Should()
+            .BeNull(
+                "a second concurrent writer whose guard filter no longer matches must be rejected, not silently re-applied"
+            );
+
+        var final = await _sut.GetByIdAsync("org-1", created.Id!.ToString()!);
+        final!.Query!.QueriedSectionKeys.Should().BeEmpty();
+        final.Version.Should().Be(first.Version, "only the first writer's update should have advanced the version");
     }
 }

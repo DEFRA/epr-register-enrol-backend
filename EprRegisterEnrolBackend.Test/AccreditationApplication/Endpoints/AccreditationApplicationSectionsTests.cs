@@ -561,6 +561,158 @@ public class AccreditationApplicationSectionsTests
     }
 
     [Fact]
+    public void BuildSectionStatusUpdate_Prns_SetsPrnsSectionStatus()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSectionStatusUpdate(
+            application,
+            OperatorSection.Prns,
+            SectionStatus.Queried
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        rendered.Should().Contain("$set");
+        // SectionStatus has no [BsonRepresentation(BsonType.String)], so it serializes as its
+        // numeric ordinal — Queried is 4 (NotStarted, InProgress, Completed, Submitted, Queried).
+        rendered.Should().Contain("prns.sectionstatus\" : 4");
+    }
+
+    [Fact]
+    public void BuildSectionStatusUpdate_BusinessPlan_SetsBusinessPlanSectionStatus()
+    {
+        var application = CreateApplication();
+
+        var update = AccreditationApplicationSections.BuildSectionStatusUpdate(
+            application,
+            OperatorSection.BusinessPlan,
+            SectionStatus.Completed
+        );
+
+        var rendered = RenderUpdateAsLowerJson(update);
+        // SectionStatus has no [BsonRepresentation(BsonType.String)], so it serializes as its
+        // numeric ordinal — Completed is 2 (NotStarted, InProgress, Completed, Submitted, Queried).
+        rendered.Should().Contain("businessplan.sectionstatus\" : 2");
+    }
+
+    // RA-519 review follow-up (tomhalley): BuildSnapshotUpdate's BusinessPlan case copies 14
+    // fields by name into BusinessPlanSnapshot - a transposed or omitted field compiles cleanly
+    // and would silently corrupt every resubmitted BusinessPlan snapshot. These two tests
+    // deserialize the rendered $push payload back into the real snapshot type and assert full
+    // structural equality against the values actually on the application, so a transposition
+    // (e.g. OtherPercent's value landing in NewUsesPercent) fails the test even though every
+    // field individually still "looks present" the way a substring Contains check would miss.
+    [Fact]
+    public void BuildSnapshotUpdate_Prns_PushesSnapshotWithEveryCurrentField()
+    {
+        var application = CreateApplication();
+        application.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo10000;
+        application.Prns.Authorisers =
+        [
+            new PrnsAuthoriser { FullName = "Jane", Email = "jane@example.com" },
+            new PrnsAuthoriser { FullName = "Bob", Email = "bob@example.com" },
+        ];
+        var versionedAt = new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var update = AccreditationApplicationSections.BuildSnapshotUpdate(
+            application,
+            OperatorSection.Prns,
+            versionedAt
+        );
+
+        var pushed = ExtractPushedDocument(update, "prns.versions");
+        var snapshot = BsonSerializer.Deserialize<PrnsSnapshot>(pushed);
+        snapshot
+            .Should()
+            .BeEquivalentTo(
+                new PrnsSnapshot
+                {
+                    PlannedTonnageBand = PlannedTonnageBand.UpTo10000,
+                    Authorisers = application.Prns.Authorisers,
+                    VersionedAt = versionedAt,
+                }
+            );
+    }
+
+    [Fact]
+    public void BuildSnapshotUpdate_BusinessPlan_PushesSnapshotWithEveryCurrentField()
+    {
+        var application = CreateApplication();
+        var bp = application.BusinessPlan;
+        bp.NewInfrastructurePercent = 10;
+        bp.PriceSupportPercent = 20;
+        bp.BusinessCollectionsPercent = 30;
+        bp.CommunicationsPercent = 5;
+        bp.NewMarketsPercent = 15;
+        bp.NewUsesPercent = 10;
+        bp.OtherPercent = 10;
+        bp.NewInfrastructureDetail = "infra detail";
+        bp.PriceSupportDetail = "price detail";
+        bp.BusinessCollectionsDetail = "collections detail";
+        bp.CommunicationsDetail = "comms detail";
+        bp.NewMarketsDetail = "markets detail";
+        bp.NewUsesDetail = "uses detail";
+        bp.OtherDetail = "other detail";
+        var versionedAt = new DateTime(2026, 5, 2, 0, 0, 0, DateTimeKind.Utc);
+
+        var update = AccreditationApplicationSections.BuildSnapshotUpdate(
+            application,
+            OperatorSection.BusinessPlan,
+            versionedAt
+        );
+
+        var pushed = ExtractPushedDocument(update, "businessplan.versions");
+        var snapshot = BsonSerializer.Deserialize<BusinessPlanSnapshot>(pushed);
+        snapshot
+            .Should()
+            .BeEquivalentTo(
+                new BusinessPlanSnapshot
+                {
+                    NewInfrastructurePercent = 10,
+                    PriceSupportPercent = 20,
+                    BusinessCollectionsPercent = 30,
+                    CommunicationsPercent = 5,
+                    NewMarketsPercent = 15,
+                    NewUsesPercent = 10,
+                    OtherPercent = 10,
+                    NewInfrastructureDetail = "infra detail",
+                    PriceSupportDetail = "price detail",
+                    BusinessCollectionsDetail = "collections detail",
+                    CommunicationsDetail = "comms detail",
+                    NewMarketsDetail = "markets detail",
+                    NewUsesDetail = "uses detail",
+                    OtherDetail = "other detail",
+                    VersionedAt = versionedAt,
+                }
+            );
+    }
+
+    // Renders `update`, locates its single $push payload at `dottedFieldNameLower` (case-
+    // insensitively, since - as elsewhere in this file - whether the camelCase element-name
+    // convention is active depends on test run order) and returns it as a standalone BsonDocument
+    // ready to deserialize back into the real snapshot type.
+    private static BsonDocument ExtractPushedDocument(
+        UpdateDefinition<AccreditationApplicationModel> update,
+        string dottedFieldNameLower
+    )
+    {
+        var registry = BsonSerializer.SerializerRegistry;
+        var rendered = update
+            .Render(
+                new RenderArgs<AccreditationApplicationModel>(
+                    registry.GetSerializer<AccreditationApplicationModel>(),
+                    registry
+                )
+            )
+            .AsBsonDocument;
+        var pushOps = rendered["$push"].AsBsonDocument;
+        var matchingField = pushOps.Names.Single(n =>
+            string.Equals(n, dottedFieldNameLower, StringComparison.OrdinalIgnoreCase)
+        );
+        return pushOps[matchingField].AsBsonDocument;
+    }
+
+    [Fact]
     public void BuildSectionStatusUpdate_SamplingPlan_SetsSamplingPlanSectionStatus()
     {
         var application = CreateApplication();

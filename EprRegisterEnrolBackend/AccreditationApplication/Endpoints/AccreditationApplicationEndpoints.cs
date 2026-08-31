@@ -2337,8 +2337,23 @@ public static class AccreditationApplicationEndpoints
                 )
         );
 
+        // Guards against two concurrent Resubmit requests both reading ApplicationStatus ==
+        // Queried before either persists (ManagementBe's own resume-from-query handling treats a
+        // second in-flight resume as an idempotent success, so both requests reach this point) -
+        // without this, both would $push their own QuerySubmission, duplicating the regulator-
+        // facing audit trail. Guarding on QueriedSectionKeys rather than ApplicationStatus/Version
+        // is deliberate: the Case Management service's webhook race this endpoint must survive
+        // (see the comment above) never touches Query, so QueriedSectionKeys is still exactly
+        // what was read here right up
+        // until *this* request's own write clears it - a genuine rival Resubmit that already
+        // completed is the only thing that would have cleared it first.
+        var notAlreadyResubmittedGuard = Builders<AccreditationApplicationModel>.Filter.Not(
+            Builders<AccreditationApplicationModel>.Filter.Size(a => a.Query!.QueriedSectionKeys, 0)
+        );
+
         var updated = await persistence.UpdateFieldsAsync(
             application.Id!.Value,
+            notAlreadyResubmittedGuard,
             combinedUpdate,
             cancellationToken
         );
@@ -2969,8 +2984,22 @@ public static class AccreditationApplicationEndpoints
                 )
         );
 
+        // Guards against two concurrent Withdraw requests racing the same way Resubmit's own
+        // duplicate-request race does (see Resubmit's matching comment above) - a genuine rival
+        // Withdraw that already completed would have moved ApplicationStatus to Withdrawn, so
+        // guarding on "not already Withdrawn" rejects that duplicate. This does not collide with
+        // the Case Management service's webhook race this endpoint must survive: ManagementBe
+        // currently excludes withdrawn transitions from its synchronous push-back (RA-519), so
+        // the webhook's own concurrent
+        // write is never the thing that sets Withdrawn here.
+        var notAlreadyWithdrawnGuard = Builders<AccreditationApplicationModel>.Filter.Ne(
+            a => a.ApplicationStatus,
+            ApplicationStatus.Withdrawn
+        );
+
         var updated = await persistence.UpdateFieldsAsync(
             application.Id!.Value,
+            notAlreadyWithdrawnGuard,
             combinedUpdate,
             cancellationToken
         );

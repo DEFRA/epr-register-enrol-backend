@@ -718,6 +718,95 @@ public class AccreditationApplicationEndpointsLifecycleTests
         stored.Query.QueriedSectionKeys.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Resubmit_TwoConcurrentRequestsBothReadQueried_SecondFailsInsteadOfDuplicatingQuerySubmission()
+    {
+        // RA-519 review follow-up (tomhalley): ManagementBe's resume-from-query handling treats a
+        // second concurrent resume as an idempotent-replay success once the work item has already
+        // left 'queried', so both requests' own adapter calls can return IsSuccess == true even
+        // though only one of them can legitimately win. Without a write-time guard, both would
+        // then $push their own QuerySubmission, duplicating the regulator-facing audit trail - the
+        // targeted-update migration's own version guard can't catch this (see
+        // AccreditationApplicationPersistence.UpdateFieldsAsync's doc comment), so this proves the
+        // dedicated guardFilter does instead.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.BusinessPlan.SectionStatus = SectionStatus.Queried;
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify",
+                    QueriedSectionKeys = ["business-plan"],
+                };
+            }
+        );
+
+        var callCount = 0;
+        _factory
+            .MockCaseWorkingAdapter.ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(async _ =>
+            {
+                callCount++;
+                if (callCount == 1)
+                {
+                    // Simulates a second, genuinely concurrent Resubmit request that reads the
+                    // same pre-write state, gets its own idempotent-replay success from
+                    // ManagementBe, and completes its own persist before this (the outer) call's
+                    // persist runs.
+                    var secondResponse = await _client.PostAsJsonAsync(
+                        $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+                        new ResubmitRequest
+                        {
+                            FullName = "Second",
+                            Email = "second@example.com",
+                            Role = "Manager",
+                        },
+                        cancellationToken: TestContext.Current.CancellationToken
+                    );
+                    secondResponse
+                        .StatusCode.Should()
+                        .Be(
+                            HttpStatusCode.OK,
+                            "the nested, genuinely-first-to-persist request must succeed"
+                        );
+                }
+                return new ResumeFromQueryResult(true);
+            });
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest
+            {
+                FullName = "First",
+                Email = "first@example.com",
+                Role = "Manager",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response
+            .StatusCode.Should()
+            .Be(
+                HttpStatusCode.InternalServerError,
+                "the outer request's own write-time guard must reject it once the nested request already cleared QueriedSectionKeys"
+            );
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!
+            .Query!.QuerySubmissions.Should()
+            .ContainSingle("only the winning request's submission should be recorded, not both");
+    }
+
     // --- Withdraw ---
 
     [Fact]
@@ -947,6 +1036,70 @@ public class AccreditationApplicationEndpointsLifecycleTests
         stored!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
         stored.WithdrawalReason.Should().Be("No longer required");
         stored.Query!.QueriedSectionKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Withdraw_TwoConcurrentRequestsBothReadNonWithdrawn_SecondFailsInsteadOfDoubleProcessing()
+    {
+        // RA-519 review follow-up (tomhalley): same duplicate-request race as Resubmit's matching
+        // test above - two concurrent Withdraw requests both reading a non-Withdrawn status before
+        // either persists. Without a write-time guard, the second would silently re-apply its own
+        // (potentially different) WithdrawalReason over the first's.
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.Submitted);
+
+        var callCount = 0;
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(async _ =>
+            {
+                callCount++;
+                if (callCount == 1)
+                {
+                    var secondResponse = await _client.PostAsJsonAsync(
+                        $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+                        new WithdrawRequest { Reason = "Second concurrent withdraw" },
+                        cancellationToken: TestContext.Current.CancellationToken
+                    );
+                    secondResponse
+                        .StatusCode.Should()
+                        .Be(
+                            HttpStatusCode.OK,
+                            "the nested, genuinely-first-to-persist request must succeed"
+                        );
+                }
+                return new WithdrawResult(true);
+            });
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            new WithdrawRequest { Reason = "First concurrent withdraw" },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response
+            .StatusCode.Should()
+            .Be(
+                HttpStatusCode.InternalServerError,
+                "the outer request's own write-time guard must reject it once the nested request already withdrew the application"
+            );
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        stored
+            .WithdrawalReason.Should()
+            .Be(
+                "Second concurrent withdraw",
+                "the winning (nested) request's reason must be the one persisted, not overwritten by the rejected outer request"
+            );
     }
 
     // --- QueryFromCaseManagement: X-Correlation-Id header present branch ---
