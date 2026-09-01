@@ -40,13 +40,25 @@ public class CdpUploaderService(
         var requestJson = JsonSerializer.Serialize(request, ResponseJsonOptions);
         // RA-516: Warn, not Information - see appsettings.json's Serilog:MinimumLevel:Default,
         // which now defaults to Warning so this full JSON dump isn't noisy in normal operation.
+        //
+        // The body is attached via BeginScope under a dotted key, not interpolated into the
+        // message template: CDP's OpenSearch ingestion pipeline only recognises the specific
+        // slash-nested ECS paths on its allow-list (for http/request it's only
+        // http/request/body/bytes - a size field, never body content), so a literally-dotted
+        // key like "http.request.body" is guaranteed to be dropped before it reaches
+        // OpenSearch, while still landing in the raw S3-stored logs for troubleshooting.
+        // Interpolating the body into the message string instead would defeat that filtering
+        // entirely, since `message` is unconditionally on the allow-list regardless of content.
         if (logger.IsEnabled(LogLevel.Warning))
         {
-            logger.LogWarning(
-                "Calling CDP uploader POST {InitiateUrl} with body: {RequestBody}",
-                initiateUrl,
-                requestJson
-            );
+            using (
+                logger.BeginScope(
+                    new Dictionary<string, object?> { ["http.request.body"] = requestJson }
+                )
+            )
+            {
+                logger.LogWarning("Calling CDP uploader POST {InitiateUrl}", initiateUrl);
+            }
         }
 
         var client = httpClientFactory.CreateClient("DefaultClient");
@@ -67,12 +79,14 @@ public class CdpUploaderService(
         }
         catch (Exception ex)
         {
-            logger.LogError(
-                ex,
-                "Failed to reach CDP uploader at {InitiateUrl} with body: {RequestBody}",
-                initiateUrl,
-                requestJson
-            );
+            using (
+                logger.BeginScope(
+                    new Dictionary<string, object?> { ["http.request.body"] = requestJson }
+                )
+            )
+            {
+                logger.LogError(ex, "Failed to reach CDP uploader at {InitiateUrl}", initiateUrl);
+            }
             throw;
         }
 
@@ -80,13 +94,22 @@ public class CdpUploaderService(
 
         if (!response.IsSuccessStatusCode)
         {
-            logger.LogError(
-                "CDP uploader returned {Status} from {InitiateUrl} for request body {RequestBody}: {ResponseBody}",
-                (int)response.StatusCode,
-                initiateUrl,
-                requestJson,
-                responseBody
-            );
+            using (
+                logger.BeginScope(
+                    new Dictionary<string, object?>
+                    {
+                        ["http.request.body"] = requestJson,
+                        ["http.response.body"] = responseBody,
+                    }
+                )
+            )
+            {
+                logger.LogError(
+                    "CDP uploader returned {Status} from {InitiateUrl}",
+                    (int)response.StatusCode,
+                    initiateUrl
+                );
+            }
             throw new HttpRequestException(
                 $"CDP uploader initiate failed: {(int)response.StatusCode}"
             );
@@ -95,12 +118,18 @@ public class CdpUploaderService(
         // RA-516: Warn, not Information - same reasoning as the request-body log above.
         if (logger.IsEnabled(LogLevel.Warning))
         {
-            logger.LogWarning(
-                "CDP uploader returned {Status} from {InitiateUrl}: {ResponseBody}",
-                (int)response.StatusCode,
-                initiateUrl,
-                responseBody
-            );
+            using (
+                logger.BeginScope(
+                    new Dictionary<string, object?> { ["http.response.body"] = responseBody }
+                )
+            )
+            {
+                logger.LogWarning(
+                    "CDP uploader returned {Status} from {InitiateUrl}",
+                    (int)response.StatusCode,
+                    initiateUrl
+                );
+            }
         }
 
         var result = JsonSerializer.Deserialize<CdpInitiateResponse>(

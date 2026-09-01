@@ -75,6 +75,20 @@ public class CdpUploaderServiceTests
             .NotContain(e =>
                 e.LogLevel == LogLevel.Information && e.Message.Contains("Calling CDP uploader")
             );
+
+        // RA-519 follow-up (log-body-message-leak): the request body must be attached as a
+        // scoped property under a dotted key CDP's OpenSearch allow-list will drop, never
+        // interpolated into the rendered message — `message` is unconditionally indexed by CDP
+        // regardless of content, so interpolating it there would defeat the allow-list entirely.
+        var callEntry = logger.Entries.Single(e => e.Message.Contains("Calling CDP uploader"));
+        callEntry.Message.Should().NotContain("my-bucket");
+        callEntry
+            .ScopeProperties.Should()
+            .ContainKey("http.request.body")
+            .WhoseValue.Should()
+            .BeOfType<string>()
+            .Which.Should()
+            .Contain("my-bucket");
     }
 
     [Fact]
@@ -111,6 +125,18 @@ public class CdpUploaderServiceTests
             .NotContain(e =>
                 e.LogLevel == LogLevel.Information && e.Message.Contains("CDP uploader returned")
             );
+
+        // RA-519 follow-up (log-body-message-leak): same scoped-property requirement as the
+        // request body above, applied to the response body.
+        var responseEntry = logger.Entries.Single(e => e.Message.Contains("CDP uploader returned"));
+        responseEntry.Message.Should().NotContain("upload-123");
+        responseEntry
+            .ScopeProperties.Should()
+            .ContainKey("http.response.body")
+            .WhoseValue.Should()
+            .BeOfType<string>()
+            .Which.Should()
+            .Contain("upload-123");
     }
 
     [Fact]
@@ -167,6 +193,44 @@ public class CdpUploaderServiceTests
 
         result.UploadUrl.Should().StartWith("http://localhost:7337");
         result.StatusUrl.Should().StartWith("http://localhost:7337");
+    }
+
+    [Fact]
+    public async Task InitiateAsync_HttpClientThrows_LogsRequestBodyAsScopedPropertyNotMessage()
+    {
+        // RA-519 follow-up (log-body-message-leak): the catch-block log path (network failure
+        // reaching cdp-uploader, as opposed to a non-success HTTP response) has its own
+        // BeginScope call, separate from the request-log and non-success-response paths already
+        // covered above — this exercises that path specifically.
+        var handler = new ThrowingHttpMessageHandler();
+        using var client = new HttpClient(handler);
+        var logger = new CapturingLogger<CdpUploaderService>();
+        var sut = BuildSut(client, logger: logger);
+
+        var act = async () =>
+            await sut.InitiateAsync(
+                new CdpInitiateRequest
+                {
+                    Redirect = "http://frontend/redirect",
+                    S3Bucket = "my-bucket",
+                    S3Path = "uploads/test.csv",
+                },
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        var errorEntry = logger.Entries.Single(e =>
+            e.LogLevel == LogLevel.Error && e.Message.Contains("Failed to reach CDP uploader")
+        );
+        errorEntry.Message.Should().NotContain("my-bucket");
+        errorEntry
+            .ScopeProperties.Should()
+            .ContainKey("http.request.body")
+            .WhoseValue.Should()
+            .BeOfType<string>()
+            .Which.Should()
+            .Contain("my-bucket");
     }
 
     [Fact]
@@ -349,29 +413,12 @@ public class CdpUploaderServiceTests
         root.GetProperty("maxFileSize").GetInt64().Should().Be(1024);
     }
 
-    // RA-516: mirrors the CapturingLogger<T> pattern already used in
-    // ExceptionLoggingHandlerTests/MongoIndexInitializerServiceTests - EnabledNullLogger discards
-    // output, which is fine for tests that don't care what was logged, but these two logging
-    // tests specifically need to assert which LogLevel a message was emitted at.
-    private sealed class CapturingLogger<T> : ILogger<T>
+    private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
     {
-        public List<(LogLevel LogLevel, string Message)> Entries { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state)
-            where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter
-        )
-        {
-            Entries.Add((logLevel, formatter(state, exception)));
-        }
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => throw new HttpRequestException("simulated network failure");
     }
 
     private class StubHttpMessageHandler : HttpMessageHandler

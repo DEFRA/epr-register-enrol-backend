@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -27,7 +28,7 @@ public class MongoIndexInitializerServiceTests
     [Fact]
     public async Task InitializeAsync_resolves_the_mongo_backed_persistences()
     {
-        var logger = new CapturingLogger();
+        var logger = new CapturingLogger<MongoIndexInitializerService>();
         var provider = AllPersistencesRegistered();
 
         var act = () => CreateSut(provider, logger).InitializeAsync(CancellationToken.None);
@@ -46,7 +47,7 @@ public class MongoIndexInitializerServiceTests
         // No persistences registered → GetRequiredService throws. The service
         // must log and move on rather than let the exception escape (which
         // would crash-loop the host from a BackgroundService).
-        var logger = new CapturingLogger();
+        var logger = new CapturingLogger<MongoIndexInitializerService>();
         var provider = new ServiceCollection().BuildServiceProvider();
 
         var act = () => CreateSut(provider, logger).InitializeAsync(CancellationToken.None);
@@ -62,29 +63,8 @@ public class MongoIndexInitializerServiceTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var act = () => CreateSut(provider, new CapturingLogger()).InitializeAsync(cts.Token);
+        var act = () => CreateSut(provider, new CapturingLogger<MongoIndexInitializerService>()).InitializeAsync(cts.Token);
 
         await act.Should().NotThrowAsync();
-    }
-
-    private sealed class CapturingLogger : ILogger<MongoIndexInitializerService>
-    {
-        public List<(LogLevel LogLevel, string Message)> Entries { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state)
-            where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter
-        )
-        {
-            Entries.Add((logLevel, formatter(state, exception)));
-        }
     }
 }
