@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
@@ -24,7 +25,8 @@ public class HttpReExApiAdapterTests
         string organisationJson,
         string overseasSitesJson = "{}",
         HttpStatusCode organisationStatusCode = HttpStatusCode.OK,
-        HttpStatusCode overseasSitesStatusCode = HttpStatusCode.OK
+        HttpStatusCode overseasSitesStatusCode = HttpStatusCode.OK,
+        ILogger<HttpReExApiAdapter>? logger = null
     )
     {
         var handler = new RoutingHandler(
@@ -36,7 +38,10 @@ public class HttpReExApiAdapterTests
         var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExConfig { BaseUrl = "http://localhost:5000/" });
         var reExClient = new ReExClient(httpClient, config, EnabledNullLogger<ReExClient>.Instance);
-        return new HttpReExApiAdapter(reExClient, EnabledNullLogger<HttpReExApiAdapter>.Instance);
+        return new HttpReExApiAdapter(
+            reExClient,
+            logger ?? EnabledNullLogger<HttpReExApiAdapter>.Instance
+        );
     }
 
     [Fact]
@@ -317,9 +322,15 @@ public class HttpReExApiAdapterTests
     }
 
     [Fact]
-    public async Task GetAccreditationAsync_ExporterRegistration_NoRegisteredOfficePostcode_FailsRatherThanSubmittingMalformedPayload()
+    public async Task GetAccreditationAsync_ExporterRegistration_NoRegisteredOfficePostcode_SucceedsAndLogsWarning()
     {
-        var sut = BuildSut(OrganisationJsonNoCompanyPostcode);
+        // ROA: this guard used to refuse the whole request (Fail 500) to avoid a silent
+        // regulator fallback downstream. Every other postcode->nation resolution point in
+        // the ecosystem already fails open to England instead of blocking, so the seed
+        // operation must now complete too — with the gap logged as a warning, not an error,
+        // and without failing the request.
+        var logger = new CapturingLogger<HttpReExApiAdapter>();
+        var sut = BuildSut(OrganisationJsonNoCompanyPostcode, logger: logger);
 
         var result = await sut.GetAccreditationAsync(
             "6a2fcd74e16883c137d01188",
@@ -328,8 +339,16 @@ public class HttpReExApiAdapterTests
             2026
         );
 
-        result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(500);
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.CompanyRegisterAddressPostcode.Should().BeNullOrEmpty();
+
+        var entry = logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Warning)
+            .Which;
+        entry.Message.Should().Contain("6a2fcd74e16883c137d01188");
+        entry.Message.Should().Contain("no registered-office postcode");
+        logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 
     [Fact]

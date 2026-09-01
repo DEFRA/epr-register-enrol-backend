@@ -92,16 +92,18 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
 
         if (isExporter && string.IsNullOrWhiteSpace(org.CompanyDetails?.Address?.Postcode))
         {
-            logger.LogError(
-                "Exporter org={OrganisationId} has no registered-office postcode; refusing to build accreditation payload to avoid a silent regulator fallback downstream",
+            // ROA: was a hard refusal (LogError + Fail 500) to avoid a silent regulator
+            // fallback downstream. Every other postcode->nation resolution point in the
+            // ecosystem (frontend nation-from-postcode.js, management-be NationResolver,
+            // management-be ApplicationReferenceGenerator) already fails open to England
+            // rather than blocking, so this refusal was the odd one out — it just moved the
+            // failure here instead of preventing it. Source data quality for the missing
+            // postcode is tracked separately; this adapter now matches the rest of the
+            // ecosystem by continuing with a null postcode and logging a warning so the gap
+            // stays observable.
+            logger.LogWarning(
+                "Exporter org={OrganisationId} has no registered-office postcode; continuing without it — downstream nation resolution will default to England",
                 organisationId
-            );
-            return ReExResult<ReExAccreditationDto>.Fail(
-                new ReExError(
-                    ReExErrorKind.ClientError,
-                    "Exporter organisation is missing a registered-office postcode"
-                ),
-                500
             );
         }
 
