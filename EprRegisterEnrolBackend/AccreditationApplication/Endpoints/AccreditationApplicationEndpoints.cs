@@ -812,6 +812,27 @@ public static class AccreditationApplicationEndpoints
             }
         }
 
+        // RA-526: backfill Nation for any application read before Seed's own resolution ran -
+        // older applications, or ones that never reached Seed yet under the pre-RA-526 code.
+        // Same shape as the RA-503 OrgId backfill above: resolved once and persisted so later
+        // reads skip the ReEx round trip, and a lookup failure leaves Nation null rather than
+        // permanently caching a miss. Without this, epr-register-enrol-frontend's
+        // resolveNation (which no longer falls back to postcode) would show every such
+        // application's operator the wrong nation's bank details and payment reference.
+        if (application.Nation is null && application.RegistrationId is not null)
+        {
+            var nationResult = await reExAdapter.GetNationAsync(
+                organisationId,
+                application.RegistrationId,
+                cancellationToken
+            );
+            if (nationResult.IsSuccess)
+            {
+                application.Nation = nationResult.Value;
+                application = await persistence.UpdateAsync(application) ?? application;
+            }
+        }
+
         // Skip the round-trip entirely when there is nothing to look up (e.g. older
         // applications submitted before the work-item id was persisted, or applications
         // never submitted at all). Defence in depth otherwise: GetNotificationStatusAsync

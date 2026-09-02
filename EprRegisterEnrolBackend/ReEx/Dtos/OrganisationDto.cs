@@ -68,7 +68,8 @@ public class CompanyDetailsDto
 
     /// <summary>
     /// The company's registered-office address, when ReEx has one recorded. RA-526: mapped in
-    /// preference to <see cref="Address"/> below - see HttpReExApiAdapter.MapCompanyAddress.
+    /// preference to <see cref="Address"/> below - see HttpReExApiAdapter.GetAccreditationAsync's
+    /// HasMappableFields / companyAddressSource resolution.
     /// </summary>
     public RegisteredAddressDto? RegisteredAddress { get; init; }
 

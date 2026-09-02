@@ -34,6 +34,21 @@ public interface IReExApiAdapter
         string organisationId,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// RA-526: the Nation a single registration belongs to, derived from that
+    /// registration's own <c>submittedToRegulator</c> via
+    /// <see cref="EprRegisterEnrolBackend.AccreditationApplication.Models.RegulatorNationMapper"/>
+    /// - the same source <see cref="GetAccreditationAsync"/> uses at Seed time. Exists as its
+    /// own lightweight lookup (mirroring <see cref="GetOrganisationNumberAsync"/>) so a caller
+    /// that only needs Nation - e.g. backfilling it onto an application that predates this
+    /// field - does not have to supply a material type and year it may not have to hand.
+    /// </summary>
+    Task<ReExResult<Nation>> GetNationAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <summary>

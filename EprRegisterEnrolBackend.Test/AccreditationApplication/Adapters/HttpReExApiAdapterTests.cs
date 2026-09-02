@@ -1023,6 +1023,92 @@ public class HttpReExApiAdapterTests
         result.StatusCode.Should().Be(500);
     }
 
+    // ---------------- RA-526: GetNationAsync ----------------
+
+    [Fact]
+    public async Task GetNationAsync_Success_ReturnsNationFromRegistrationRegulator()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(Nation.England);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_UnrecognisedRegulatorCode_DefaultsToEngland()
+    {
+        var sut = BuildSut(
+            """
+            {
+              "id": "6a2fcd74e16883c137d01188",
+              "registrations": [
+                { "id": "reg-1", "submittedToRegulator": "not-a-real-regulator" }
+              ]
+            }
+            """
+        );
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(Nation.England);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_RegistrationNotFound_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "does-not-exist",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_OrganisationNotFound_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.NotFound);
+
+        var result = await sut.GetNationAsync(
+            "does-not-exist",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_OrganisationServerError_ReturnsFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.InternalServerError);
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
     // Realistic redacted ReEx organisation payload — companyDetails deliberately has no
     // registrationNumber key, matching the real API. Mirrors the fixture used in
     // ReExOrganisationFixtureTests.cs.

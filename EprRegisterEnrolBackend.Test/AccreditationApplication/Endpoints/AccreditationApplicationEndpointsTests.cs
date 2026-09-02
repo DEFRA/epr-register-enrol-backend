@@ -1109,6 +1109,148 @@ public class AccreditationApplicationEndpointsTests
         secondBody!.OrgId.Should().Be(500500);
     }
 
+    // RA-526: GetById backfills Nation for an application read before Seed's own resolution ran,
+    // and persists the result so later reads skip the ReEx round trip entirely. Mirrors the
+    // RA-503 OrgId backfill trio above.
+    [Fact]
+    public async Task GetById_NationNotYetResolved_BackfillsFromReExAndPersists()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.Nation = null;
+            a.RegistrationId = "reg-1";
+        });
+        _factory
+            .MockReExAdapter.GetNationAsync("org-123", "reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<Nation>.Success(Nation.Wales, 200)));
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Nation.Should().Be(Nation.Wales);
+
+        // Persisted, not just returned once: a second read must show the same value even if
+        // ReEx would now return something different (proving GetById skips ReEx once resolved).
+        _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
+        _factory
+            .MockReExAdapter.GetNationAsync("org-123", "reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<Nation>.Success(Nation.Scotland, 200)));
+        var second = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var secondBody = await second.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        secondBody!.Nation.Should().Be(Nation.Wales);
+    }
+
+    [Fact]
+    public async Task GetById_NationAlreadyResolved_DoesNotCallReEx()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.Nation = Nation.NorthernIreland;
+            a.RegistrationId = "reg-1";
+        });
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Nation.Should().Be(Nation.NorthernIreland);
+        await _factory
+            .MockReExAdapter.DidNotReceive()
+            .GetNationAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetById_NoRegistrationId_DoesNotCallReExForNation()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.Nation = null;
+            a.RegistrationId = null;
+        });
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Nation.Should().BeNull();
+        await _factory
+            .MockReExAdapter.DidNotReceive()
+            .GetNationAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetById_NationReExLookupFails_NationStaysNullAndIsNotPermanentlyCached()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.Nation = null;
+            a.RegistrationId = "reg-1";
+        });
+        _factory
+            .MockReExAdapter.GetNationAsync("org-123", "reg-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult(
+                    ReExResult<Nation>.Fail(new ReExError(ReExErrorKind.ServerError, "down"), 500)
+                )
+            );
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Nation.Should().BeNull();
+
+        // A failure must not be cached as a permanent null: the next read retries ReEx.
+        _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
+        _factory
+            .MockReExAdapter.GetNationAsync("org-123", "reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<Nation>.Success(Nation.Wales, 200)));
+        var second = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var secondBody = await second.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        secondBody!.Nation.Should().Be(Nation.Wales);
+    }
+
     // --- PatchPrns ---
 
     [Fact]

@@ -438,6 +438,56 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         return ReExResult<int?>.Success(orgNumber, 200);
     }
 
+    public async Task<ReExResult<Nation>> GetNationAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var orgResult = await reExClient.GetOrganisationsAsync(organisationId, cancellationToken);
+        if (!orgResult.IsSuccess)
+        {
+            if (orgResult.IsNotFound)
+                logger.LogWarning(
+                    "ReEx organisation not found for organisationId={OrganisationId}",
+                    organisationId
+                );
+            else
+                logger.LogError(
+                    "ReEx GetOrganisations failed for organisationId={OrganisationId}: {Error}",
+                    organisationId,
+                    orgResult.Error?.Message
+                );
+            return ReExResult<Nation>.Fail(orgResult.Error!, orgResult.StatusCode);
+        }
+
+        var registration = orgResult.Value!.Registrations.FirstOrDefault(r =>
+            r.Id == registrationId
+        );
+        if (registration is null)
+        {
+            logger.LogWarning(
+                "No registration found for registrationId={RegistrationId} in org={OrganisationId}",
+                registrationId,
+                organisationId
+            );
+            return ReExResult<Nation>.Fail(
+                new ReExError(ReExErrorKind.NotFound, $"Registration {registrationId} not found"),
+                404
+            );
+        }
+
+        if (!RegulatorNationMapper.TryMap(registration.SubmittedToRegulator, out var nation))
+            logger.LogWarning(
+                "Unrecognised regulator code {RegulatorCode} for org={OrganisationId} reg={RegistrationId}; defaulting to England",
+                registration.SubmittedToRegulator,
+                organisationId,
+                registrationId
+            );
+
+        return ReExResult<Nation>.Success(nation, 200);
+    }
+
     private static OverseasSiteModel MapOverseasSite(string key, OverseasSiteDto dto) =>
         new()
         {

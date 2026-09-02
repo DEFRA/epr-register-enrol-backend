@@ -365,6 +365,12 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             RegistrationId = src.RegistrationId,
             IsExporter = src.IsExporter,
             MaterialType = src.MaterialType,
+            // RA-526: same latent-drop class as OrgId/GlassRecyclingProcess above - Nation and
+            // IsUkRegisteredAddress were missing entirely, so GetById's Nation backfill-and-persist
+            // logic could never see a previously-stored value survive a round trip through this
+            // fake, and always re-triggered the backfill on every read.
+            Nation = src.Nation,
+            IsUkRegisteredAddress = src.IsUkRegisteredAddress,
             // RA-448: another pre-existing gap - GlassRecyclingProcess was silently
             // dropped on every read through this fake, latent until a Glass-typed
             // application needed it back (RegulatoryNumberGenerator requires it).
