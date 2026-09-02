@@ -320,7 +320,12 @@ public class HttpCaseWorkingApiAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
+                LogManagementBeError(
+                    LogLevel.Error,
+                    (int)response.StatusCode,
+                    endpoint,
+                    responseBody
+                );
                 return new ResumeFromQueryResult(false);
             }
 
@@ -374,7 +379,12 @@ public class HttpCaseWorkingApiAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
+                LogManagementBeError(
+                    LogLevel.Error,
+                    (int)response.StatusCode,
+                    endpoint,
+                    responseBody
+                );
                 return new WithdrawResult(false);
             }
 
@@ -447,7 +457,12 @@ public class HttpCaseWorkingApiAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                LogManagementBeError(LogLevel.Warning, (int)response.StatusCode, endpoint, responseBody);
+                LogManagementBeError(
+                    LogLevel.Warning,
+                    (int)response.StatusCode,
+                    endpoint,
+                    responseBody
+                );
             }
         }
         catch (Exception ex)
@@ -471,7 +486,10 @@ public class HttpCaseWorkingApiAdapter(
         var payload = new Dictionary<string, object?>();
         var sections = sectionKeys
             .Select(key =>
-                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(key, out var section)
+                AccreditationApplicationSections.TryMapCaseManagementKeyToSection(
+                    key,
+                    out var section
+                )
                     ? section
                     : (OperatorSection?)null
             )
@@ -548,6 +566,13 @@ public class HttpCaseWorkingApiAdapter(
             complianceIssuesReported = 0,
             siteAddress = application.SiteAddress,
             siteAddressPostcode = ExtractPostcode(application.SiteAddress),
+            // RA-526: derived at Seed time from the registration's own regulator (see
+            // RegulatorNationMapper) - the reliable replacement for ManagementBe's own
+            // postcode-derived nation routing (ReAccreditationNationRoutingHook). Null when
+            // this application predates that derivation; JsonOptions' WhenWritingNull drops it
+            // entirely rather than sending an explicit null, so ManagementBe's own
+            // default-to-England fallback applies exactly as it does for any other absent field.
+            nation = application.Nation?.ToString(),
             companyRegisterAddressPostcode = application.CompanyRegisterAddressPostcode,
             companyRegisteredAddress = application.CompanyRegisteredAddress,
             companiesHouseNumber = application.CompaniesHouseNumber,

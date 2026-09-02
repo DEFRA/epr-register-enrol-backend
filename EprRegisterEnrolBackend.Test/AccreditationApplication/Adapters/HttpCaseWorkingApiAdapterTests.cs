@@ -190,10 +190,7 @@ public class HttpCaseWorkingApiAdapterTests
 
         await act.Should().ThrowAsync<HttpRequestException>();
 
-        var entry = logger
-            .Entries.Should()
-            .ContainSingle(e => e.LogLevel == LogLevel.Error)
-            .Which;
+        var entry = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Which;
         entry.Message.Should().NotContain("jane@example.com");
         entry.Message.Should().NotContain("Validation failed");
         entry
@@ -398,6 +395,42 @@ public class HttpCaseWorkingApiAdapterTests
             .GetString()
             .Should()
             .Be("Human Infrastructure Architect");
+    }
+
+    // RA-526: Nation is derived at Seed time from the registration's own regulator (see
+    // RegulatorNationMapper) - sending it lets ManagementBe's ReAccreditationNationRoutingHook
+    // use a reliable value instead of its own postcode-derived routing.
+    [Fact]
+    public async Task SubmitApplicationAsync_WithNation_IncludesNationInPayload()
+    {
+        var application = CreateTestApplication();
+        application.Nation = Nation.Wales;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        var payload = JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload");
+        payload.GetProperty("nation").GetString().Should().Be("Wales");
+    }
+
+    // RA-526: Nation is nullable - an application seeded before this field existed must omit
+    // it entirely rather than send a fabricated value, same as every other nullable field here.
+    // ManagementBe defaults to England when nation is absent.
+    [Fact]
+    public async Task SubmitApplicationAsync_NullNation_OmitsNationFromPayload()
+    {
+        var application = CreateTestApplication();
+        application.Nation = null;
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        var payload = JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload");
+        payload.TryGetProperty("nation", out _).Should().BeFalse();
     }
 
     // RA-503: OrgId is resolved fresh from ReEx immediately before submission (see the Submit
