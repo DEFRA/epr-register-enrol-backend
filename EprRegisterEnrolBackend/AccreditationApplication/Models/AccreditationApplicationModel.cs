@@ -32,6 +32,12 @@ public class AccreditationApplicationModel
 
     public bool IsExporter { get; set; }
 
+    // RA-526: derived at Seed time from the source registration's own SubmittedToRegulator
+    // (never the organisation's, and never from postcode - see RegulatorNationMapper).
+    // Nullable so applications seeded before this field existed still deserialize.
+    [BsonRepresentation(BsonType.String)]
+    public Nation? Nation { get; set; }
+
     public string? SiteAddress { get; set; }
 
     public string? CompanyRegisterAddressPostcode { get; set; }
@@ -40,6 +46,10 @@ public class AccreditationApplicationModel
     // registered office in place of the (non-existent) uk based site address on the accreditation
     // application header/landing page.
     public string? CompanyRegisteredAddress { get; set; }
+
+    // RA-526: true when CompanyRegisteredAddress came from companyDetails.registeredAddress
+    // rather than the companyDetails.address fallback.
+    public bool IsUkRegisteredAddress { get; set; }
 
     public string? CompaniesHouseNumber { get; set; }
 

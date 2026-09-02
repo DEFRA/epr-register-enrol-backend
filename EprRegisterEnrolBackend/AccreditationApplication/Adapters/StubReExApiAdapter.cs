@@ -249,4 +249,25 @@ public class StubReExApiAdapter(
 
         return Task.FromResult(ReExResult<int?>.Success(orgNumber, 200));
     }
+
+    public Task<ReExResult<Nation>> GetNationAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubReExApiAdapter.GetNationAsync called for org={OrganisationId} reg={RegistrationId}",
+                organisationId,
+                registrationId
+            );
+        }
+
+        // Stub: no local fixture carries a submittedToRegulator code, so this always
+        // reports England - the same safe default RegulatorNationMapper itself falls
+        // back to when the code is absent.
+        return Task.FromResult(ReExResult<Nation>.Success(Nation.England, 200));
+    }
 }

@@ -90,7 +90,40 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
 
         var isExporter = registration is ExporterRegistrationDto;
 
-        if (isExporter && string.IsNullOrWhiteSpace(org.CompanyDetails?.Address?.Postcode))
+        // RA-526: registeredAddress is the proper UK registered-office address and is tried
+        // first; address is a fallback. If neither has anything mappable, this organisation's
+        // company details are unusable and the seed must abort rather than silently persist an
+        // application with no company address at all.
+        RegisteredAddressDto? companyAddressSource;
+        bool isUkRegisteredAddress;
+        if (HasMappableFields(org.CompanyDetails?.RegisteredAddress))
+        {
+            companyAddressSource = org.CompanyDetails!.RegisteredAddress;
+            isUkRegisteredAddress = true;
+        }
+        else if (HasMappableFields(org.CompanyDetails?.Address))
+        {
+            companyAddressSource = org.CompanyDetails!.Address;
+            isUkRegisteredAddress = false;
+        }
+        else
+        {
+            logger.LogError(
+                "Could not map registeredAddress nor address from companyDetails for org={OrganisationId} reg={RegistrationId} registrationNumber={RegistrationNumber}",
+                organisationId,
+                registrationId,
+                registration.RegistrationNumber
+            );
+            return ReExResult<ReExAccreditationDto>.Fail(
+                new ReExError(
+                    ReExErrorKind.ClientError,
+                    "Organisation has no mappable registeredAddress or address in companyDetails."
+                ),
+                500
+            );
+        }
+
+        if (isExporter && string.IsNullOrWhiteSpace(companyAddressSource?.Postcode))
         {
             // ROA: was a hard refusal (LogError + Fail 500) to avoid a silent regulator
             // fallback downstream. Every other postcode->nation resolution point in the
@@ -100,10 +133,26 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             // failure here instead of preventing it. Source data quality for the missing
             // postcode is tracked separately; this adapter now matches the rest of the
             // ecosystem by continuing with a null postcode and logging a warning so the gap
-            // stays observable.
+            // stays observable. RA-526: this is a softer, distinct case from the hard-fail
+            // above — an address is present, just without a postcode specifically.
             logger.LogWarning(
                 "Exporter org={OrganisationId} has no registered-office postcode; continuing without it — downstream nation resolution will default to England",
                 organisationId
+            );
+        }
+
+        // RA-526: Regulator Nation is derived from THIS registration's own regulator, never the
+        // organisation's (an org can hold registrations approved by different regulators) and
+        // never from postcode. Missing/unrecognised codes default to England; an unrecognised
+        // non-null code is logged so the gap stays observable, same precedent as the postcode
+        // warning above.
+        if (!RegulatorNationMapper.TryMap(registration.SubmittedToRegulator, out var nation))
+        {
+            logger.LogWarning(
+                "Unrecognised regulator code {RegulatorCode} for org={OrganisationId} reg={RegistrationId}; defaulting to England",
+                registration.SubmittedToRegulator,
+                organisationId,
+                registrationId
             );
         }
 
@@ -131,7 +180,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 glassRecyclingProcess = mappedGlassRecyclingProcess;
         }
 
-        var companyRegisteredAddress = FormatAddress(org.CompanyDetails?.Address);
+        var companyRegisteredAddress = FormatAddress(companyAddressSource);
 
         var permitNumbers = registration
             .WasteManagementPermits.Select(p => p.PermitNumber)
@@ -285,8 +334,10 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 RegistrationReference = registration.RegistrationNumber,
                 SiteAddress = siteAddress,
                 IsExporter = isExporter,
-                CompanyRegisterAddressPostcode = org.CompanyDetails?.Address?.Postcode,
+                Nation = nation,
+                CompanyRegisterAddressPostcode = companyAddressSource?.Postcode,
                 CompanyRegisteredAddress = companyRegisteredAddress,
+                IsUkRegisteredAddress = isUkRegisteredAddress,
                 CompaniesHouseNumber = org.CompanyDetails?.CompaniesHouseNumber,
                 PermitNumbers = permitNumbers,
                 WasteProcessingType = isExporter ? "exporter" : "reprocessor",
@@ -387,6 +438,56 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         return ReExResult<int?>.Success(orgNumber, 200);
     }
 
+    public async Task<ReExResult<Nation>> GetNationAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var orgResult = await reExClient.GetOrganisationsAsync(organisationId, cancellationToken);
+        if (!orgResult.IsSuccess)
+        {
+            if (orgResult.IsNotFound)
+                logger.LogWarning(
+                    "ReEx organisation not found for organisationId={OrganisationId}",
+                    organisationId
+                );
+            else
+                logger.LogError(
+                    "ReEx GetOrganisations failed for organisationId={OrganisationId}: {Error}",
+                    organisationId,
+                    orgResult.Error?.Message
+                );
+            return ReExResult<Nation>.Fail(orgResult.Error!, orgResult.StatusCode);
+        }
+
+        var registration = orgResult.Value!.Registrations.FirstOrDefault(r =>
+            r.Id == registrationId
+        );
+        if (registration is null)
+        {
+            logger.LogWarning(
+                "No registration found for registrationId={RegistrationId} in org={OrganisationId}",
+                registrationId,
+                organisationId
+            );
+            return ReExResult<Nation>.Fail(
+                new ReExError(ReExErrorKind.NotFound, $"Registration {registrationId} not found"),
+                404
+            );
+        }
+
+        if (!RegulatorNationMapper.TryMap(registration.SubmittedToRegulator, out var nation))
+            logger.LogWarning(
+                "Unrecognised regulator code {RegulatorCode} for org={OrganisationId} reg={RegistrationId}; defaulting to England",
+                registration.SubmittedToRegulator,
+                organisationId,
+                registrationId
+            );
+
+        return ReExResult<Nation>.Success(nation, 200);
+    }
+
     private static OverseasSiteModel MapOverseasSite(string key, OverseasSiteDto dto) =>
         new()
         {
@@ -426,4 +527,19 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                     !string.IsNullOrWhiteSpace(s)
                 )
             );
+
+    // RA-526: "mappable" means at least one field is non-null/non-empty - an address object
+    // with every field null or "" carries nothing worth mapping, and is treated the same as no
+    // address at all when deciding whether to fall back / abort.
+    private static bool HasMappableFields(RegisteredAddressDto? addr) =>
+        addr is not null
+        && new[]
+        {
+            addr.Line1,
+            addr.Line2,
+            addr.Town,
+            addr.County,
+            addr.Country,
+            addr.Postcode,
+        }.Any(s => !string.IsNullOrWhiteSpace(s));
 }

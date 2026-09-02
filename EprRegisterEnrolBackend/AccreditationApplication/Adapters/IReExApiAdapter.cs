@@ -34,6 +34,21 @@ public interface IReExApiAdapter
         string organisationId,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// RA-526: the Nation a single registration belongs to, derived from that
+    /// registration's own <c>submittedToRegulator</c> via
+    /// <see cref="EprRegisterEnrolBackend.AccreditationApplication.Models.RegulatorNationMapper"/>
+    /// - the same source <see cref="GetAccreditationAsync"/> uses at Seed time. Exists as its
+    /// own lightweight lookup (mirroring <see cref="GetOrganisationNumberAsync"/>) so a caller
+    /// that only needs Nation - e.g. backfilling it onto an application that predates this
+    /// field - does not have to supply a material type and year it may not have to hand.
+    /// </summary>
+    Task<ReExResult<Nation>> GetNationAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <summary>
@@ -56,8 +71,18 @@ public class ReExAccreditationDto
     public string? RegistrationReference { get; set; }
     public string? SiteAddress { get; set; }
     public bool IsExporter { get; set; }
+
+    // RA-526: derived from the matched registration's SubmittedToRegulator (never the
+    // organisation's) - see RegulatorNationMapper. Replaces postcode-derived nation lookup.
+    public Nation Nation { get; set; }
+
     public string? CompanyRegisterAddressPostcode { get; set; }
     public string? CompanyRegisteredAddress { get; set; }
+
+    // RA-526: true when CompanyRegisteredAddress was mapped from CompanyDetails.RegisteredAddress
+    // (the proper UK registered-office address); false when it fell back to CompanyDetails.Address.
+    public bool IsUkRegisteredAddress { get; set; }
+
     public string? CompaniesHouseNumber { get; set; }
     public List<string> PermitNumbers { get; set; } = [];
     public string? WasteProcessingType { get; set; }

@@ -318,4 +318,24 @@ public class StubReExApiAdapterTests
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value.Should().BeNull();
     }
+
+    // ---------------- RA-526: GetNationAsync ----------------
+
+    [Fact]
+    public async Task GetNationAsync_AlwaysReturnsEngland()
+    {
+        var sut = new StubReExApiAdapter(
+            new FakeOrganisationPersistence(),
+            EnabledNullLogger<StubReExApiAdapter>.Instance
+        );
+
+        var result = await sut.GetNationAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(Nation.England);
+    }
 }

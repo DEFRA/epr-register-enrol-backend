@@ -722,12 +722,39 @@ public class HttpReExApiAdapterTests
             .BeNull(because: "FormatAddress must handle a missing site gracefully");
     }
 
-    // Covers FormatAddress(RegisteredAddressDto?) returning null when companyDetails has no
-    // "address" key at all (reprocessor, so the exporter-only postcode guard doesn't apply).
+    // RA-526: companyDetails with neither a mappable registeredAddress nor a mappable address
+    // is a data gap the seed can no longer silently paper over (was: MapsNullRegisteredAddressAndPostcode,
+    // returning a success with both fields null) — it must now abort with a logged Error naming
+    // orgId and registrationNumber, regardless of reprocessor/exporter, since Regulator Nation no
+    // longer depends on this address at all (it comes from SubmittedToRegulator) but a
+    // company address is still required data.
     [Fact]
-    public async Task GetAccreditationAsync_NoCompanyAddress_MapsNullRegisteredAddressAndPostcode()
+    public async Task GetAccreditationAsync_NoCompanyAddressAtAll_AbortsWithLoggedError()
     {
-        var sut = BuildSut(OrganisationJsonNoCompanyAddress);
+        var logger = new CapturingLogger<HttpReExApiAdapter>();
+        var sut = BuildSut(OrganisationJsonNoCompanyAddress, logger: logger);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+
+        var entry = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Which;
+        entry.Message.Should().Contain("6a2fcd74e16883c137d01188");
+        entry.Message.Should().Contain("reg-reprocessor-1");
+        entry.Message.Should().Contain("R25SR500000912AL");
+    }
+
+    // RA-526: registeredAddress must be preferred over address when both are present and
+    // mappable, and IsUkRegisteredAddress must reflect that it was the source used.
+    [Fact]
+    public async Task GetAccreditationAsync_RegisteredAddressPresent_PreferredOverAddress()
+    {
+        var sut = BuildSut(OrganisationJsonWithRegisteredAddress);
 
         var result = await sut.GetAccreditationAsync(
             "6a2fcd74e16883c137d01188",
@@ -737,8 +764,112 @@ public class HttpReExApiAdapterTests
         );
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.CompanyRegisteredAddress.Should().BeNull();
-        result.Value!.CompanyRegisterAddressPostcode.Should().BeNull();
+        result.Value!.IsUkRegisteredAddress.Should().BeTrue();
+        result.Value!.CompanyRegisterAddressPostcode.Should().Be("RO1 1RO");
+        result.Value!.CompanyRegisteredAddress.Should().Contain("Registered Office Row");
+    }
+
+    // RA-526: an unmappable registeredAddress (all fields null/empty) must fall back to address,
+    // and IsUkRegisteredAddress must reflect that the fallback was used, not registeredAddress.
+    [Fact]
+    public async Task GetAccreditationAsync_RegisteredAddressUnmappable_FallsBackToAddress()
+    {
+        var sut = BuildSut(OrganisationJsonWithEmptyRegisteredAddress);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.IsUkRegisteredAddress.Should().BeFalse();
+        result.Value!.CompanyRegisterAddressPostcode.Should().Be("AB1 2CD");
+    }
+
+    // RA-526: the organisation's submittedToRegulator must never be used for Nation derivation -
+    // only the specific registration's own value. This fixture deliberately disagrees (org=ea,
+    // registration=nrw) to prove the registration's value wins.
+    [Fact]
+    public async Task GetAccreditationAsync_OrgAndRegistrationRegulatorDisagree_RegistrationValueWins()
+    {
+        var sut = BuildSut(OrganisationJsonRegistrationRegulatorDiffersFromOrg);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.Nation.Should().Be(Nation.Wales);
+    }
+
+    // RA-526: a registration with no submittedToRegulator at all must default to England, not
+    // throw or block the seed.
+    [Fact]
+    public async Task GetAccreditationAsync_RegistrationHasNoSubmittedToRegulator_DefaultsToEngland()
+    {
+        var sut = BuildSut(OrganisationJsonRegistrationNoSubmittedToRegulator);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.Nation.Should().Be(Nation.England);
+    }
+
+    // RA-526 AC5: the missing-postcode warning must still fire (not error) when registeredAddress
+    // is the source actually used and only its postcode is blank - not just for the address
+    // fallback case already covered by GetAccreditationAsync_ExporterRegistration_NoRegisteredOfficePostcode_SucceedsAndLogsWarning.
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegisteredAddressPresentNoPostcode_SucceedsAndLogsWarning()
+    {
+        var logger = new CapturingLogger<HttpReExApiAdapter>();
+        var sut = BuildSut(OrganisationJsonExporterRegisteredAddressNoPostcode, logger: logger);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.IsUkRegisteredAddress.Should().BeTrue();
+        result.Value!.CompanyRegisterAddressPostcode.Should().BeNullOrEmpty();
+
+        var entry = logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Warning)
+            .Which;
+        entry.Message.Should().Contain("no registered-office postcode");
+        logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
+    }
+
+    // RA-526 AC5: registeredAddress AND address both present but every field null/empty string
+    // is "not mapped/mappable" per the ticket, same as neither key being present at all.
+    [Fact]
+    public async Task GetAccreditationAsync_BothAddressesPresentButAllFieldsEmpty_AbortsWithLoggedError()
+    {
+        var logger = new CapturingLogger<HttpReExApiAdapter>();
+        var sut = BuildSut(OrganisationJsonBothAddressesAllFieldsEmpty, logger: logger);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error);
     }
 
     // Covers MapOverseasSite's two defensive ternaries: a non-numeric overseas-site dictionary
@@ -885,6 +1016,92 @@ public class HttpReExApiAdapterTests
 
         var result = await sut.GetOrganisationNumberAsync(
             "6a2fcd74e16883c137d01188",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
+    // ---------------- RA-526: GetNationAsync ----------------
+
+    [Fact]
+    public async Task GetNationAsync_Success_ReturnsNationFromRegistrationRegulator()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(Nation.England);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_UnrecognisedRegulatorCode_DefaultsToEngland()
+    {
+        var sut = BuildSut(
+            """
+            {
+              "id": "6a2fcd74e16883c137d01188",
+              "registrations": [
+                { "id": "reg-1", "submittedToRegulator": "not-a-real-regulator" }
+              ]
+            }
+            """
+        );
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(Nation.England);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_RegistrationNotFound_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "does-not-exist",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_OrganisationNotFound_ReturnsNotFoundFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.NotFound);
+
+        var result = await sut.GetNationAsync(
+            "does-not-exist",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_OrganisationServerError_ReturnsFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.InternalServerError);
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-1",
             TestContext.Current.CancellationToken
         );
 
@@ -1270,6 +1487,301 @@ public class HttpReExApiAdapterTests
                   "town": "Exampleton"
                 }
               },
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    // Same as OrganisationJsonReprocessorNoSite but companyDetails has both registeredAddress
+    // and address populated with different values, to prove registeredAddress is preferred.
+    private const string OrganisationJsonWithRegisteredAddress = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "registeredAddress": { "line1": "1 Registered Office Row", "postcode": "RO1 1RO", "country": "UK", "town": "Registertown" },
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    // Same as OrganisationJsonWithRegisteredAddress but registeredAddress has every field
+    // null/empty - unmappable, so the fallback to address must kick in.
+    private const string OrganisationJsonWithEmptyRegisteredAddress = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "registeredAddress": { "line1": "", "line2": null, "postcode": "" },
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    // Org-level submittedToRegulator ("ea") deliberately disagrees with the registration-level
+    // one ("nrw") to prove RA-526's derivation reads the registration, never the org.
+    private const string OrganisationJsonRegistrationRegulatorDiffersFromOrg = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "nrw",
+              "orgName": "Test Recycling Solutions Ltd",
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    // Registration has no submittedToRegulator key at all - most test registrations don't set
+    // it, per the ticket - so Nation must default to England rather than fail.
+    private const string OrganisationJsonRegistrationNoSubmittedToRegulator = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "address": { "line1": "1 Example Hill", "postcode": "AB1 2CD", "country": "UK", "town": "Exampleton" }
+          },
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "orgName": "Test Recycling Solutions Ltd",
+              "material": "aluminium",
+              "wasteProcessingType": "reprocessor",
+              "accreditationId": "acc-reprocessor-1",
+              "registrationNumber": "R25SR500000912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "reprocessingType": "input",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "reprocessor",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "R-ACC12045AL",
+              "reprocessingType": "input",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    // registeredAddress present (other fields populated) but no postcode key - exercises the
+    // ROA warning against the registeredAddress source specifically, not the address fallback.
+    private const string OrganisationJsonExporterRegisteredAddressNoPostcode = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["exporter"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "registeredAddress": { "line1": "1 Registered Office Row", "country": "UK", "town": "Registertown" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-exporter-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
+              "noticeAddress": { "fullAddress": "1 Example Parade, Example Town", "country": "UK" },
+              "material": "aluminium",
+              "exportPorts": ["Southampton"],
+              "wasteProcessingType": "exporter",
+              "accreditationId": "acc-exporter-1",
+              "registrationNumber": "E25SR500020912AL",
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "status": "approved",
+              "accreditation": null
+            }
+          ],
+          "accreditations": [
+            {
+              "id": "acc-exporter-1",
+              "submittedToRegulator": "ea",
+              "wasteProcessingType": "exporter",
+              "material": "aluminium",
+              "orgName": "Test Recycling Solutions Ltd",
+              "prnIssuance": { "tonnageBand": "up_to_5000", "signatories": [], "incomeBusinessPlan": [] },
+              "validFrom": "2026-01-01",
+              "validTo": "2027-01-01",
+              "accreditationNumber": "E-ACC12245AL",
+              "status": "approved"
+            }
+          ]
+        }
+        """;
+
+    // Both registeredAddress and address are present as JSON objects but every field in both is
+    // null or empty string - "not mapped/mappable" per the ticket, same as neither key existing.
+    private const string OrganisationJsonBothAddressesAllFieldsEmpty = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "schemaVersion": 3,
+          "orgId": 509193,
+          "wasteProcessingTypes": ["reprocessor"],
+          "reprocessingNations": ["england"],
+          "businessType": "individual",
+          "companyDetails": {
+            "name": "Test Recycling Solutions Ltd",
+            "registeredAddress": { "line1": "", "line2": null, "town": "", "county": null, "country": "", "postcode": "" },
+            "address": { "line1": null, "line2": "", "town": null, "county": "", "country": null, "postcode": "" }
+          },
+          "submittedToRegulator": "ea",
+          "registrations": [
+            {
+              "id": "reg-reprocessor-1",
+              "submittedToRegulator": "ea",
+              "orgName": "Test Recycling Solutions Ltd",
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",

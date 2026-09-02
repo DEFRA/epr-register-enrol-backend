@@ -30,6 +30,12 @@ public class OrganisationDto
     public CompanyDetailsDto? CompanyDetails { get; init; }
     public ContactDetailsDto? SubmitterContactDetails { get; init; }
     public ContactDetailsDto? ManagementContactDetails { get; init; }
+
+    /// <summary>
+    /// Org-level regulator. RA-526: NOT a valid source for Regulator Nation derivation - an
+    /// organisation can hold registrations approved by different regulators, so use the
+    /// specific registration's <see cref="RegistrationBaseDto.SubmittedToRegulator"/> instead.
+    /// </summary>
     public string? SubmittedToRegulator { get; init; }
     public LinkedDefraOrganisationDto? LinkedDefraOrganisation { get; init; }
     public List<RegistrationBaseDto> Registrations { get; init; } = [];
@@ -59,6 +65,18 @@ public class CompanyDetailsDto
     public string? TradingName { get; init; }
     public string? RegistrationNumber { get; init; }
     public string? CompaniesHouseNumber { get; init; }
+
+    /// <summary>
+    /// The company's registered-office address, when ReEx has one recorded. RA-526: mapped in
+    /// preference to <see cref="Address"/> below - see HttpReExApiAdapter.GetAccreditationAsync's
+    /// HasMappableFields / companyAddressSource resolution.
+    /// </summary>
+    public RegisteredAddressDto? RegisteredAddress { get; init; }
+
+    /// <summary>
+    /// RA-526: the fallback company address, used only when <see cref="RegisteredAddress"/> has
+    /// no mappable fields.
+    /// </summary>
     public RegisteredAddressDto? Address { get; init; }
 }
 
@@ -96,6 +114,15 @@ public class RegistrationBaseDto
     public string? Id { get; init; }
     public string? AccreditationId { get; init; }
     public string? RegistrationNumber { get; init; }
+
+    /// <summary>
+    /// RA-526: the regulator that approved THIS registration - the authoritative source for
+    /// Regulator Nation derivation. Deliberately distinct from the org-level
+    /// <see cref="OrganisationDto.SubmittedToRegulator"/>, which must never be used for this
+    /// purpose (an organisation can have registrations approved by different regulators).
+    /// </summary>
+    public string? SubmittedToRegulator { get; init; }
+
     public NoticeAddressDto? NoticeAddress { get; init; }
     public List<WasteManagementPermitDto> WasteManagementPermits { get; init; } = [];
 
