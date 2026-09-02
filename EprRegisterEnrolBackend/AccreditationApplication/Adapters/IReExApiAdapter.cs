@@ -56,8 +56,18 @@ public class ReExAccreditationDto
     public string? RegistrationReference { get; set; }
     public string? SiteAddress { get; set; }
     public bool IsExporter { get; set; }
+
+    // RA-526: derived from the matched registration's SubmittedToRegulator (never the
+    // organisation's) - see RegulatorNationMapper. Replaces postcode-derived nation lookup.
+    public Nation Nation { get; set; }
+
     public string? CompanyRegisterAddressPostcode { get; set; }
     public string? CompanyRegisteredAddress { get; set; }
+
+    // RA-526: true when CompanyRegisteredAddress was mapped from CompanyDetails.RegisteredAddress
+    // (the proper UK registered-office address); false when it fell back to CompanyDetails.Address.
+    public bool IsUkRegisteredAddress { get; set; }
+
     public string? CompaniesHouseNumber { get; set; }
     public List<string> PermitNumbers { get; set; } = [];
     public string? WasteProcessingType { get; set; }

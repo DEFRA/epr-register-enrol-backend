@@ -690,9 +690,11 @@ public static class AccreditationApplicationEndpoints
             Year = request.Year,
             RegistrationId = registrationId,
             IsExporter = priorYearData.IsExporter,
+            Nation = priorYearData.Nation,
             SiteAddress = priorYearData.SiteAddress,
             CompanyRegisterAddressPostcode = priorYearData.CompanyRegisterAddressPostcode,
             CompanyRegisteredAddress = priorYearData.CompanyRegisteredAddress,
+            IsUkRegisteredAddress = priorYearData.IsUkRegisteredAddress,
             CompaniesHouseNumber = priorYearData.CompaniesHouseNumber,
             PermitNumbers = priorYearData.PermitNumbers,
             SubmitterContactDetails = priorYearData.SubmitterContactDetails is { } submitterContact
@@ -2323,7 +2325,8 @@ public static class AccreditationApplicationEndpoints
         };
 
         var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
-            sectionUpdates.Append(BuildQueryResubmitUpdate(freshApplication, querySubmission))
+            sectionUpdates
+                .Append(BuildQueryResubmitUpdate(freshApplication, querySubmission))
                 .Append(
                     Builders<AccreditationApplicationModel>.Update.Set(
                         a => a.ApplicationStatus,

@@ -54,6 +54,10 @@ public class ReExOrganisationFixtureTests
         org.CompanyDetails.Address!.Line1.Should().Be("1 Example Hill");
         org.CompanyDetails.Address.Postcode.Should().Be("AB1 2CD");
 
+        // RA-526: registeredAddress and address are distinct fields, populated independently.
+        org.CompanyDetails.RegisteredAddress!.Line1.Should().Be("1 Registered Office Row");
+        org.CompanyDetails.RegisteredAddress.Postcode.Should().Be("RO1 1RO");
+
         org.SubmitterContactDetails!.FullName.Should().Be("Test Submitter");
         org.SubmitterContactDetails.Email.Should().Be("submitter@example.test");
         org.SubmitterContactDetails.JobTitle.Should().Be("Sustainability Director");
@@ -71,6 +75,7 @@ public class ReExOrganisationFixtureTests
         reprocessor.Id.Should().Be("reg-reprocessor-1");
         reprocessor.AccreditationId.Should().Be("acc-reprocessor-1");
         reprocessor.RegistrationNumber.Should().Be("R25SR500000912AL");
+        reprocessor.SubmittedToRegulator.Should().Be("ea");
         reprocessor.Site!.Address!.Line1.Should().Be("Reprocessor Site Road");
         reprocessor.Site.GridReference.Should().Be("TQ 132 546");
 
@@ -155,6 +160,12 @@ public class ReExOrganisationFixtureTests
             "name": "Test Recycling Solutions Ltd",
             "tradingName": "Test Recycling Solutions Ltd",
             "companiesHouseNumber": "09876543",
+            "registeredAddress": {
+              "line1": "1 Registered Office Row",
+              "postcode": "RO1 1RO",
+              "country": "UK",
+              "town": "Registertown"
+            },
             "address": {
               "line1": "1 Example Hill",
               "postcode": "AB1 2CD",
