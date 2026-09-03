@@ -167,6 +167,27 @@ Each section tracks its own status: `NotStarted` → `InProgress` → `Completed
 
 Swagger UI is available at `/swagger` when running locally.
 
+##### ReEx API (epr-backend) integration
+
+`HttpReExApiAdapter` (`EprRegisterEnrolBackend/AccreditationApplication/Adapters/HttpReExApiAdapter.cs`) is the live implementation of `IReExApiAdapter`, used to seed a new accreditation application from an organisation's prior-year ReEx data (`POST /{organisationId}/seed`, see [Endpoints](#endpoints) above). It calls two [epr-backend](https://github.com/DEFRA/epr-backend) endpoints, both via `ReExClient` (`EprRegisterEnrolBackend/ReEx/ReExClient.cs`):
+
+| Method | Path | Called for | epr-backend source |
+| --- | --- | --- | --- |
+| `GET` | `/v1/organisations/{organisationId}` | Every seed: the full organisation record, resolved to the matching registration and its linked accreditation | [`src/routes/v1/organisations/get-by-id.js`](https://github.com/DEFRA/epr-backend/blob/main/src/routes/v1/organisations/get-by-id.js) |
+| `GET` | `/v1/organisations/{organisationId}/registrations/{registrationId}/accreditations/{accreditationId}/overseas-sites` | Exporter registrations only, to populate `OverseasSites` on the seeded application | [`src/overseas-sites/routes/accreditation-list.js`](https://github.com/DEFRA/epr-backend/blob/main/src/overseas-sites/routes/accreditation-list.js) |
+
+Seeding sequence (`HttpReExApiAdapter.GetAccreditationAsync`):
+
+1. Fetch the organisation, locate the registration matching the requested `registrationId`, and derive whether it's a reprocessor or exporter registration.
+2. Resolve the company's registered-office address and the registration's Regulator Nation (see the RA-526 comments in the adapter for the fallback rules).
+3. Locate the accreditation linked to that registration and confirm it matches the requested year.
+4. For exporter registrations only, call the overseas-sites endpoint and map the result onto the seeded application.
+5. Map PRN issuance, business-plan, and contact-detail fields from the fetched organisation into the new `AccreditationApplicationModel`.
+
+`IReExApiAdapter.GetLinkedDefraOrganisationAsync` and `GetOrganisationNumberAsync` reuse the same organisation `GET` above; no other epr-backend endpoint is called.
+
+The full epr-backend API surface — including both endpoints above — is documented in its swagger definition, published as a static snapshot at [DEFRA/epr-re-ex-service: `docs/architecture/api-definitions/internal-api.yaml`](https://github.com/DEFRA/epr-re-ex-service/blob/main/docs/architecture/api-definitions/internal-api.yaml) (epr-backend itself serves the live version at `/swagger` when run locally; there's no swagger file checked into the epr-backend repo itself). Both endpoints above are documented there with full response schemas (`OrganisationResponse` and `AccreditationOverseasSitesResponse`).
+
 ### Testing
 
 Tests run a full `WebApplication` backed by [Ephemeral MongoDB](https://github.com/asimmon/ephemeral-mongo). No mocking — tests read and write from an in-memory database.
