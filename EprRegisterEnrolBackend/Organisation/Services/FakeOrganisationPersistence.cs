@@ -38,12 +38,17 @@ public class FakeOrganisationPersistence
     // regulator nations, each with a real address in that nation, so the Case
     // Management service's nation filter (which reads Nation from SubmittedToRegulator,
     // not the address) sees more than just England for perftest data.
-    private static readonly (string RegulatorCode, string Town, string Postcode)[] PerfTestRegulatorAreas =
+    private static readonly (
+        string RegulatorCode,
+        string Nation,
+        string Town,
+        string Postcode
+    )[] PerfTestRegulatorAreas =
     [
-        ("ea", "London", "SW1A 1AA"),
-        ("sepa", "Edinburgh", "EH1 1AA"),
-        ("nrw", "Cardiff", "CF10 1AA"),
-        ("niea", "Belfast", "BT1 1AA"),
+        ("ea", "england", "London", "SW1A 1AA"),
+        ("sepa", "scotland", "Edinburgh", "EH1 1AA"),
+        ("nrw", "wales", "Cardiff", "CF10 1AA"),
+        ("niea", "northern_ireland", "Belfast", "BT1 1AA"),
     ];
 
     private readonly List<OrganisationModel> _store = new();
@@ -626,7 +631,7 @@ public class FakeOrganisationPersistence
         {
             var orgId = 60000 + i;
             var material = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
-            var (regulatorCode, town, postcode) = PerfTestRegulatorAreas[
+            var (regulatorCode, nation, town, postcode) = PerfTestRegulatorAreas[
                 (i - 1) % PerfTestRegulatorAreas.Length
             ];
             var registrationId = ObjectId.Parse($"aaa{orgId:000000000000000000000}");
@@ -639,7 +644,7 @@ public class FakeOrganisationPersistence
                     Version = 1,
                     BusinessType = BusinessTypeUnincorporated,
                     WasteProcessingTypes = [WasteProcessingTypeReprocessor],
-                    ReprocessingNations = [NationEngland],
+                    ReprocessingNations = [nation],
                     SubmittedToRegulator = regulatorCode,
                     CompanyDetails = new CompanyDetailsModel
                     {
@@ -696,7 +701,7 @@ public class FakeOrganisationPersistence
         {
             var orgId = 61000 + i;
             var material = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
-            var (regulatorCode, town, postcode) = PerfTestRegulatorAreas[
+            var (regulatorCode, nation, town, postcode) = PerfTestRegulatorAreas[
                 (i - 1) % PerfTestRegulatorAreas.Length
             ];
             var registrationId = ObjectId.Parse($"aaa{orgId:000000000000000000000}");
@@ -714,7 +719,7 @@ public class FakeOrganisationPersistence
                     Version = 1,
                     BusinessType = BusinessTypeUnincorporated,
                     WasteProcessingTypes = [WasteProcessingTypeExporter],
-                    ReprocessingNations = [NationEngland],
+                    ReprocessingNations = [nation],
                     SubmittedToRegulator = regulatorCode,
                     CompanyDetails = new CompanyDetailsModel
                     {

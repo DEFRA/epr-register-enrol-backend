@@ -12,6 +12,14 @@ namespace EprRegisterEnrolBackend.Test.Organisation.Services;
 /// </summary>
 public class FakeOrganisationPersistenceTests
 {
+    private static readonly Dictionary<string, string> RegulatorToNation = new()
+    {
+        ["ea"] = "england",
+        ["sepa"] = "scotland",
+        ["nrw"] = "wales",
+        ["niea"] = "northern_ireland",
+    };
+
     private static OrganisationModel NewOrg(int orgId, string name = "New Test Org") =>
         new()
         {
@@ -330,6 +338,11 @@ public class FakeOrganisationPersistenceTests
             .Distinct()
             .Should()
             .BeEquivalentTo(["ea", "sepa", "nrw", "niea"]);
+        reprocessors
+            .Should()
+            .OnlyContain(o =>
+                o.ReprocessingNations!.Single() == RegulatorToNation[o.SubmittedToRegulator!]
+            );
     }
 
     [Fact]
@@ -374,6 +387,11 @@ public class FakeOrganisationPersistenceTests
             .Distinct()
             .Should()
             .BeEquivalentTo(["ea", "sepa", "nrw", "niea"]);
+        exporters
+            .Should()
+            .OnlyContain(o =>
+                o.ReprocessingNations!.Single() == RegulatorToNation[o.SubmittedToRegulator!]
+            );
     }
 
     [Fact]
