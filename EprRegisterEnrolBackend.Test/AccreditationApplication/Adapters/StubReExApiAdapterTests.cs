@@ -353,4 +353,29 @@ public class StubReExApiAdapterTests
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value.Should().Be(Nation.Scotland);
     }
+
+    [Fact]
+    public async Task GetAccreditationAsync_PerfTestOrg_ResolvesItsAssignedNation()
+    {
+        var sut = new StubReExApiAdapter(
+            new FakeOrganisationPersistence(),
+            EnabledNullLogger<StubReExApiAdapter>.Instance
+        );
+
+        // OrgId 60003 (perftest reprocessor #3) is seeded with SubmittedToRegulator = "nrw"
+        // and a Cardiff address - RA-553 regression: the fixture used to default Nation to
+        // England here regardless of the org's actual regulator/address.
+        var org = await new FakeOrganisationPersistence().GetByOrgIdAsync(60003);
+        var registrationId = org!.Registrations![0].Id.ToString();
+
+        var result = await sut.GetAccreditationAsync(
+            "60003",
+            registrationId,
+            MaterialType.Plastic,
+            2027
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.Nation.Should().Be(Nation.Wales);
+    }
 }

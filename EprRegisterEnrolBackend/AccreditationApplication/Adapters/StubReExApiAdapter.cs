@@ -59,10 +59,12 @@ public class StubReExApiAdapter(
         var isExporter = false;
         GlassRecyclingProcess? glassRecyclingProcess = null;
         List<OverseasSiteModel> overseasSites = [];
+        string? submittedToRegulator = null;
 
         if (int.TryParse(organisationId, out var orgIdInt))
         {
             var org = await fakeOrgs.GetByOrgIdAsync(orgIdInt);
+            submittedToRegulator = org?.SubmittedToRegulator;
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
             companyRegisterAddressPostcode = org?.CompanyDetails?.RegisteredAddress?.Postcode;
@@ -144,6 +146,12 @@ public class StubReExApiAdapter(
             }
         }
 
+        // RA-553: same source as GetNationAsync below - the fixture's SubmittedToRegulator
+        // code, mirroring HttpReExApiAdapter.GetAccreditationAsync deriving Nation from the
+        // real ReEx registration's regulator. Without this, seeded stub applications always
+        // defaulted to Nation.England regardless of the org's actual regulator/postcode.
+        RegulatorNationMapper.TryMap(submittedToRegulator, out var nation);
+
         var fixture = new ReExAccreditationDto
         {
             AccreditationId = $"reex-acc-{organisationId}-{materialType}-{year}",
@@ -154,6 +162,7 @@ public class StubReExApiAdapter(
             RegistrationReference = registrationReference ?? "STUB-REG-001",
             SiteAddress = siteAddress,
             IsExporter = isExporter,
+            Nation = nation,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
             CompanyRegisteredAddress =
                 companyRegisteredAddress ?? "1 Stub Registered Office, Stubton, ST1 1AB",
