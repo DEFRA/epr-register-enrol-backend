@@ -34,6 +34,23 @@ public class FakeOrganisationPersistence
         "fibre",
     ];
 
+    // RA-553: cycles the 100 perftest reprocessors/exporters evenly across all four
+    // regulator nations, each with a real address in that nation, so the Case
+    // Management service's nation filter (which reads Nation from SubmittedToRegulator,
+    // not the address) sees more than just England for perftest data.
+    private static readonly (
+        string RegulatorCode,
+        string Nation,
+        string Town,
+        string Postcode
+    )[] PerfTestRegulatorAreas =
+    [
+        ("ea", "england", "London", "SW1A 1AA"),
+        ("sepa", "scotland", "Edinburgh", "EH1 1AA"),
+        ("nrw", "wales", "Cardiff", "CF10 1AA"),
+        ("niea", "northern_ireland", "Belfast", "BT1 1AA"),
+    ];
+
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
 
@@ -614,6 +631,9 @@ public class FakeOrganisationPersistence
         {
             var orgId = 60000 + i;
             var material = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
+            var (regulatorCode, nation, town, postcode) = PerfTestRegulatorAreas[
+                (i - 1) % PerfTestRegulatorAreas.Length
+            ];
             var registrationId = ObjectId.Parse($"aaa{orgId:000000000000000000000}");
 
             _store.Add(
@@ -624,7 +644,8 @@ public class FakeOrganisationPersistence
                     Version = 1,
                     BusinessType = BusinessTypeUnincorporated,
                     WasteProcessingTypes = [WasteProcessingTypeReprocessor],
-                    ReprocessingNations = [NationEngland],
+                    ReprocessingNations = [nation],
+                    SubmittedToRegulator = regulatorCode,
                     CompanyDetails = new CompanyDetailsModel
                     {
                         Name = $"PerfTest Reprocessor {i:000}",
@@ -634,8 +655,8 @@ public class FakeOrganisationPersistence
                         RegisteredAddress = new RegisteredAddressModel
                         {
                             Line1 = $"Unit {i}",
-                            Town = "Perftown",
-                            Postcode = "PT1 1AA",
+                            Town = town,
+                            Postcode = postcode,
                         },
                     },
                     ContactDetails = new ContactDetailsModel
@@ -657,8 +678,8 @@ public class FakeOrganisationPersistence
                             SiteAddress = new SiteAddressModel
                             {
                                 Line1 = $"Unit {i}",
-                                Town = "Perftown",
-                                Postcode = "PT1 1AA",
+                                Town = town,
+                                Postcode = postcode,
                             },
                             WasteManagementPermits =
                             [
@@ -680,6 +701,9 @@ public class FakeOrganisationPersistence
         {
             var orgId = 61000 + i;
             var material = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
+            var (regulatorCode, nation, town, postcode) = PerfTestRegulatorAreas[
+                (i - 1) % PerfTestRegulatorAreas.Length
+            ];
             var registrationId = ObjectId.Parse($"aaa{orgId:000000000000000000000}");
             var overseasSiteCount = 2 + (i % 3);
             var overseasSites = Enumerable
@@ -695,7 +719,8 @@ public class FakeOrganisationPersistence
                     Version = 1,
                     BusinessType = BusinessTypeUnincorporated,
                     WasteProcessingTypes = [WasteProcessingTypeExporter],
-                    ReprocessingNations = [NationEngland],
+                    ReprocessingNations = [nation],
+                    SubmittedToRegulator = regulatorCode,
                     CompanyDetails = new CompanyDetailsModel
                     {
                         Name = $"PerfTest Exporter {i:000}",
@@ -705,8 +730,8 @@ public class FakeOrganisationPersistence
                         RegisteredAddress = new RegisteredAddressModel
                         {
                             Line1 = $"Export House {i}",
-                            Town = "Perftown",
-                            Postcode = "PT2 2AA",
+                            Town = town,
+                            Postcode = postcode,
                         },
                     },
                     ContactDetails = new ContactDetailsModel

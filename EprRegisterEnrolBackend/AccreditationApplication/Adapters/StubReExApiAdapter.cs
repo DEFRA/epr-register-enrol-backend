@@ -59,10 +59,12 @@ public class StubReExApiAdapter(
         var isExporter = false;
         GlassRecyclingProcess? glassRecyclingProcess = null;
         List<OverseasSiteModel> overseasSites = [];
+        string? submittedToRegulator = null;
 
         if (int.TryParse(organisationId, out var orgIdInt))
         {
             var org = await fakeOrgs.GetByOrgIdAsync(orgIdInt);
+            submittedToRegulator = org?.SubmittedToRegulator;
             organisationName = org?.CompanyDetails?.Name;
             registrationReference = org?.CompanyDetails?.RegistrationNumber;
             companyRegisterAddressPostcode = org?.CompanyDetails?.RegisteredAddress?.Postcode;
@@ -144,6 +146,12 @@ public class StubReExApiAdapter(
             }
         }
 
+        // RA-553: same source as GetNationAsync below - the fixture's SubmittedToRegulator
+        // code, mirroring HttpReExApiAdapter.GetAccreditationAsync deriving Nation from the
+        // real ReEx registration's regulator. Without this, seeded stub applications always
+        // defaulted to Nation.England regardless of the org's actual regulator/postcode.
+        RegulatorNationMapper.TryMap(submittedToRegulator, out var nation);
+
         var fixture = new ReExAccreditationDto
         {
             AccreditationId = $"reex-acc-{organisationId}-{materialType}-{year}",
@@ -154,6 +162,7 @@ public class StubReExApiAdapter(
             RegistrationReference = registrationReference ?? "STUB-REG-001",
             SiteAddress = siteAddress,
             IsExporter = isExporter,
+            Nation = nation,
             CompanyRegisterAddressPostcode = companyRegisterAddressPostcode ?? "ST1 1AB",
             CompanyRegisteredAddress =
                 companyRegisteredAddress ?? "1 Stub Registered Office, Stubton, ST1 1AB",
@@ -250,7 +259,7 @@ public class StubReExApiAdapter(
         return Task.FromResult(ReExResult<int?>.Success(orgNumber, 200));
     }
 
-    public Task<ReExResult<Nation>> GetNationAsync(
+    public async Task<ReExResult<Nation>> GetNationAsync(
         string organisationId,
         string registrationId,
         CancellationToken cancellationToken = default
@@ -265,9 +274,18 @@ public class StubReExApiAdapter(
             );
         }
 
-        // Stub: no local fixture carries a submittedToRegulator code, so this always
-        // reports England - the same safe default RegulatorNationMapper itself falls
-        // back to when the code is absent.
-        return Task.FromResult(ReExResult<Nation>.Success(Nation.England, 200));
+        // RA-553: resolve nation from the fixture's SubmittedToRegulator code, same as
+        // HttpReExApiAdapter does from the real ReEx API's regulator field. Falls back to
+        // England when the org can't be found or has no regulator code set - the same
+        // default RegulatorNationMapper itself applies.
+        string? submittedToRegulator = null;
+        if (int.TryParse(organisationId, out var orgIdInt))
+        {
+            var org = await fakeOrgs.GetByOrgIdAsync(orgIdInt);
+            submittedToRegulator = org?.SubmittedToRegulator;
+        }
+
+        RegulatorNationMapper.TryMap(submittedToRegulator, out var nation);
+        return ReExResult<Nation>.Success(nation, 200);
     }
 }

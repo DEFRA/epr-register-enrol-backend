@@ -12,6 +12,14 @@ namespace EprRegisterEnrolBackend.Test.Organisation.Services;
 /// </summary>
 public class FakeOrganisationPersistenceTests
 {
+    private static readonly Dictionary<string, string> RegulatorToNation = new()
+    {
+        ["ea"] = "england",
+        ["sepa"] = "scotland",
+        ["nrw"] = "wales",
+        ["niea"] = "northern_ireland",
+    };
+
     private static OrganisationModel NewOrg(int orgId, string name = "New Test Org") =>
         new()
         {
@@ -313,6 +321,31 @@ public class FakeOrganisationPersistenceTests
     }
 
     [Fact]
+    public async Task Constructor_SeedsPerfTestReprocessors_EvenlySplitAcrossFourNations()
+    {
+        var sut = new FakeOrganisationPersistence();
+
+        var all = (await sut.GetAllAsync()).ToList();
+        var reprocessors = all.Where(o => o.OrgId is >= 60001 and <= 60100).ToList();
+
+        reprocessors
+            .GroupBy(o => o.SubmittedToRegulator)
+            .Should()
+            .HaveCount(4)
+            .And.OnlyContain(g => g.Count() == 25);
+        reprocessors
+            .Select(o => o.SubmittedToRegulator)
+            .Distinct()
+            .Should()
+            .BeEquivalentTo(["ea", "sepa", "nrw", "niea"]);
+        reprocessors
+            .Should()
+            .OnlyContain(o =>
+                o.ReprocessingNations!.Single() == RegulatorToNation[o.SubmittedToRegulator!]
+            );
+    }
+
+    [Fact]
     public async Task Constructor_SeedsPerfTestExporters_100OrgsWithOverseasSites()
     {
         var sut = new FakeOrganisationPersistence();
@@ -334,6 +367,31 @@ public class FakeOrganisationPersistenceTests
             registration.OverseasSites.Should().HaveCountGreaterThanOrEqualTo(2);
             registration.OverseasSites.Should().HaveCountLessThanOrEqualTo(4);
         }
+    }
+
+    [Fact]
+    public async Task Constructor_SeedsPerfTestExporters_EvenlySplitAcrossFourNations()
+    {
+        var sut = new FakeOrganisationPersistence();
+
+        var all = (await sut.GetAllAsync()).ToList();
+        var exporters = all.Where(o => o.OrgId is >= 61001 and <= 61100).ToList();
+
+        exporters
+            .GroupBy(o => o.SubmittedToRegulator)
+            .Should()
+            .HaveCount(4)
+            .And.OnlyContain(g => g.Count() == 25);
+        exporters
+            .Select(o => o.SubmittedToRegulator)
+            .Distinct()
+            .Should()
+            .BeEquivalentTo(["ea", "sepa", "nrw", "niea"]);
+        exporters
+            .Should()
+            .OnlyContain(o =>
+                o.ReprocessingNations!.Single() == RegulatorToNation[o.SubmittedToRegulator!]
+            );
     }
 
     [Fact]
