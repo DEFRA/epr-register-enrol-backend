@@ -4,6 +4,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
+using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -2629,15 +2630,20 @@ public class HttpReExApiAdapterTests
             CancellationToken cancellationToken
         )
         {
-            var path = request.RequestUri!.AbsolutePath;
-            var isAccreditationSites =
-                path.Contains("accreditations") && path.Contains("overseas-sites");
-            var isRegistrationSites = !isAccreditationSites && path.Contains("overseas-sites");
-
-            var (body, statusCode) =
-                isAccreditationSites ? (_overseasSitesJson, _overseasSitesStatusCode)
-                : isRegistrationSites ? (_registrationSitesJson, _registrationSitesStatusCode)
-                : (_organisationJson, _organisationStatusCode);
+            var (body, statusCode) = ReExFakeRouting.Classify(
+                request.RequestUri!.AbsolutePath
+            ) switch
+            {
+                ReExFakeRoute.AccreditationOverseasSites => (
+                    _overseasSitesJson,
+                    _overseasSitesStatusCode
+                ),
+                ReExFakeRoute.RegistrationOverseasSites => (
+                    _registrationSitesJson,
+                    _registrationSitesStatusCode
+                ),
+                _ => (_organisationJson, _organisationStatusCode),
+            };
 
             return Task.FromResult(
                 new HttpResponseMessage(statusCode)
@@ -2668,7 +2674,7 @@ public class HttpReExApiAdapterTests
         {
             var path = request.RequestUri!.AbsolutePath;
             _requestedPaths.Add(path);
-            var isOverseasSites = path.Contains("overseas-sites");
+            var isOverseasSites = ReExFakeRouting.Classify(path) != ReExFakeRoute.Organisation;
             var body = isOverseasSites ? "{}" : _organisationJson;
 
             return Task.FromResult(

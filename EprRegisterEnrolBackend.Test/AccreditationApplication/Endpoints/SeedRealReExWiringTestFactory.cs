@@ -8,6 +8,7 @@ using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Test.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Test.Auth;
 using EprRegisterEnrolBackend.Test.CdpUploader;
+using EprRegisterEnrolBackend.Test.TestSupport;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -110,14 +111,18 @@ public class FakeReExHandler : HttpMessageHandler
         var path = request.RequestUri!.AbsolutePath;
         RequestedPaths.Add(path);
 
-        var isAccreditationSites =
-            path.Contains("accreditations") && path.Contains("overseas-sites");
-        var isRegistrationSites = !isAccreditationSites && path.Contains("overseas-sites");
-
-        var (body, statusCode) =
-            isAccreditationSites ? (AccreditationSitesJson, AccreditationSitesStatusCode)
-            : isRegistrationSites ? (RegistrationSitesJson, RegistrationSitesStatusCode)
-            : (OrganisationJson, OrganisationStatusCode);
+        var (body, statusCode) = ReExFakeRouting.Classify(path) switch
+        {
+            ReExFakeRoute.AccreditationOverseasSites => (
+                AccreditationSitesJson,
+                AccreditationSitesStatusCode
+            ),
+            ReExFakeRoute.RegistrationOverseasSites => (
+                RegistrationSitesJson,
+                RegistrationSitesStatusCode
+            ),
+            _ => (OrganisationJson, OrganisationStatusCode),
+        };
 
         return Task.FromResult(
             new HttpResponseMessage(statusCode)

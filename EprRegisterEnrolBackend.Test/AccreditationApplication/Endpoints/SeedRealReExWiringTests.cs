@@ -38,7 +38,7 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
     }
 
     [Fact]
-    public async Task Seed_ExporterWithSitesInBothOrsListsAndOnlyOne_ReturnsCorrectlyMergedOverseasSites()
+    public async Task Seed_ExporterWithMixOfRegisteredOnlyAccreditedOnlyAndBothSites_ReturnsCorrectlyMergedOverseasSites()
     {
         Reset();
         _factory.FakeReExHandler.OrganisationJson = OrganisationJson;
