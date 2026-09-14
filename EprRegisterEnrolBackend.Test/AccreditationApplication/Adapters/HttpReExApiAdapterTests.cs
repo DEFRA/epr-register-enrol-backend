@@ -24,13 +24,11 @@ public class HttpReExApiAdapterTests
 {
     private static HttpReExApiAdapter BuildSut(
         string organisationJson,
-        // ORS-A: sites tied to this specific accreditation.
+        // ORS-A: sites tied to this specific accreditation — the only overseas-sites endpoint
+        // called since RA-580-1 (see HttpReExApiAdapter.cs for why ORS-R was redundant).
         string overseasSitesJson = "{}",
         HttpStatusCode organisationStatusCode = HttpStatusCode.OK,
         HttpStatusCode overseasSitesStatusCode = HttpStatusCode.OK,
-        // ORS-R: every overseas site tied to the registration, accredited or not.
-        string registrationSitesJson = "{}",
-        HttpStatusCode registrationSitesStatusCode = HttpStatusCode.OK,
         ILogger<HttpReExApiAdapter>? logger = null
     )
     {
@@ -38,9 +36,7 @@ public class HttpReExApiAdapterTests
             organisationJson,
             overseasSitesJson,
             organisationStatusCode,
-            overseasSitesStatusCode,
-            registrationSitesJson,
-            registrationSitesStatusCode
+            overseasSitesStatusCode
         );
         var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExConfig { BaseUrl = "http://localhost:5000/" });
@@ -438,21 +434,21 @@ public class HttpReExApiAdapterTests
         result.Value!.OverseasSites[0].Coordinates.Should().BeNull();
     }
 
-    // ── RA-580: ORS-R/ORS-A merge and Selected derivation ──────────────────────
+    // ── RA-580-1: Selected/ValidFrom derivation from ORS-A alone ────────────────
 
     [Fact]
-    public async Task GetAccreditationAsync_SiteOnlyInRegistrationSites_IsSelectedFalse()
+    public async Task GetAccreditationAsync_ExporterRegistration_SiteWithValidFrom_IsSelectedTrue()
     {
-        const string registrationSitesJson = """
+        const string overseasSitesJson = """
             {
               "001": {
-                "name": "Registered Only Co",
+                "name": "Approved Co",
                 "country": "France",
-                "address": { "line1": "1 Rue Example", "townOrCity": "Paris" }
+                "validFrom": "2024-01-01T00:00:00.000Z"
               }
             }
             """;
-        var sut = BuildSut(OrganisationJson, registrationSitesJson: registrationSitesJson);
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
 
         var result = await sut.GetAccreditationAsync(
             "6a2fcd74e16883c137d01188",
@@ -465,68 +461,26 @@ public class HttpReExApiAdapterTests
         result.Value!.OverseasSites.Should().ContainSingle();
         var site = result.Value!.OverseasSites[0];
         site.OrsId.Should().Be("001");
-        site.SiteName.Should().Be("Registered Only Co");
-        site.Selected.Should().BeFalse(because: "the site is only present in ORS-R, not ORS-A");
-    }
-
-    [Fact]
-    public async Task GetAccreditationAsync_SiteOnlyInAccreditationSites_IsSelectedTrue()
-    {
-        const string accreditationSitesJson = """
-            {
-              "002": {
-                "name": "Accredited Only Co",
-                "country": "Germany",
-                "address": { "line1": "1 Beispielstrasse", "townOrCity": "Berlin" }
-              }
-            }
-            """;
-        var sut = BuildSut(OrganisationJson, accreditationSitesJson);
-
-        var result = await sut.GetAccreditationAsync(
-            "6a2fcd74e16883c137d01188",
-            "reg-exporter-1",
-            MaterialType.Aluminium,
-            2026
-        );
-
-        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.OverseasSites.Should().ContainSingle();
-        var site = result.Value!.OverseasSites[0];
-        site.OrsId.Should().Be("002");
-        site.SiteName.Should().Be("Accredited Only Co");
+        site.ValidFrom.Should().Be("2024-01-01T00:00:00.000Z");
         site.Selected.Should()
             .BeTrue(
-                because: "the site is present in ORS-A, so it is included in the accreditation"
+                because: "ValidFrom is set, so ReEx has approved this site for the accreditation"
             );
     }
 
     [Fact]
-    public async Task GetAccreditationAsync_SiteInBothOrsRAndOrsA_UsesOrsADescriptiveFieldsAndIsSelectedTrue()
+    public async Task GetAccreditationAsync_ExporterRegistration_SiteWithNullValidFrom_IsSelectedFalse()
     {
-        const string registrationSitesJson = """
+        const string overseasSitesJson = """
             {
-              "003": {
-                "name": "Stale Registration Name",
-                "country": "France",
-                "address": { "line1": "Old Address", "townOrCity": "Lyon" }
+              "002": {
+                "name": "Unapproved Co",
+                "country": "Germany",
+                "validFrom": null
               }
             }
             """;
-        const string accreditationSitesJson = """
-            {
-              "003": {
-                "name": "Current Accredited Name",
-                "country": "Spain",
-                "address": { "line1": "New Address", "townOrCity": "Madrid" }
-              }
-            }
-            """;
-        var sut = BuildSut(
-            OrganisationJson,
-            accreditationSitesJson,
-            registrationSitesJson: registrationSitesJson
-        );
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
 
         var result = await sut.GetAccreditationAsync(
             "6a2fcd74e16883c137d01188",
@@ -538,37 +492,22 @@ public class HttpReExApiAdapterTests
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.OverseasSites.Should().ContainSingle();
         var site = result.Value!.OverseasSites[0];
-        site.OrsId.Should().Be("003");
-        site.SiteName.Should()
-            .Be(
-                "Current Accredited Name",
-                because: "descriptive fields must come from ORS-A when a site id appears in both"
+        site.ValidFrom.Should().BeNull();
+        site.Selected.Should()
+            .BeFalse(
+                because: "a null ValidFrom means the site is registered but not yet accredited"
             );
-        site.Country.Should().Be("Spain");
-        site.SiteAddress.Should().Be("New Address, Madrid");
-        site.Selected.Should().BeTrue();
     }
 
     [Fact]
-    public async Task GetAccreditationAsync_MixOfRegisteredOnlyAccreditedOnlyAndBoth_MergesToOneEntryPerId()
+    public async Task GetAccreditationAsync_ExporterRegistration_SiteWithNoValidFromKeyAtAll_IsSelectedFalse()
     {
-        const string registrationSitesJson = """
-            {
-              "001": { "name": "Registered Only", "country": "France" },
-              "003": { "name": "Stale Shared Name", "country": "France" }
-            }
+        // ReEx omits the key entirely for a never-approved site rather than sending an explicit
+        // null in some responses — must fall back the same way an explicit null does.
+        const string overseasSitesJson = """
+            { "003": { "name": "Never Approved Co", "country": "Spain" } }
             """;
-        const string accreditationSitesJson = """
-            {
-              "002": { "name": "Accredited Only", "country": "Germany" },
-              "003": { "name": "Current Shared Name", "country": "Spain" }
-            }
-            """;
-        var sut = BuildSut(
-            OrganisationJson,
-            accreditationSitesJson,
-            registrationSitesJson: registrationSitesJson
-        );
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
 
         var result = await sut.GetAccreditationAsync(
             "6a2fcd74e16883c137d01188",
@@ -578,23 +517,42 @@ public class HttpReExApiAdapterTests
         );
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result
-            .Value!.OverseasSites.Should()
-            .HaveCount(3, because: "site id 003 appears in both lists and must not be duplicated");
-
-        var byOrsId = result.Value!.OverseasSites.ToDictionary(s => s.OrsId!);
-        byOrsId["001"].Selected.Should().BeFalse();
-        byOrsId["001"].SiteName.Should().Be("Registered Only");
-        byOrsId["002"].Selected.Should().BeTrue();
-        byOrsId["002"].SiteName.Should().Be("Accredited Only");
-        byOrsId["003"].Selected.Should().BeTrue();
-        byOrsId["003"]
-            .SiteName.Should()
-            .Be("Current Shared Name", because: "ORS-A wins for a site present in both");
+        result.Value!.OverseasSites[0].Selected.Should().BeFalse();
     }
 
     [Fact]
-    public async Task GetAccreditationAsync_BothOrsListsEmpty_ReturnsEmptyOverseasSites()
+    public async Task GetAccreditationAsync_ExporterRegistration_MixOfApprovedAndUnapprovedSites_DerivesSelectedPerSite()
+    {
+        // Mirrors epr-backend's own accreditation-list.test.js: ORS-A returns every site on the
+        // registration in one response, "approved and unapproved" together — never split across
+        // two endpoints/dictionaries. This is the regression guard that a single hardcoded
+        // Selected literal (the original RA-580 bug) or a membership-based derivation (the
+        // RA-580-1 bug this fix addresses) can never handle correctly.
+        const string overseasSitesJson = """
+            {
+              "001": { "name": "Approved Co", "country": "France", "validFrom": "2024-01-01T00:00:00.000Z" },
+              "002": { "name": "Unapproved Co", "country": "Germany", "validFrom": null },
+              "003": { "name": "Also Approved Co", "country": "Spain", "validFrom": "2025-06-15T00:00:00.000Z" }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        var byOrsId = result.Value!.OverseasSites.ToDictionary(s => s.OrsId!);
+        byOrsId["001"].Selected.Should().BeTrue();
+        byOrsId["002"].Selected.Should().BeFalse();
+        byOrsId["003"].Selected.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_NoOverseasSites_ReturnsEmptyOverseasSites()
     {
         var sut = BuildSut(OrganisationJson);
 
@@ -610,47 +568,7 @@ public class HttpReExApiAdapterTests
     }
 
     [Fact]
-    public async Task GetAccreditationAsync_ExporterRegistrationSitesCallFails_ReturnsFailureFromUpstream()
-    {
-        var sut = BuildSut(
-            OrganisationJson,
-            registrationSitesStatusCode: HttpStatusCode.InternalServerError
-        );
-
-        var result = await sut.GetAccreditationAsync(
-            "6a2fcd74e16883c137d01188",
-            "reg-exporter-1",
-            MaterialType.Aluminium,
-            2026
-        );
-
-        result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(500);
-    }
-
-    [Fact]
-    public async Task GetAccreditationAsync_BothOverseasSitesCallsFail_ReturnsFailureWithoutThrowing()
-    {
-        var sut = BuildSut(
-            OrganisationJson,
-            overseasSitesStatusCode: HttpStatusCode.InternalServerError,
-            registrationSitesStatusCode: HttpStatusCode.Unauthorized
-        );
-
-        var act = () =>
-            sut.GetAccreditationAsync(
-                "6a2fcd74e16883c137d01188",
-                "reg-exporter-1",
-                MaterialType.Aluminium,
-                2026
-            );
-
-        var result = await act.Should().NotThrowAsync();
-        result.Subject.IsSuccess.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task GetAccreditationAsync_ReprocessorRegistration_DoesNotCallEitherOverseasSitesEndpoint()
+    public async Task GetAccreditationAsync_ReprocessorRegistration_DoesNotCallOverseasSitesEndpoint()
     {
         var callLog = new List<string>();
         var handler = new RecordingRoutingHandler(OrganisationJson, callLog);
@@ -675,83 +593,8 @@ public class HttpReExApiAdapterTests
             .Should()
             .NotContain(
                 path => path.Contains("overseas-sites"),
-                because: "reprocessor registrations have no overseas sites to fetch from either endpoint"
+                because: "a reprocessor registration has no overseas sites to fetch"
             );
-    }
-
-    [Fact]
-    public async Task GetAccreditationAsync_ExporterRegistration_NonNumericIdPresentInBothLists_MergesByRawKey()
-    {
-        const string registrationSitesJson = """
-            {
-              "site-A": { "name": "Registered Version", "country": "France" }
-            }
-            """;
-        const string accreditationSitesJson = """
-            {
-              "site-A": { "name": "Accredited Version", "country": "Spain" }
-            }
-            """;
-        var sut = BuildSut(
-            OrganisationJson,
-            accreditationSitesJson,
-            registrationSitesJson: registrationSitesJson
-        );
-
-        var result = await sut.GetAccreditationAsync(
-            "6a2fcd74e16883c137d01188",
-            "reg-exporter-1",
-            MaterialType.Aluminium,
-            2026
-        );
-
-        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.OverseasSites.Should().ContainSingle();
-        var site = result.Value!.OverseasSites[0];
-        site.OrsId.Should().Be("site-A");
-        site.SiteId.Should()
-            .Be(
-                0,
-                because: "a non-numeric key falls back to SiteId 0 regardless of which list it came from"
-            );
-        site.SiteName.Should().Be("Accredited Version");
-        site.Selected.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task GetAccreditationAsync_ExporterRegistration_NoLiteralHardcodedSelectedValue()
-    {
-        // Regression guard for RA-580: previously every mapped site got a single hardcoded
-        // Selected literal, which could never be correct once both ORS-R-only and ORS-A-only
-        // sites appear in the same response. Asserting both values appear together, driven only
-        // by list membership, pins that the value is genuinely derived per-site.
-        const string registrationSitesJson = """
-            { "001": { "name": "Registered Only", "country": "France" } }
-            """;
-        const string accreditationSitesJson = """
-            { "002": { "name": "Accredited Only", "country": "Germany" } }
-            """;
-        var sut = BuildSut(
-            OrganisationJson,
-            accreditationSitesJson,
-            registrationSitesJson: registrationSitesJson
-        );
-
-        var result = await sut.GetAccreditationAsync(
-            "6a2fcd74e16883c137d01188",
-            "reg-exporter-1",
-            MaterialType.Aluminium,
-            2026
-        );
-
-        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        var byOrsId = result.Value!.OverseasSites.ToDictionary(s => s.OrsId!);
-        byOrsId["001"]
-            .Selected.Should()
-            .BeFalse(
-                because: "registered-only sites must not share a hardcoded value with accredited sites"
-            );
-        byOrsId["002"].Selected.Should().BeTrue();
     }
 
     [Fact]
@@ -2670,34 +2513,27 @@ public class HttpReExApiAdapterTests
         }
         """;
 
-    // Routes by URL shape, since organisations, ORS-A (accreditation-scoped overseas-sites,
-    // path contains "accreditations") and ORS-R (registration-scoped overseas-sites, no
-    // "accreditations" segment) each need their own fixed body/status — a single body can't
-    // serve all three shapes.
+    // Routes by URL shape, since organisations and ORS-A (accreditation-scoped
+    // overseas-sites) each need their own fixed body/status — a single body can't serve both
+    // shapes.
     private sealed class RoutingHandler : HttpMessageHandler
     {
         private readonly string _organisationJson;
         private readonly string _overseasSitesJson;
         private readonly HttpStatusCode _organisationStatusCode;
         private readonly HttpStatusCode _overseasSitesStatusCode;
-        private readonly string _registrationSitesJson;
-        private readonly HttpStatusCode _registrationSitesStatusCode;
 
         public RoutingHandler(
             string organisationJson,
             string overseasSitesJson = "{}",
             HttpStatusCode organisationStatusCode = HttpStatusCode.OK,
-            HttpStatusCode overseasSitesStatusCode = HttpStatusCode.OK,
-            string registrationSitesJson = "{}",
-            HttpStatusCode registrationSitesStatusCode = HttpStatusCode.OK
+            HttpStatusCode overseasSitesStatusCode = HttpStatusCode.OK
         )
         {
             _organisationJson = organisationJson;
             _overseasSitesJson = overseasSitesJson;
             _organisationStatusCode = organisationStatusCode;
             _overseasSitesStatusCode = overseasSitesStatusCode;
-            _registrationSitesJson = registrationSitesJson;
-            _registrationSitesStatusCode = registrationSitesStatusCode;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -2705,20 +2541,11 @@ public class HttpReExApiAdapterTests
             CancellationToken cancellationToken
         )
         {
-            var (body, statusCode) = ReExFakeRouting.Classify(
-                request.RequestUri!.AbsolutePath
-            ) switch
-            {
-                ReExFakeRoute.AccreditationOverseasSites => (
-                    _overseasSitesJson,
-                    _overseasSitesStatusCode
-                ),
-                ReExFakeRoute.RegistrationOverseasSites => (
-                    _registrationSitesJson,
-                    _registrationSitesStatusCode
-                ),
-                _ => (_organisationJson, _organisationStatusCode),
-            };
+            var (body, statusCode) =
+                ReExFakeRouting.Classify(request.RequestUri!.AbsolutePath)
+                == ReExFakeRoute.AccreditationOverseasSites
+                    ? (_overseasSitesJson, _overseasSitesStatusCode)
+                    : (_organisationJson, _organisationStatusCode);
 
             return Task.FromResult(
                 new HttpResponseMessage(statusCode)

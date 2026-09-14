@@ -146,59 +146,6 @@ public class ReExClient : IReExClient
         }
     }
 
-    public async Task<ReExResult<OverseasSitesDto>> GetRegistrationOverseasSitesAsync(
-        string organisationId,
-        string registrationId,
-        CancellationToken cancellationToken = default
-    )
-    {
-        var endpoint =
-            $"v1/organisations/{Uri.EscapeDataString(organisationId)}"
-            + $"/registrations/{Uri.EscapeDataString(registrationId)}/overseas-sites";
-        if (_logger.IsEnabled(LogLevel.Information))
-        {
-            _logger.LogInformation("Calling ReEx API: GET {Endpoint}", endpoint);
-        }
-
-        try
-        {
-            using var response = await _httpClient.GetAsync(endpoint, cancellationToken);
-            var result = await MapResponseAsync<OverseasSitesDto>(response, cancellationToken);
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation(
-                    "ReEx API GET {Endpoint} returned {StatusCode}",
-                    endpoint,
-                    result.StatusCode
-                );
-            }
-            return result;
-        }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning(
-                "ReEx API request timed out for registration overseas sites (org={OrganisationId} reg={RegistrationId})",
-                organisationId,
-                registrationId
-            );
-            return ReExResult<OverseasSitesDto>.Fail(
-                new ReExError(ReExErrorKind.Timeout, "Request timed out")
-            );
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogError(
-                ex,
-                "Transport error calling ReEx API for registration overseas sites (org={OrganisationId} reg={RegistrationId})",
-                organisationId,
-                registrationId
-            );
-            return ReExResult<OverseasSitesDto>.Fail(
-                new ReExError(ReExErrorKind.TransportError, "Transport error")
-            );
-        }
-    }
-
     private async Task<ReExResult<T>> MapResponseAsync<T>(
         HttpResponseMessage response,
         CancellationToken cancellationToken

@@ -295,33 +295,16 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 );
         }
 
-        // Fetch overseas sites for exporters. Two distinct ReEx result sets are needed: ORS-R
-        // (every overseas site tied to the registration) and ORS-A (only the sites actually
-        // included in this accreditation). Neither set alone is sufficient — ORS-A alone gives
-        // no way to distinguish "accredited" from "registered-only", and ORS-R alone has no
-        // concept of accreditation membership at all.
+        // RA-580-1: only ORS-A (accreditation-scoped overseas-sites) is called. ReEx's real
+        // implementation of ORS-R (registration-scoped) and ORS-A always return the same site
+        // membership — both resolve from the registration's own overseas-site map — so calling
+        // both and merging by id (the original RA-580 approach) bought nothing: it added a
+        // network call whose result was always a strict subset of ORS-A's. ORS-A alone carries
+        // everything needed, including each site's ValidFrom (approval date), which is the
+        // actual per-site "accredited or not" signal — see MapOverseasSite.
         List<OverseasSiteModel> overseasSites = [];
         if (isExporter)
         {
-            var registrationSitesResult = await reExClient.GetRegistrationOverseasSitesAsync(
-                organisationId,
-                registrationId,
-                CancellationToken.None
-            );
-
-            if (!registrationSitesResult.IsSuccess)
-            {
-                logger.LogError(
-                    "Registration overseas sites call failed for registrationId={RegistrationId}: {Error}",
-                    registrationId,
-                    registrationSitesResult.Error?.Message
-                );
-                return ReExResult<ReExAccreditationDto>.Fail(
-                    registrationSitesResult.Error!,
-                    registrationSitesResult.StatusCode
-                );
-            }
-
             var accreditationSitesResult = await reExClient.GetOverseasSiteAsync(
                 organisationId,
                 registrationId,
@@ -342,10 +325,9 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 );
             }
 
-            overseasSites = MergeOverseasSites(
-                registrationSitesResult.Value!,
-                accreditationSitesResult.Value!
-            );
+            overseasSites = accreditationSitesResult
+                .Value!.Select(kvp => MapOverseasSite(kvp.Key, kvp.Value))
+                .ToList();
         }
 
         return ReExResult<ReExAccreditationDto>.Success(
@@ -513,37 +495,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         return ReExResult<Nation>.Success(nation, 200);
     }
 
-    // RA-580: merges ORS-R (every overseas site on the registration) with ORS-A (only the
-    // sites included in this accreditation) into one list, one entry per unique site id.
-    // Descriptive fields come from ORS-A wherever a site id appears in both — accreditation
-    // data is more current/authoritative than registration data for a site that has since been
-    // accredited. Seeding the dictionary from ORS-R first and overwriting with ORS-A entries
-    // achieves that precedence with no extra branching.
-    private static List<OverseasSiteModel> MergeOverseasSites(
-        OverseasSitesDto registrationSites,
-        OverseasSitesDto accreditationSites
-    )
-    {
-        var merged = new Dictionary<string, OverseasSiteDto>(registrationSites);
-        foreach (var (key, dto) in accreditationSites)
-            merged[key] = dto;
-
-        return merged
-            .Select(kvp =>
-                MapOverseasSite(
-                    kvp.Key,
-                    kvp.Value,
-                    selected: accreditationSites.ContainsKey(kvp.Key)
-                )
-            )
-            .ToList();
-    }
-
-    private static OverseasSiteModel MapOverseasSite(
-        string key,
-        OverseasSiteDto dto,
-        bool selected
-    ) =>
+    private static OverseasSiteModel MapOverseasSite(string key, OverseasSiteDto dto) =>
         new()
         {
             SiteId = int.TryParse(key, out var id) ? id : 0,
@@ -560,11 +512,15 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             IsEu = CountryClassifications.IsEu(dto.Country),
             IsOecd = CountryClassifications.IsOecd(dto.Country),
             Coordinates = MapCoordinates(dto.Coordinates),
-            // RA-580: derived from which ReEx result set this site id was found in — true means
-            // this overseas site is (still) included in the accreditation (ORS-A), false means
-            // it's registered but not accredited (ORS-R only). Not a hardcoded literal, and not
-            // the same thing as a user's UI selection — see OverseasSiteModel.Selected.
-            Selected = selected,
+            ValidFrom = dto.ValidFrom,
+            // RA-580-1: ReEx's ORS-A (accreditation-scoped overseas-sites) always returns every
+            // site on the registration, approved or not — confirmed against epr-backend's own
+            // implementation and test suite, which explicitly serves "approved and unapproved"
+            // sites from the same response. ValidFrom is the actual per-site accredited signal:
+            // non-null means the site is approved/included for this accreditation, null means
+            // it's registered but not yet accredited. Not a hardcoded literal, and not the same
+            // thing as a user's UI selection — see OverseasSiteModel.Selected.
+            Selected = !string.IsNullOrWhiteSpace(dto.ValidFrom),
             IsNewSite = false,
         };
 
