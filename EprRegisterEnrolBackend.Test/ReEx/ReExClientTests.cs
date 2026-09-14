@@ -12,7 +12,10 @@ namespace EprRegisterEnrolBackend.Test.ReEx;
 
 public class ReExClientTests
 {
-    private static ReExClient BuildSut(HttpMessageHandler handler, string baseUrl = "http://localhost:5000/")
+    private static ReExClient BuildSut(
+        HttpMessageHandler handler,
+        string baseUrl = "http://localhost:5000/"
+    )
     {
         var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExConfig { BaseUrl = baseUrl });
@@ -63,7 +66,10 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("987654", TestContext.Current.CancellationToken);
+        var result = await sut.GetOrganisationsAsync(
+            "987654",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeTrue();
         result.Value!.OrgId.Should().Be(987654);
@@ -86,12 +92,187 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1", TestContext.Current.CancellationToken);
+        var result = await sut.GetOverseasSiteAsync(
+            "org-1",
+            "reg-1",
+            "acc-1",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().ContainKey("100");
         result.Value!["100"].Name.Should().Be("Site One");
         result.Value["100"].Address!.TownOrCity.Should().Be("Shanghai");
+    }
+
+    [Fact]
+    public async Task GetRegistrationOverseasSitesAsync_200_ReturnsKeyedDictionary()
+    {
+        const string json = """
+            {
+              "200": {
+                "name": "Site Two",
+                "country": "Poland",
+                "address": { "line1": "456 Road", "townOrCity": "Warsaw" },
+                "coordinates": null
+              }
+            }
+            """;
+
+        var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
+
+        var result = await sut.GetRegistrationOverseasSitesAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().ContainKey("200");
+        result.Value!["200"].Name.Should().Be("Site Two");
+        result.Value["200"].Address!.TownOrCity.Should().Be("Warsaw");
+    }
+
+    [Fact]
+    public async Task GetRegistrationOverseasSitesAsync_200_EmptyDictionary_ReturnsEmptySuccess()
+    {
+        var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, "{}"));
+
+        var result = await sut.GetRegistrationOverseasSitesAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetRegistrationOverseasSitesAsync_RequestsRegistrationScopedPathWithoutAccreditationSegment()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var sut = BuildSut(new CapturingHandler(HttpStatusCode.OK, "{}", r => capturedRequest = r));
+
+        await sut.GetRegistrationOverseasSitesAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        capturedRequest.Should().NotBeNull();
+        var path = capturedRequest!.RequestUri!.AbsolutePath;
+        path.Should()
+            .Be(
+                "/v1/organisations/org-1/registrations/reg-1/overseas-sites",
+                because: "ORS-R is registration-scoped and must not include an accreditationId segment"
+            );
+        path.Should().NotContain("accreditations");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, ReExErrorKind.AuthError)]
+    [InlineData(HttpStatusCode.NotFound, ReExErrorKind.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError, ReExErrorKind.ServerError)]
+    public async Task GetRegistrationOverseasSitesAsync_ErrorStatusCode_ReturnsCorrectErrorKind(
+        HttpStatusCode statusCode,
+        ReExErrorKind expectedKind
+    )
+    {
+        var sut = BuildSut(new RawStringHandler(statusCode, "error"));
+
+        var result = await sut.GetRegistrationOverseasSitesAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error!.Kind.Should().Be(expectedKind);
+    }
+
+    [Fact]
+    public async Task GetRegistrationOverseasSitesAsync_InvalidJson_ReturnsDeserializationError()
+    {
+        var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, "not-valid-json{{{{"));
+
+        var result = await sut.GetRegistrationOverseasSitesAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error!.Kind.Should().Be(ReExErrorKind.DeserializationError);
+    }
+
+    [Fact]
+    public async Task GetRegistrationOverseasSitesAsync_Timeout_ReturnsTimeoutError()
+    {
+        var sut = BuildSut(new TimeoutHandler());
+
+        var result = await sut.GetRegistrationOverseasSitesAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error!.Kind.Should().Be(ReExErrorKind.Timeout);
+    }
+
+    [Fact]
+    public async Task GetRegistrationOverseasSitesAsync_TransportError_ReturnsTransportError()
+    {
+        var sut = BuildSut(new ExceptionHandler(new HttpRequestException("connection refused")));
+
+        var result = await sut.GetRegistrationOverseasSitesAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error!.Kind.Should().Be(ReExErrorKind.TransportError);
+    }
+
+    [Fact]
+    public async Task GetRegistrationOverseasSitesAsync_NeverThrowsForHttpErrors()
+    {
+        foreach (
+            var status in new[]
+            {
+                HttpStatusCode.Unauthorized,
+                HttpStatusCode.NotFound,
+                HttpStatusCode.InternalServerError,
+            }
+        )
+        {
+            var sut = BuildSut(new RawStringHandler(status, "err"));
+            var act = () => sut.GetRegistrationOverseasSitesAsync("org-1", "reg-1");
+            await act.Should().NotThrowAsync();
+        }
+    }
+
+    // ── ORS-A vs ORS-R route distinction ────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOverseasSiteAsync_RequestsAccreditationScopedPathWithAccreditationSegment()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var sut = BuildSut(new CapturingHandler(HttpStatusCode.OK, "{}", r => capturedRequest = r));
+
+        await sut.GetOverseasSiteAsync(
+            "org-1",
+            "reg-1",
+            "acc-1",
+            TestContext.Current.CancellationToken
+        );
+
+        capturedRequest.Should().NotBeNull();
+        capturedRequest!
+            .RequestUri!.AbsolutePath.Should()
+            .Be("/v1/organisations/org-1/registrations/reg-1/accreditations/acc-1/overseas-sites");
     }
 
     // ── Error status code mapping ─────────────────────────────────────────────
@@ -106,7 +287,9 @@ public class ReExClientTests
     [InlineData(HttpStatusCode.BadGateway, ReExErrorKind.ServerError)]
     [InlineData(HttpStatusCode.ServiceUnavailable, ReExErrorKind.ServerError)]
     public async Task GetOrganisationsAsync_ErrorStatusCode_ReturnsCorrectErrorKind(
-        HttpStatusCode statusCode, ReExErrorKind expectedKind)
+        HttpStatusCode statusCode,
+        ReExErrorKind expectedKind
+    )
     {
         var sut = BuildSut(new RawStringHandler(statusCode, "error"));
 
@@ -123,11 +306,18 @@ public class ReExClientTests
     [InlineData(HttpStatusCode.NotFound, ReExErrorKind.NotFound)]
     [InlineData(HttpStatusCode.InternalServerError, ReExErrorKind.ServerError)]
     public async Task GetOverseasSiteAsync_ErrorStatusCode_ReturnsCorrectErrorKind(
-        HttpStatusCode statusCode, ReExErrorKind expectedKind)
+        HttpStatusCode statusCode,
+        ReExErrorKind expectedKind
+    )
     {
         var sut = BuildSut(new RawStringHandler(statusCode, "error"));
 
-        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1", TestContext.Current.CancellationToken);
+        var result = await sut.GetOverseasSiteAsync(
+            "org-1",
+            "reg-1",
+            "acc-1",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(expectedKind);
@@ -181,7 +371,12 @@ public class ReExClientTests
     {
         var sut = BuildSut(new TimeoutHandler());
 
-        var result = await sut.GetOverseasSiteAsync("org-1", "reg-1", "acc-1", TestContext.Current.CancellationToken);
+        var result = await sut.GetOverseasSiteAsync(
+            "org-1",
+            "reg-1",
+            "acc-1",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeFalse();
         result.Error!.Kind.Should().Be(ReExErrorKind.Timeout);
@@ -203,7 +398,14 @@ public class ReExClientTests
     [Fact]
     public async Task GetOrganisationsAsync_NeverThrowsForHttpErrors()
     {
-        foreach (var status in new[] { HttpStatusCode.Unauthorized, HttpStatusCode.NotFound, HttpStatusCode.InternalServerError })
+        foreach (
+            var status in new[]
+            {
+                HttpStatusCode.Unauthorized,
+                HttpStatusCode.NotFound,
+                HttpStatusCode.InternalServerError,
+            }
+        )
         {
             var sut = BuildSut(new RawStringHandler(status, "err"));
             var act = () => sut.GetOrganisationsAsync("x");
@@ -257,7 +459,11 @@ public class ReExClientTests
 
         result.IsSuccess.Should().BeTrue();
         result.Value!.Registrations.Should().HaveCount(1);
-        var reg = result.Value.Registrations[0].Should().BeOfType<ReprocessorRegistrationDto>().Subject;
+        var reg = result
+            .Value.Registrations[0]
+            .Should()
+            .BeOfType<ReprocessorRegistrationDto>()
+            .Subject;
         reg.Site!.Address!.Line1.Should().Be("1 Industrial Way");
         reg.Site.GridReference.Should().Be("SE123456");
         reg.YearlyMetrics.Should().HaveCount(1);
@@ -294,7 +500,11 @@ public class ReExClientTests
         var result = await sut.GetOrganisationsAsync("1234", TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
-        var reg = result.Value!.Registrations[0].Should().BeOfType<ExporterRegistrationDto>().Subject;
+        var reg = result
+            .Value!.Registrations[0]
+            .Should()
+            .BeOfType<ExporterRegistrationDto>()
+            .Subject;
         reg.ExportPorts.Should().BeEquivalentTo(["Dover", "Felixstowe"]);
         reg.OverseasSites["100"].OverseasSiteId.Should().Be("6a2fcd76-site");
         reg.OrsFileUploads[0].DefraFormUploadedFileId.Should().Be("file-1");
@@ -324,7 +534,10 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("org-1", TestContext.Current.CancellationToken);
+        var result = await sut.GetOrganisationsAsync(
+            "org-1",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeTrue();
         var reprocessor = (ReprocessorRegistrationDto)result.Value!.Registrations[0];
@@ -358,7 +571,10 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("org-1", TestContext.Current.CancellationToken);
+        var result = await sut.GetOrganisationsAsync(
+            "org-1",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeTrue();
         var reg = (ReprocessorRegistrationDto)result.Value!.Registrations[0];
@@ -381,7 +597,10 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("org-1", TestContext.Current.CancellationToken);
+        var result = await sut.GetOrganisationsAsync(
+            "org-1",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeTrue();
         result.Value!.Registrations[0].AccreditationId.Should().BeNull();
@@ -411,7 +630,10 @@ public class ReExClientTests
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetOrganisationsAsync("org-1", TestContext.Current.CancellationToken);
+        var result = await sut.GetOrganisationsAsync(
+            "org-1",
+            TestContext.Current.CancellationToken
+        );
 
         result.IsSuccess.Should().BeTrue();
         var acc = result.Value!.Accreditations[0];
@@ -435,16 +657,56 @@ public class ReExClientTests
             _body = body;
         }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(_status)
-            {
-                Content = new StringContent(_body, Encoding.UTF8, "application/json")
-            });
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) =>
+            Task.FromResult(
+                new HttpResponseMessage(_status)
+                {
+                    Content = new StringContent(_body, Encoding.UTF8, "application/json"),
+                }
+            );
+    }
+
+    private sealed class CapturingHandler : HttpMessageHandler
+    {
+        private readonly HttpStatusCode _status;
+        private readonly string _body;
+        private readonly Action<HttpRequestMessage> _capture;
+
+        public CapturingHandler(
+            HttpStatusCode status,
+            string body,
+            Action<HttpRequestMessage> capture
+        )
+        {
+            _status = status;
+            _body = body;
+            _capture = capture;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            _capture(request);
+            return Task.FromResult(
+                new HttpResponseMessage(_status)
+                {
+                    Content = new StringContent(_body, Encoding.UTF8, "application/json"),
+                }
+            );
+        }
     }
 
     private sealed class TimeoutHandler : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             // Simulate HttpClient timeout: throws TaskCanceledException with an internal token (not the caller's)
             var cts = new CancellationTokenSource();
@@ -459,7 +721,9 @@ public class ReExClientTests
 
         public ExceptionHandler(Exception exception) => _exception = exception;
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            throw _exception;
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => throw _exception;
     }
 }

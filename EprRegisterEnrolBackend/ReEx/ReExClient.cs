@@ -21,7 +21,11 @@ public class ReExClient : IReExClient
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public ReExClient(HttpClient httpClient, IOptions<ReExConfig> config, ILogger<ReExClient> logger)
+    public ReExClient(
+        HttpClient httpClient,
+        IOptions<ReExConfig> config,
+        ILogger<ReExClient> logger
+    )
     {
         _logger = logger;
         var baseUrl = config.Value.BaseUrl;
@@ -64,13 +68,24 @@ public class ReExClient : IReExClient
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("ReEx API request timed out for organisation {OrganisationId}", organisationId);
-            return ReExResult<OrganisationDto>.Fail(new ReExError(ReExErrorKind.Timeout, "Request timed out"));
+            _logger.LogWarning(
+                "ReEx API request timed out for organisation {OrganisationId}",
+                organisationId
+            );
+            return ReExResult<OrganisationDto>.Fail(
+                new ReExError(ReExErrorKind.Timeout, "Request timed out")
+            );
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "Transport error calling ReEx API for organisation {OrganisationId}", organisationId);
-            return ReExResult<OrganisationDto>.Fail(new ReExError(ReExErrorKind.TransportError, "Transport error"));
+            _logger.LogError(
+                ex,
+                "Transport error calling ReEx API for organisation {OrganisationId}",
+                organisationId
+            );
+            return ReExResult<OrganisationDto>.Fail(
+                new ReExError(ReExErrorKind.TransportError, "Transport error")
+            );
         }
     }
 
@@ -81,9 +96,10 @@ public class ReExClient : IReExClient
         CancellationToken cancellationToken = default
     )
     {
-        var endpoint = $"v1/organisations/{Uri.EscapeDataString(organisationId)}" +
-            $"/registrations/{Uri.EscapeDataString(registrationId)}" +
-            $"/accreditations/{Uri.EscapeDataString(accreditationId)}/overseas-sites";
+        var endpoint =
+            $"v1/organisations/{Uri.EscapeDataString(organisationId)}"
+            + $"/registrations/{Uri.EscapeDataString(registrationId)}"
+            + $"/accreditations/{Uri.EscapeDataString(accreditationId)}/overseas-sites";
         if (_logger.IsEnabled(LogLevel.Information))
         {
             _logger.LogInformation("Calling ReEx API: GET {Endpoint}", endpoint);
@@ -107,18 +123,79 @@ public class ReExClient : IReExClient
         {
             _logger.LogWarning(
                 "ReEx API request timed out for overseas sites (org={OrganisationId} reg={RegistrationId} acc={AccreditationId})",
-                organisationId, registrationId, accreditationId
+                organisationId,
+                registrationId,
+                accreditationId
             );
-            return ReExResult<OverseasSitesDto>.Fail(new ReExError(ReExErrorKind.Timeout, "Request timed out"));
+            return ReExResult<OverseasSitesDto>.Fail(
+                new ReExError(ReExErrorKind.Timeout, "Request timed out")
+            );
         }
         catch (HttpRequestException ex)
         {
             _logger.LogError(
                 ex,
                 "Transport error calling ReEx API for overseas sites (org={OrganisationId} reg={RegistrationId} acc={AccreditationId})",
-                organisationId, registrationId, accreditationId
+                organisationId,
+                registrationId,
+                accreditationId
             );
-            return ReExResult<OverseasSitesDto>.Fail(new ReExError(ReExErrorKind.TransportError, "Transport error"));
+            return ReExResult<OverseasSitesDto>.Fail(
+                new ReExError(ReExErrorKind.TransportError, "Transport error")
+            );
+        }
+    }
+
+    public async Task<ReExResult<OverseasSitesDto>> GetRegistrationOverseasSitesAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var endpoint =
+            $"v1/organisations/{Uri.EscapeDataString(organisationId)}"
+            + $"/registrations/{Uri.EscapeDataString(registrationId)}/overseas-sites";
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Calling ReEx API: GET {Endpoint}", endpoint);
+        }
+
+        try
+        {
+            using var response = await _httpClient.GetAsync(endpoint, cancellationToken);
+            var result = await MapResponseAsync<OverseasSitesDto>(response, cancellationToken);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(
+                    "ReEx API GET {Endpoint} returned {StatusCode}",
+                    endpoint,
+                    result.StatusCode
+                );
+            }
+            return result;
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "ReEx API request timed out for registration overseas sites (org={OrganisationId} reg={RegistrationId})",
+                organisationId,
+                registrationId
+            );
+            return ReExResult<OverseasSitesDto>.Fail(
+                new ReExError(ReExErrorKind.Timeout, "Request timed out")
+            );
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(
+                ex,
+                "Transport error calling ReEx API for registration overseas sites (org={OrganisationId} reg={RegistrationId})",
+                organisationId,
+                registrationId
+            );
+            return ReExResult<OverseasSitesDto>.Fail(
+                new ReExError(ReExErrorKind.TransportError, "Transport error")
+            );
         }
     }
 
@@ -133,17 +210,27 @@ public class ReExClient : IReExClient
         {
             try
             {
-                var value = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
+                var value = await response.Content.ReadFromJsonAsync<T>(
+                    JsonOptions,
+                    cancellationToken
+                );
                 if (value is null)
                     return ReExResult<T>.Fail(
-                        new ReExError(ReExErrorKind.DeserializationError, "Response body was empty"),
+                        new ReExError(
+                            ReExErrorKind.DeserializationError,
+                            "Response body was empty"
+                        ),
                         statusCode
                     );
                 return ReExResult<T>.Success(value, statusCode);
             }
             catch (JsonException ex)
             {
-                _logger.LogError(ex, "Failed to deserialize ReEx API response (status {StatusCode})", statusCode);
+                _logger.LogError(
+                    ex,
+                    "Failed to deserialize ReEx API response (status {StatusCode})",
+                    statusCode
+                );
                 return ReExResult<T>.Fail(
                     new ReExError(ReExErrorKind.DeserializationError, "Invalid response body"),
                     statusCode

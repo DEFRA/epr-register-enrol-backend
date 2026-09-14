@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Dtos;
@@ -294,33 +295,57 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 );
         }
 
-        // Fetch overseas sites for exporters
+        // Fetch overseas sites for exporters. Two distinct ReEx result sets are needed: ORS-R
+        // (every overseas site tied to the registration) and ORS-A (only the sites actually
+        // included in this accreditation). Neither set alone is sufficient — ORS-A alone gives
+        // no way to distinguish "accredited" from "registered-only", and ORS-R alone has no
+        // concept of accreditation membership at all.
         List<OverseasSiteModel> overseasSites = [];
         if (isExporter)
         {
-            var sitesResult = await reExClient.GetOverseasSiteAsync(
+            var registrationSitesResult = await reExClient.GetRegistrationOverseasSitesAsync(
+                organisationId,
+                registrationId,
+                CancellationToken.None
+            );
+
+            if (!registrationSitesResult.IsSuccess)
+            {
+                logger.LogError(
+                    "Registration overseas sites call failed for registrationId={RegistrationId}: {Error}",
+                    registrationId,
+                    registrationSitesResult.Error?.Message
+                );
+                return ReExResult<ReExAccreditationDto>.Fail(
+                    registrationSitesResult.Error!,
+                    registrationSitesResult.StatusCode
+                );
+            }
+
+            var accreditationSitesResult = await reExClient.GetOverseasSiteAsync(
                 organisationId,
                 registrationId,
                 accreditation.Id!,
                 CancellationToken.None
             );
 
-            if (!sitesResult.IsSuccess)
+            if (!accreditationSitesResult.IsSuccess)
             {
                 logger.LogError(
-                    "Overseas sites call failed for accreditationId={AccreditationId}: {Error}",
+                    "Accreditation overseas sites call failed for accreditationId={AccreditationId}: {Error}",
                     accreditation.Id,
-                    sitesResult.Error?.Message
+                    accreditationSitesResult.Error?.Message
                 );
                 return ReExResult<ReExAccreditationDto>.Fail(
-                    sitesResult.Error!,
-                    sitesResult.StatusCode
+                    accreditationSitesResult.Error!,
+                    accreditationSitesResult.StatusCode
                 );
             }
 
-            overseasSites = sitesResult
-                .Value!.Select(kvp => MapOverseasSite(kvp.Key, kvp.Value))
-                .ToList();
+            overseasSites = MergeOverseasSites(
+                registrationSitesResult.Value!,
+                accreditationSitesResult.Value!
+            );
         }
 
         return ReExResult<ReExAccreditationDto>.Success(
@@ -488,7 +513,37 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         return ReExResult<Nation>.Success(nation, 200);
     }
 
-    private static OverseasSiteModel MapOverseasSite(string key, OverseasSiteDto dto) =>
+    // RA-580: merges ORS-R (every overseas site on the registration) with ORS-A (only the
+    // sites included in this accreditation) into one list, one entry per unique site id.
+    // Descriptive fields come from ORS-A wherever a site id appears in both — accreditation
+    // data is more current/authoritative than registration data for a site that has since been
+    // accredited. Seeding the dictionary from ORS-R first and overwriting with ORS-A entries
+    // achieves that precedence with no extra branching.
+    private static List<OverseasSiteModel> MergeOverseasSites(
+        OverseasSitesDto registrationSites,
+        OverseasSitesDto accreditationSites
+    )
+    {
+        var merged = new Dictionary<string, OverseasSiteDto>(registrationSites);
+        foreach (var (key, dto) in accreditationSites)
+            merged[key] = dto;
+
+        return merged
+            .Select(kvp =>
+                MapOverseasSite(
+                    kvp.Key,
+                    kvp.Value,
+                    selected: accreditationSites.ContainsKey(kvp.Key)
+                )
+            )
+            .ToList();
+    }
+
+    private static OverseasSiteModel MapOverseasSite(
+        string key,
+        OverseasSiteDto dto,
+        bool selected
+    ) =>
         new()
         {
             SiteId = int.TryParse(key, out var id) ? id : 0,
@@ -504,9 +559,34 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             Country = dto.Country,
             IsEu = CountryClassifications.IsEu(dto.Country),
             IsOecd = CountryClassifications.IsOecd(dto.Country),
-            Selected = false,
+            Coordinates = MapCoordinates(dto.Coordinates),
+            // RA-580: derived from which ReEx result set this site id was found in — true means
+            // this overseas site is (still) included in the accreditation (ORS-A), false means
+            // it's registered but not accredited (ORS-R only). Not a hardcoded literal, and not
+            // the same thing as a user's UI selection — see OverseasSiteModel.Selected.
+            Selected = selected,
             IsNewSite = false,
         };
+
+    // ReEx's own spec types coordinates as a plain string ("lat, long"), but the DTO keeps it
+    // as JsonElement since real ReEx responses have only ever sent null so far. Only accept a
+    // JSON string that also satisfies the same format/range rule operator-submitted
+    // coordinates must pass (CoordinatesValidation) — anything else (absent, null, wrong
+    // shape, malformed, out of range) falls back to null rather than persisting a value the
+    // rest of the domain wouldn't accept from a user.
+    private static string? MapCoordinates(JsonElement? coordinates)
+    {
+        if (coordinates is not { ValueKind: JsonValueKind.String } element)
+            return null;
+
+        var value = element.GetString();
+        return
+            !string.IsNullOrWhiteSpace(value)
+            && CoordinatesValidation.FormatRegex.IsMatch(value)
+            && CoordinatesValidation.IsWithinRange(value)
+            ? value
+            : null;
+    }
 
     private static string? FormatAddress(SiteAddressDto? addr) =>
         addr is null
