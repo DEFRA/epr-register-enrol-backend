@@ -41,6 +41,14 @@ public class OverseasSiteModel
     public bool? ConditionsOfExport { get; set; }
     public bool IsEu { get; set; }
     public bool IsOecd { get; set; }
+
+    // RA-580: when populated from ReEx (HttpReExApiAdapter.MapOverseasSite), this means "this
+    // overseas site is included in the accreditation" (i.e. previously/currently accredited,
+    // per ORS-A) as opposed to registered-only (ORS-R). It is derived from which ReEx result
+    // set the site's id was found in, never a hardcoded literal. Once persisted, the same field
+    // doubles as a user-editable UI selection (see AccreditationApplicationEndpoints' Promote/
+    // Revert/PatchSites handlers) — the two meanings share a wire property so the frontend
+    // contract doesn't change, but only the initial ReEx-derived value follows the rule above.
     public bool Selected { get; set; } = true;
     public BesEvidenceModel? BesEvidence { get; set; }
 
