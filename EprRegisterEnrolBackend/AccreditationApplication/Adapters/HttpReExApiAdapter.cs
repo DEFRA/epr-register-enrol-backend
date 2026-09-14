@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Dtos;
@@ -558,6 +559,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             Country = dto.Country,
             IsEu = CountryClassifications.IsEu(dto.Country),
             IsOecd = CountryClassifications.IsOecd(dto.Country),
+            Coordinates = MapCoordinates(dto.Coordinates),
             // RA-580: derived from which ReEx result set this site id was found in — true means
             // this overseas site is (still) included in the accreditation (ORS-A), false means
             // it's registered but not accredited (ORS-R only). Not a hardcoded literal, and not
@@ -565,6 +567,26 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             Selected = selected,
             IsNewSite = false,
         };
+
+    // ReEx's own spec types coordinates as a plain string ("lat, long"), but the DTO keeps it
+    // as JsonElement since real ReEx responses have only ever sent null so far. Only accept a
+    // JSON string that also satisfies the same format/range rule operator-submitted
+    // coordinates must pass (CoordinatesValidation) — anything else (absent, null, wrong
+    // shape, malformed, out of range) falls back to null rather than persisting a value the
+    // rest of the domain wouldn't accept from a user.
+    private static string? MapCoordinates(JsonElement? coordinates)
+    {
+        if (coordinates is not { ValueKind: JsonValueKind.String } element)
+            return null;
+
+        var value = element.GetString();
+        return
+            !string.IsNullOrWhiteSpace(value)
+            && CoordinatesValidation.FormatRegex.IsMatch(value)
+            && CoordinatesValidation.IsWithinRange(value)
+            ? value
+            : null;
+    }
 
     private static string? FormatAddress(SiteAddressDto? addr) =>
         addr is null

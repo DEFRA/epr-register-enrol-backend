@@ -363,6 +363,81 @@ public class HttpReExApiAdapterTests
         byOrsId["003"].IsOecd.Should().BeFalse(because: "China is not in the OECD");
     }
 
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsValidCoordinatesString()
+    {
+        const string overseasSitesJson = """
+            {
+              "001": { "name": "Site With Coordinates", "country": "France", "coordinates": "51.5034, -0.1275" }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OverseasSites[0].Coordinates.Should().Be("51.5034, -0.1275");
+    }
+
+    [Theory]
+    [InlineData("null")] // JSON null
+    [InlineData("\"not-coordinates\"")] // wrong format
+    [InlineData("\"999.1234, 999.1234\"")] // right format, out of lat/long range
+    [InlineData("{ \"lat\": 51.5, \"lng\": -0.1 }")] // unexpected shape (object, not string)
+    [InlineData("12345")] // unexpected shape (number, not string)
+    public async Task GetAccreditationAsync_ExporterRegistration_UnmappableCoordinates_FallsBackToNull(
+        string rawCoordinatesJson
+    )
+    {
+        var overseasSitesJson = $$"""
+            {
+              "001": { "name": "Site With Bad Coordinates", "country": "France", "coordinates": {{rawCoordinatesJson}} }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result
+            .Value!.OverseasSites[0]
+            .Coordinates.Should()
+            .BeNull(
+                because: "coordinates must satisfy the same format/range rule a user-submitted value would, or fall back to null"
+            );
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_AbsentCoordinatesKey_MapsToNull()
+    {
+        const string overseasSitesJson = """
+            {
+              "001": { "name": "Site With No Coordinates Key", "country": "France" }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OverseasSites[0].Coordinates.Should().BeNull();
+    }
+
     // ── RA-580: ORS-R/ORS-A merge and Selected derivation ──────────────────────
 
     [Fact]
