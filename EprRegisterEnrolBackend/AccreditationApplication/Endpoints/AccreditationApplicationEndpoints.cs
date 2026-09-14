@@ -1930,13 +1930,16 @@ public static class AccreditationApplicationEndpoints
         site.BesEvidence.BesEvidenceUploads.Add(
             new BesEvidenceFileModel
             {
-                FileId = scannedFile.FileId,
-                Filename = scannedFile.Filename,
+                // TryResolveScannedFileAsync's guard already rejects a null/whitespace
+                // FileId, Filename or S3Key before returning — the compiler just can't see
+                // that across the tuple return, hence the forgiving `!`s.
+                FileId = scannedFile.FileId!,
+                Filename = scannedFile.Filename!,
                 ContentType = scannedFile.ContentType ?? scannedFile.DetectedContentType,
                 ScanStatus = scanStatus,
                 BesEvidenceValidFromDate = request.BesEvidenceValidFromDate,
                 BesEvidenceExpiryDate = request.BesEvidenceExpiryDate,
-                S3Key = scannedFile.S3Key,
+                S3Key = scannedFile.S3Key!,
                 S3Bucket = scannedFile.S3Bucket,
             }
         );
@@ -2650,8 +2653,11 @@ public static class AccreditationApplicationEndpoints
 
         var file = new AccreditationApplicationFile
         {
-            FileId = scannedFile.FileId,
-            Filename = scannedFile.Filename,
+            // TryResolveScannedFileAsync's guard already rejects a null/whitespace
+            // FileId, Filename or S3Key before returning — the compiler just can't see
+            // that across the tuple return, hence the forgiving `!`s.
+            FileId = scannedFile.FileId!,
+            Filename = scannedFile.Filename!,
             ContentType = contentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
             ScanStatus =
@@ -2659,7 +2665,7 @@ public static class AccreditationApplicationEndpoints
                     ? FileScanStatus.Clean
                     : FileScanStatus.Infected,
             DocumentType = request.DocumentType,
-            S3Key = scannedFile.S3Key,
+            S3Key = scannedFile.S3Key!,
             S3Bucket = scannedFile.S3Bucket,
         };
 
