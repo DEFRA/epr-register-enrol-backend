@@ -327,6 +327,41 @@ public class HttpReExApiAdapterTests
         result.Value!.OverseasSites[0].OrsId.Should().Be("003");
     }
 
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsIsEuAndIsOecdFromCountry()
+    {
+        // MapOverseasSite delegates to CountryClassifications.IsEu/IsOecd, which are unit
+        // tested directly in CountryClassificationsTests — this pins that MapOverseasSite
+        // actually wires their result onto the model, which nothing else here asserts.
+        const string overseasSitesJson = """
+            {
+              "001": { "name": "EU And OECD Site", "country": "France" },
+              "002": { "name": "OECD Only Site", "country": "Japan" },
+              "003": { "name": "Neither Site", "country": "China" }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        var byOrsId = result.Value!.OverseasSites.ToDictionary(s => s.OrsId!);
+
+        byOrsId["001"].IsEu.Should().BeTrue(because: "France is in the EU");
+        byOrsId["001"].IsOecd.Should().BeTrue(because: "France is also in the OECD");
+
+        byOrsId["002"].IsEu.Should().BeFalse(because: "Japan is not in the EU");
+        byOrsId["002"].IsOecd.Should().BeTrue(because: "Japan is in the OECD");
+
+        byOrsId["003"].IsEu.Should().BeFalse(because: "China is not in the EU");
+        byOrsId["003"].IsOecd.Should().BeFalse(because: "China is not in the OECD");
+    }
+
     // ── RA-580: ORS-R/ORS-A merge and Selected derivation ──────────────────────
 
     [Fact]
