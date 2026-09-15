@@ -325,6 +325,93 @@ public class HttpReExApiAdapterTests
     }
 
     [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsStructuredAddressFieldsNotJustSiteAddress()
+    {
+        // RA-580-2: epr-register-enrol-frontend's promote/edit wizard
+        // (select-overseas-sites/wizard-entry.controller.js) reads addressLine1/addressLine2/
+        // townOrCity directly to pre-fill its form for a ReEx-seeded site — the flattened
+        // SiteAddress string alone isn't enough, and previously wasn't wired at all.
+        const string overseasSitesJson = """
+            {
+              "001": {
+                "name": "Overseas Recycling Co",
+                "country": "France",
+                "address": { "line1": "1 Rue Example", "line2": "Zone Industrielle", "townOrCity": "Paris" }
+              }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        var site = result.Value!.OverseasSites[0];
+        site.AddressLine1.Should().Be("1 Rue Example");
+        site.AddressLine2.Should().Be("Zone Industrielle");
+        site.TownOrCity.Should().Be("Paris");
+        site.SiteAddress.Should()
+            .Be(
+                "1 Rue Example, Zone Industrielle, Paris",
+                because: "the flattened display string must also incorporate line2"
+            );
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_AddressWithNoLine2_OmitsItFromStructuredAndFlattenedFields()
+    {
+        const string overseasSitesJson = """
+            {
+              "001": {
+                "name": "Overseas Recycling Co",
+                "country": "France",
+                "address": { "line1": "1 Rue Example", "townOrCity": "Paris" }
+              }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        var site = result.Value!.OverseasSites[0];
+        site.AddressLine2.Should().BeNull();
+        site.SiteAddress.Should().Be("1 Rue Example, Paris");
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_ExporterRegistration_NoAddress_StructuredFieldsAndSiteAddressAreNull()
+    {
+        const string overseasSitesJson = """
+            { "001": { "name": "Overseas Recycling Co", "country": "France" } }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        var site = result.Value!.OverseasSites[0];
+        site.AddressLine1.Should().BeNull();
+        site.AddressLine2.Should().BeNull();
+        site.TownOrCity.Should().BeNull();
+        site.SiteAddress.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetAccreditationAsync_ExporterRegistration_MapsIsEuAndIsOecdFromCountry()
     {
         // MapOverseasSite delegates to CountryClassifications.IsEu/IsOecd, which are unit
