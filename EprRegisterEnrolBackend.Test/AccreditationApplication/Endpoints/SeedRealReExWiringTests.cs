@@ -46,7 +46,7 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
         // "002" does (accredited).
         _factory.FakeReExHandler.AccreditationSitesJson = """
             {
-              "001": { "name": "Registered Only Co", "country": "France", "address": { "line1": "1 Rue Example", "townOrCity": "Paris" }, "validFrom": null },
+              "001": { "name": "Registered Only Co", "country": "France", "address": { "line1": "1 Rue Example", "line2": "Zone 2", "townOrCity": "Paris" }, "validFrom": null },
               "002": { "name": "Accredited Co", "country": "Spain", "address": { "line1": "New Address", "townOrCity": "Madrid" }, "validFrom": "2024-01-01T00:00:00.000Z" }
             }
             """;
@@ -84,6 +84,12 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
             .BeFalse(because: "001 has no ValidFrom, so it's not yet accredited");
         byOrsId["001"].SiteName.Should().Be("Registered Only Co");
         byOrsId["001"].ValidFrom.Should().BeNull();
+        // RA-580-2: the structured address fields the frontend's promote/edit wizard reads
+        // directly, not just the flattened SiteAddress string.
+        byOrsId["001"].AddressLine1.Should().Be("1 Rue Example");
+        byOrsId["001"].AddressLine2.Should().Be("Zone 2");
+        byOrsId["001"].TownOrCity.Should().Be("Paris");
+        byOrsId["001"].SiteAddress.Should().Be("1 Rue Example, Zone 2, Paris");
 
         byOrsId["002"].Selected.Should().BeTrue(because: "002 has a ValidFrom, so it's accredited");
         byOrsId["002"].SiteName.Should().Be("Accredited Co");

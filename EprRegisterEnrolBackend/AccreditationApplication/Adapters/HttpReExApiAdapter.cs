@@ -505,9 +505,16 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             // computing the next one for an operator-added site, avoiding duplicate ORS ids.
             OrsId = key,
             SiteName = dto.Name ?? string.Empty,
-            SiteAddress = dto.Address is { } addr
-                ? $"{addr.Line1}, {addr.TownOrCity}".Trim(',', ' ')
-                : null,
+            SiteAddress = FormatSiteAddress(dto.Address),
+            // RA-580-2: the structured fields, not just the flattened SiteAddress above — the
+            // frontend's promote/edit wizard (select-overseas-sites/wizard-entry.controller.js)
+            // reads these directly to pre-fill its form for a ReEx-seeded site, the same shape
+            // AddOverseasSiteRequest/UpdateOverseasSiteRequest use for an operator-entered one.
+            // Leaving them null forced a blank, required address field on every such promote/
+            // edit action even though ReEx already had the data.
+            AddressLine1 = dto.Address?.Line1,
+            AddressLine2 = dto.Address?.Line2,
+            TownOrCity = dto.Address?.TownOrCity,
             Country = dto.Country,
             IsEu = CountryClassifications.IsEu(dto.Country),
             IsOecd = CountryClassifications.IsOecd(dto.Country),
@@ -543,6 +550,20 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             ? value
             : null;
     }
+
+    // RA-580-2: flattened display string for an overseas site's address — mirrors the join
+    // pattern the FormatAddress overloads below use for domestic addresses. StateOrRegion and
+    // Postcode are deliberately not included: OverseasSiteModel has no fields for them and
+    // neither does the frontend's own field set for a main (non-interim) overseas site.
+    private static string? FormatSiteAddress(OverseasSiteAddressDto? addr) =>
+        addr is null
+            ? null
+            : string.Join(
+                ", ",
+                new[] { addr.Line1, addr.Line2, addr.TownOrCity }.Where(s =>
+                    !string.IsNullOrWhiteSpace(s)
+                )
+            );
 
     private static string? FormatAddress(SiteAddressDto? addr) =>
         addr is null
