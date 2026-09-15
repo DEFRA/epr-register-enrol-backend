@@ -75,8 +75,7 @@ public class SeedRealReExWiringTestFactory : WebApplicationFactory<Program>
 }
 
 /// <summary>
-/// Fakes only the ReEx HTTP transport. Routes by URL shape — organisations, ORS-R
-/// (registration-scoped overseas-sites, no "accreditations" segment) and ORS-A
+/// Fakes only the ReEx HTTP transport. Routes by URL shape — organisations and ORS-A
 /// (accreditation-scoped overseas-sites) each get their own configurable body/status.
 /// Mutable and reused across tests in a class, so each test sets what it needs and the
 /// class's Reset() puts it back to empty-but-successful defaults.
@@ -85,8 +84,6 @@ public class FakeReExHandler : HttpMessageHandler
 {
     public string OrganisationJson { get; set; } = "{}";
     public HttpStatusCode OrganisationStatusCode { get; set; } = HttpStatusCode.OK;
-    public string RegistrationSitesJson { get; set; } = "{}";
-    public HttpStatusCode RegistrationSitesStatusCode { get; set; } = HttpStatusCode.OK;
     public string AccreditationSitesJson { get; set; } = "{}";
     public HttpStatusCode AccreditationSitesStatusCode { get; set; } = HttpStatusCode.OK;
 
@@ -96,8 +93,6 @@ public class FakeReExHandler : HttpMessageHandler
     {
         OrganisationJson = "{}";
         OrganisationStatusCode = HttpStatusCode.OK;
-        RegistrationSitesJson = "{}";
-        RegistrationSitesStatusCode = HttpStatusCode.OK;
         AccreditationSitesJson = "{}";
         AccreditationSitesStatusCode = HttpStatusCode.OK;
         RequestedPaths.Clear();
@@ -111,18 +106,10 @@ public class FakeReExHandler : HttpMessageHandler
         var path = request.RequestUri!.AbsolutePath;
         RequestedPaths.Add(path);
 
-        var (body, statusCode) = ReExFakeRouting.Classify(path) switch
-        {
-            ReExFakeRoute.AccreditationOverseasSites => (
-                AccreditationSitesJson,
-                AccreditationSitesStatusCode
-            ),
-            ReExFakeRoute.RegistrationOverseasSites => (
-                RegistrationSitesJson,
-                RegistrationSitesStatusCode
-            ),
-            _ => (OrganisationJson, OrganisationStatusCode),
-        };
+        var (body, statusCode) =
+            ReExFakeRouting.Classify(path) == ReExFakeRoute.AccreditationOverseasSites
+                ? (AccreditationSitesJson, AccreditationSitesStatusCode)
+                : (OrganisationJson, OrganisationStatusCode);
 
         return Task.FromResult(
             new HttpResponseMessage(statusCode)

@@ -8,12 +8,11 @@ using FluentAssertions;
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
 /// <summary>
-/// RA-580: end-to-end coverage for the seam AccreditationApplicationEndpointsTests
-/// deliberately skips — those tests mock IReExApiAdapter wholesale, so they never prove
-/// the real HttpReExApiAdapter/ReExClient mapping and ORS-R/ORS-A merge logic actually
-/// works when driven from the real POST .../seed HTTP endpoint against real-shaped ReEx
-/// JSON. These tests use the real adapter and client, faking only the ReEx HTTP transport
-/// (SeedRealReExWiringTestFactory.FakeReExHandler).
+/// RA-580/RA-580-1: end-to-end coverage for the seam AccreditationApplicationEndpointsTests
+/// deliberately skips — those tests mock IReExApiAdapter wholesale, so they never prove the
+/// real HttpReExApiAdapter/ReExClient mapping logic actually works when driven from the real
+/// POST .../seed HTTP endpoint against real-shaped ReEx JSON. These tests use the real adapter
+/// and client, faking only the ReEx HTTP transport (SeedRealReExWiringTestFactory.FakeReExHandler).
 /// </summary>
 public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFactory>
 {
@@ -38,24 +37,17 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
     }
 
     [Fact]
-    public async Task Seed_ExporterWithMixOfRegisteredOnlyAccreditedOnlyAndBothSites_ReturnsCorrectlyMergedOverseasSites()
+    public async Task Seed_ExporterWithMixOfApprovedAndUnapprovedSites_DerivesSelectedFromValidFrom()
     {
         Reset();
         _factory.FakeReExHandler.OrganisationJson = OrganisationJson;
-        // ORS-R: every site on the registration. "003" here is the stale registration-side
-        // view of a site that has since been accredited.
-        _factory.FakeReExHandler.RegistrationSitesJson = """
-            {
-              "001": { "name": "Registered Only Co", "country": "France", "address": { "line1": "1 Rue Example", "townOrCity": "Paris" } },
-              "003": { "name": "Stale Registration Name", "country": "France", "address": { "line1": "Old Address", "townOrCity": "Lyon" } }
-            }
-            """;
-        // ORS-A: only sites actually in this accreditation. "002" is accredited-only;
-        // "003" is the same id as above with the current, accredited-side data.
+        // RA-580-1: ORS-A alone returns every site on the registration, approved and
+        // unapproved together — "001" has no validFrom (registered but not yet accredited),
+        // "002" does (accredited).
         _factory.FakeReExHandler.AccreditationSitesJson = """
             {
-              "002": { "name": "Accredited Only Co", "country": "Germany", "address": { "line1": "1 Beispielstrasse", "townOrCity": "Berlin" } },
-              "003": { "name": "Current Accredited Name", "country": "Spain", "address": { "line1": "New Address", "townOrCity": "Madrid" } }
+              "001": { "name": "Registered Only Co", "country": "France", "address": { "line1": "1 Rue Example", "townOrCity": "Paris" }, "validFrom": null },
+              "002": { "name": "Accredited Co", "country": "Spain", "address": { "line1": "New Address", "townOrCity": "Madrid" }, "validFrom": "2024-01-01T00:00:00.000Z" }
             }
             """;
 
@@ -83,32 +75,24 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
 
         body!.IsExporter.Should().BeTrue();
         body.OverseasSites.Should().NotBeNull();
-        body.OverseasSites!.Sites.Should()
-            .HaveCount(
-                3,
-                because: "site id 003 appears in both ReEx lists and must not be duplicated"
-            );
+        body.OverseasSites!.Sites.Should().HaveCount(2);
 
         var byOrsId = body.OverseasSites.Sites.ToDictionary(s => s.OrsId!);
 
-        byOrsId["001"].Selected.Should().BeFalse(because: "001 is only in ORS-R");
+        byOrsId["001"]
+            .Selected.Should()
+            .BeFalse(because: "001 has no ValidFrom, so it's not yet accredited");
         byOrsId["001"].SiteName.Should().Be("Registered Only Co");
+        byOrsId["001"].ValidFrom.Should().BeNull();
 
-        byOrsId["002"].Selected.Should().BeTrue(because: "002 is only in ORS-A");
-        byOrsId["002"].SiteName.Should().Be("Accredited Only Co");
-
-        byOrsId["003"].Selected.Should().BeTrue(because: "003 is in ORS-A, so it's accredited");
-        byOrsId["003"]
-            .SiteName.Should()
-            .Be(
-                "Current Accredited Name",
-                because: "descriptive fields for a site in both lists must come from ORS-A end to end, through the real HTTP client and adapter"
-            );
-        byOrsId["003"].Country.Should().Be("Spain");
+        byOrsId["002"].Selected.Should().BeTrue(because: "002 has a ValidFrom, so it's accredited");
+        byOrsId["002"].SiteName.Should().Be("Accredited Co");
+        byOrsId["002"].ValidFrom.Should().Be("2024-01-01T00:00:00.000Z");
+        byOrsId["002"].Country.Should().Be("Spain");
     }
 
     [Fact]
-    public async Task Seed_ReprocessorRegistration_ReturnsNullOverseasSitesAndNeverCallsEitherOrsEndpoint()
+    public async Task Seed_ReprocessorRegistration_ReturnsNullOverseasSitesAndNeverCallsOverseasSitesEndpoint()
     {
         Reset();
         _factory.FakeReExHandler.OrganisationJson = OrganisationJson;
@@ -139,7 +123,7 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
             .FakeReExHandler.RequestedPaths.Should()
             .NotContain(
                 path => path.Contains("overseas-sites"),
-                because: "a reprocessor registration has no overseas sites to fetch from either endpoint"
+                because: "a reprocessor registration has no overseas sites to fetch"
             );
     }
 

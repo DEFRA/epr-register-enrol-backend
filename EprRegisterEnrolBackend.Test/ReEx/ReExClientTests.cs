@@ -106,155 +106,30 @@ public class ReExClientTests
     }
 
     [Fact]
-    public async Task GetRegistrationOverseasSitesAsync_200_ReturnsKeyedDictionary()
+    public async Task GetOverseasSiteAsync_ResolvesValidFromPerSite()
     {
         const string json = """
             {
-              "200": {
-                "name": "Site Two",
-                "country": "Poland",
-                "address": { "line1": "456 Road", "townOrCity": "Warsaw" },
-                "coordinates": null
-              }
+              "001": { "name": "Approved Site", "country": "France", "validFrom": "2024-01-01T00:00:00.000Z" },
+              "002": { "name": "Unapproved Site", "country": "Germany", "validFrom": null }
             }
             """;
 
         var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, json));
 
-        var result = await sut.GetRegistrationOverseasSitesAsync(
+        var result = await sut.GetOverseasSiteAsync(
             "org-1",
             "reg-1",
+            "acc-1",
             TestContext.Current.CancellationToken
         );
 
         result.IsSuccess.Should().BeTrue();
-        result.Value.Should().ContainKey("200");
-        result.Value!["200"].Name.Should().Be("Site Two");
-        result.Value["200"].Address!.TownOrCity.Should().Be("Warsaw");
+        result.Value!["001"].ValidFrom.Should().Be("2024-01-01T00:00:00.000Z");
+        result.Value["002"].ValidFrom.Should().BeNull();
     }
 
-    [Fact]
-    public async Task GetRegistrationOverseasSitesAsync_200_EmptyDictionary_ReturnsEmptySuccess()
-    {
-        var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, "{}"));
-
-        var result = await sut.GetRegistrationOverseasSitesAsync(
-            "org-1",
-            "reg-1",
-            TestContext.Current.CancellationToken
-        );
-
-        result.IsSuccess.Should().BeTrue();
-        result.Value.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task GetRegistrationOverseasSitesAsync_RequestsRegistrationScopedPathWithoutAccreditationSegment()
-    {
-        HttpRequestMessage? capturedRequest = null;
-        var sut = BuildSut(new CapturingHandler(HttpStatusCode.OK, "{}", r => capturedRequest = r));
-
-        await sut.GetRegistrationOverseasSitesAsync(
-            "org-1",
-            "reg-1",
-            TestContext.Current.CancellationToken
-        );
-
-        capturedRequest.Should().NotBeNull();
-        var path = capturedRequest!.RequestUri!.AbsolutePath;
-        path.Should()
-            .Be(
-                "/v1/organisations/org-1/registrations/reg-1/overseas-sites",
-                because: "ORS-R is registration-scoped and must not include an accreditationId segment"
-            );
-        path.Should().NotContain("accreditations");
-    }
-
-    [Theory]
-    [InlineData(HttpStatusCode.Unauthorized, ReExErrorKind.AuthError)]
-    [InlineData(HttpStatusCode.NotFound, ReExErrorKind.NotFound)]
-    [InlineData(HttpStatusCode.InternalServerError, ReExErrorKind.ServerError)]
-    public async Task GetRegistrationOverseasSitesAsync_ErrorStatusCode_ReturnsCorrectErrorKind(
-        HttpStatusCode statusCode,
-        ReExErrorKind expectedKind
-    )
-    {
-        var sut = BuildSut(new RawStringHandler(statusCode, "error"));
-
-        var result = await sut.GetRegistrationOverseasSitesAsync(
-            "org-1",
-            "reg-1",
-            TestContext.Current.CancellationToken
-        );
-
-        result.IsSuccess.Should().BeFalse();
-        result.Error!.Kind.Should().Be(expectedKind);
-    }
-
-    [Fact]
-    public async Task GetRegistrationOverseasSitesAsync_InvalidJson_ReturnsDeserializationError()
-    {
-        var sut = BuildSut(new RawStringHandler(HttpStatusCode.OK, "not-valid-json{{{{"));
-
-        var result = await sut.GetRegistrationOverseasSitesAsync(
-            "org-1",
-            "reg-1",
-            TestContext.Current.CancellationToken
-        );
-
-        result.IsSuccess.Should().BeFalse();
-        result.Error!.Kind.Should().Be(ReExErrorKind.DeserializationError);
-    }
-
-    [Fact]
-    public async Task GetRegistrationOverseasSitesAsync_Timeout_ReturnsTimeoutError()
-    {
-        var sut = BuildSut(new TimeoutHandler());
-
-        var result = await sut.GetRegistrationOverseasSitesAsync(
-            "org-1",
-            "reg-1",
-            TestContext.Current.CancellationToken
-        );
-
-        result.IsSuccess.Should().BeFalse();
-        result.Error!.Kind.Should().Be(ReExErrorKind.Timeout);
-    }
-
-    [Fact]
-    public async Task GetRegistrationOverseasSitesAsync_TransportError_ReturnsTransportError()
-    {
-        var sut = BuildSut(new ExceptionHandler(new HttpRequestException("connection refused")));
-
-        var result = await sut.GetRegistrationOverseasSitesAsync(
-            "org-1",
-            "reg-1",
-            TestContext.Current.CancellationToken
-        );
-
-        result.IsSuccess.Should().BeFalse();
-        result.Error!.Kind.Should().Be(ReExErrorKind.TransportError);
-    }
-
-    [Fact]
-    public async Task GetRegistrationOverseasSitesAsync_NeverThrowsForHttpErrors()
-    {
-        foreach (
-            var status in new[]
-            {
-                HttpStatusCode.Unauthorized,
-                HttpStatusCode.NotFound,
-                HttpStatusCode.InternalServerError,
-            }
-        )
-        {
-            var sut = BuildSut(new RawStringHandler(status, "err"));
-            var act = () => sut.GetRegistrationOverseasSitesAsync("org-1", "reg-1");
-            await act.Should().NotThrowAsync();
-        }
-    }
-
-    // ── ORS-A vs ORS-R route distinction ────────────────────────────────────────
+    // ── Route shape ──────────────────────────────────────────────────────────
 
     [Fact]
     public async Task GetOverseasSiteAsync_RequestsAccreditationScopedPathWithAccreditationSegment()
