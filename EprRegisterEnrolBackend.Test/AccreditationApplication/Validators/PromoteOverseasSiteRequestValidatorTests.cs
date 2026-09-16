@@ -41,7 +41,10 @@ public class PromoteOverseasSiteRequestValidatorTests
         // Y46-Y49 are on the approved list but match neither shape the old
         // BaselOecdRegex accepted - this is the bug the membership check fixes.
         // Matching is case-insensitive.
-        var request = ValidRequest() with { Code1 = code };
+        var request = ValidRequest() with
+        {
+            Code1 = code,
+        };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor(r => r.Code1);
     }
@@ -61,7 +64,10 @@ public class PromoteOverseasSiteRequestValidatorTests
     {
         // "Z9999" matches the old shape regex (letter + 4 digits) but is not on the
         // approved list, so it must now be rejected by the membership check.
-        var request = ValidRequest() with { Code1 = code };
+        var request = ValidRequest() with
+        {
+            Code1 = code,
+        };
         var result = _validator.TestValidate(request);
         result.ShouldHaveValidationErrorFor(r => r.Code1);
     }
@@ -101,12 +107,7 @@ public class PromoteOverseasSiteRequestValidatorTests
     [Fact]
     public void DistinctCodes_PassesValidation()
     {
-        var request = ValidRequest() with
-        {
-            Code1 = "A1181",
-            Code2 = "Y46",
-            Code3 = "B1010",
-        };
+        var request = ValidRequest() with { Code1 = "A1181", Code2 = "Y46", Code3 = "B1010" };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor("Code2");
     }
@@ -142,7 +143,8 @@ public class PromoteOverseasSiteRequestValidatorTests
     [InlineData("-90.0000, 180.0000")]
     [InlineData("52.520008,13.404954")]
     [InlineData("51.5034 , -0.1275")]
-    public void CoordinatesWithAtLeast4DecimalPlaces_PassesValidation(string coordinates)
+    [InlineData("51.5033999999, -0.1274999999")] // exactly 10 d.p. — new ceiling
+    public void CoordinatesWithinTheAllowedDecimalPlaceRange_PassesValidation(string coordinates)
     {
         var request = ValidRequest() with { Coordinates = coordinates };
         var result = _validator.TestValidate(request);
@@ -154,19 +156,23 @@ public class PromoteOverseasSiteRequestValidatorTests
     [InlineData("51.5034")]
     [InlineData("51.503, -0.127")]
     [InlineData("51.5, -0.1275")]
-    public void CoordinatesWithFewerThan4DecimalPlacesOrBadFormat_FailsValidation(
+    [InlineData("51.50339999999, -0.12749999999")] // 11 d.p. — over the new ceiling
+    public void CoordinatesOutsideTheAllowedDecimalPlaceRangeOrBadFormat_FailsValidation(
         string coordinates
     )
     {
         // RA-479: the promote path writes Coordinates to the same field as add-ORS
         // (ApplyPromotedFields), so it must enforce the same precision rule — this used
         // to be the gap where only AddOverseasSiteRequestValidator checked it.
-        var request = ValidRequest() with { Coordinates = coordinates };
+        var request = ValidRequest() with
+        {
+            Coordinates = coordinates,
+        };
         var result = _validator.TestValidate(request);
         result
             .ShouldHaveValidationErrorFor(r => r.Coordinates)
             .WithErrorMessage(
-                "Coordinates must be latitude and longitude to at least 4 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
+                "Coordinates must be latitude and longitude to between 4 and 10 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
             );
     }
 

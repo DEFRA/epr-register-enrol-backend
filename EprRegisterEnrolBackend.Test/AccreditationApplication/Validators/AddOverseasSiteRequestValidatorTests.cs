@@ -133,7 +133,8 @@ public class AddOverseasSiteRequestValidatorTests
     [InlineData("-90.0000, 180.0000")]
     [InlineData("52.520008,13.404954")]
     [InlineData("51.5034 , -0.1275")]
-    public void CoordinatesWithAtLeast4DecimalPlaces_PassesValidation(string coordinates)
+    [InlineData("51.5033999999, -0.1274999999")] // exactly 10 d.p. — new ceiling
+    public void CoordinatesWithinTheAllowedDecimalPlaceRange_PassesValidation(string coordinates)
     {
         var request = ValidRequest() with { Coordinates = coordinates };
         var result = _validator.TestValidate(request);
@@ -147,7 +148,10 @@ public class AddOverseasSiteRequestValidatorTests
     {
         // Coordinates is optional; the frontend treats it as required on its own form,
         // but this validator only kicks in once a non-blank value is actually supplied.
-        var request = ValidRequest() with { Coordinates = coordinates };
+        var request = ValidRequest() with
+        {
+            Coordinates = coordinates,
+        };
         var result = _validator.TestValidate(request);
         result.ShouldNotHaveValidationErrorFor(r => r.Coordinates);
     }
@@ -157,7 +161,8 @@ public class AddOverseasSiteRequestValidatorTests
     [InlineData("51.5034")]
     [InlineData("51.503, -0.127")]
     [InlineData("51.5, -0.1275")]
-    public void CoordinatesWithFewerThan4DecimalPlacesOrBadFormat_FailsValidation(
+    [InlineData("51.50339999999, -0.12749999999")] // 11 d.p. — over the new ceiling
+    public void CoordinatesOutsideTheAllowedDecimalPlaceRangeOrBadFormat_FailsValidation(
         string coordinates
     )
     {
@@ -166,7 +171,7 @@ public class AddOverseasSiteRequestValidatorTests
         result
             .ShouldHaveValidationErrorFor(r => r.Coordinates)
             .WithErrorMessage(
-                "Coordinates must be latitude and longitude to at least 4 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
+                "Coordinates must be latitude and longitude to between 4 and 10 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
             );
     }
 
