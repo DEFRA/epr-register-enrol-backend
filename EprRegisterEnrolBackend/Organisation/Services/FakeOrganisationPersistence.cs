@@ -22,6 +22,7 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50014 = ObjectId.Parse("aaa000000000000000050014");
     public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
     public static readonly ObjectId Reg50016 = ObjectId.Parse("aaa000000000000000050016");
+    public static readonly ObjectId Reg50017 = ObjectId.Parse("aaa000000000000000050017");
 
     private static readonly string[] PerfTestMaterials =
     [
@@ -619,6 +620,61 @@ public class FakeOrganisationPersistence
             }
         );
 
+        // RA-580-2 regression-guard org: dedicated to coordinate-precision.e2e.js, for the
+        // same reason orgs 50013-50016 above are each dedicated to their own spec — that spec
+        // adds an ORS site via the wizard on every `it()` block, which is exactly the shape of
+        // repeated, cross-test reuse the org-50005 Seed race (documented above) corrupts under
+        // concurrent wdio workers. Mirrors org 50014's shape (exporter, empty OverseasSites)
+        // rather than org 50015's pre-seeded-sites pattern: this spec doesn't assert against
+        // any pre-existing site, only the one it adds itself each run.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50017,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "Coordinate Precision Test Exports Ltd",
+                    TradingName = "Coordinate Precision Test Exports",
+                    RegistrationNumber = "EXP-50017",
+                    CompaniesHouseNumber = "12345017",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "Export House",
+                        Town = "Southampton",
+                        Postcode = "SO14 2AQ",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Export Manager",
+                    Email = "info@coordinateprecisiontestexports.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50017,
+                        SiteId = "REG017",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeExporter,
+                        OverseasSites = [],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50017" },
+                        ],
+                    },
+                ],
+            }
+        );
+
         // RA-512: perftest fixtures, generated (not hand-written) because 200
         // near-identical literals would be unreviewable. See Impl-RA-512.md.
         AddPerfTestReprocessors();
@@ -683,10 +739,7 @@ public class FakeOrganisationPersistence
                             },
                             WasteManagementPermits =
                             [
-                                new WasteManagementPermitModel
-                                {
-                                    PermitNumber = $"WML{orgId}",
-                                },
+                                new WasteManagementPermitModel { PermitNumber = $"WML{orgId}" },
                             ],
                         },
                     ],
@@ -753,10 +806,7 @@ public class FakeOrganisationPersistence
                             OverseasSites = overseasSites,
                             WasteManagementPermits =
                             [
-                                new WasteManagementPermitModel
-                                {
-                                    PermitNumber = $"WML{orgId}",
-                                },
+                                new WasteManagementPermitModel { PermitNumber = $"WML{orgId}" },
                             ],
                         },
                     ],

@@ -113,9 +113,7 @@ public class FakeOrganisationPersistenceTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task SearchByValueAsync_NullOrWhitespaceTerm_ReturnsAllOrganisations(
-        string? term
-    )
+    public async Task SearchByValueAsync_NullOrWhitespaceTerm_ReturnsAllOrganisations(string? term)
     {
         var sut = new FakeOrganisationPersistence();
 
@@ -309,8 +307,7 @@ public class FakeOrganisationPersistenceTests
         reprocessors
             .Should()
             .OnlyContain(o =>
-                o.WasteProcessingTypes!.Count == 1
-                && o.WasteProcessingTypes![0] == "reprocessor"
+                o.WasteProcessingTypes!.Count == 1 && o.WasteProcessingTypes![0] == "reprocessor"
             );
 
         foreach (var summary in reprocessors)
@@ -411,10 +408,13 @@ public class FakeOrganisationPersistenceTests
             50014,
             50015,
             50016,
+            50017,
         ];
 
         var all = (await sut.GetAllAsync()).ToList();
-        var perfTestOrgIds = all.Where(o => o.OrgId is (>= 60001 and <= 60100) or (>= 61001 and <= 61100))
+        var perfTestOrgIds = all.Where(o =>
+                o.OrgId is (>= 60001 and <= 60100) or (>= 61001 and <= 61100)
+            )
             .Select(o => o.OrgId)
             .ToList();
 
