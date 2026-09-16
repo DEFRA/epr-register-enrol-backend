@@ -103,6 +103,15 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddExceptionHandler<ExceptionLoggingHandler>();
     builder.Services.AddProblemDetails();
 
+    // RA-463: HSTS with preload so browsers (and the HSTS preload list, once submitted)
+    // enforce HTTPS for this host even before the first request completes.
+    builder.Services.AddHsts(options =>
+    {
+        options.MaxAge = TimeSpan.FromDays(365);
+        options.IncludeSubDomains = true;
+        options.Preload = true;
+    });
+
     // Add healthcheck, this is required for the platform to know your service is alive.
     // "ready" is a separate tag/endpoint (see SetupApplication) — required config gaps
     // (RA-441) degrade readiness, not liveness, so a broken deploy is visible without
@@ -347,6 +356,13 @@ static WebApplication SetupApplication(WebApplication app)
         startupLogger.LogWarning(
             "AUTH_SHARED_SECRET__FRONTEND is not configured — inbound Frontend-authenticated requests will be rejected."
         );
+
+    // RA-463: HSTS instructs browsers to only talk to us over HTTPS. Skipped in
+    // Development so local HTTP workflows aren't affected.
+    if (!app.Environment.IsDevelopment())
+    {
+        app.UseHsts();
+    }
 
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
