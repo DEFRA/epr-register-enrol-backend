@@ -1924,6 +1924,10 @@ public static class AccreditationApplicationEndpoints
         if (site is null)
             return Results.NotFound();
 
+        // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
+        if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
+            return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
+
         var scanStatus = scannedFile.FileStatus == "complete" ? "Clean" : "Infected";
 
         site.BesEvidence ??= new BesEvidenceModel();
@@ -2650,6 +2654,10 @@ public static class AccreditationApplicationEndpoints
 
         if (application.SamplingPlan.Files.Count >= 10)
             return Results.UnprocessableEntity("Maximum of 10 files permitted per application.");
+
+        // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
+        if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
+            return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
 
         var file = new AccreditationApplicationFile
         {

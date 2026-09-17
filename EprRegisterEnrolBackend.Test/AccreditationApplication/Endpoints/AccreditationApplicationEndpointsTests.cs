@@ -3006,6 +3006,104 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
+    // RA-571 AC01/AC03
+    [Fact]
+    public async Task AddFile_DuplicateFilename_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.SamplingPlan.Files.Add(
+                new AccreditationApplicationFile
+                {
+                    FileId = "existing",
+                    Filename = "Evidence Rafa.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = string.Empty,
+                    S3Key = "sampling-plans/existing",
+                }
+            );
+        });
+
+        // RA-571 AC02: same base name, different extension — still a duplicate.
+        var fileUploadId = await SeedValidatedUpload(
+            "file-dup",
+            "Evidence Rafa.docx",
+            "sampling-plans/file-dup",
+            contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        var request = new FileUploadRequest
+        {
+            FileUploadId = fileUploadId,
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var persisted = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        persisted!.SamplingPlan.Files.Should().ContainSingle();
+    }
+
+    // RA-571 AC01/AC03: "within a single application submission" spans every section — a
+    // sampling-plan upload colliding with an existing BES evidence filename on an overseas
+    // site is rejected too.
+    [Fact]
+    public async Task AddFile_DuplicateFilenameAgainstBesEvidenceOnAnotherSection_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Test Site",
+                        BesEvidence = new BesEvidenceModel
+                        {
+                            BesEvidenceUploads =
+                            [
+                                new BesEvidenceFileModel
+                                {
+                                    FileId = "existing-bes",
+                                    Filename = "evidence.pdf",
+                                    S3Key = "bes-evidence/existing-bes",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            };
+        });
+
+        var fileUploadId = await SeedValidatedUpload(
+            "file-dup-2",
+            "EVIDENCE.PDF",
+            "sampling-plans/file-dup-2"
+        );
+        var request = new FileUploadRequest
+        {
+            FileUploadId = fileUploadId,
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
     [Fact]
     public async Task AddFile_MissingDocumentType_Returns201AndPersistsNull()
     {
