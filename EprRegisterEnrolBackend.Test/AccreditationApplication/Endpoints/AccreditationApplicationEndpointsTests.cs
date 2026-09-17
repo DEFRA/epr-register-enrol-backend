@@ -2699,6 +2699,77 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
+    public async Task Withdraw_OrsAndBesQueriedWithCleanEvidence_BesEvidenceRecomputesToCompleted()
+    {
+        // RA-583: Withdraw shares ComputeCurrentStatus with Resubmit — one regression case is
+        // enough since the underlying logic is identical.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    SectionStatus = SectionStatus.Queried,
+                    Sites =
+                    [
+                        new OverseasSiteModel
+                        {
+                            SiteId = 1,
+                            SiteName = "Site 1",
+                            Selected = true,
+                            BesEvidence = new BesEvidenceModel
+                            {
+                                BesEvidenceUploads =
+                                [
+                                    new BesEvidenceFileModel
+                                    {
+                                        FileId = "file-1",
+                                        Filename = "evidence.pdf",
+                                        ScanStatus = "Clean",
+                                        S3Key = "key-1",
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                };
+                a.BesEvidence = new AccreditationApplicationBesEvidence
+                {
+                    SectionStatus = SectionStatus.Queried,
+                };
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify ORS and BES",
+                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
+                };
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new WithdrawResult(true)));
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.BesEvidence!.SectionStatus.Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
     public async Task Withdraw_WhenAlreadyWithdrawn_ReturnsIdempotentOkWithoutCallingAdapter()
     {
         Reset();
@@ -6283,6 +6354,85 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.Prns.SectionStatus.Should().Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Resubmit_OrsAndBesQueriedWithCleanEvidence_BesEvidenceRecomputesToCompleted()
+    {
+        // RA-583: a query raised on both ORS and BES used to leave BES stuck on NotStarted after
+        // resubmit regardless of whether the operator had re-completed the BES evidence, because
+        // ComputeCurrentStatus hardcoded BesEvidence to NotStarted. This seeds a site with Clean
+        // evidence so only a correct IsBesEvidenceComplete-equivalent calculation produces
+        // Completed.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = Guid.NewGuid();
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    SectionStatus = SectionStatus.Queried,
+                    Sites =
+                    [
+                        new OverseasSiteModel
+                        {
+                            SiteId = 1,
+                            SiteName = "Site 1",
+                            Selected = true,
+                            BesEvidence = new BesEvidenceModel
+                            {
+                                BesEvidenceUploads =
+                                [
+                                    new BesEvidenceFileModel
+                                    {
+                                        FileId = "file-1",
+                                        Filename = "evidence.pdf",
+                                        ScanStatus = "Clean",
+                                        S3Key = "key-1",
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                };
+                a.BesEvidence = new AccreditationApplicationBesEvidence
+                {
+                    SectionStatus = SectionStatus.Queried,
+                };
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify ORS and BES",
+                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
+                };
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new ResumeFromQueryResult(true)));
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest
+            {
+                FullName = "Jane",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.BesEvidence!.SectionStatus.Should().Be(SectionStatus.Completed);
     }
 
     // --- StatusChangedFromCaseManagement ---

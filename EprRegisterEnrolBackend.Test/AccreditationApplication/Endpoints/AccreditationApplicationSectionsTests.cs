@@ -157,18 +157,140 @@ public class AccreditationApplicationSectionsTests
     }
 
     [Fact]
-    public void ComputeCurrentStatus_BesEvidence_IsAlwaysNotStarted()
+    public void ComputeCurrentStatus_BesEvidence_AllRequiredSitesHaveCleanEvidence_IsCompleted()
     {
         var application = CreateApplication();
         application.BesEvidence = new AccreditationApplicationBesEvidence
         {
             SectionStatus = SectionStatus.Queried,
         };
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    SiteName = "Site 1",
+                    Selected = true,
+                    BesEvidence = new BesEvidenceModel
+                    {
+                        BesEvidenceUploads =
+                        [
+                            new BesEvidenceFileModel
+                            {
+                                FileId = "file-1",
+                                Filename = "evidence.pdf",
+                                ScanStatus = "Clean",
+                                S3Key = "key-1",
+                            },
+                        ],
+                    },
+                },
+            ],
+        };
 
         AccreditationApplicationSections
             .ComputeCurrentStatus(application, OperatorSection.BesEvidence)
             .Should()
-            .Be(SectionStatus.NotStarted);
+            .Be(SectionStatus.Completed);
+    }
+
+    [Fact]
+    public void ComputeCurrentStatus_BesEvidence_RequiredSiteHasNoEvidence_IsInProgress()
+    {
+        var application = CreateApplication();
+        application.BesEvidence = new AccreditationApplicationBesEvidence
+        {
+            SectionStatus = SectionStatus.Queried,
+        };
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel { SiteId = 1, SiteName = "Site 1", Selected = true },
+            ],
+        };
+
+        AccreditationApplicationSections
+            .ComputeCurrentStatus(application, OperatorSection.BesEvidence)
+            .Should()
+            .Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void ComputeCurrentStatus_BesEvidence_RequiredSiteHasInfectedEvidence_IsInProgress()
+    {
+        var application = CreateApplication();
+        application.BesEvidence = new AccreditationApplicationBesEvidence
+        {
+            SectionStatus = SectionStatus.Queried,
+        };
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    SiteName = "Site 1",
+                    Selected = true,
+                    BesEvidence = new BesEvidenceModel
+                    {
+                        BesEvidenceUploads =
+                        [
+                            new BesEvidenceFileModel
+                            {
+                                FileId = "file-1",
+                                Filename = "evidence.pdf",
+                                ScanStatus = "Infected",
+                                S3Key = "key-1",
+                            },
+                        ],
+                    },
+                },
+            ],
+        };
+
+        AccreditationApplicationSections
+            .ComputeCurrentStatus(application, OperatorSection.BesEvidence)
+            .Should()
+            .Be(SectionStatus.InProgress);
+    }
+
+    [Fact]
+    public void ComputeCurrentStatus_BesEvidence_NoSitesRequireEvidence_IsCompleted()
+    {
+        var application = CreateApplication();
+        application.BesEvidence = new AccreditationApplicationBesEvidence
+        {
+            SectionStatus = SectionStatus.Queried,
+        };
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    SiteName = "EU Site",
+                    Selected = true,
+                    IsEu = true,
+                },
+                new OverseasSiteModel
+                {
+                    SiteId = 2,
+                    SiteName = "Conditions Of Export Site",
+                    Selected = true,
+                    ConditionsOfExport = true,
+                },
+            ],
+        };
+
+        AccreditationApplicationSections
+            .ComputeCurrentStatus(application, OperatorSection.BesEvidence)
+            .Should()
+            .Be(SectionStatus.Completed);
     }
 
     // --- SnapshotSection ---
