@@ -95,6 +95,13 @@ public static class AccreditationApplicationEndpoints
                 DeleteBesEvidenceFile
             )
         );
+        // RA-570: date-only Amend of an already-uploaded BES evidence file.
+        FrontendOnly(
+            group.MapPatch(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files/{fileId}",
+                PatchBesEvidenceFile
+            )
+        );
         FrontendOnly(
             group.MapPatch("{organisationId}/{applicationId}/bes-evidence", PatchBesEvidenceSection)
         );
@@ -2020,6 +2027,18 @@ public static class AccreditationApplicationEndpoints
         if (site?.BesEvidence is null)
             return Results.NotFound();
 
+        if (!site.BesEvidence.BesEvidenceUploads.Any(f => f.FileId == fileId))
+            return Results.NotFound();
+
+        // RA-570: a BES evidence site can never be left with zero files - block deleting the
+        // last remaining upload instead of silently emptying the section (mirrors the
+        // UnprocessableEntity style RecomputeOverseasSitesSectionStatus uses for its own
+        // equivalent "not a valid state to be in" business rule, above).
+        if (site.BesEvidence.BesEvidenceUploads.Count == 1)
+            return Results.UnprocessableEntity(
+                "Cannot delete the last BES evidence file - at least one file must remain."
+            );
+
         var removed = site.BesEvidence.BesEvidenceUploads.RemoveAll(f => f.FileId == fileId);
         if (removed == 0)
             return Results.NotFound();
@@ -2029,6 +2048,53 @@ public static class AccreditationApplicationEndpoints
         return updated is null
             ? Results.Problem("Failed to delete BES evidence file.")
             : Results.Ok();
+    }
+
+    private static async Task<IResult> PatchBesEvidenceFile(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        string fileId,
+        PatchBesEvidenceFileRequest request,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "BES evidence section is not editable in the application's current status."
+            );
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return Results.NotFound();
+
+        var file = site.BesEvidence?.BesEvidenceUploads.FirstOrDefault(f => f.FileId == fileId);
+        if (file is null)
+            return Results.NotFound();
+
+        // Each date is independently optional - the Amend flow can patch just one without
+        // touching the other, or re-sending/re-uploading the rest of the file (RA-570).
+        if (request.BesEvidenceValidFromDate is not null)
+            file.BesEvidenceValidFromDate = request.BesEvidenceValidFromDate;
+        if (request.BesEvidenceExpiryDate is not null)
+            file.BesEvidenceExpiryDate = request.BesEvidenceExpiryDate;
+
+        application.DateLastEdited = DateTime.UtcNow;
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update BES evidence file.")
+            : Results.Ok(updated);
     }
 
     private static async Task<IResult> PatchBesEvidenceSection(
