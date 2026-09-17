@@ -169,6 +169,16 @@ public class PatchBesEvidenceRequest
     public bool? DoYouWantToUploadMoreEvidence { get; set; }
 }
 
+// RA-570: date-only edit of an already-uploaded BES evidence file (the Amend flow) - each date
+// is independently optional so the caller can patch just one without resending the other or
+// re-uploading the file itself. Filename/ContentType/ScanStatus/S3Key/S3Bucket are deliberately
+// NOT editable here, same H6 reasoning as AddBesEvidenceFileRequest.
+public class PatchBesEvidenceFileRequest
+{
+    public string? BesEvidenceValidFromDate { get; set; }
+    public string? BesEvidenceExpiryDate { get; set; }
+}
+
 // RA-469: regulator-scoped correction of an ORS's recycling operation codes only - no other
 // overseas-site fields are editable through this endpoint.
 public class PatchRecyclingOperationsRequest
