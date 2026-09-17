@@ -18,8 +18,10 @@ public static class CoordinatesValidation
     // an explicit timeout rather than being left to run unbounded on the request thread.
     // ValidCoordinates() below caps length (MaximumLength) ahead of this with
     // CascadeMode.Stop so the regex never sees unbounded input.
+    // RA-580-2: widened from an unbounded "4+ dp" floor to a 4-10 dp inclusive range — 4 dp
+    // remains the required minimum accuracy (~11m, per RA-479), 10 dp is the new ceiling.
     public static readonly Regex FormatRegex = new(
-        @"^-?\d+\.\d{4,}\s*,\s*-?\d+\.\d{4,}$",
+        @"^-?\d+\.\d{4,10}\s*,\s*-?\d+\.\d{4,10}$",
         RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(100)
     );
@@ -40,7 +42,7 @@ public static class CoordinatesValidation
             .MaximumLength(50)
             .Must(c => FormatRegex.IsMatch(c!))
             .WithMessage(
-                "Coordinates must be latitude and longitude to at least 4 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
+                "Coordinates must be latitude and longitude to between 4 and 10 decimal places, separated by a comma, e.g. 51.5034, -0.1275."
             )
             .Must(c => IsWithinRange(c!))
             .WithMessage(

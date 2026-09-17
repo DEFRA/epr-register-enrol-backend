@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Dtos;
@@ -532,23 +534,95 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         };
 
     // ReEx's own spec types coordinates as a plain string ("lat, long"), but the DTO keeps it
-    // as JsonElement since real ReEx responses have only ever sent null so far. Only accept a
-    // JSON string that also satisfies the same format/range rule operator-submitted
-    // coordinates must pass (CoordinatesValidation) — anything else (absent, null, wrong
-    // shape, malformed, out of range) falls back to null rather than persisting a value the
-    // rest of the domain wouldn't accept from a user.
+    // as JsonElement since real ReEx responses have only ever sent null so far. Accepts either
+    // that decimal shape or a DMS string (RA-580-2, see TryParseDms) — anything else (absent,
+    // null, wrong shape, malformed, out of range) falls back to null rather than persisting a
+    // value the rest of the domain wouldn't accept from a user. This fallback never throws.
     private static string? MapCoordinates(JsonElement? coordinates)
     {
         if (coordinates is not { ValueKind: JsonValueKind.String } element)
             return null;
 
         var value = element.GetString();
-        return
-            !string.IsNullOrWhiteSpace(value)
-            && CoordinatesValidation.FormatRegex.IsMatch(value)
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (
+            CoordinatesValidation.FormatRegex.IsMatch(value)
             && CoordinatesValidation.IsWithinRange(value)
-            ? value
+        )
+            return value;
+
+        return TryParseDms(value);
+    }
+
+    // RA-580-2: DMS (degrees/minutes/seconds) input support, scoped to this ReEx import path
+    // only — e.g. 40°00'00.0"N 74°00'00.0"E or 42°01'34.0"S 74°00'00.0"W. Deliberately not on
+    // CoordinatesValidation itself: that class is the shared, decimal-only rule the manual
+    // Add/Promote overseas-site request validators enforce, and must stay that way. Lenient
+    // about formatting ReEx might actually send: the unicode degree/minute/second marks or a
+    // plausible ASCII substitute ("deg", a straight ' or "), variable whitespace, and either a
+    // comma or whitespace between the lat and long components.
+    //
+    // S6444: given an explicit timeout for the same reason as CoordinatesValidation.FormatRegex
+    // — this reads untrusted (if indirectly, via ReEx) input.
+    // Minutes and seconds are bounded to [0-5]?\d so a malformed value (e.g. 99 minutes)
+    // fails the match and falls back to null, rather than silently converting to a
+    // plausible-looking but wrong decimal coordinate (60 minutes would otherwise add a full
+    // degree that was never really there).
+    private static readonly Regex DmsRegex = new(
+        @"^\s*(?<latDeg>\d{1,2})\s*(?:°|deg\.?)\s*(?<latMin>[0-5]?\d)\s*(?:'|′)\s*(?<latSec>[0-5]?\d(?:\.\d+)?)\s*(?:""|″)\s*(?<latDir>[NSns])\s*(?:,\s*|\s+)(?<lonDeg>\d{1,3})\s*(?:°|deg\.?)\s*(?<lonMin>[0-5]?\d)\s*(?:'|′)\s*(?<lonSec>[0-5]?\d(?:\.\d+)?)\s*(?:""|″)\s*(?<lonDir>[EWew])\s*$",
+        RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(100)
+    );
+
+    // Converts a successfully-parsed DMS pair to a decimal "lat, long" string — no new stored
+    // format, it lands in the same field a decimal value would. Re-validated through
+    // CoordinatesValidation before being returned, so a DMS value that converts to something
+    // out of range (or that would sit outside the 4-10 dp window) falls back to null exactly
+    // like a bad decimal value would, rather than bypassing the rule via a different input path.
+    private static string? TryParseDms(string value)
+    {
+        var match = DmsRegex.Match(value);
+        if (!match.Success)
+            return null;
+
+        var groups = match.Groups;
+        var latitude = DmsToDecimalDegrees(
+            groups["latDeg"].Value,
+            groups["latMin"].Value,
+            groups["latSec"].Value,
+            groups["latDir"].Value
+        );
+        var longitude = DmsToDecimalDegrees(
+            groups["lonDeg"].Value,
+            groups["lonMin"].Value,
+            groups["lonSec"].Value,
+            groups["lonDir"].Value
+        );
+        var converted =
+            $"{latitude.ToString("F6", CultureInfo.InvariantCulture)}, {longitude.ToString("F6", CultureInfo.InvariantCulture)}";
+
+        return
+            CoordinatesValidation.FormatRegex.IsMatch(converted)
+            && CoordinatesValidation.IsWithinRange(converted)
+            ? converted
             : null;
+    }
+
+    // dd = d + m/60 + s/3600, negated for S/W — the standard DMS-to-decimal-degrees formula.
+    private static double DmsToDecimalDegrees(
+        string degrees,
+        string minutes,
+        string seconds,
+        string direction
+    )
+    {
+        var decimalDegrees =
+            double.Parse(degrees, CultureInfo.InvariantCulture)
+            + double.Parse(minutes, CultureInfo.InvariantCulture) / 60.0
+            + double.Parse(seconds, CultureInfo.InvariantCulture) / 3600.0;
+        return direction is "S" or "s" or "W" or "w" ? -decimalDegrees : decimalDegrees;
     }
 
     // RA-580-2: flattened display string for an overseas site's address — mirrors the join

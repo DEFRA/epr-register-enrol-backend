@@ -467,6 +467,83 @@ public class HttpReExApiAdapterTests
         result.Value!.OverseasSites[0].Coordinates.Should().Be("51.5034, -0.1275");
     }
 
+    // RA-580-2: DMS (degrees/minutes/seconds) input, ReEx mapping path only — MapCoordinates
+    // accepts a DMS string as an alternative to decimal and converts it to decimal degrees
+    // before storing, tolerant of unicode vs ASCII degree/minute/second marks, whitespace, and
+    // a comma or space separator between the lat and long components.
+    [Theory]
+    [InlineData("40°00'00.0\"N 74°00'00.0\"E", "40.000000, 74.000000")]
+    [InlineData("42°01'34.0\"S 74°00'00.0\"W", "-42.026111, -74.000000")]
+    [InlineData("48°51'24.0\"N 2°21'08.0\"E", "48.856667, 2.352222")] // Paris
+    [InlineData("36°03'21.0\"N 112°08'22.0\"W", "36.055833, -112.139444")] // Grand Canyon
+    [InlineData("40deg00'00.0\"N 74deg00'00.0\"E", "40.000000, 74.000000")] // ASCII "deg" substitute
+    [InlineData("40 ° 00 ' 00.0 \" N   74 ° 00 ' 00.0 \" E", "40.000000, 74.000000")] // loose whitespace
+    [InlineData("40°00'00.0\"N, 74°00'00.0\"E", "40.000000, 74.000000")] // comma separator
+    public async Task GetAccreditationAsync_ExporterRegistration_MapsDmsCoordinatesToDecimal(
+        string dmsCoordinates,
+        string expectedDecimal
+    )
+    {
+        var overseasSitesJson = $$"""
+            {
+              "001": { "name": "Site With DMS Coordinates", "country": "France", "coordinates": "{{dmsCoordinates.Replace(
+                "\"",
+                "\\\""
+            )}}" }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OverseasSites[0].Coordinates.Should().Be(expectedDecimal);
+    }
+
+    // RA-580-2: DMS input that looks plausible but is invalid still falls back to null — the
+    // existing silent-fallback behaviour is unchanged by adding a second accepted input shape.
+    [Theory]
+    [InlineData("40°00'00.0\"Q 74°00'00.0\"E")] // invalid hemisphere letter
+    [InlineData("91°00'00.0\"N 74°00'00.0\"E")] // DMS-shaped but out of lat range once converted
+    [InlineData("40°00'00.0\"N")] // only one component, no longitude
+    [InlineData("not a coordinate at all")] // neither decimal nor DMS
+    [InlineData("40°99'00.0\"N 74°00'00.0\"E")] // minutes out of 0-59 range
+    [InlineData("40°00'99.0\"N 74°00'00.0\"E")] // seconds out of 0-59 range
+    public async Task GetAccreditationAsync_ExporterRegistration_MalformedDmsCoordinates_FallsBackToNull(
+        string malformedDms
+    )
+    {
+        var overseasSitesJson = $$"""
+            {
+              "001": { "name": "Site With Malformed DMS Coordinates", "country": "France", "coordinates": "{{malformedDms.Replace(
+                "\"",
+                "\\\""
+            )}}" }
+            }
+            """;
+        var sut = BuildSut(OrganisationJson, overseasSitesJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result
+            .Value!.OverseasSites[0]
+            .Coordinates.Should()
+            .BeNull(
+                because: "coordinates that are neither valid decimal nor valid DMS must still fall back to null, not throw"
+            );
+    }
+
     [Theory]
     [InlineData("null")] // JSON null
     [InlineData("\"not-coordinates\"")] // wrong format
