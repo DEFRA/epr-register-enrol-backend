@@ -36,12 +36,15 @@ ENTRYPOINT ["dotnet", "watch", "run", "--no-launch-profile", "--non-interactive"
 FROM build AS publish
 RUN dotnet publish EprRegisterEnrolBackend -c Release -o /app/publish /p:UseAppHost=false
 
-
-ENV ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
-
 # Final production image
 FROM base AS final
 WORKDIR /app
+# TLS terminates upstream in CDP, so requests reach this container over plain HTTP with
+# X-Forwarded-Proto: https. This env var makes ASP.NET Core apply forwarded headers
+# automatically, so downstream middleware (e.g. UseHsts) sees the request as HTTPS. Must be
+# set here, in the final stage's own image: ENV does not cross the FROM boundary from
+# `publish`, so setting it there has no effect on the running container.
+ENV ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
 COPY --from=publish --chown=$APP_UID:$APP_UID /app/publish .
 # S6471: the published app must not run as root. The aspnet base image already ships a
 # non-root "app" account (UID/GID 1654, exported as APP_UID), so /app is handed to it and
