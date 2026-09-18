@@ -357,6 +357,10 @@ static WebApplication SetupApplication(WebApplication app)
             "AUTH_SHARED_SECRET__FRONTEND is not configured — inbound Frontend-authenticated requests will be rejected."
         );
 
+    // UseExceptionHandler must be the very first middleware so unhandled exceptions
+    // become a ProblemDetails response instead of leaking a stack trace.
+    app.UseExceptionHandler();
+
     // RA-463: HSTS instructs browsers to only talk to us over HTTPS. Skipped in
     // Development so local HTTP workflows aren't affected.
     if (!app.Environment.IsDevelopment())
@@ -364,7 +368,6 @@ static WebApplication SetupApplication(WebApplication app)
         app.UseHsts();
     }
 
-    app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
     // No app.UseAuthentication(): CaseManagement is the only scheme registered, so ASP.NET Core
