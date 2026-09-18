@@ -887,6 +887,49 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
+    public async Task ResumeFromQueryAsync_BesEvidenceSection_EmitsSameSitesAsOverseasSitesSection()
+    {
+        // RA-570 follow-up: a query raised only against "broadly-equivalent-standards" (no ORS)
+        // used to send only { sectionStatus } for the BesEvidence section - the operator's
+        // resubmitted/amended/deleted evidence files (which live per-site, not on this section)
+        // never reached ManagementBe, so the regulator's view stayed stale. BesEvidence must now
+        // carry the identical per-site projection, files included, that the OverseasSites section
+        // sends - same source data, so byte-identical once sectionStatus is set aside.
+        var sections = await CapturedResumeSections(
+            ApplicationWithRa292Data(),
+            "broadly-equivalent-standards"
+        );
+
+        var besEvidenceSection = sections.GetProperty("BesEvidence");
+        Canonical(besEvidenceSection.GetProperty("sites").GetRawText())
+            .Should()
+            .Be(
+                Canonical(
+                    JsonDocument.Parse(ExpectedOverseasSitesJson).RootElement.GetProperty("sites").GetRawText()
+                )
+            );
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_BesEvidenceSection_StillIncludesSectionStatus()
+    {
+        var application = ApplicationWithRa292Data();
+        application.BesEvidence = new AccreditationApplicationBesEvidence
+        {
+            SectionStatus = SectionStatus.Completed,
+        };
+
+        var sections = await CapturedResumeSections(application, "broadly-equivalent-standards");
+
+        sections
+            .GetProperty("BesEvidence")
+            .GetProperty("sectionStatus")
+            .GetString()
+            .Should()
+            .Be("Completed");
+    }
+
+    [Fact]
     public async Task ResumeFromQueryAsync_PrnsSection_EmitsAuthorisersWithIsNewFlag()
     {
         var sections = await CapturedResumeSections(
