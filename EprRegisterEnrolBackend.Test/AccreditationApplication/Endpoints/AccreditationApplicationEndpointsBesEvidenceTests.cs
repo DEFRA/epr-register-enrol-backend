@@ -486,7 +486,316 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
     }
 
     [Fact]
+    public async Task DeleteBesEvidenceFile_OnlyRemainingFile_Returns422AndKeepsFile()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+        app.OverseasSites!.Sites[0].BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "only-file",
+                    Filename = "only.pdf",
+                    S3Key = "bes-evidence/only-file",
+                },
+            ],
+        };
+
+        var response = await _client.DeleteAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/only-file",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        var uploads = stored!.OverseasSites!.Sites[0].BesEvidence!.BesEvidenceUploads;
+        uploads.Should().HaveCount(1);
+        uploads[0].FileId.Should().Be("only-file");
+    }
+
+    [Fact]
     public async Task DeleteBesEvidenceFile_WhenUpdateFails_Returns500()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+        app.OverseasSites!.Sites[0].BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "target-file",
+                    Filename = "target.pdf",
+                    S3Key = "bes-evidence/target-file",
+                },
+                // A second file so the RA-570 "cannot delete the last file" guard doesn't
+                // short-circuit before this test reaches the UpdateAsync-fails branch it exists
+                // to exercise.
+                new BesEvidenceFileModel
+                {
+                    FileId = "keep-file",
+                    Filename = "keep.pdf",
+                    S3Key = "bes-evidence/keep-file",
+                },
+            ],
+        };
+        using var client = CreateClientWithFailingUpdate(app);
+
+        var response = await client.DeleteAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/target-file",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+    }
+
+    // --- PatchBesEvidenceFile ---
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_ApplicationNotFound_Returns404()
+    {
+        Reset();
+
+        var request = new PatchBesEvidenceFileRequest { BesEvidenceValidFromDate = "2026-01-01" };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{ObjectId.GenerateNewId()}/overseas-sites/1/bes-evidence/files/bes-file-001",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_SiteNotFound_Returns404()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite(siteId: 1);
+
+        var request = new PatchBesEvidenceFileRequest { BesEvidenceValidFromDate = "2026-01-01" };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/999/bes-evidence/files/bes-file-001",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_FileNotFound_Returns404()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+        app.OverseasSites!.Sites[0].BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "other-file",
+                    Filename = "other.pdf",
+                    S3Key = "bes-evidence/other-file",
+                },
+            ],
+        };
+
+        var request = new PatchBesEvidenceFileRequest { BesEvidenceValidFromDate = "2026-01-01" };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/does-not-exist",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_DateOnlyPatch_UpdatesOnlyValidFromDateAndLeavesExpiryUnchanged()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+        app.OverseasSites!.Sites[0].BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "target-file",
+                    Filename = "target.pdf",
+                    S3Key = "bes-evidence/target-file",
+                    ContentType = "application/pdf",
+                    ScanStatus = "Clean",
+                    BesEvidenceValidFromDate = "2025-01-01",
+                    BesEvidenceExpiryDate = "2025-12-31",
+                },
+            ],
+        };
+
+        // Only one property in the body - an absent date must be left untouched.
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/target-file",
+            new { besEvidenceValidFromDate = "2026-02-15" },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        var file = stored!.OverseasSites!.Sites[0].BesEvidence!.BesEvidenceUploads[0];
+        file.BesEvidenceValidFromDate.Should().Be("2026-02-15");
+        file.BesEvidenceExpiryDate.Should().Be("2025-12-31");
+        file.Filename.Should().Be("target.pdf");
+        file.ContentType.Should().Be("application/pdf");
+        file.ScanStatus.Should().Be("Clean");
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_ExplicitNullExpiry_ClearsStoredExpiryAndKeepsValidFrom()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+        app.OverseasSites!.Sites[0].BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "target-file",
+                    Filename = "target.pdf",
+                    S3Key = "bes-evidence/target-file",
+                    BesEvidenceValidFromDate = "2025-01-01",
+                    BesEvidenceExpiryDate = "2025-12-31",
+                },
+            ],
+        };
+
+        // The Amend flow sends an explicit null when the operator blanks the end-date boxes.
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/target-file",
+            new { besEvidenceValidFromDate = "2026-02-15", besEvidenceExpiryDate = (string?)null },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        var file = stored!.OverseasSites!.Sites[0].BesEvidence!.BesEvidenceUploads[0];
+        file.BesEvidenceValidFromDate.Should().Be("2026-02-15");
+        file.BesEvidenceExpiryDate.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_MalformedDate_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/target-file",
+            new { besEvidenceValidFromDate = "not-a-date" },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_ExpiryBeforeValidFrom_Returns400()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite();
+
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/target-file",
+            new
+            {
+                besEvidenceValidFromDate = "2026-06-01T00:00:00.000Z",
+                besEvidenceExpiryDate = "2026-01-01T00:00:00.000Z",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_SectionQueried_AllowsEditAndReturns200()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+                a.BesEvidence = new AccreditationApplicationBesEvidence
+                {
+                    SectionStatus = SectionStatus.Queried,
+                }
+        );
+        app.OverseasSites!.Sites[0].BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "target-file",
+                    Filename = "target.pdf",
+                    S3Key = "bes-evidence/target-file",
+                },
+            ],
+        };
+
+        var request = new PatchBesEvidenceFileRequest { BesEvidenceExpiryDate = "2027-01-01" };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/target-file",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_SectionNotEditable_Returns409()
+    {
+        Reset();
+        var app = SeedApplicationWithOverseasSite(status: ApplicationStatus.Submitted);
+        app.OverseasSites!.Sites[0].BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "target-file",
+                    Filename = "target.pdf",
+                    S3Key = "bes-evidence/target-file",
+                },
+            ],
+        };
+
+        var request = new PatchBesEvidenceFileRequest { BesEvidenceExpiryDate = "2027-01-01" };
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/target-file",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_WhenUpdateFails_Returns500()
     {
         Reset();
         var app = SeedApplicationWithOverseasSite();
@@ -504,8 +813,10 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
         };
         using var client = CreateClientWithFailingUpdate(app);
 
-        var response = await client.DeleteAsync(
+        var request = new PatchBesEvidenceFileRequest { BesEvidenceValidFromDate = "2026-01-01" };
+        var response = await client.PatchAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files/target-file",
+            request,
             cancellationToken: TestContext.Current.CancellationToken
         );
 
