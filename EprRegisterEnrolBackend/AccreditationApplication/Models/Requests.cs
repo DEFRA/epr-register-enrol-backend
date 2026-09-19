@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 public class SeedRequest
@@ -173,10 +175,41 @@ public class PatchBesEvidenceRequest
 // is independently optional so the caller can patch just one without resending the other or
 // re-uploading the file itself. Filename/ContentType/ScanStatus/S3Key/S3Bucket are deliberately
 // NOT editable here, same H6 reasoning as AddBesEvidenceFileRequest.
+//
+// A date that is ABSENT from the JSON body is left unchanged; a date sent as an explicit null
+// CLEARS the stored value (an operator may blank the expiry date). The setters record that the
+// property was supplied - System.Text.Json only invokes a setter for properties present in the
+// body, including explicit nulls.
 public class PatchBesEvidenceFileRequest
 {
-    public string? BesEvidenceValidFromDate { get; set; }
-    public string? BesEvidenceExpiryDate { get; set; }
+    private string? _besEvidenceValidFromDate;
+    private string? _besEvidenceExpiryDate;
+
+    public string? BesEvidenceValidFromDate
+    {
+        get => _besEvidenceValidFromDate;
+        set
+        {
+            _besEvidenceValidFromDate = value;
+            HasBesEvidenceValidFromDate = true;
+        }
+    }
+
+    public string? BesEvidenceExpiryDate
+    {
+        get => _besEvidenceExpiryDate;
+        set
+        {
+            _besEvidenceExpiryDate = value;
+            HasBesEvidenceExpiryDate = true;
+        }
+    }
+
+    [JsonIgnore]
+    public bool HasBesEvidenceValidFromDate { get; private set; }
+
+    [JsonIgnore]
+    public bool HasBesEvidenceExpiryDate { get; private set; }
 }
 
 // RA-469: regulator-scoped correction of an ORS's recycling operation codes only - no other

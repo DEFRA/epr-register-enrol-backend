@@ -1999,6 +1999,46 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(updated);
     }
 
+    // Shared lookup-and-guard prologue for the per-file BES evidence handlers: application
+    // exists -> not terminal -> BES section editable -> site exists. On any failure the
+    // returned Failure is the response to send.
+    private static async Task<(
+        AccreditationApplicationModel? Application,
+        OverseasSiteModel? Site,
+        IResult? Failure
+    )> ResolveEditableBesEvidenceSite(
+        IAccreditationApplicationPersistence persistence,
+        string organisationId,
+        string applicationId,
+        int siteId
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return (null, null, Results.NotFound());
+        if (RejectIfTerminal(application) is { } conflict)
+            return (null, null, conflict);
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return (
+                null,
+                null,
+                Results.Conflict(
+                    "BES evidence section is not editable in the application's current status."
+                )
+            );
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        return site is null
+            ? (null, null, Results.NotFound())
+            : (application, site, null);
+    }
+
     private static async Task<IResult> DeleteBesEvidenceFile(
         string organisationId,
         string applicationId,
@@ -2007,24 +2047,16 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
+        var (application, site, failure) = await ResolveEditableBesEvidenceSite(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
 
-        if (
-            !AccreditationApplicationSections.IsSectionEditable(
-                application.ApplicationStatus,
-                application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
-            )
-        )
-            return Results.Conflict(
-                "BES evidence section is not editable in the application's current status."
-            );
-
-        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        if (site?.BesEvidence is null)
+        if (site!.BesEvidence is null)
             return Results.NotFound();
 
         if (!site.BesEvidence.BesEvidenceUploads.Any(f => f.FileId == fileId))
@@ -2039,11 +2071,11 @@ public static class AccreditationApplicationEndpoints
                 "Cannot delete the last BES evidence file - at least one file must remain."
             );
 
-        var removed = site.BesEvidence.BesEvidenceUploads.RemoveAll(f => f.FileId == fileId);
-        if (removed == 0)
-            return Results.NotFound();
+        // The Any() existence check above guarantees the file is present, so RemoveAll always
+        // removes exactly one.
+        site.BesEvidence.BesEvidenceUploads.RemoveAll(f => f.FileId == fileId);
 
-        application.DateLastEdited = DateTime.UtcNow;
+        application!.DateLastEdited = DateTime.UtcNow;
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to delete BES evidence file.")
@@ -2056,41 +2088,37 @@ public static class AccreditationApplicationEndpoints
         int siteId,
         string fileId,
         PatchBesEvidenceFileRequest request,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchBesEvidenceFileRequest> validator
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
+        var validation = await validator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
 
-        if (
-            !AccreditationApplicationSections.IsSectionEditable(
-                application.ApplicationStatus,
-                application.BesEvidence?.SectionStatus ?? SectionStatus.NotStarted
-            )
-        )
-            return Results.Conflict(
-                "BES evidence section is not editable in the application's current status."
-            );
+        var (application, site, failure) = await ResolveEditableBesEvidenceSite(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
 
-        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        if (site is null)
-            return Results.NotFound();
-
-        var file = site.BesEvidence?.BesEvidenceUploads.FirstOrDefault(f => f.FileId == fileId);
+        var file = site!.BesEvidence?.BesEvidenceUploads.FirstOrDefault(f => f.FileId == fileId);
         if (file is null)
             return Results.NotFound();
 
         // Each date is independently optional - the Amend flow can patch just one without
-        // touching the other, or re-sending/re-uploading the rest of the file (RA-570).
-        if (request.BesEvidenceValidFromDate is not null)
+        // touching the other, or re-sending/re-uploading the rest of the file (RA-570). A date
+        // absent from the body is left alone; one sent as an explicit null clears the stored
+        // value (the operator blanked it), so presence - not nullness - drives the assignment.
+        if (request.HasBesEvidenceValidFromDate)
             file.BesEvidenceValidFromDate = request.BesEvidenceValidFromDate;
-        if (request.BesEvidenceExpiryDate is not null)
+        if (request.HasBesEvidenceExpiryDate)
             file.BesEvidenceExpiryDate = request.BesEvidenceExpiryDate;
 
-        application.DateLastEdited = DateTime.UtcNow;
+        application!.DateLastEdited = DateTime.UtcNow;
         var updated = await persistence.UpdateAsync(application);
         return updated is null
             ? Results.Problem("Failed to update BES evidence file.")
