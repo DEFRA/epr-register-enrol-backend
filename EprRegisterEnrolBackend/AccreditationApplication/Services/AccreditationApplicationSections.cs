@@ -133,8 +133,10 @@ public static class AccreditationApplicationSections
     // back to a real value instead of leaving them stuck at Queried. Mirrors the same
     // computations each Patch endpoint already applies (SectionStatusService for Prns/
     // BusinessPlan/SamplingPlan, the inline Any(Selected) check for OverseasSites). BesEvidence
-    // has no computed state — it's operator-controlled directly via PatchBesEvidenceSection —
-    // so an untouched, still-Queried BesEvidence resets to NotStarted.
+    // mirrors the same completeness rule PatchBesEvidenceSection already enforces via
+    // SectionStatusService.IsBesEvidenceComplete, so resubmit/withdraw agree with manual-patch on
+    // when BES is "done" instead of always forcing NotStarted regardless of real evidence state
+    // (RA-583).
     public static SectionStatus ComputeCurrentStatus(
         AccreditationApplicationModel application,
         OperatorSection section
@@ -153,7 +155,11 @@ public static class AccreditationApplicationSections
             )
                 ? SectionStatus.Completed
                 : SectionStatus.NotStarted,
-            OperatorSection.BesEvidence => SectionStatus.NotStarted,
+            OperatorSection.BesEvidence => SectionStatusService.IsBesEvidenceComplete(
+                application.OverseasSites
+            )
+                ? SectionStatus.Completed
+                : SectionStatus.InProgress,
             _ => SectionStatus.NotStarted,
         };
 

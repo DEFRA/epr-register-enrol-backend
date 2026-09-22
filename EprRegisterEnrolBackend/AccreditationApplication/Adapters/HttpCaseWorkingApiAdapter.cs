@@ -541,9 +541,20 @@ public class HttpCaseWorkingApiAdapter(
                 // resubmit after a query silently destroyed the interim site data ManagementBe
                 // already held.
                 OperatorSection.OverseasSites => BuildOverseasSitesSection(application),
+                // RA-570 follow-up: BES evidence files live per-site
+                // (OverseasSiteModel.BesEvidence.BesEvidenceUploads), not on this section - a
+                // BES-only query's resubmit used to send only sectionStatus here, so a regulator
+                // who queried "Broadly Equivalent Standards" without also querying "Overseas
+                // Reprocessing Site" never received the operator's updated/added/deleted evidence
+                // files, since the site array (and its nested besEvidence.files) was only ever
+                // projected by the OverseasSites case above. Send the same site projection here
+                // too - identical shape to BuildOverseasSitesSection - so ManagementBe can merge it
+                // into the one field the regulator's work-item view actually reads regardless of
+                // which of the two query keys triggered the resubmit.
                 OperatorSection.BesEvidence => new
                 {
                     sectionStatus = application.BesEvidence?.SectionStatus.ToString(),
+                    sites = BuildOverseasSitesArray(application),
                 },
                 _ => null,
             };
@@ -669,11 +680,16 @@ public class HttpCaseWorkingApiAdapter(
     // "absent or true => visible, explicit false => removed", so this only ever emits true today
     // but pins the field name for management-fe and management-be.
     private static object BuildOverseasSitesSection(AccreditationApplicationModel application) =>
-        new
-        {
-            sites = (application.OverseasSites?.Sites ?? [])
-                .Where(s => s.Selected)
-                .Select(s => new
+        new { sites = BuildOverseasSitesArray(application) };
+
+    // Extracted from BuildOverseasSitesSection so the BesEvidence case above can send the
+    // identical per-site projection (including nested besEvidence.files) without duplicating it -
+    // same "single source of truth" reasoning as the comment on BuildOverseasSitesSection itself.
+    private static object[] BuildOverseasSitesArray(AccreditationApplicationModel application) =>
+        (application.OverseasSites?.Sites ?? [])
+            .Where(s => s.Selected)
+            .Select(s =>
+                (object)new
                 {
                     siteId = s.SiteId,
                     selected = s.Selected,
@@ -735,8 +751,7 @@ public class HttpCaseWorkingApiAdapter(
                             .ToArray(),
                     },
                 })
-                .ToArray(),
-        };
+            .ToArray();
 
     // Shared by BuildPayload and BuildSectionsPayload, as above.
     //
