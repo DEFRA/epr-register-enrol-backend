@@ -5266,8 +5266,13 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // RA-603 AC06 reverses this. Adding a second interim site to an ORS used to be a 409 - that
+    // restriction was the thing stopping operators recording their real arrangements, so the
+    // guard is gone and this now asserts the opposite. Kept rather than deleted so the reversal
+    // is visible in one place: a legacy document carrying only the singular interimSite is read
+    // as a one-element list and appended to, rather than rejected.
     [Fact]
-    public async Task AddInterimSite_AlreadyHasInterimSite_Returns409()
+    public async Task AddInterimSite_AlreadyHasInterimSite_NowAppendsASecondOne()
     {
         Reset();
         var app = SeedApplication(configure: a =>
@@ -5302,7 +5307,15 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            app.OrganisationId,
+            app.Id!.Value.ToString()
+        );
+        var site = stored!.OverseasSites!.Sites.Single(s => s.SiteId == 1);
+        site.InterimSites.Should().HaveCount(2);
+        site.InterimSites.Should().Contain(i => i.SiteName == "Existing Interim");
     }
 
     [Fact]

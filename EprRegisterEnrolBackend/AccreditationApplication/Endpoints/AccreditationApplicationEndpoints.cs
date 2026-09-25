@@ -77,6 +77,32 @@ public static class AccreditationApplicationEndpoints
                 AddInterimSite
             )
         );
+        // RA-603: the per-interim-site routes. The singular route above stays for callers that
+        // have not moved over, minus its duplicate guard.
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-sites",
+                AddInterimSite
+            )
+        );
+        FrontendOnly(
+            group.MapPatch(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-sites/{interimSiteId}",
+                UpdateInterimSite
+            )
+        );
+        FrontendOnly(
+            group.MapDelete(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-sites/{interimSiteId}",
+                WithdrawInterimSite
+            )
+        );
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-sites/{interimSiteId}/restore",
+                RestoreInterimSite
+            )
+        );
         FrontendOnly(
             group.MapPost(
                 "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files",
@@ -1787,6 +1813,198 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(site);
     }
 
+    /// <summary>
+    /// RA-603: the guard stack every interim-site route shares - load, reject a terminal
+    /// application, reject a section that is not editable, find the ORS - plus the normalisation
+    /// that lets a pre-RA-603 document (singular field only) be mutated as a list.
+    ///
+    /// Extracted so the four routes cannot drift apart. The editability check in particular is
+    /// what AC12 rests on: IsSectionEditable returns true for a Queried section even on a locked
+    /// application, so an operator answering a regulator's query can still change their interim
+    /// sites. A route that reimplemented this and forgot that clause would fail AC12 silently.
+    /// </summary>
+    private static async Task<(
+        IResult? Failure,
+        AccreditationApplicationModel? Application,
+        OverseasSiteModel? Site
+    )> ResolveEditableOverseasSiteAsync(
+        IAccreditationApplicationPersistence persistence,
+        string organisationId,
+        string applicationId,
+        int siteId
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return (Results.NotFound(), null, null);
+
+        if (RejectIfTerminal(application) is { } conflict)
+            return (conflict, null, null);
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return (
+                Results.Conflict(
+                    "Overseas sites section is not editable in the application's current status."
+                ),
+                null,
+                null
+            );
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return (Results.NotFound(), null, null);
+
+        // The list is what every mutation below edits, so promote a legacy singular value into it
+        // before anything touches it.
+        InterimSiteSync.Normalise(site);
+        return (null, application, site);
+    }
+
+    /// <summary>
+    /// RA-603: edits one interim site in place. SiteId, SiteNumber, CreatedAt and RemovedAt are
+    /// server-owned and are not taken from the request - the request shape is the same
+    /// <see cref="AddInterimSiteRequest"/> the create route uses, so the R12/R13 rule is enforced
+    /// by the same validator rather than a second copy of it.
+    /// </summary>
+    private static async Task<IResult> UpdateInterimSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        int interimSiteId,
+        AddInterimSiteRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<AddInterimSiteRequest> validator,
+        CancellationToken cancellationToken
+    )
+    {
+        var validation = await validator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
+
+        var interimSite = site!.InterimSites.FirstOrDefault(i => i.SiteId == interimSiteId);
+        if (interimSite is null)
+            return Results.NotFound();
+
+        // Editing something the operator has withdrawn would silently resurrect it into every
+        // active list; restoring it is a deliberate, separate action.
+        if (interimSite.RemovedAt is not null)
+            return Results.Conflict(
+                $"Interim site '{interimSiteId}' has been withdrawn and cannot be edited."
+            );
+
+        interimSite.Country = request.Country;
+        interimSite.SiteName = request.SiteName;
+        interimSite.AddressLine1 = request.AddressLine1;
+        interimSite.AddressLine2 = request.AddressLine2;
+        interimSite.TownOrCity = request.TownOrCity;
+        interimSite.StateOrRegion = request.StateOrRegion;
+        interimSite.Postcode = request.Postcode;
+        interimSite.ContactName = request.ContactName;
+        interimSite.ContactEmail = request.ContactEmail;
+        interimSite.ContactPhone = request.ContactPhone;
+        interimSite.OperationCodes = request.OperationCodes;
+
+        InterimSiteSync.SyncMirror(site);
+        application!.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to update interim site.")
+            : Results.Ok(interimSite);
+    }
+
+    /// <summary>
+    /// RA-603 AC05: withdraws an interim site. A soft delete - the record stays in the document so
+    /// it remains available for reporting, and only stops appearing wherever active sites are
+    /// listed. Idempotent, and it never overwrites an earlier withdrawal date.
+    /// </summary>
+    private static async Task<IResult> WithdrawInterimSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        int interimSiteId,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
+
+        var interimSite = site!.InterimSites.FirstOrDefault(i => i.SiteId == interimSiteId);
+        if (interimSite is null)
+            return Results.NotFound();
+
+        interimSite.RemovedAt ??= DateTime.UtcNow;
+
+        InterimSiteSync.SyncMirror(site);
+        application!.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to withdraw interim site.")
+            : Results.NoContent();
+    }
+
+    /// <summary>
+    /// RA-603 AC05: brings a withdrawn interim site back. Clearing RemovedAt is the whole
+    /// operation - SiteId, SiteNumber, CreatedAt and IsNewSite are all left exactly as they were,
+    /// so the site that returns is the one that went away rather than a lookalike, and the
+    /// withdraw/restore pair stays readable in the record.
+    ///
+    /// Called restore rather than revert: the ORS already has a /revert route, which un-promotes a
+    /// registered site and is a different thing entirely.
+    /// </summary>
+    private static async Task<IResult> RestoreInterimSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        int interimSiteId,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
+
+        var interimSite = site!.InterimSites.FirstOrDefault(i => i.SiteId == interimSiteId);
+        if (interimSite is null)
+            return Results.NotFound();
+
+        interimSite.RemovedAt = null;
+
+        InterimSiteSync.SyncMirror(site);
+        application!.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? Results.Problem("Failed to restore interim site.")
+            : Results.Ok(interimSite);
+    }
+
     private static async Task<IResult> AddInterimSite(
         string organisationId,
         string applicationId,
@@ -1803,30 +2021,14 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
-
-        if (
-            !AccreditationApplicationSections.IsSectionEditable(
-                application.ApplicationStatus,
-                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
-            )
-        )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
-
-        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        if (site is null)
-            return Results.NotFound();
-
-        if (site.InterimSite is not null)
-            return Results.Conflict(
-                $"An interim site already exists for overseas site '{siteId}'."
-            );
+        var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
 
         var nextSiteId = NextSiteId(application.OverseasSites!);
 
@@ -1846,10 +2048,14 @@ public static class AccreditationApplicationEndpoints
             ContactPhone = request.ContactPhone,
             OperationCodes = request.OperationCodes,
             IsNewSite = true,
+            CreatedAt = DateTime.UtcNow,
         };
 
-        site.InterimSite = interimSite;
-        application.DateLastEdited = DateTime.UtcNow;
+        // RA-603: appends. The duplicate guard that used to 409 a second interim site is gone -
+        // an ORS may now hold many (AC01/AC06).
+        site!.InterimSites.Add(interimSite);
+        InterimSiteSync.SyncMirror(site);
+        application!.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application);
         if (updated is null)
