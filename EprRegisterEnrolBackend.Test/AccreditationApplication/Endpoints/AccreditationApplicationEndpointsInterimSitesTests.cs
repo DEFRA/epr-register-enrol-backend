@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -552,5 +553,265 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         update.StatusCode.Should().Be(HttpStatusCode.Conflict);
         withdraw.StatusCode.Should().Be(HttpStatusCode.Conflict);
         restore.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // -- AC12: a queried ORS section stays editable ---------------------------
+    //
+    // These pin behaviour that already existed rather than behaviour this ticket added.
+    // IsSectionEditable is `!LockedStatuses.Contains(appStatus) || sectionStatus == Queried`, so a
+    // section the regulator has queried stays editable even though the application as a whole is
+    // locked - which is exactly what lets an operator answer the query.
+    //
+    // The risk AC12 actually carries is not that the rule is wrong, it is that one of the four new
+    // routes quietly fails to apply it. They share ResolveEditableOverseasSiteAsync for that
+    // reason, and these tests are what would notice if someone inlined the guard into one of them
+    // and dropped the Queried clause.
+
+    [Theory]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.DulyMade)]
+    [InlineData(ApplicationStatus.Updated)]
+    [InlineData(ApplicationStatus.AwaitingDecision)]
+    [InlineData(ApplicationStatus.Queried)]
+    public async Task QueriedOrsSection_OnALockedApplication_AllowsAddingAnInterimSite(
+        ApplicationStatus lockedStatus
+    )
+    {
+        Reset();
+        var app = Seed(status: lockedStatus, sectionStatus: SectionStatus.Queried);
+
+        var response = await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.DulyMade)]
+    [InlineData(ApplicationStatus.Updated)]
+    [InlineData(ApplicationStatus.AwaitingDecision)]
+    [InlineData(ApplicationStatus.Queried)]
+    public async Task QueriedOrsSection_OnALockedApplication_AllowsWithdrawingAnInterimSite(
+        ApplicationStatus lockedStatus
+    )
+    {
+        Reset();
+        var app = Seed(
+            status: lockedStatus,
+            sectionStatus: SectionStatus.Queried,
+            interimSites: [Interim(2)]
+        );
+
+        var response = await _client.DeleteAsync(
+            Item(app, 2),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await StoredSiteAsync(app)).InterimSites[0].RemovedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task QueriedOrsSection_OnALockedApplication_AllowsEditingAndRestoring()
+    {
+        Reset();
+        var app = Seed(
+            status: ApplicationStatus.Submitted,
+            sectionStatus: SectionStatus.Queried,
+            interimSites: [Interim(2), Interim(3, removedAt: DateTime.UtcNow)]
+        );
+
+        var update = await _client.PatchAsJsonAsync(
+            Item(app, 2),
+            ValidRequest() with
+            {
+                SiteName = "Renamed Under Query",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var restore = await _client.PostAsync(
+            $"{Item(app, 3)}/restore",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        update.StatusCode.Should().Be(HttpStatusCode.OK);
+        restore.StatusCode.Should().Be(HttpStatusCode.OK);
+        var site = await StoredSiteAsync(app);
+        site.InterimSites.Single(i => i.SiteId == 2).SiteName.Should().Be("Renamed Under Query");
+        site.InterimSites.Single(i => i.SiteId == 3).RemovedAt.Should().BeNull();
+    }
+
+    // The other half of the rule, and the half that makes the tests above mean something: a locked
+    // application whose ORS section is NOT the queried one stays shut.
+    [Theory]
+    [InlineData(SectionStatus.Completed)]
+    [InlineData(SectionStatus.InProgress)]
+    [InlineData(SectionStatus.NotStarted)]
+    public async Task UnqueriedOrsSection_OnALockedApplication_RefusesEveryInterimSiteWrite(
+        SectionStatus sectionStatus
+    )
+    {
+        Reset();
+        var app = Seed(
+            status: ApplicationStatus.Submitted,
+            sectionStatus: sectionStatus,
+            interimSites: [Interim(2)]
+        );
+
+        var create = await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var update = await _client.PatchAsJsonAsync(
+            Item(app, 2),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var withdraw = await _client.DeleteAsync(
+            Item(app, 2),
+            TestContext.Current.CancellationToken
+        );
+        var restore = await _client.PostAsync(
+            $"{Item(app, 2)}/restore",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        create.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        update.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        withdraw.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        restore.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // -- AC08: withdrawing the last interim site does not block submission ----
+    //
+    // RA-486 decoupled an ORS from its interim sites: an ORS needs at least one of R3/R4/R5 and
+    // nothing at all is required about interim sites. AccreditationApplicationSections contains no
+    // reference to them, so an ORS whose only interim site has been withdrawn should be exactly as
+    // submittable as one that never had an interim site.
+    //
+    // That is a conclusion drawn from reading the code, which is the kind of thing that is true
+    // until someone adds a completeness rule. This proves it end to end instead.
+
+    private AccreditationApplicationModel SeedSubmittableExporter(
+        List<InterimSiteModel> interimSites
+    )
+    {
+        var app = new AccreditationApplicationModel
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = "org-123",
+            Year = 2026,
+            MaterialType = MaterialType.Steel,
+            ApplicationStatus = ApplicationStatus.Started,
+            IsExporter = true,
+            OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                SectionStatus = SectionStatus.Completed,
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Test Site",
+                        Selected = true,
+                        OperationCodes = ["R4"],
+                        InterimSites = interimSites,
+                        InterimSite = interimSites.FirstOrDefault(i => i.RemovedAt is null),
+                    },
+                ],
+            },
+            BesEvidence = new AccreditationApplicationBesEvidence
+            {
+                SectionStatus = SectionStatus.Completed,
+            },
+        };
+        app.Prns.SectionStatus = SectionStatus.Completed;
+        app.BusinessPlan.SectionStatus = SectionStatus.Completed;
+        app.SamplingPlan.SectionStatus = SectionStatus.Completed;
+
+        _factory
+            .MockCaseWorkingAdapter.SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                Task.FromResult(new CaseWorkingSubmissionResult("RA-123456789", Guid.NewGuid()))
+            );
+
+        _factory.FakePersistence.Seed(app);
+        return app;
+    }
+
+    private async Task<HttpResponseMessage> SubmitAsync(AccreditationApplicationModel app) =>
+        await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
+            new SubmitRequest
+            {
+                FullName = "John",
+                JobTitle = "Manager",
+                Email = "j@x.com",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+    [Fact]
+    public async Task Submit_OrsWhoseOnlyInterimSiteIsWithdrawn_StillSucceeds()
+    {
+        Reset();
+        var app = SeedSubmittableExporter([Interim(2, removedAt: DateTime.UtcNow)]);
+
+        var response = await SubmitAsync(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Submit_OrsWithNoInterimSitesAtAll_StillSucceeds()
+    {
+        Reset();
+        var app = SeedSubmittableExporter([]);
+
+        var response = await SubmitAsync(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Submit_OrsWithSeveralInterimSites_StillSucceeds()
+    {
+        Reset();
+        var app = SeedSubmittableExporter(
+            [Interim(2), Interim(3), Interim(4, removedAt: DateTime.UtcNow)]
+        );
+
+        var response = await SubmitAsync(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // Withdrawing the last one through the real route, then submitting - the sequence an operator
+    // would actually perform, rather than a document hand-built into that state.
+    [Fact]
+    public async Task WithdrawingTheLastInterimSiteThenSubmitting_Succeeds()
+    {
+        Reset();
+        var app = SeedSubmittableExporter([Interim(2)]);
+
+        var withdraw = await _client.DeleteAsync(
+            Item(app, 2),
+            TestContext.Current.CancellationToken
+        );
+        withdraw.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var response = await SubmitAsync(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 }
