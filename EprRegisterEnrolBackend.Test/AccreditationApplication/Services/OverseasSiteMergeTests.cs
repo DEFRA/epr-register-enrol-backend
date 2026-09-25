@@ -436,4 +436,208 @@ public class OverseasSiteMergeTests
             .RegisteredNowAccredited.Should()
             .BeFalse();
     }
+
+    // -- RA-603: many interim sites, and withdrawal as a soft delete -----------
+    //
+    // The bulk PATCH replaces the site list wholesale - "a site the client omitted is genuinely
+    // dropped, never resurrected", per this class's own doc comment. That rule is right for ORS
+    // sites and actively dangerous for interim sites now that withdrawing one only stamps
+    // RemovedAt: the frontend filters withdrawn sites out of its view model, so it stops sending
+    // them, so the next save would destroy exactly the records AC05 keeps for reporting.
+
+    private static InterimSiteModel InterimWithDates(
+        int siteId,
+        DateTime? createdAt = null,
+        DateTime? removedAt = null,
+        bool isNewSite = false,
+        List<string>? operationCodes = null
+    )
+    {
+        var interim = Interim(siteId, isNewSite, operationCodes);
+        interim.CreatedAt = createdAt;
+        interim.RemovedAt = removedAt;
+        return interim;
+    }
+
+    private static OverseasSiteModel SiteWithInterims(
+        int siteId,
+        params InterimSiteModel[] interimSites
+    ) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteName = "Site",
+            InterimSites = [.. interimSites],
+        };
+
+    [Fact]
+    public void Merge_ClientOmitsAWithdrawnInterimSite_ReattachesItRatherThanDestroyingIt()
+    {
+        var withdrawnAt = new DateTime(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc);
+        var persisted = SiteWithInterims(
+            1,
+            InterimWithDates(42, removedAt: withdrawnAt),
+            InterimWithDates(43)
+        );
+        // What the frontend actually sends: only the interim sites it still displays.
+        var incoming = SiteWithInterims(1, InterimWithDates(43));
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites.Should().HaveCount(2);
+        result[0].InterimSites.Single(i => i.SiteId == 42).RemovedAt.Should().Be(withdrawnAt);
+    }
+
+    // Decision 7 of the plan is that hard deletion happens nowhere in this ticket. An omitted
+    // ACTIVE interim site therefore cannot be dropped either - it is withdrawn, so the audit
+    // record survives and the observable result (gone from the mirror, gone from the active list)
+    // matches the old destructive behaviour.
+    [Fact]
+    public void Merge_ClientOmitsAnActiveInterimSite_WithdrawsItRatherThanDestroyingIt()
+    {
+        var persisted = SiteWithInterims(1, InterimWithDates(42), InterimWithDates(43));
+        var incoming = SiteWithInterims(1, InterimWithDates(43));
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites.Should().HaveCount(2);
+        result[0].InterimSites.Single(i => i.SiteId == 42).RemovedAt.Should().NotBeNull();
+    }
+
+    // The legacy detach contract: a PATCH carrying interimSite: null and no list. It still makes
+    // the interim site disappear from everything that reads the mirror or the active list - it
+    // just no longer erases it.
+    [Fact]
+    public void Merge_LegacyNullInterimSite_WithdrawsInsteadOfErasing()
+    {
+        var persisted = SiteWithInterims(1, InterimWithDates(42));
+        var incoming = new OverseasSiteModel
+        {
+            SiteId = 1,
+            SiteName = "Site",
+            InterimSite = null,
+        };
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSite.Should().BeNull();
+        result[0].InterimSites.Should().ContainSingle();
+        result[0].InterimSites[0].RemovedAt.Should().NotBeNull();
+    }
+
+    // RemovedAt is what withdrawal means, so letting a client clear it through the bulk PATCH
+    // would be an un-withdraw that bypasses the restore endpoint entirely.
+    [Fact]
+    public void Merge_ClientTriesToClearRemovedAt_KeepsThePersistedValue()
+    {
+        var withdrawnAt = new DateTime(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc);
+        var persisted = SiteWithInterims(1, InterimWithDates(42, removedAt: withdrawnAt));
+        var incoming = SiteWithInterims(1, InterimWithDates(42, removedAt: null));
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites[0].RemovedAt.Should().Be(withdrawnAt);
+    }
+
+    [Fact]
+    public void Merge_ClientTriesToRewriteCreatedAt_KeepsThePersistedValue()
+    {
+        var createdAt = new DateTime(2026, 1, 5, 12, 0, 0, DateTimeKind.Utc);
+        var persisted = SiteWithInterims(1, InterimWithDates(42, createdAt: createdAt));
+        var incoming = SiteWithInterims(
+            1,
+            InterimWithDates(42, createdAt: new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc))
+        );
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites[0].CreatedAt.Should().Be(createdAt);
+    }
+
+    [Fact]
+    public void Merge_ManyInterimSites_RestoresIsNewSitePerElement()
+    {
+        var persisted = SiteWithInterims(
+            1,
+            InterimWithDates(42, isNewSite: true),
+            InterimWithDates(43, isNewSite: false)
+        );
+        var incoming = SiteWithInterims(
+            1,
+            InterimWithDates(42, isNewSite: false),
+            InterimWithDates(43, isNewSite: true)
+        );
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites.Single(i => i.SiteId == 42).IsNewSite.Should().BeTrue();
+        result[0].InterimSites.Single(i => i.SiteId == 43).IsNewSite.Should().BeFalse();
+    }
+
+    // RA-486's guard, now applied per element rather than to the single nested site.
+    [Fact]
+    public void Merge_ManyInterimSites_RestoresEmptyOperationCodesPerElement()
+    {
+        var persisted = SiteWithInterims(
+            1,
+            InterimWithDates(42, operationCodes: ["R12"]),
+            InterimWithDates(43, operationCodes: ["R13"])
+        );
+        var incoming = SiteWithInterims(
+            1,
+            InterimWithDates(42, operationCodes: []),
+            InterimWithDates(43, operationCodes: ["R12", "R13"])
+        );
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites.Single(i => i.SiteId == 42).OperationCodes.Should().Equal("R12");
+        result[0]
+            .InterimSites.Single(i => i.SiteId == 43)
+            .OperationCodes.Should()
+            .Equal("R12", "R13");
+    }
+
+    [Fact]
+    public void Merge_IncomingCarriesOnlyTheLegacySingularField_IsReadAsAOneElementList()
+    {
+        var persisted = SiteWithInterims(1, InterimWithDates(42));
+        var incoming = new OverseasSiteModel
+        {
+            SiteId = 1,
+            SiteName = "Site",
+            InterimSite = InterimWithDates(42),
+        };
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites.Should().ContainSingle();
+        result[0].InterimSites[0].SiteId.Should().Be(42);
+    }
+
+    [Fact]
+    public void Merge_AfterMerging_MirrorPointsAtTheFirstActiveInterimSite()
+    {
+        var persisted = SiteWithInterims(
+            1,
+            InterimWithDates(42, removedAt: DateTime.UtcNow),
+            InterimWithDates(43)
+        );
+        var incoming = SiteWithInterims(1, InterimWithDates(43));
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSite!.SiteId.Should().Be(43);
+    }
+
+    [Fact]
+    public void Merge_UnknownInterimSiteId_IsTreatedAsNew()
+    {
+        var persisted = SiteWithInterims(1);
+        var incoming = SiteWithInterims(1, InterimWithDates(99, isNewSite: false));
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites.Single(i => i.SiteId == 99).IsNewSite.Should().BeTrue();
+    }
 }

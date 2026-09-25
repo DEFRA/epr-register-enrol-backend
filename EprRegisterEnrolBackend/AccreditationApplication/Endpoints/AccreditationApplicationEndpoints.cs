@@ -1392,8 +1392,16 @@ public static class AccreditationApplicationEndpoints
         {
             if (site.SiteId > maxSiteId)
                 maxSiteId = site.SiteId;
-            if (site.InterimSite is not null && site.InterimSite.SiteId > maxSiteId)
-                maxSiteId = site.InterimSite.SiteId;
+
+            // RA-603: scan every interim site, not just the mirror. Missing one would hand the
+            // next site an id that is already taken, and withdrawn sites count too - their ids
+            // stay claimed for as long as the record does, which is forever (AC05).
+            InterimSiteSync.Normalise(site);
+            foreach (var interim in site.InterimSites)
+            {
+                if (interim.SiteId > maxSiteId)
+                    maxSiteId = interim.SiteId;
+            }
         }
         return maxSiteId + 1;
     }
@@ -2038,9 +2046,7 @@ public static class AccreditationApplicationEndpoints
             );
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        return site is null
-            ? (null, null, Results.NotFound())
-            : (application, site, null);
+        return site is null ? (null, null, Results.NotFound()) : (application, site, null);
     }
 
     private static async Task<IResult> DeleteBesEvidenceFile(
