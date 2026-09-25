@@ -18,6 +18,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         _store.Clear();
         FailNextUpdate = false;
         FailNextOrsIdWrites = 0;
+        FailNextInterimSiteNumberWrites = 0;
     }
 
     /// <summary>
@@ -35,6 +36,14 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     /// without real concurrency.
     /// </summary>
     public int FailNextOrsIdWrites { get; set; }
+
+    /// <summary>
+    /// RA-603: the interim counterpart of <see cref="FailNextOrsIdWrites"/> - the next N calls to
+    /// <see cref="UpdateIfInterimSiteNumberAbsentAsync"/> return null, as if a concurrent writer
+    /// had already claimed that number, so AddInterimSite's retry loop can be exercised without
+    /// real concurrency.
+    /// </summary>
+    public int FailNextInterimSiteNumberWrites { get; set; }
 
     public Task<AccreditationApplicationModel?> CreateAsync(
         AccreditationApplicationModel application
@@ -88,6 +97,21 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(orsIds);
     }
 
+    public Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
+        string registrationId
+    )
+    {
+        IReadOnlyList<string> numbers = _store
+            .Where(a => a.RegistrationId == registrationId)
+            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+            .SelectMany(InterimSiteSync.All)
+            .Select(i => i.SiteNumber)
+            .Where(number => number is not null)
+            .Select(number => number!)
+            .ToList();
+        return Task.FromResult(numbers);
+    }
+
     public Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
         string applicationId
@@ -127,6 +151,30 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         application.Version++;
         _store[idx] = application;
         return Task.FromResult<AccreditationApplicationModel?>(application);
+    }
+
+    public Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
+        AccreditationApplicationModel application,
+        string siteNumber
+    )
+    {
+        if (FailNextInterimSiteNumberWrites > 0)
+        {
+            FailNextInterimSiteNumberWrites--;
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+        }
+
+        var idx = _store.FindIndex(a => a.Id == application.Id);
+        if (idx < 0)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+
+        var alreadyPresent = (_store[idx].OverseasSites?.Sites ?? [])
+            .SelectMany(InterimSiteSync.All)
+            .Any(i => i.SiteNumber == siteNumber);
+        if (alreadyPresent)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+
+        return UpdateAsync(application);
     }
 
     public Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
@@ -352,6 +400,57 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return current;
     }
 
+    /// <summary>
+    /// RA-603: a copy of one overseas site that owns its own lists.
+    ///
+    /// Sites.ToList() alone was not enough. It gives the caller a new list but the SAME
+    /// OverseasSiteModel objects, so when an endpoint appends to site.InterimSites it is
+    /// mutating the very list this fake is holding as "the stored document" - and
+    /// UpdateIfInterimSiteNumberAbsentAsync then sees the endpoint's own pending write and
+    /// rejects it as a duplicate, on every single call. Real Mongo cannot behave that way: its
+    /// filter runs against the persisted document, which has not seen the append.
+    ///
+    /// This is the same self-collision the Sites.ToList() above was added to fix at the ORS
+    /// level, recurring one level down as soon as a guard started looking inside a site.
+    ///
+    /// Every property has to be here. A field left out is silently dropped on every read through
+    /// this fake - the exact latent-drop bug recorded against OrgId, Nation and
+    /// GlassRecyclingProcess in ShallowCopy below.
+    /// </summary>
+    private static OverseasSiteModel CopySite(OverseasSiteModel src) =>
+        new()
+        {
+            SiteId = src.SiteId,
+            OrsId = src.OrsId,
+            SiteName = src.SiteName,
+            SiteAddress = src.SiteAddress,
+            AddressLine1 = src.AddressLine1,
+            AddressLine2 = src.AddressLine2,
+            TownOrCity = src.TownOrCity,
+            Country = src.Country,
+            Coordinates = src.Coordinates,
+            ContactName = src.ContactName,
+            ContactEmail = src.ContactEmail,
+            ContactPhone = src.ContactPhone,
+            OperationCodes = src.OperationCodes.ToList(),
+            Code1 = src.Code1,
+            Code2 = src.Code2,
+            Code3 = src.Code3,
+            RepatriatedLoads = src.RepatriatedLoads,
+            ConditionsOfExport = src.ConditionsOfExport,
+            IsEu = src.IsEu,
+            IsOecd = src.IsOecd,
+            ValidFrom = src.ValidFrom,
+            Selected = src.Selected,
+            BesEvidence = src.BesEvidence,
+            IsNewSite = src.IsNewSite,
+            RegisteredNowAccredited = src.RegisteredNowAccredited,
+            PreviousSites = src.PreviousSites.ToList(),
+            InterimSite = src.InterimSite,
+            // The list this whole helper exists for.
+            InterimSites = src.InterimSites.ToList(),
+        };
+
     private static AccreditationApplicationModel ShallowCopy(AccreditationApplicationModel src) =>
         new()
         {
@@ -416,7 +515,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 ? null
                 : new AccreditationApplicationOverseasSites
                 {
-                    Sites = src.OverseasSites.Sites.ToList(),
+                    Sites = [.. src.OverseasSites.Sites.Select(CopySite)],
                     SectionStatus = src.OverseasSites.SectionStatus,
                     Versions = src.OverseasSites.Versions.ToList(),
                 },

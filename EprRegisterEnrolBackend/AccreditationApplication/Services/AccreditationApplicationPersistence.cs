@@ -99,6 +99,28 @@ public class AccreditationApplicationPersistence(
             .ToList();
     }
 
+    // RA-603: the interim counterpart of GetOrsIdsByRegistrationAsync above. Reads every interim
+    // site, withdrawn ones included - their numbers stay claimed for as long as the record does,
+    // which under AC05 is permanently.
+    public async Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
+        string registrationId
+    )
+    {
+        var filter = Builders<AccreditationApplicationModel>.Filter.Eq(
+            a => a.RegistrationId,
+            registrationId
+        );
+
+        var applications = await Collection.Find(filter).ToListAsync();
+        return applications
+            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+            .SelectMany(InterimSiteSync.All)
+            .Select(i => i.SiteNumber)
+            .Where(number => number is not null)
+            .Select(number => number!)
+            .ToList();
+    }
+
     public async Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
         string applicationId
@@ -146,6 +168,30 @@ public class AccreditationApplicationPersistence(
                 Builders<AccreditationApplicationModel>.Filter.ElemMatch(
                     a => a.OverseasSites!.Sites,
                     s => s.OrsId == orsId
+                )
+            )
+        );
+        return ReplaceIfMatchAsync(application, filter);
+    }
+
+    // RA-603: the interim counterpart of UpdateIfOrsIdAbsentAsync. The guard has to reach one
+    // level deeper - a site number lives on an interim site nested inside an overseas site - so
+    // this is an ElemMatch over the ORS list whose predicate is itself an Any over that ORS's
+    // interim sites.
+    public Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
+        AccreditationApplicationModel application,
+        string siteNumber
+    )
+    {
+        if (application.Id is null)
+            return Task.FromResult<AccreditationApplicationModel?>(null);
+
+        var filter = Builders<AccreditationApplicationModel>.Filter.And(
+            Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, application.Id),
+            Builders<AccreditationApplicationModel>.Filter.Not(
+                Builders<AccreditationApplicationModel>.Filter.ElemMatch(
+                    a => a.OverseasSites!.Sites,
+                    s => s.InterimSites.Any(i => i.SiteNumber == siteNumber)
                 )
             )
         );

@@ -1409,6 +1409,31 @@ public static class AccreditationApplicationEndpoints
         return await persistence.GetOrsIdsByRegistrationAsync(application.RegistrationId);
     }
 
+    // RA-603: the interim site NUMBER allocation scope - not to be confused with NextSiteId
+    // below, which allocates the internal SiteId. The two used to be the same counter, which is
+    // why interim numbers skipped whenever an ORS was added.
+    //
+    // Scoped exactly like OrsIdScope above, and for the same reason: a registration is
+    // established once and renewed annually via a new application each year, so a number
+    // reissued next year would collide with one already sitting in a submitted return. Withdrawn
+    // interim sites are included - their numbers stay claimed for as long as the record does,
+    // which under AC05 is permanently. Legacy SN-000N values come through untouched and simply
+    // do not parse, which is what makes them harmless here.
+    private static async Task<IEnumerable<string?>> InterimSiteNumberScope(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel application
+    )
+    {
+        if (application.RegistrationId is null)
+            return (application.OverseasSites?.Sites ?? [])
+                .SelectMany(InterimSiteSync.All)
+                .Select(i => i.SiteNumber);
+
+        return await persistence.GetInterimSiteNumbersByRegistrationAsync(
+            application.RegistrationId
+        );
+    }
+
     // Site numbers must be unique application-wide across both ORS sites and their nested
     // interim sites (RA-294), so the next id is the max across both, not just the ORS list.
     private static int NextSiteId(AccreditationApplicationOverseasSites overseasSites)
@@ -2030,48 +2055,31 @@ public static class AccreditationApplicationEndpoints
         if (failure is not null)
             return failure;
 
-        var nextSiteId = NextSiteId(application.OverseasSites!);
-
-        var interimSite = new InterimSiteModel
-        {
-            SiteId = nextSiteId,
-            SiteNumber = $"SN-{nextSiteId:D4}",
-            Country = request.Country,
-            SiteName = request.SiteName,
-            AddressLine1 = request.AddressLine1,
-            AddressLine2 = request.AddressLine2,
-            TownOrCity = request.TownOrCity,
-            StateOrRegion = request.StateOrRegion,
-            Postcode = request.Postcode,
-            ContactName = request.ContactName,
-            ContactEmail = request.ContactEmail,
-            ContactPhone = request.ContactPhone,
-            OperationCodes = request.OperationCodes,
-            IsNewSite = true,
-            CreatedAt = DateTime.UtcNow,
-        };
-
-        // RA-603: appends. The duplicate guard that used to 409 a second interim site is gone -
-        // an ORS may now hold many (AC01/AC06).
-        site!.InterimSites.Add(interimSite);
-        InterimSiteSync.SyncMirror(site);
-        application!.DateLastEdited = DateTime.UtcNow;
-
-        var updated = await persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to add interim site.");
+        var (allocationError, interimSite, updated) =
+            await TryAddInterimSiteWithGeneratedNumberAsync(
+                persistence,
+                organisationId,
+                applicationId,
+                siteId,
+                application!,
+                request
+            );
+        if (allocationError is not null)
+            return allocationError;
 
         // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
         // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s).
-        if (updated.CaseManagementWorkItemId is not null)
+        if (updated!.CaseManagementWorkItemId is not null)
         {
             try
             {
                 await caseWorkingAdapter.NotifySiteAddedAsync(
-                    updated,
+                    updated!,
                     siteType: "interim",
-                    orsId: site.OrsId ?? string.Empty,
-                    siteNumber: interimSite.SiteNumber,
+                    orsId: updated!
+                        .OverseasSites!.Sites.First(s => s.SiteId == siteId)
+                        .OrsId ?? string.Empty,
+                    siteNumber: interimSite!.SiteNumber,
                     isNewSite: interimSite.IsNewSite,
                     cancellationToken: cancellationToken
                 );
@@ -2089,6 +2097,99 @@ public static class AccreditationApplicationEndpoints
         }
 
         return Results.Created(string.Empty, interimSite);
+    }
+
+    // RA-603: the interim counterpart of TryAddOverseasSiteWithGeneratedIdAsync, and pulled out
+    // for the same reason - this owns the whole generate-write-retry loop so AddInterimSite's
+    // cognitive complexity stays down. Reports either a terminal error IResult or the persisted
+    // interim-site/application pair, never a mix.
+    //
+    // The write is guarded so two concurrent AddInterimSite calls under one registration cannot
+    // both mint the same regulator-visible number: UpdateIfInterimSiteNumberAbsentAsync only
+    // persists if nothing already carries it, and a lost race re-fetches and retries with a
+    // freshly computed number. Bounded, so a genuinely stuck conflict fails loudly.
+    private static async Task<(
+        IResult? ErrorResult,
+        InterimSiteModel? NewSite,
+        AccreditationApplicationModel? Updated
+    )> TryAddInterimSiteWithGeneratedNumberAsync(
+        IAccreditationApplicationPersistence persistence,
+        string organisationId,
+        string applicationId,
+        int siteId,
+        AccreditationApplicationModel application,
+        AddInterimSiteRequest request
+    )
+    {
+        const int maxSiteNumberAttempts = 3;
+
+        for (var attempt = 1; attempt <= maxSiteNumberAttempts; attempt++)
+        {
+            var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+            if (site is null)
+                return (Results.NotFound(), null, null);
+
+            var scope = await InterimSiteNumberScope(persistence, application);
+            var generated = OrsIdGenerator.GenerateNext(scope);
+            if (generated.CapacityExceeded)
+                return (
+                    Results.UnprocessableEntity(
+                        "This registration has reached the maximum of 999 interim sites."
+                    ),
+                    null,
+                    null
+                );
+
+            var interimSite = new InterimSiteModel
+            {
+                // SiteId keeps the shared ORS+interim sequence - it is what the routes address.
+                // Only SiteNumber moved to its own set.
+                SiteId = NextSiteId(application.OverseasSites!),
+                SiteNumber = generated.OrsId!,
+                Country = request.Country,
+                SiteName = request.SiteName,
+                AddressLine1 = request.AddressLine1,
+                AddressLine2 = request.AddressLine2,
+                TownOrCity = request.TownOrCity,
+                StateOrRegion = request.StateOrRegion,
+                Postcode = request.Postcode,
+                ContactName = request.ContactName,
+                ContactEmail = request.ContactEmail,
+                ContactPhone = request.ContactPhone,
+                OperationCodes = request.OperationCodes,
+                IsNewSite = true,
+                CreatedAt = DateTime.UtcNow,
+            };
+
+            // RA-603: appends. The duplicate guard that used to 409 a second interim site is
+            // gone - an ORS may now hold many (AC01/AC06).
+            site.InterimSites.Add(interimSite);
+            InterimSiteSync.SyncMirror(site);
+            application.DateLastEdited = DateTime.UtcNow;
+
+            var updated = await persistence.UpdateIfInterimSiteNumberAbsentAsync(
+                application,
+                generated.OrsId!
+            );
+            if (updated is not null)
+                return (null, interimSite, updated);
+
+            // Lost the race to a concurrent writer - re-fetch the now-current document and retry
+            // with a freshly computed number rather than risking a duplicate. The re-fetch also
+            // discards the interim site appended above, which belonged to the stale document.
+            var refetched = await persistence.GetByIdAsync(organisationId, applicationId);
+            if (refetched is null)
+                return (Results.NotFound(), null, null);
+            application = refetched;
+        }
+
+        return (
+            Results.Conflict(
+                "Could not allocate a unique interim site number after several attempts; please retry."
+            ),
+            null,
+            null
+        );
     }
 
     // Bundles AddBesEvidenceFile's DI-service/framework parameters under one [AsParameters]

@@ -387,12 +387,17 @@ public class AccreditationApplicationEndpointsSitesFilesTests
             }
         );
 
+    // RA-603: this used to assert 500 on a single failed write. AddInterimSite now allocates its
+    // site number inside the same generate-write-retry loop AddOverseasSite uses, so one failed
+    // write is a lost race to be retried, not a terminal error - the single-retry case is covered
+    // by Create_RetriesWhenAnotherWriterClaimsTheNumberFirst. What is worth pinning here is the
+    // other end: when the write keeps losing, the caller is told rather than spun on forever.
     [Fact]
-    public async Task AddInterimSite_WhenPersistenceUpdateFails_ReturnsProblem()
+    public async Task AddInterimSite_WhenTheWriteKeepsLosingTheRace_ReturnsConflict()
     {
         Reset();
         var app = SeedApplicationWithOverseasSite();
-        _factory.FakePersistence.FailNextUpdate = true;
+        _factory.FakePersistence.FailNextInterimSiteNumberWrites = 3;
 
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/interim-site",
@@ -400,7 +405,7 @@ public class AccreditationApplicationEndpointsSitesFilesTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
     [Fact]
@@ -436,7 +441,7 @@ public class AccreditationApplicationEndpointsSitesFilesTests
                 Arg.Any<AccreditationApplicationModel>(),
                 "interim",
                 string.Empty,
-                "SN-0002",
+                "001",
                 true,
                 Arg.Any<CancellationToken>()
             );

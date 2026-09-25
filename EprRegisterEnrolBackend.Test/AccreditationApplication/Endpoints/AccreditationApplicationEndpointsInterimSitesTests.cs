@@ -50,12 +50,16 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         string siteName = "Interim",
         DateTime? createdAt = null,
         DateTime? removedAt = null,
-        List<string>? operationCodes = null
+        List<string>? operationCodes = null,
+        string? siteNumber = null
     ) =>
         new()
         {
             SiteId = siteId,
-            SiteNumber = $"SN-{siteId:D4}",
+            // The default is deliberately the LEGACY SN-000N form, which is what records stored
+            // before RA-603's numbering change carry. Tests about the new 001-999 numbering pass
+            // siteNumber explicitly.
+            SiteNumber = siteNumber ?? $"SN-{siteId:D4}",
             Country = "France",
             SiteName = siteName,
             AddressLine1 = "1 Rue Example",
@@ -72,13 +76,15 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         ApplicationStatus status = ApplicationStatus.Saved,
         SectionStatus sectionStatus = SectionStatus.Completed,
         InterimSiteModel? legacyMirror = null,
-        List<InterimSiteModel>? interimSites = null
+        List<InterimSiteModel>? interimSites = null,
+        string? registrationId = null
     )
     {
         var app = new AccreditationApplicationModel
         {
             Id = ObjectId.GenerateNewId(),
             OrganisationId = "org-123",
+            RegistrationId = registrationId,
             Year = 2026,
             MaterialType = MaterialType.Steel,
             ApplicationStatus = status,
@@ -100,6 +106,40 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         };
         _factory.FakePersistence.Seed(app);
         return app;
+    }
+
+    /// <summary>
+    /// Another application under the same registration - a previous year's, typically. Its
+    /// interim sites are in scope for numbering even though no route in this test class touches
+    /// it, which is what "registration-scoped" means.
+    /// </summary>
+    private void SeedSibling(string registrationId, params InterimSiteModel[] interimSites)
+    {
+        _factory.FakePersistence.Seed(
+            new AccreditationApplicationModel
+            {
+                Id = ObjectId.GenerateNewId(),
+                OrganisationId = "org-123",
+                RegistrationId = registrationId,
+                Year = 2025,
+                MaterialType = MaterialType.Steel,
+                ApplicationStatus = ApplicationStatus.Saved,
+                OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    SectionStatus = SectionStatus.Completed,
+                    Sites =
+                    [
+                        new OverseasSiteModel
+                        {
+                            SiteId = 1,
+                            SiteName = "Prior Year Site",
+                            OperationCodes = ["R4"],
+                            InterimSites = [.. interimSites],
+                        },
+                    ],
+                },
+            }
+        );
     }
 
     private static AddInterimSiteRequest ValidRequest() =>
@@ -166,7 +206,9 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         var site = await StoredSiteAsync(app);
         var created = site.InterimSites.Single(i => i.SiteName == "Interim Recycling Site");
         created.SiteId.Should().Be(4);
-        created.SiteNumber.Should().Be("SN-0004");
+        // SiteId still counts on the shared ORS+interim sequence; siteNumber no longer does.
+        // The two fixtures carry legacy SN-000N numbers, which do not parse, so this is 001.
+        created.SiteNumber.Should().Be("001");
     }
 
     // A withdrawn interim site keeps its id forever, so the allocator has to keep counting past it.
@@ -813,5 +855,262 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         var response = await SubmitAsync(app);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // ── site numbers are their own 001-999 set ───────────────────────────────
+    //
+    // An interim site's siteNumber is a real-world identifier a regulator reads. It runs 001-999
+    // as its OWN set, independent of the ORS ids, and - like them - it is scoped by
+    // RegistrationId, so it stays unique across every year of a company's history rather than
+    // restarting each application.
+    //
+    // It used to be derived from NextSiteId, the shared ORS+interim internal counter. That made
+    // interim numbers skip whenever an ORS was added: an accreditation's two interim sites came
+    // out SN-0002 and SN-0004 rather than 001 and 002.
+    //
+    // SiteId keeps the shared sequence and is unaffected. That is what the routes address, and it
+    // is why an interim site can be named without also naming its parent.
+
+    [Fact]
+    public async Task Create_FirstInterimSiteUnderARegistration_IsNumbered001()
+    {
+        Reset();
+        var app = Seed(registrationId: "reg-1");
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app)).InterimSites.Single().SiteNumber.Should().Be("001");
+    }
+
+    [Fact]
+    public async Task Create_NumbersInterimSitesSequentially()
+    {
+        Reset();
+        var app = Seed(interimSites: [Interim(2, siteNumber: "001")], registrationId: "reg-1");
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app))
+            .InterimSites.Select(i => i.SiteNumber)
+            .Should()
+            .Equal("001", "002");
+    }
+
+    // The defect this fixes. An ORS added in between used to consume a number from the interim
+    // sequence, because both came off the same counter.
+    [Fact]
+    public async Task Create_InterimNumbersDoNotSkipWhenOverseasSitesAreAdded()
+    {
+        Reset();
+        var app = Seed(interimSites: [Interim(2, siteNumber: "001")], registrationId: "reg-1");
+        app.OverseasSites!.Sites.Add(
+            new OverseasSiteModel
+            {
+                SiteId = 50,
+                SiteName = "Another ORS",
+                OperationCodes = ["R4"],
+            }
+        );
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app)).InterimSites.Should().Contain(i => i.SiteNumber == "002");
+    }
+
+    // Counted across every ORS on the application, not restarted per ORS.
+    [Fact]
+    public async Task Create_NumbersAreUniqueAcrossEveryOverseasSite()
+    {
+        Reset();
+        var app = Seed(interimSites: [Interim(2, siteNumber: "001")], registrationId: "reg-1");
+        app.OverseasSites!.Sites.Add(
+            new OverseasSiteModel
+            {
+                SiteId = 50,
+                SiteName = "Another ORS",
+                OperationCodes = ["R4"],
+                InterimSites = [Interim(51, siteNumber: "002")],
+            }
+        );
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            app.OrganisationId,
+            app.Id!.Value.ToString()
+        );
+        var allNumbers = stored!
+            .OverseasSites!.Sites.SelectMany(site => site.InterimSites)
+            .Select(i => i.SiteNumber)
+            .ToList();
+        allNumbers.Should().OnlyHaveUniqueItems();
+        allNumbers.Should().Contain("003");
+    }
+
+    // A withdrawn interim site keeps its number for as long as the record lasts, which under AC05
+    // is permanently. Reissuing it would put a regulator-visible identifier on two records.
+    [Fact]
+    public async Task Create_WithdrawnInterimSitesKeepTheirNumbersReserved()
+    {
+        Reset();
+        var app = Seed(
+            interimSites:
+            [
+                Interim(2, siteNumber: "001", removedAt: DateTime.UtcNow),
+                Interim(3, siteNumber: "002"),
+            ],
+            registrationId: "reg-1"
+        );
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app))
+            .InterimSites.Select(i => i.SiteNumber)
+            .Should()
+            .Equal("001", "002", "003");
+    }
+
+    // Records stored before this change carry SN-000N, which is not a number. Numbering has to
+    // keep working rather than trip over them or, worse, parse them into something.
+    [Fact]
+    public async Task Create_IgnoresLegacySiteNumbers()
+    {
+        Reset();
+        var app = Seed(interimSites: [Interim(2, siteNumber: "SN-0002")], registrationId: "reg-1");
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app)).InterimSites.Should().Contain(i => i.SiteNumber == "001");
+    }
+
+    // The scope rule, and the reason it is not per-application: a registration spans years, and a
+    // number reissued next year would collide with one already in a submitted return.
+    [Fact]
+    public async Task Create_ContinuesFromOtherApplicationsUnderTheSameRegistration()
+    {
+        Reset();
+        var app = Seed(registrationId: "reg-1");
+        SeedSibling("reg-1", Interim(90, siteNumber: "001"), Interim(91, siteNumber: "002"));
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app)).InterimSites.Single().SiteNumber.Should().Be("003");
+    }
+
+    // Scoped, not global. Another company's numbers are none of this registration's business.
+    [Fact]
+    public async Task Create_IgnoresInterimSitesUnderADifferentRegistration()
+    {
+        Reset();
+        var app = Seed(registrationId: "reg-1");
+        SeedSibling("reg-OTHER", Interim(90, siteNumber: "500"));
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app)).InterimSites.Single().SiteNumber.Should().Be("001");
+    }
+
+    // No registration established yet means no prior-year history to collide with, so the
+    // application's own sites are the whole scope. Self-corrects once a real id is assigned.
+    [Fact]
+    public async Task Create_NoRegistrationId_NumbersWithinTheApplicationAlone()
+    {
+        Reset();
+        var app = Seed(interimSites: [Interim(2, siteNumber: "001")], registrationId: null);
+        SeedSibling("reg-1", Interim(90, siteNumber: "700"));
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app)).InterimSites.Should().Contain(i => i.SiteNumber == "002");
+    }
+
+    // Two writers under one registration must not mint the same number. Same guard and same
+    // bounded retry as AddOverseasSite (RA-482), driven here without real concurrency.
+    [Fact]
+    public async Task Create_RetriesWhenAnotherWriterClaimsTheNumberFirst()
+    {
+        Reset();
+        var app = Seed(registrationId: "reg-1");
+        _factory.FakePersistence.FailNextInterimSiteNumberWrites = 1;
+
+        var response = await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await StoredSiteAsync(app)).InterimSites.Should().HaveCount(1);
+    }
+
+    // Bounded, not unlimited - a genuinely stuck conflict fails loudly rather than spinning.
+    [Fact]
+    public async Task Create_GivesUpAfterThreeConflictingAttempts()
+    {
+        Reset();
+        var app = Seed(registrationId: "reg-1");
+        _factory.FakePersistence.FailNextInterimSiteNumberWrites = 3;
+
+        var response = await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        // 409, matching AddOverseasSite's give-up on the same situation.
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // The format's ceiling. 999 is the last one the three-digit form can express.
+    [Fact]
+    public async Task Create_AtCapacity_Returns422AndAddsNothing()
+    {
+        Reset();
+        var app = Seed(interimSites: [Interim(2, siteNumber: "999")], registrationId: "reg-1");
+
+        var response = await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await StoredSiteAsync(app)).InterimSites.Should().HaveCount(1);
     }
 }

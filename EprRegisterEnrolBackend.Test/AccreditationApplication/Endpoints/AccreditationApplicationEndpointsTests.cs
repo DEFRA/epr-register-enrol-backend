@@ -5111,7 +5111,9 @@ public class AccreditationApplicationEndpointsTests
         interimSite.ContactPhone.Should().Be("+33 1 23 45 67 89");
         interimSite.IsNewSite.Should().BeTrue();
         interimSite.SiteId.Should().Be(2);
-        interimSite.SiteNumber.Should().Be("SN-0002");
+        // RA-603: SiteId still comes off the shared ORS+interim sequence. SiteNumber is now its
+        // own registration-scoped 001-999 set, and this is the first one.
+        interimSite.SiteNumber.Should().Be("001");
         interimSite.OperationCodes.Should().BeEquivalentTo(["R12"]);
     }
 
@@ -5184,7 +5186,10 @@ public class AccreditationApplicationEndpointsTests
             TestContext.Current.CancellationToken
         );
         interimSite!.SiteId.Should().Be(13);
-        interimSite.SiteNumber.Should().Be("SN-0013");
+        // The point of the split: SiteId is 13 because ids are shared with the ORS list, while
+        // the number is 001 because the only existing interim site carries a legacy SN-0012 that
+        // does not parse. These two used to be forced to agree.
+        interimSite.SiteNumber.Should().Be("001");
     }
 
     [Fact]
@@ -5385,7 +5390,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 "interim",
                 "001",
-                "SN-0002",
+                "001",
                 true,
                 Arg.Any<CancellationToken>()
             );
