@@ -685,6 +685,31 @@ public class HttpCaseWorkingApiAdapter(
     // Extracted from BuildOverseasSitesSection so the BesEvidence case above can send the
     // identical per-site projection (including nested besEvidence.files) without duplicating it -
     // same "single source of truth" reasoning as the comment on BuildOverseasSitesSection itself.
+    // RA-603: one projection, used for both the singular mirror and the list, so the two can
+    // never describe the same interim site differently.
+    private static object? BuildInterimSite(InterimSiteModel? interimSite) =>
+        interimSite is null
+            ? null
+            : new
+            {
+                siteId = interimSite.SiteId,
+                siteNumber = interimSite.SiteNumber,
+                isNewSite = interimSite.IsNewSite,
+                country = interimSite.Country,
+                siteName = interimSite.SiteName,
+                addressLine1 = interimSite.AddressLine1,
+                addressLine2 = interimSite.AddressLine2,
+                townOrCity = interimSite.TownOrCity,
+                stateOrRegion = interimSite.StateOrRegion,
+                postcode = interimSite.Postcode,
+                contactName = interimSite.ContactName,
+                contactEmail = interimSite.ContactEmail,
+                contactPhone = interimSite.ContactPhone,
+                operationCodes = interimSite.OperationCodes,
+                createdAt = interimSite.CreatedAt,
+                removedAt = interimSite.RemovedAt,
+            };
+
     private static object[] BuildOverseasSitesArray(AccreditationApplicationModel application) =>
         (application.OverseasSites?.Sites ?? [])
             .Where(s => s.Selected)
@@ -714,25 +739,17 @@ public class HttpCaseWorkingApiAdapter(
                     isOecd = s.IsOecd,
                     isNewSite = s.IsNewSite,
                     registeredNowAccredited = s.RegisteredNowAccredited,
-                    interimSite = s.InterimSite is null
-                        ? null
-                        : new
-                        {
-                            siteId = s.InterimSite.SiteId,
-                            siteNumber = s.InterimSite.SiteNumber,
-                            isNewSite = s.InterimSite.IsNewSite,
-                            country = s.InterimSite.Country,
-                            siteName = s.InterimSite.SiteName,
-                            addressLine1 = s.InterimSite.AddressLine1,
-                            addressLine2 = s.InterimSite.AddressLine2,
-                            townOrCity = s.InterimSite.TownOrCity,
-                            stateOrRegion = s.InterimSite.StateOrRegion,
-                            postcode = s.InterimSite.Postcode,
-                            contactName = s.InterimSite.ContactName,
-                            contactEmail = s.InterimSite.ContactEmail,
-                            contactPhone = s.InterimSite.ContactPhone,
-                            operationCodes = s.InterimSite.OperationCodes,
-                        },
+                    // RA-603: derived rather than read straight off the model, so a stale stored
+                    // mirror can never advertise a site the operator has withdrawn.
+                    interimSite = BuildInterimSite(InterimSiteSync.Active(s).FirstOrDefault()),
+                    // RA-603 AC09: every interim site, withdrawn ones included. AC05 keeps those
+                    // for reporting and this service is where the reporting happens, so they go
+                    // over the wire carrying their dates and the regulator's own view decides
+                    // what to show.
+                    interimSites = InterimSiteSync
+                        .All(s)
+                        .Select(i => BuildInterimSite(i))
+                        .ToArray(),
                     besEvidence = new
                     {
                         files = (s.BesEvidence?.BesEvidenceUploads ?? [])
