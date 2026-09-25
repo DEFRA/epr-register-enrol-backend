@@ -50,9 +50,41 @@ public static class InterimSiteSync
     /// Re-points <see cref="OverseasSiteModel.InterimSite"/> at the first non-withdrawn entry in
     /// the list, or null when every entry is withdrawn (or there are none). Call after any
     /// mutation of the list.
+    ///
+    /// Reads <see cref="OverseasSiteModel.InterimSites"/> directly and deliberately NOT through
+    /// <see cref="Active"/>: this is a write-path operation, where the list is authoritative and
+    /// the mirror is the thing being derived. Going through Active's legacy fallback would make
+    /// the mirror derive from itself, so an empty list could never clear it and a withdrawn
+    /// interim site would be resurrected by the very call meant to retire it. A write path that
+    /// needs the legacy value promoted calls <see cref="Normalise"/> first.
     /// </summary>
     public static void SyncMirror(OverseasSiteModel site) =>
-        site.InterimSite = Active(site).FirstOrDefault();
+        site.InterimSite = site.InterimSites.FirstOrDefault(i => i.RemovedAt is null);
+
+    /// <summary>
+    /// Every interim site on this ORS, withdrawn ones included, in list order.
+    ///
+    /// Falls back to the singular mirror when the list is empty, which is what makes reading
+    /// legacy-safe without a stored migration: RA-603 ships no backfill, so a document written
+    /// before it keeps only <see cref="OverseasSiteModel.InterimSite"/> until something saves it
+    /// again, and this returns the right answer for both shapes.
+    ///
+    /// That fallback lives here rather than in a read-path call to <see cref="Normalise"/> on
+    /// purpose. The endpoints run against <c>FakeAccreditationApplicationPersistence</c> in tests
+    /// and the Mongo class in production, so a normalise bolted onto the real persistence would be
+    /// invisible to every endpoint test - the one shape of bug most likely to reach an environment
+    /// unnoticed. Making the read itself correct cannot be forgotten by a caller and cannot
+    /// diverge between the two.
+    ///
+    /// Pure: unlike <see cref="Normalise"/> it does not touch the site.
+    /// </summary>
+    public static IEnumerable<InterimSiteModel> All(OverseasSiteModel site)
+    {
+        if (site.InterimSites.Count > 0)
+            return site.InterimSites;
+
+        return site.InterimSite is null ? [] : [site.InterimSite];
+    }
 
     /// <summary>
     /// The interim sites the operator currently has on this ORS, in list order, excluding any
@@ -60,5 +92,5 @@ public static class InterimSiteSync
     /// list is only for persistence and reporting.
     /// </summary>
     public static IEnumerable<InterimSiteModel> Active(OverseasSiteModel site) =>
-        site.InterimSites.Where(i => i.RemovedAt is null);
+        All(site).Where(i => i.RemovedAt is null);
 }

@@ -194,4 +194,52 @@ public class InterimSiteSyncTests
     {
         InterimSiteSync.Active(Site()).Should().BeEmpty();
     }
+
+    // -- All: reading is legacy-safe without anyone having to mutate first -----
+    //
+    // There is no stored migration. A document written before RA-603 carries only the singular
+    // field, and it stays that way until something saves it again. Rather than depend on every
+    // read path remembering to call Normalise first - which endpoint tests would not even catch,
+    // since they run against FakeAccreditationApplicationPersistence rather than the Mongo class -
+    // All falls back to the mirror, so reading is correct for both shapes by construction.
+
+    [Fact]
+    public void All_LegacyDocumentWithOnlyTheSingularField_FallsBackToTheMirror()
+    {
+        var site = Site(mirror: Interim(42));
+
+        InterimSiteSync.All(site).Select(i => i.SiteId).Should().Equal(42);
+    }
+
+    [Fact]
+    public void All_ListPopulated_IgnoresTheMirrorEntirely()
+    {
+        var site = Site(mirror: Interim(42), list: [Interim(43), Interim(44)]);
+
+        InterimSiteSync.All(site).Select(i => i.SiteId).Should().Equal(43, 44);
+    }
+
+    [Fact]
+    public void All_NoInterimSiteAtAll_IsEmpty()
+    {
+        InterimSiteSync.All(Site()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void All_DoesNotMutateTheSite()
+    {
+        var site = Site(mirror: Interim(42));
+
+        _ = InterimSiteSync.All(site).ToList();
+
+        site.InterimSites.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Active_LegacyDocumentWithOnlyTheSingularField_ReturnsIt()
+    {
+        var site = Site(mirror: Interim(42));
+
+        InterimSiteSync.Active(site).Select(i => i.SiteId).Should().Equal(42);
+    }
 }
