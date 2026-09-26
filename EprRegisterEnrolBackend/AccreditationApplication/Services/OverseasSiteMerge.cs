@@ -125,36 +125,7 @@ public static class OverseasSiteMerge
             // singular field is read as a one-element list, so the rules below are written once.
             InterimSiteSync.Normalise(site);
 
-            foreach (var interim in site.InterimSites)
-            {
-                var hasPersistedInterim = persistedInterimSites.TryGetValue(
-                    interim.SiteId,
-                    out var persistedInterim
-                );
-
-                interim.IsNewSite = !hasPersistedInterim || persistedInterim!.IsNewSite;
-
-                // RA-486: unlike SiteName/AddressLine1/ContactName, OperationCodes is not
-                // `required` on InterimSiteModel — it defaults to `[]` so pre-RA-486 persisted
-                // documents still deserialise. That means a PATCH body that omits it (or carries
-                // an empty list) binds to [] rather than failing model binding, and would
-                // otherwise wipe the persisted codes below the ≥1-of-R12/R13 minimum. Restore from
-                // the persisted value whenever the incoming list is empty, mirroring OrsId/
-                // RegisteredNowAccredited/PreviousSites above.
-                if (interim.OperationCodes.Count == 0 && hasPersistedInterim)
-                {
-                    interim.OperationCodes = persistedInterim!.OperationCodes;
-                }
-
-                // RA-603 AC05: both dates are server-owned. RemovedAt in particular IS the
-                // withdrawal, so accepting it from a client would let a bulk PATCH un-withdraw an
-                // interim site and bypass the restore endpoint entirely.
-                if (hasPersistedInterim)
-                {
-                    interim.CreatedAt = persistedInterim!.CreatedAt;
-                    interim.RemovedAt = persistedInterim!.RemovedAt;
-                }
-            }
+            RestoreServerOwnedInterimFields(site, persistedInterimSites);
 
             // RA-603 AC05, and the reason this method needed rewriting at all. The wholesale
             // replacement above is correct for ORS sites and destructive for interim sites: the
@@ -167,23 +138,87 @@ public static class OverseasSiteMerge
             // detach working as callers expect (the site vanishes from the mirror and from every
             // active list) while making hard deletion impossible through this path, per the
             // plan's rule that nothing in this ticket deletes an interim site outright.
-            if (persistedInterimSitesByParent.TryGetValue(site.SiteId, out var persistedInterims))
-            {
-                var sentIds = site.InterimSites.Select(i => i.SiteId).ToHashSet();
-                foreach (var omitted in persistedInterims)
-                {
-                    if (sentIds.Contains(omitted.SiteId))
-                        continue;
-
-                    omitted.RemovedAt ??= DateTime.UtcNow;
-                    site.InterimSites.Add(omitted);
-                }
-            }
+            ReattachOmittedInterimSites(site, persistedInterimSitesByParent);
 
             // Re-point the legacy mirror at the first interim site still standing.
             InterimSiteSync.SyncMirror(site);
         }
 
         return merged;
+    }
+
+    /// <summary>
+    /// RA-603: restores the interim-site fields the server owns, so a PATCH cannot set them.
+    ///
+    /// Split out of <see cref="Merge"/> rather than inlined: the interim rules are a self-contained
+    /// concern and leaving them in the loop pushed that method past the cognitive-complexity
+    /// limit, which is a fair reading — the ORS rules and the interim rules are two different
+    /// subjects that happen to share an iteration.
+    /// </summary>
+    private static void RestoreServerOwnedInterimFields(
+        OverseasSiteModel site,
+        Dictionary<int, InterimSiteModel> persistedInterimSites
+    )
+    {
+        foreach (var interim in site.InterimSites)
+        {
+            var hasPersistedInterim = persistedInterimSites.TryGetValue(
+                interim.SiteId,
+                out var persistedInterim
+            );
+
+            interim.IsNewSite = !hasPersistedInterim || persistedInterim!.IsNewSite;
+
+            // RA-486: unlike SiteName/AddressLine1/ContactName, OperationCodes is not `required`
+            // on InterimSiteModel — it defaults to `[]` so pre-RA-486 persisted documents still
+            // deserialise. That means a PATCH body that omits it (or carries an empty list) binds
+            // to [] rather than failing model binding, and would otherwise wipe the persisted
+            // codes below the ≥1-of-R12/R13 minimum. Restore from the persisted value whenever the
+            // incoming list is empty, mirroring OrsId/RegisteredNowAccredited/PreviousSites.
+            if (interim.OperationCodes.Count == 0 && hasPersistedInterim)
+            {
+                interim.OperationCodes = persistedInterim!.OperationCodes;
+            }
+
+            // RA-603 AC05: both dates are server-owned. RemovedAt in particular IS the
+            // withdrawal, so accepting it from a client would let a bulk PATCH un-withdraw an
+            // interim site and bypass the restore endpoint entirely.
+            if (hasPersistedInterim)
+            {
+                interim.CreatedAt = persistedInterim!.CreatedAt;
+                interim.RemovedAt = persistedInterim!.RemovedAt;
+            }
+        }
+    }
+
+    /// <summary>
+    /// RA-603 AC05, and the reason <see cref="Merge"/> needed rewriting at all. The wholesale
+    /// replacement it performs is correct for ORS sites and destructive for interim sites: the
+    /// frontend filters withdrawn ones out of its view model, so it stops sending them, and the
+    /// very next save would erase the records AC05 keeps for reporting.
+    ///
+    /// So nothing here drops an interim site. One the client left out is either already withdrawn
+    /// — reattached exactly as persisted — or still active, in which case it is withdrawn now
+    /// rather than destroyed. That keeps the legacy `interimSite: null` detach working as callers
+    /// expect (the site vanishes from the mirror and from every active list) while making hard
+    /// deletion impossible through this path.
+    /// </summary>
+    private static void ReattachOmittedInterimSites(
+        OverseasSiteModel site,
+        Dictionary<int, List<InterimSiteModel>> persistedInterimSitesByParent
+    )
+    {
+        if (!persistedInterimSitesByParent.TryGetValue(site.SiteId, out var persistedInterims))
+            return;
+
+        var sentIds = site.InterimSites.Select(i => i.SiteId).ToHashSet();
+        foreach (var omitted in persistedInterims)
+        {
+            if (sentIds.Contains(omitted.SiteId))
+                continue;
+
+            omitted.RemovedAt ??= DateTime.UtcNow;
+            site.InterimSites.Add(omitted);
+        }
     }
 }

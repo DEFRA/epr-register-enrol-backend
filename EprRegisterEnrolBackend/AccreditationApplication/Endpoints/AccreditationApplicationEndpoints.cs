@@ -1902,11 +1902,10 @@ public static class AccreditationApplicationEndpoints
         int siteId,
         int interimSiteId,
         AddInterimSiteRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<AddInterimSiteRequest> validator,
-        CancellationToken cancellationToken
+        [AsParameters] UpdateInterimSiteServices services
     )
     {
+        var (persistence, validator, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
@@ -2191,6 +2190,16 @@ public static class AccreditationApplicationEndpoints
             null
         );
     }
+
+    // Bundles UpdateInterimSite's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) — the route itself
+    // needs four path segments plus a body, which leaves no room for three more. Same reasoning
+    // and same shape as AddBesEvidenceFileServices below.
+    private sealed record UpdateInterimSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddInterimSiteRequest> Validator,
+        CancellationToken CancellationToken
+    );
 
     // Bundles AddBesEvidenceFile's DI-service/framework parameters under one [AsParameters]
     // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
