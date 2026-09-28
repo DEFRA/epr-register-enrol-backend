@@ -1097,6 +1097,112 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // RA-603 review (Aysha): interim site ids are unique application-wide, but the bulk PATCH
+    // body is client-shaped and could list one under two overseas sites. Merge would then keep
+    // it active under one parent and stamp it withdrawn under the other - the same record stored
+    // twice. Refused up front instead.
+    [Fact]
+    public async Task BulkPatch_SameInterimSiteUnderTwoOverseasSites_IsRejected()
+    {
+        Reset();
+        var app = Seed(
+            status: ApplicationStatus.Started,
+            sectionStatus: SectionStatus.InProgress,
+            interimSites: [Interim(42)]
+        );
+        var request = new PatchOverseasSitesRequest
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    SiteName = "Test Site",
+                    OperationCodes = ["R4"],
+                    InterimSites = [Interim(42)],
+                },
+                new OverseasSiteModel
+                {
+                    SiteId = 2,
+                    SiteName = "Second Site",
+                    OperationCodes = ["R4"],
+                    InterimSites = [Interim(42)],
+                },
+            ],
+        };
+
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await StoredSiteAsync(app)).InterimSites.Should().ContainSingle(i => i.SiteId == 42);
+    }
+
+    // RA-603 review (Aysha): the write that lost can have lost to a status change rather than a
+    // number clash - the guard only compares Version. The retry must re-check that the
+    // application can still be edited, not just re-read it.
+    [Fact]
+    public async Task Create_RetryAfterTheApplicationWasWithdrawn_IsRefused()
+    {
+        Reset();
+        var app = Seed(status: ApplicationStatus.Started, sectionStatus: SectionStatus.InProgress);
+        _factory.FakePersistence.FailNextInterimSiteNumberWrites = 1;
+        _factory.FakePersistence.OnLostRace = stored =>
+            stored.ApplicationStatus = ApplicationStatus.Withdrawn;
+
+        var response = await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await StoredSiteAsync(app)).InterimSites.Should().BeEmpty();
+    }
+
+    // RA-603 review (Aysha): a retry re-reads the document, and the re-read can hold a
+    // pre-RA-603 ORS whose only interim site is still in the singular field. Appending to the
+    // list without normalising first would drop that site. Pins the explicit normalise on the
+    // retry path, so it no longer depends on NextSiteId doing it as a side effect.
+    [Fact]
+    public async Task Create_RetryAgainstALegacyOnlyDocument_KeepsTheLegacyInterimSite()
+    {
+        Reset();
+        var app = Seed(status: ApplicationStatus.Started, sectionStatus: SectionStatus.InProgress);
+        _factory.FakePersistence.FailNextInterimSiteNumberWrites = 1;
+        _factory.FakePersistence.OnLostRace = stored =>
+            stored.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                SectionStatus = SectionStatus.InProgress,
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Test Site",
+                        OperationCodes = ["R4"],
+                        InterimSite = Interim(7, "Legacy Depot"),
+                        InterimSites = [],
+                    },
+                ],
+            };
+
+        var response = await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var site = await StoredSiteAsync(app);
+        site.InterimSites.Should().HaveCount(2);
+        site.InterimSites.Should().Contain(i => i.SiteId == 7 && i.SiteName == "Legacy Depot");
+    }
+
     // The format's ceiling. 999 is the last one the three-digit form can express.
     [Fact]
     public async Task Create_AtCapacity_Returns422AndAddsNothing()

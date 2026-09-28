@@ -209,6 +209,24 @@ public static class AccreditationApplicationEndpoints
     // RA-252 / RA-415: an application in a terminal status (Withdrawn, Approved or Rejected)
     // must not be editable through any of the ordinary write endpoints, even if the frontend's
     // own session guard fails open or is bypassed.
+    // Terminal application, or an overseas-sites section the current status does not allow
+    // writing to. IsSectionEditable is what keeps a Queried section writable on a locked
+    // application (AC12), so overseas-site writes go through this rather than re-implementing it.
+    private static IResult? RejectIfOverseasSitesNotEditable(
+        AccreditationApplicationModel application
+    ) =>
+        RejectIfTerminal(application)
+        ?? (
+            AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+                ? null
+                : Results.Conflict(
+                    "Overseas sites section is not editable in the application's current status."
+                )
+        );
+
     private static IResult? RejectIfTerminal(AccreditationApplicationModel application) =>
         application.ApplicationStatus
             is ApplicationStatus.Withdrawn
@@ -1172,6 +1190,11 @@ public static class AccreditationApplicationEndpoints
         if (application.OverseasSites is null)
             application.OverseasSites = new AccreditationApplicationOverseasSites();
 
+        if (FindInterimSiteUnderSeveralOverseasSites(request.Sites) is { } duplicateId)
+            return Results.BadRequest(
+                $"Interim site {duplicateId} appears under more than one overseas site."
+            );
+
         // RA-292 AC01/AC02: isNewSite (site and interim) is re-derived server-side against the
         // persisted list; whatever the client sent for it is discarded.
         if (request.Sites != null)
@@ -1236,12 +1259,12 @@ public static class AccreditationApplicationEndpoints
                 $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
             );
 
-        var (errorResult, newSite, updated) = await TryAddOverseasSiteWithGeneratedIdAsync(
+        var (errorResult, newSite, updated) = await AllocateGeneratedIdAsync(
             persistence,
             organisationId,
             applicationId,
             application,
-            request
+            OrsIdAllocation(persistence, request)
         );
         if (errorResult is not null || newSite is null || updated is null)
             return errorResult ?? Results.Problem("Failed to add overseas site.");
@@ -1278,78 +1301,119 @@ public static class AccreditationApplicationEndpoints
         return Results.Created(string.Empty, newSite);
     }
 
-    // RA-482: pulled out of AddOverseasSite to keep that method's cognitive complexity down —
-    // this owns the whole generate-write-retry loop, including the capacity guard and the
-    // re-fetch-and-retry path, and reports back either a terminal error IResult or the
-    // successfully persisted site/application pair (never a mix of the two).
+    /// <summary>
+    /// What <see cref="AllocateGeneratedIdAsync{T}"/> needs to know about one kind of generated
+    /// identifier: where its scope comes from, how a new record claiming it is built and attached,
+    /// and which guarded write persists it. ORS ids (RA-482) and interim site numbers (RA-603)
+    /// differ only in these, so the retry rules around them exist once.
+    /// </summary>
+    private sealed record GeneratedIdAllocation<T>(
+        string CapacityNoun,
+        string IdName,
+        Func<AccreditationApplicationModel, Task<IEnumerable<string?>>> Scope,
+        Func<AccreditationApplicationModel, string, (IResult? Error, T? Created)> Attach,
+        Func<AccreditationApplicationModel, string, Task<AccreditationApplicationModel?>> WriteIfAbsent
+    )
+        where T : class;
+
+    // RA-482/RA-603: generate an id from the registration-wide scope, attach the new record, and
+    // persist only if no concurrent writer has claimed that id first. A lost race re-reads and
+    // tries again with a fresh id, bounded so a stuck conflict fails loudly. Reports either an
+    // error or the created record with its persisted application, never a mix.
+    //
+    // The guarded write also compares Version, so it can lose to ANY concurrent write - a status
+    // change included. The re-read is therefore re-checked for editability before retrying;
+    // otherwise a retry could add to an application that has since become terminal.
     private static async Task<(
         IResult? ErrorResult,
-        OverseasSiteModel? NewSite,
+        T? Created,
         AccreditationApplicationModel? Updated
-    )> TryAddOverseasSiteWithGeneratedIdAsync(
+    )> AllocateGeneratedIdAsync<T>(
         IAccreditationApplicationPersistence persistence,
         string organisationId,
         string applicationId,
         AccreditationApplicationModel application,
-        AddOverseasSiteRequest request
+        GeneratedIdAllocation<T> allocation
     )
+        where T : class
     {
-        // RA-482: OrsId is server-generated (max existing numeric id + 1, zero-padded, scoped by
-        // RegistrationId across every application under it, falling back to just this
-        // application when no RegistrationId is set yet) rather than accepted from the client.
-        // The write is guarded so a concurrent AddOverseasSite call under the same registration
-        // can't silently produce a duplicate: UpdateIfOrsIdAbsentAsync only persists if nothing
-        // else already inserted that exact id, and a failed attempt retries with a freshly
-        // computed id. Bounded, not unlimited, so a genuinely stuck conflict fails loudly.
-        const int maxOrsIdAttempts = 3;
+        const int maxAttempts = 3;
 
-        // Callers already guarantee this before calling in, but that guarantee doesn't cross
-        // the method boundary for the compiler's nullable flow analysis -- assert it locally too.
-        application.OverseasSites ??= new AccreditationApplicationOverseasSites();
-
-        for (var attempt = 1; attempt <= maxOrsIdAttempts; attempt++)
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            var scope = await OrsIdScope(persistence, application);
-            var generated = OrsIdGenerator.GenerateNext(scope);
+            var generated = OrsIdGenerator.GenerateNext(await allocation.Scope(application));
             if (generated.CapacityExceeded)
                 return (
                     Results.UnprocessableEntity(
-                        "This registration has reached the maximum of 999 overseas sites."
+                        $"This registration has reached the maximum of 999 {allocation.CapacityNoun}."
                     ),
                     null,
                     null
                 );
 
-            var newSite = BuildOverseasSite(application.OverseasSites, generated.OrsId!, request);
+            var (attachError, created) = allocation.Attach(application, generated.OrsId!);
+            if (attachError is not null || created is null)
+                return (attachError ?? Results.Problem("Failed to attach the new site."), null, null);
 
-            application.OverseasSites.Sites.Add(newSite);
-            RecomputeOverseasSitesSectionStatus(application.OverseasSites);
-            application.DateLastEdited = DateTime.UtcNow;
-
-            if (application.ApplicationStatus == ApplicationStatus.Saved)
-                application.ApplicationStatus = ApplicationStatus.Started;
-
-            var updated = await persistence.UpdateIfOrsIdAbsentAsync(application, generated.OrsId!);
+            var updated = await allocation.WriteIfAbsent(application, generated.OrsId!);
             if (updated is not null)
-                return (null, newSite, updated);
+                return (null, created, updated);
 
-            // Lost the race to a concurrent writer — re-fetch the now-current document and retry
-            // with a freshly computed id rather than risking a duplicate.
             var refetched = await persistence.GetByIdAsync(organisationId, applicationId);
             if (refetched is null)
                 return (Results.NotFound(), null, null);
+            if (RejectIfOverseasSitesNotEditable(refetched) is { } notEditable)
+                return (notEditable, null, null);
             application = refetched;
-            application.OverseasSites ??= new AccreditationApplicationOverseasSites();
         }
 
         return (
             Results.Conflict(
-                "Could not allocate a unique ORS id after several attempts; please retry."
+                $"Could not allocate a unique {allocation.IdName} after several attempts; please retry."
             ),
             null,
             null
         );
     }
+
+    // RA-482: OrsId is server-generated (max existing numeric id + 1, zero-padded) across every
+    // application under the registration, never taken from the client.
+    private static GeneratedIdAllocation<OverseasSiteModel> OrsIdAllocation(
+        IAccreditationApplicationPersistence persistence,
+        AddOverseasSiteRequest request
+    ) =>
+        new(
+            CapacityNoun: "overseas sites",
+            IdName: "ORS id",
+            Scope: application => OrsIdScope(persistence, application),
+            Attach: (application, orsId) =>
+            {
+                application.OverseasSites ??= new AccreditationApplicationOverseasSites();
+                var newSite = BuildOverseasSite(application.OverseasSites, orsId, request);
+                application.OverseasSites.Sites.Add(newSite);
+                RecomputeOverseasSitesSectionStatus(application.OverseasSites);
+                application.DateLastEdited = DateTime.UtcNow;
+                if (application.ApplicationStatus == ApplicationStatus.Saved)
+                    application.ApplicationStatus = ApplicationStatus.Started;
+                return (null, newSite);
+            },
+            WriteIfAbsent: persistence.UpdateIfOrsIdAbsentAsync
+        );
+
+    // RA-603: interim site ids are unique application-wide, but a bulk PATCH body is
+    // client-shaped. One listed under two overseas sites would be merged as active under one and
+    // withdrawn under the other - the same record stored twice - so it is refused. Ids of 0 or
+    // less are not yet allocated and are not compared.
+    private static int? FindInterimSiteUnderSeveralOverseasSites(List<OverseasSiteModel>? sites) =>
+        (sites ?? [])
+            .SelectMany(site =>
+                InterimSiteSync.All(site).Select(interim => (InterimId: interim.SiteId, site.SiteId))
+            )
+            .Where(pair => pair.InterimId > 0)
+            .GroupBy(pair => pair.InterimId)
+            .Where(group => group.Select(pair => pair.SiteId).Distinct().Skip(1).Any())
+            .Select(group => (int?)group.Key)
+            .FirstOrDefault();
 
     private static OverseasSiteModel BuildOverseasSite(
         AccreditationApplicationOverseasSites overseasSites,
@@ -1444,11 +1508,10 @@ public static class AccreditationApplicationEndpoints
             if (site.SiteId > maxSiteId)
                 maxSiteId = site.SiteId;
 
-            // RA-603: scan every interim site, not just the mirror. Missing one would hand the
-            // next site an id that is already taken, and withdrawn sites count too - their ids
-            // stay claimed for as long as the record does, which is forever (AC05).
-            InterimSiteSync.Normalise(site);
-            foreach (var interim in site.InterimSites)
+            // RA-603: every interim site, the legacy mirror and withdrawn ones included - their
+            // ids stay claimed for as long as the record does, which is forever (AC05). Reads
+            // only; a caller that is about to mutate the list normalises it itself.
+            foreach (var interim in InterimSiteSync.All(site))
             {
                 if (interim.SiteId > maxSiteId)
                     maxSiteId = interim.SiteId;
@@ -1863,22 +1926,8 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return (Results.NotFound(), null, null);
 
-        if (RejectIfTerminal(application) is { } conflict)
-            return (conflict, null, null);
-
-        if (
-            !AccreditationApplicationSections.IsSectionEditable(
-                application.ApplicationStatus,
-                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
-            )
-        )
-            return (
-                Results.Conflict(
-                    "Overseas sites section is not editable in the application's current status."
-                ),
-                null,
-                null
-            );
+        if (RejectIfOverseasSitesNotEditable(application) is { } notEditable)
+            return (notEditable, null, null);
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
         if (site is null)
@@ -2054,15 +2103,13 @@ public static class AccreditationApplicationEndpoints
         if (failure is not null)
             return failure;
 
-        var (allocationError, interimSite, updated) =
-            await TryAddInterimSiteWithGeneratedNumberAsync(
-                persistence,
-                organisationId,
-                applicationId,
-                siteId,
-                application!,
-                request
-            );
+        var (allocationError, interimSite, updated) = await AllocateGeneratedIdAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            application!,
+            InterimSiteNumberAllocation(persistence, siteId, request)
+        );
         if (allocationError is not null)
             return allocationError;
 
@@ -2098,98 +2145,65 @@ public static class AccreditationApplicationEndpoints
         return Results.Created(string.Empty, interimSite);
     }
 
-    // RA-603: the interim counterpart of TryAddOverseasSiteWithGeneratedIdAsync, and pulled out
-    // for the same reason - this owns the whole generate-write-retry loop so AddInterimSite's
-    // cognitive complexity stays down. Reports either a terminal error IResult or the persisted
-    // interim-site/application pair, never a mix.
-    //
-    // The write is guarded so two concurrent AddInterimSite calls under one registration cannot
-    // both mint the same regulator-visible number: UpdateIfInterimSiteNumberAbsentAsync only
-    // persists if nothing already carries it, and a lost race re-fetches and retries with a
-    // freshly computed number. Bounded, so a genuinely stuck conflict fails loudly.
-    private static async Task<(
-        IResult? ErrorResult,
-        InterimSiteModel? NewSite,
-        AccreditationApplicationModel? Updated
-    )> TryAddInterimSiteWithGeneratedNumberAsync(
+    // RA-603: an interim site's regulator-visible number comes from its own registration-wide
+    // sequence; its SiteId stays on the shared ORS+interim sequence, which is what routes address.
+    private static GeneratedIdAllocation<InterimSiteModel> InterimSiteNumberAllocation(
         IAccreditationApplicationPersistence persistence,
-        string organisationId,
-        string applicationId,
         int siteId,
-        AccreditationApplicationModel application,
         AddInterimSiteRequest request
-    )
-    {
-        const int maxSiteNumberAttempts = 3;
-
-        for (var attempt = 1; attempt <= maxSiteNumberAttempts; attempt++)
-        {
-            var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-            if (site is null)
-                return (Results.NotFound(), null, null);
-
-            var scope = await InterimSiteNumberScope(persistence, application);
-            var generated = OrsIdGenerator.GenerateNext(scope);
-            if (generated.CapacityExceeded)
-                return (
-                    Results.UnprocessableEntity(
-                        "This registration has reached the maximum of 999 interim sites."
-                    ),
-                    null,
-                    null
-                );
-
-            var interimSite = new InterimSiteModel
+    ) =>
+        new(
+            CapacityNoun: "interim sites",
+            IdName: "interim site number",
+            Scope: application => InterimSiteNumberScope(persistence, application),
+            Attach: (application, siteNumber) =>
             {
-                // SiteId keeps the shared ORS+interim sequence - it is what the routes address.
-                // Only SiteNumber moved to its own set.
-                SiteId = NextSiteId(application.OverseasSites!),
-                SiteNumber = generated.OrsId!,
-                Country = request.Country,
-                SiteName = request.SiteName,
-                AddressLine1 = request.AddressLine1,
-                AddressLine2 = request.AddressLine2,
-                TownOrCity = request.TownOrCity,
-                StateOrRegion = request.StateOrRegion,
-                Postcode = request.Postcode,
-                ContactName = request.ContactName,
-                ContactEmail = request.ContactEmail,
-                ContactPhone = request.ContactPhone,
-                OperationCodes = request.OperationCodes,
-                IsNewSite = true,
-                CreatedAt = DateTime.UtcNow,
-            };
+                var site = application.OverseasSites?.Sites.FirstOrDefault(s =>
+                    s.SiteId == siteId
+                );
+                if (site is null)
+                    return (Results.NotFound(), null);
 
-            // RA-603: appends. The duplicate guard that used to 409 a second interim site is
-            // gone - an ORS may now hold many (AC01/AC06).
-            site.InterimSites.Add(interimSite);
-            InterimSiteSync.SyncMirror(site);
-            application.DateLastEdited = DateTime.UtcNow;
-
-            var updated = await persistence.UpdateIfInterimSiteNumberAbsentAsync(
-                application,
-                generated.OrsId!
-            );
-            if (updated is not null)
-                return (null, interimSite, updated);
-
-            // Lost the race to a concurrent writer - re-fetch the now-current document and retry
-            // with a freshly computed number rather than risking a duplicate. The re-fetch also
-            // discards the interim site appended above, which belonged to the stale document.
-            var refetched = await persistence.GetByIdAsync(organisationId, applicationId);
-            if (refetched is null)
-                return (Results.NotFound(), null, null);
-            application = refetched;
-        }
-
-        return (
-            Results.Conflict(
-                "Could not allocate a unique interim site number after several attempts; please retry."
-            ),
-            null,
-            null
+                // A retry works on a re-read document, which can hold a pre-RA-603 ORS whose only
+                // interim site is still in the singular field. Promote it into the list before
+                // appending, or it would be lost.
+                InterimSiteSync.Normalise(site);
+                var interimSite = BuildInterimSite(
+                    NextSiteId(application.OverseasSites!),
+                    siteNumber,
+                    request
+                );
+                site.InterimSites.Add(interimSite);
+                InterimSiteSync.SyncMirror(site);
+                application.DateLastEdited = DateTime.UtcNow;
+                return (null, interimSite);
+            },
+            WriteIfAbsent: persistence.UpdateIfInterimSiteNumberAbsentAsync
         );
-    }
+
+    private static InterimSiteModel BuildInterimSite(
+        int siteId,
+        string siteNumber,
+        AddInterimSiteRequest request
+    ) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = siteNumber,
+            Country = request.Country,
+            SiteName = request.SiteName,
+            AddressLine1 = request.AddressLine1,
+            AddressLine2 = request.AddressLine2,
+            TownOrCity = request.TownOrCity,
+            StateOrRegion = request.StateOrRegion,
+            Postcode = request.Postcode,
+            ContactName = request.ContactName,
+            ContactEmail = request.ContactEmail,
+            ContactPhone = request.ContactPhone,
+            OperationCodes = request.OperationCodes,
+            IsNewSite = true,
+            CreatedAt = DateTime.UtcNow,
+        };
 
     // Bundles UpdateInterimSite's DI-service/framework parameters under one [AsParameters]
     // argument so the handler stays under Sonar's 7-parameter limit (S107) — the route itself

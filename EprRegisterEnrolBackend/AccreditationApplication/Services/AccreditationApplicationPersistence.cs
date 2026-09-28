@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson;
@@ -83,42 +84,33 @@ public class AccreditationApplicationPersistence(
         return await Collection.Find(filter).Sort(NewestFirstSort).Limit(1).FirstOrDefaultAsync();
     }
 
-    public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId)
-    {
-        var filter = Builders<AccreditationApplicationModel>.Filter.Eq(
-            a => a.RegistrationId,
-            registrationId
-        );
-
-        var applications = await Collection.Find(filter).ToListAsync();
-        return applications
-            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+    public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId) =>
+        (await GetSitesByRegistrationAsync(registrationId))
             .Select(s => s.OrsId)
-            .Where(id => id is not null)
-            .Select(id => id!)
+            .OfType<string>()
             .ToList();
-    }
 
-    // RA-603: the interim counterpart of GetOrsIdsByRegistrationAsync above. Reads every interim
-    // site, withdrawn ones included - their numbers stay claimed for as long as the record does,
-    // which under AC05 is permanently.
+    // RA-603: every interim site, withdrawn ones included - their numbers stay claimed for as
+    // long as the record does, which under AC05 is permanently.
     public async Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
         string registrationId
-    )
-    {
-        var filter = Builders<AccreditationApplicationModel>.Filter.Eq(
-            a => a.RegistrationId,
-            registrationId
-        );
-
-        var applications = await Collection.Find(filter).ToListAsync();
-        return applications
-            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+    ) =>
+        (await GetSitesByRegistrationAsync(registrationId))
             .SelectMany(InterimSiteSync.All)
             .Select(i => i.SiteNumber)
-            .Where(number => number is not null)
-            .Select(number => number!)
+            .OfType<string>()
             .ToList();
+
+    // The overseas sites of every application under a registration - the allocation scope for
+    // both ORS ids and interim site numbers. Projects to the overseas-sites section alone, since
+    // this runs on every attempt of every add and the rest of the document is never read.
+    private async Task<List<OverseasSiteModel>> GetSitesByRegistrationAsync(string registrationId)
+    {
+        var sections = await Collection
+            .Find(a => a.RegistrationId == registrationId)
+            .Project(a => a.OverseasSites)
+            .ToListAsync();
+        return sections.SelectMany(o => o?.Sites ?? []).ToList();
     }
 
     public async Task<AccreditationApplicationModel?> GetByIdAsync(
@@ -157,30 +149,28 @@ public class AccreditationApplicationPersistence(
     public Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
         string orsId
-    )
-    {
-        if (application.Id is null)
-            return Task.FromResult<AccreditationApplicationModel?>(null);
+    ) => UpdateIfNoSiteMatchesAsync(application, s => s.OrsId == orsId);
 
-        var filter = Builders<AccreditationApplicationModel>.Filter.And(
-            Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, application.Id),
-            Builders<AccreditationApplicationModel>.Filter.Not(
-                Builders<AccreditationApplicationModel>.Filter.ElemMatch(
-                    a => a.OverseasSites!.Sites,
-                    s => s.OrsId == orsId
-                )
-            )
-        );
-        return ReplaceIfMatchAsync(application, filter);
-    }
-
-    // RA-603: the interim counterpart of UpdateIfOrsIdAbsentAsync. The guard has to reach one
-    // level deeper - a site number lives on an interim site nested inside an overseas site - so
-    // this is an ElemMatch over the ORS list whose predicate is itself an Any over that ORS's
-    // interim sites.
+    // RA-603: a site number lives on an interim site nested in an overseas site. The legacy
+    // singular mirror is checked as well as the list, matching the scope read above
+    // (InterimSiteSync.All) - a number held only by an un-normalised pre-RA-603 document is
+    // still taken.
     public Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
         AccreditationApplicationModel application,
         string siteNumber
+    ) =>
+        UpdateIfNoSiteMatchesAsync(
+            application,
+            s =>
+                s.InterimSites.Any(i => i.SiteNumber == siteNumber)
+                || (s.InterimSite != null && s.InterimSite.SiteNumber == siteNumber)
+        );
+
+    // Shared by the two allocation guards above: persist only if no overseas site on the stored
+    // document already claims the value - i.e. a concurrent writer has not taken it first.
+    private Task<AccreditationApplicationModel?> UpdateIfNoSiteMatchesAsync(
+        AccreditationApplicationModel application,
+        Expression<Func<OverseasSiteModel, bool>> claimsValue
     )
     {
         if (application.Id is null)
@@ -191,7 +181,7 @@ public class AccreditationApplicationPersistence(
             Builders<AccreditationApplicationModel>.Filter.Not(
                 Builders<AccreditationApplicationModel>.Filter.ElemMatch(
                     a => a.OverseasSites!.Sites,
-                    s => s.InterimSites.Any(i => i.SiteNumber == siteNumber)
+                    claimsValue
                 )
             )
         );

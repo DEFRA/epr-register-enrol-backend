@@ -525,6 +525,25 @@ public class OverseasSiteMergeTests
         result[0].InterimSites[0].RemovedAt.Should().NotBeNull();
     }
 
+    // RA-603 review (Aysha): the legacy null detach applies only to a body that carries no list.
+    // When the list is present it is authoritative and the singular field is ignored - so a
+    // read-modify-write that nulls the mirror but echoes the list back leaves the site active.
+    // Only a pre-RA-603 client sends that shape, and only while it is still deployed; the current
+    // frontend withdraws through the per-interim-site route. Pinned so the rule is explicit.
+    [Fact]
+    public void Merge_LegacyNullAlongsideTheList_TheListIsAuthoritative()
+    {
+        var persisted = SiteWithInterims(1, InterimWithDates(42));
+        var incoming = SiteWithInterims(1, InterimWithDates(42));
+        incoming.InterimSite = null;
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        result[0].InterimSites.Should().ContainSingle();
+        result[0].InterimSites[0].RemovedAt.Should().BeNull();
+        result[0].InterimSite!.SiteId.Should().Be(42);
+    }
+
     // RemovedAt is what withdrawal means, so letting a client clear it through the bulk PATCH
     // would be an un-withdraw that bypasses the restore endpoint entirely.
     [Fact]

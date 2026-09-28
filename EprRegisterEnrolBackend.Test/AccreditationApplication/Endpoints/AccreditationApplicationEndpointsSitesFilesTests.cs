@@ -212,6 +212,32 @@ public class AccreditationApplicationEndpointsSitesFilesTests
         site!.OrsId.Should().Be("001");
     }
 
+    // RA-603 review (Aysha): the ORS allocation loop has the same shape as the interim one, so
+    // the same gap - a retry after losing to a status change must re-check editability rather
+    // than write into what is now a terminal application.
+    [Fact]
+    public async Task AddOverseasSite_RetryAfterTheApplicationWasWithdrawn_IsRefused()
+    {
+        Reset();
+        var app = SeedApplication();
+        _factory.FakePersistence.FailNextOrsIdWrites = 1;
+        _factory.FakePersistence.OnLostRace = stored =>
+            stored.ApplicationStatus = ApplicationStatus.Withdrawn;
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            ValidAddOrsRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        (stored!.OverseasSites?.Sites ?? []).Should().BeEmpty();
+    }
+
     [Fact]
     public async Task AddOverseasSite_WhenNotifyThrows_StillReturns201()
     {

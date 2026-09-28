@@ -19,6 +19,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         FailNextUpdate = false;
         FailNextOrsIdWrites = 0;
         FailNextInterimSiteNumberWrites = 0;
+        OnLostRace = null;
     }
 
     /// <summary>
@@ -44,6 +45,23 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     /// real concurrency.
     /// </summary>
     public int FailNextInterimSiteNumberWrites { get; set; }
+
+    /// <summary>
+    /// RA-603 review: what the concurrent writer changed, for the guarded writes above. Runs
+    /// against the STORED application each time a FailNext*Writes counter makes a write lose,
+    /// and bumps its Version the way a real competing write would, so the retry's re-fetch sees
+    /// that writer's document rather than the one it started from.
+    /// </summary>
+    public Action<AccreditationApplicationModel>? OnLostRace { get; set; }
+
+    private void ApplyLostRace(AccreditationApplicationModel application)
+    {
+        var stored = _store.FirstOrDefault(a => a.Id == application.Id);
+        if (stored is null || OnLostRace is null)
+            return;
+        OnLostRace(stored);
+        stored.Version++;
+    }
 
     public Task<AccreditationApplicationModel?> CreateAsync(
         AccreditationApplicationModel application
@@ -161,6 +179,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         if (FailNextInterimSiteNumberWrites > 0)
         {
             FailNextInterimSiteNumberWrites--;
+            ApplyLostRace(application);
             return Task.FromResult<AccreditationApplicationModel?>(null);
         }
 
@@ -185,6 +204,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         if (FailNextOrsIdWrites > 0)
         {
             FailNextOrsIdWrites--;
+            ApplyLostRace(application);
             return Task.FromResult<AccreditationApplicationModel?>(null);
         }
 

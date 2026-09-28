@@ -320,4 +320,31 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
 
         result.Should().BeNull();
     }
+
+    // RA-603 review (Aysha): the number scope reads the legacy singular mirror (see
+    // GetInterimSiteNumbersByRegistrationAsync_ReadsTheLegacySingularField), so the write guard
+    // has to as well - otherwise a number held only in an un-normalised mirror is invisible to it.
+    // The Version matches, so a refusal here can only come from the number guard.
+    [Fact]
+    public async Task UpdateIfInterimSiteNumberAbsentAsync_NumberHeldOnlyByALegacyMirror_RefusesTheWrite()
+    {
+        var application = BuildApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    SiteName = "ORS 1",
+                    InterimSite = Interim(2, "005"),
+                },
+            ],
+        };
+        await _sut.CreateAsync(application);
+
+        var result = await _sut.UpdateIfInterimSiteNumberAbsentAsync(application, "005");
+
+        result.Should().BeNull();
+    }
 }
