@@ -122,7 +122,7 @@ public static class OverseasSiteMerge
             if (hasPersistedInterim)
             {
                 interim.CreatedAt = persistedInterim!.CreatedAt;
-                interim.RemovedAt = persistedInterim!.RemovedAt;
+                interim.RemovedAt = persistedInterim.RemovedAt;
             }
         }
     }

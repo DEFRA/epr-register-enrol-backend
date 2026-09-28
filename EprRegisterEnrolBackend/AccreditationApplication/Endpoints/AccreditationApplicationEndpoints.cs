@@ -1321,9 +1321,9 @@ public static class AccreditationApplicationEndpoints
     // tries again with a fresh id, bounded so a stuck conflict fails loudly. Reports either an
     // error or the created record with its persisted application, never a mix.
     //
-    // The guarded write also compares Version, so it can lose to ANY concurrent write - a status
-    // change included. The re-read is therefore re-checked for editability before retrying;
-    // otherwise a retry could add to an application that has since become terminal.
+    // The guarded write also compares Version, so it can lose to ANY concurrent write, a status
+    // change included. That is why the re-read is re-checked for editability before retrying:
+    // without it, a retry could add to an application that has since become terminal.
     private static async Task<(
         IResult? ErrorResult,
         T? Created,
@@ -1511,10 +1511,10 @@ public static class AccreditationApplicationEndpoints
             // RA-603: every interim site, the legacy mirror and withdrawn ones included - their
             // ids stay claimed for as long as the record does, which is forever (AC05). Reads
             // only; a caller that is about to mutate the list normalises it itself.
-            foreach (var interim in InterimSiteSync.All(site))
+            foreach (var interimSiteId in InterimSiteSync.All(site).Select(i => i.SiteId))
             {
-                if (interim.SiteId > maxSiteId)
-                    maxSiteId = interim.SiteId;
+                if (interimSiteId > maxSiteId)
+                    maxSiteId = interimSiteId;
             }
         }
         return maxSiteId + 1;
@@ -2094,7 +2094,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
+        var (failure, application, _) = await ResolveEditableOverseasSiteAsync(
             persistence,
             organisationId,
             applicationId,
@@ -2120,9 +2120,9 @@ public static class AccreditationApplicationEndpoints
             try
             {
                 await caseWorkingAdapter.NotifySiteAddedAsync(
-                    updated!,
+                    updated,
                     siteType: "interim",
-                    orsId: updated!
+                    orsId: updated
                         .OverseasSites!.Sites.First(s => s.SiteId == siteId)
                         .OrsId ?? string.Empty,
                     siteNumber: interimSite!.SiteNumber,
