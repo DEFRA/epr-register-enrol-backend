@@ -1142,6 +1142,42 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         (await StoredSiteAsync(app)).InterimSites.Should().ContainSingle(i => i.SiteId == 42);
     }
 
+    // RA-603 review (Aysha): the same id twice under one overseas site is the same problem -
+    // both copies would be stored and a later withdraw would stamp only the first.
+    [Fact]
+    public async Task BulkPatch_SameInterimSiteTwiceUnderOneOverseasSite_IsRejected()
+    {
+        Reset();
+        var app = Seed(
+            status: ApplicationStatus.Started,
+            sectionStatus: SectionStatus.InProgress,
+            interimSites: [Interim(42)]
+        );
+        var request = new PatchOverseasSitesRequest
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    SiteName = "Test Site",
+                    OperationCodes = ["R4"],
+                    InterimSites = [Interim(42), Interim(42)],
+                },
+            ],
+        };
+
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            request,
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await StoredSiteAsync(app)).InterimSites.Should().ContainSingle(i => i.SiteId == 42);
+    }
+
     // RA-603 review (Aysha): the write that lost can have lost to a status change rather than a
     // number clash - the guard only compares Version. The retry must re-check that the
     // application can still be edited, not just re-read it.

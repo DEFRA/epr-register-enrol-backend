@@ -1190,10 +1190,8 @@ public static class AccreditationApplicationEndpoints
         if (application.OverseasSites is null)
             application.OverseasSites = new AccreditationApplicationOverseasSites();
 
-        if (FindInterimSiteUnderSeveralOverseasSites(request.Sites) is { } duplicateId)
-            return Results.BadRequest(
-                $"Interim site {duplicateId} appears under more than one overseas site."
-            );
+        if (FindRepeatedInterimSite(request.Sites) is { } duplicateId)
+            return Results.BadRequest($"Interim site {duplicateId} appears more than once.");
 
         // RA-292 AC01/AC02: isNewSite (site and interim) is re-derived server-side against the
         // persisted list; whatever the client sent for it is discarded.
@@ -1401,17 +1399,15 @@ public static class AccreditationApplicationEndpoints
         );
 
     // RA-603: interim site ids are unique application-wide, but a bulk PATCH body is
-    // client-shaped. One listed under two overseas sites would be merged as active under one and
-    // withdrawn under the other - the same record stored twice - so it is refused. Ids of 0 or
-    // less are not yet allocated and are not compared.
-    private static int? FindInterimSiteUnderSeveralOverseasSites(List<OverseasSiteModel>? sites) =>
+    // client-shaped. One listed twice - under two overseas sites, or twice under the same one -
+    // would be stored twice, and a later withdraw only stamps the first copy, so it is refused.
+    // Ids of 0 or less are not yet allocated and are not compared.
+    private static int? FindRepeatedInterimSite(List<OverseasSiteModel>? sites) =>
         (sites ?? [])
-            .SelectMany(site =>
-                InterimSiteSync.All(site).Select(interim => (InterimId: interim.SiteId, site.SiteId))
-            )
-            .Where(pair => pair.InterimId > 0)
-            .GroupBy(pair => pair.InterimId)
-            .Where(group => group.Select(pair => pair.SiteId).Distinct().Skip(1).Any())
+            .SelectMany(site => InterimSiteSync.All(site).Select(interim => interim.SiteId))
+            .Where(interimId => interimId > 0)
+            .GroupBy(interimId => interimId)
+            .Where(group => group.Skip(1).Any())
             .Select(group => (int?)group.Key)
             .FirstOrDefault();
 
