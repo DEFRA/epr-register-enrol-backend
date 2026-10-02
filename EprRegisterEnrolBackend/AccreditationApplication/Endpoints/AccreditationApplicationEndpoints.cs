@@ -8,6 +8,7 @@ using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Utils;
+using EprRegisterEnrolBackend.Utils.Logging;
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
@@ -1184,7 +1185,15 @@ public static class AccreditationApplicationEndpoints
     {
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(AddOverseasSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -1541,6 +1550,7 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence Persistence,
         IValidator<PromoteOverseasSiteRequest> Validator,
         IRecyclingOperationsAuditPersistence AuditPersistence,
+        ILoggerFactory LoggerFactory,
         HttpContext HttpContext,
         CancellationToken CancellationToken
     );
@@ -1570,7 +1580,15 @@ public static class AccreditationApplicationEndpoints
             services.CancellationToken
         );
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                services.LoggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(UpdateOverseasSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -1684,12 +1702,21 @@ public static class AccreditationApplicationEndpoints
         int siteId,
         PromoteOverseasSiteRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PromoteOverseasSiteRequest> validator
+        IValidator<PromoteOverseasSiteRequest> validator,
+        ILoggerFactory loggerFactory
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(PromoteOverseasSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -1793,7 +1820,15 @@ public static class AccreditationApplicationEndpoints
     {
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(AddInterimSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
