@@ -74,7 +74,18 @@ public class OverseasSiteModel
     // back over the current fields. Backend-internal only — never sent to the FE.
     [JsonIgnore]
     public List<OverseasSiteModel> PreviousSites { get; set; } = [];
+
+    // RA-603: retained as a MIRROR of the first non-withdrawn entry in
+    // <see cref="InterimSites"/>, so consumers that have not moved to the list yet keep working.
+    // It is derived, never authoritative - InterimSiteSync.SyncMirror re-points it after every
+    // mutation. Deliberately the first *active* site rather than InterimSites[0]: a withdrawn
+    // interim site must never be the one a legacy consumer displays.
     public InterimSiteModel? InterimSite { get; set; }
+
+    // RA-603: the authoritative collection. Includes withdrawn entries (RemovedAt set), which is
+    // what makes AC05's "persist in the database for reporting purposes" true - anything that
+    // renders this list has to filter them out for itself.
+    public List<InterimSiteModel> InterimSites { get; set; } = [];
 }
 
 public class InterimSiteModel
@@ -100,6 +111,18 @@ public class InterimSiteModel
     // RA-292 AC02 — same reasoning as OverseasSiteModel.IsNewSite above. Set explicitly by
     // AddInterimSite, preserved across PATCH by OverseasSiteMerge.
     public bool IsNewSite { get; set; }
+
+    // RA-603 AC05. Stamped when the interim site is created. Nullable, and deliberately NOT
+    // backfilled for documents that predate this field: null means "unknown, created before this
+    // was recorded". Inventing a plausible timestamp would be fabricating audit data on the one
+    // field that exists for auditability.
+    public DateTime? CreatedAt { get; set; }
+
+    // RA-603 AC05. Null means active. Withdrawing an interim site stamps this instead of deleting
+    // the record, so it stays available for reporting; restoring clears it and touches nothing
+    // else, so the same site comes back with its original SiteId, SiteNumber, CreatedAt and
+    // IsNewSite and the withdraw/restore sequence stays legible.
+    public DateTime? RemovedAt { get; set; }
 }
 
 public class BesEvidenceModel

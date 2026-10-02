@@ -740,6 +740,24 @@ public class HttpCaseWorkingApiAdapterTests
                 "contactPhone": "+33 4 11 22 33 44",
                 "operationCodes": ["R12"]
               },
+              "interimSites": [
+                {
+                  "siteId": 2,
+                  "siteNumber": "SN-0002",
+                  "isNewSite": true,
+                  "country": "France",
+                  "siteName": "Interim Recycling Site",
+                  "addressLine1": "9 Rue Interim",
+                  "addressLine2": "Batiment B",
+                  "townOrCity": "Lyon",
+                  "stateOrRegion": "Auvergne",
+                  "postcode": "69001",
+                  "contactName": "Marie Curie",
+                  "contactEmail": "marie@example.com",
+                  "contactPhone": "+33 4 11 22 33 44",
+                  "operationCodes": ["R12"]
+                }
+              ],
               "besEvidence": {
                 "files": [
                   {
@@ -765,6 +783,7 @@ public class HttpCaseWorkingApiAdapterTests
               "isOecd": false,
               "isNewSite": false,
               "registeredNowAccredited": false,
+              "interimSites": [],
               "besEvidence": {
                 "files": []
               }
@@ -2516,4 +2535,167 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     #endregion
+
+    // -- RA-603 AC09: every interim site reaches case management ---------------
+
+    private static InterimSiteModel CaseManagementInterim(
+        int siteId,
+        string siteName,
+        DateTime? createdAt = null,
+        DateTime? removedAt = null,
+        List<string>? operationCodes = null
+    ) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = $"SN-{siteId:D4}",
+            Country = "France",
+            SiteName = siteName,
+            AddressLine1 = "1 Rue Example",
+            TownOrCity = "Paris",
+            ContactName = "Marie Curie",
+            ContactEmail = "marie@example.com",
+            ContactPhone = "0033111222333",
+            OperationCodes = operationCodes ?? ["R12"],
+            CreatedAt = createdAt,
+            RemovedAt = removedAt,
+        };
+
+    private static AccreditationApplicationModel AppWithInterimSites(
+        InterimSiteModel? mirror,
+        List<InterimSiteModel> interimSites
+    ) =>
+        new()
+        {
+            OrganisationId = "org-123",
+            Year = 2026,
+            MaterialType = MaterialType.Steel,
+            OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "ORS 1",
+                        Selected = true,
+                        InterimSite = mirror,
+                        InterimSites = interimSites,
+                    },
+                ],
+            },
+        };
+
+    private static async Task<JsonElement> CapturedFirstSite(
+        AccreditationApplicationModel application
+    )
+    {
+        var payload = await CapturedSubmitPayload(application);
+        return payload.GetProperty("overseasSites").GetProperty("sites")[0];
+    }
+
+    [Fact]
+    public async Task Submit_SendsEveryInterimSiteAlongsideTheLegacySingularField()
+    {
+        var first = CaseManagementInterim(2, "First Depot");
+        var application = AppWithInterimSites(first, [first, CaseManagementInterim(3, "Second Depot")]);
+
+        var site = await CapturedFirstSite(application);
+
+        var interimSites = site.GetProperty("interimSites");
+        interimSites.GetArrayLength().Should().Be(2);
+        interimSites[0].GetProperty("siteName").GetString().Should().Be("First Depot");
+        interimSites[1].GetProperty("siteName").GetString().Should().Be("Second Depot");
+
+        // The singular field keeps its shape so nothing downstream breaks while it catches up.
+        site.GetProperty("interimSite").GetProperty("siteName").GetString().Should().Be("First Depot");
+    }
+
+    [Fact]
+    public async Task Submit_CarriesEachInterimSitesOwnRCodes()
+    {
+        var first = CaseManagementInterim(2, "First Depot", operationCodes: ["R12"]);
+        var application = AppWithInterimSites(
+            first,
+            [first, CaseManagementInterim(3, "Second Depot", operationCodes: ["R13", "R3"])]
+        );
+
+        var site = await CapturedFirstSite(application);
+
+        var interimSites = site.GetProperty("interimSites");
+        interimSites[0]
+            .GetProperty("operationCodes")
+            .EnumerateArray()
+            .Select(c => c.GetString())
+            .Should()
+            .Equal("R12");
+        interimSites[1]
+            .GetProperty("operationCodes")
+            .EnumerateArray()
+            .Select(c => c.GetString())
+            .Should()
+            .Equal("R13", "R3");
+    }
+
+    // AC05 keeps withdrawn interim sites for reporting, and case management is where the
+    // reporting happens - so they go over the wire with their dates, and it is the regulator's
+    // own view that filters them out.
+    [Fact]
+    public async Task Submit_IncludesWithdrawnInterimSitesWithTheirDates()
+    {
+        var createdAt = new DateTime(2026, 1, 5, 12, 0, 0, DateTimeKind.Utc);
+        var removedAt = new DateTime(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc);
+        var active = CaseManagementInterim(3, "Still Here", createdAt: createdAt);
+        var application = AppWithInterimSites(
+            active,
+            [CaseManagementInterim(2, "Withdrawn", createdAt: createdAt, removedAt: removedAt), active]
+        );
+
+        var site = await CapturedFirstSite(application);
+
+        var interimSites = site.GetProperty("interimSites");
+        interimSites.GetArrayLength().Should().Be(2);
+        var withdrawn = interimSites[0];
+        withdrawn.GetProperty("siteName").GetString().Should().Be("Withdrawn");
+        withdrawn.GetProperty("removedAt").GetDateTime().Should().Be(removedAt);
+        withdrawn.GetProperty("createdAt").GetDateTime().Should().Be(createdAt);
+    }
+
+    // The mirror must never advertise a site the operator has withdrawn.
+    [Fact]
+    public async Task Submit_SingularFieldSkipsWithdrawnInterimSites()
+    {
+        var application = AppWithInterimSites(
+            null,
+            [CaseManagementInterim(2, "Withdrawn", removedAt: DateTime.UtcNow), CaseManagementInterim(3, "Still Here")]
+        );
+
+        var site = await CapturedFirstSite(application);
+
+        site.GetProperty("interimSite").GetProperty("siteName").GetString().Should().Be("Still Here");
+    }
+
+    // A document written before RA-603 has only the singular field; case management must still
+    // receive it in the new shape.
+    [Fact]
+    public async Task Submit_LegacyDocumentWithOnlyTheSingularField_StillSendsAOneElementArray()
+    {
+        var application = AppWithInterimSites(CaseManagementInterim(2, "Legacy Depot"), []);
+
+        var site = await CapturedFirstSite(application);
+
+        var interimSites = site.GetProperty("interimSites");
+        interimSites.GetArrayLength().Should().Be(1);
+        interimSites[0].GetProperty("siteName").GetString().Should().Be("Legacy Depot");
+    }
+
+    [Fact]
+    public async Task Submit_NoInterimSitesAtAll_SendsAnEmptyArray()
+    {
+        var application = AppWithInterimSites(null, []);
+
+        var site = await CapturedFirstSite(application);
+
+        site.GetProperty("interimSites").GetArrayLength().Should().Be(0);
+    }
 }
