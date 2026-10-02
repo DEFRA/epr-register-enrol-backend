@@ -1992,7 +1992,7 @@ public static class AccreditationApplicationEndpoints
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
-            ? Results.Problem("Failed to update interim site.")
+            ? LostInterimSiteRace(interimSiteId)
             : Results.Ok(interimSite);
     }
 
@@ -2029,7 +2029,7 @@ public static class AccreditationApplicationEndpoints
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
-            ? Results.Problem("Failed to withdraw interim site.")
+            ? LostInterimSiteRace(interimSiteId)
             : Results.NoContent();
     }
 
@@ -2070,9 +2070,19 @@ public static class AccreditationApplicationEndpoints
 
         var updated = await persistence.UpdateAsync(application);
         return updated is null
-            ? Results.Problem("Failed to restore interim site.")
+            ? LostInterimSiteRace(interimSiteId)
             : Results.Ok(interimSite);
     }
+
+    // RA-603: UpdateAsync is version-guarded, so null from it on these routes means another write
+    // to the application landed between our read and this write. That is a lost race, not a server
+    // fault - report it as 409, the same status the create route ends in once its retries are
+    // spent. No retry here: re-applying an edit over state the operator never saw is worse than
+    // asking them to reload, and withdraw/restore are idempotent so a client retry is safe.
+    private static IResult LostInterimSiteRace(int interimSiteId) =>
+        Results.Conflict(
+            $"The application changed while interim site '{interimSiteId}' was being saved; please reload and try again."
+        );
 
     private static async Task<IResult> AddInterimSite(
         string organisationId,

@@ -597,6 +597,32 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         restore.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // UpdateAsync is version-guarded, so a concurrent write to the application makes it return
+    // null. That is a lost race, not a server fault: report it as 409 the way the create route's
+    // exhausted retry does, not as a 500.
+    [Theory]
+    [InlineData("update")]
+    [InlineData("withdraw")]
+    [InlineData("restore")]
+    public async Task LostVersionRace_Returns409(string route)
+    {
+        Reset();
+        var app = Seed(
+            interimSites: [Interim(2, removedAt: route == "restore" ? DateTime.UtcNow : null)]
+        );
+        _factory.FakePersistence.FailNextUpdate = true;
+        var ct = TestContext.Current.CancellationToken;
+
+        var response = route switch
+        {
+            "update" => await _client.PatchAsJsonAsync(Item(app, 2), ValidRequest(), ct),
+            "withdraw" => await _client.DeleteAsync(Item(app, 2), ct),
+            _ => await _client.PostAsync($"{Item(app, 2)}/restore", content: null, ct),
+        };
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
     // -- AC12: a queried ORS section stays editable ---------------------------
     //
     // These pin behaviour that already existed rather than behaviour this ticket added.
