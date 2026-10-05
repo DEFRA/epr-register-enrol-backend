@@ -31,6 +31,29 @@ public static class ValidationFailureLog
         );
     }
 
+    /// <summary>
+    /// For a 400 decided by a check outside FluentValidation. Same message shape as the
+    /// <see cref="ValidationResult"/> overload so one CDP search finds both; the caller owns
+    /// keeping <paramref name="reason"/> free of personal data.
+    /// </summary>
+    public static void LogValidationFailure(
+        ILogger logger,
+        string operation,
+        string applicationId,
+        string reason
+    )
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+            return;
+
+        logger.LogWarning(
+            "{Operation} validation failed for applicationId={ApplicationId}: {FailedFields}",
+            operation,
+            applicationId,
+            reason
+        );
+    }
+
     public static string DescribeFailures(IEnumerable<ValidationFailure> failures) =>
         string.Join(", ", failures.Select(f => $"{f.PropertyName} ({f.ErrorCode})"));
 }

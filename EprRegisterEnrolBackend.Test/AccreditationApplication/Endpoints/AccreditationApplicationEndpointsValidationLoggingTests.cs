@@ -183,6 +183,77 @@ public class AccreditationApplicationEndpointsValidationLoggingTests
     }
 
     [Fact]
+    public async Task UpdateInterimSite_ValidationFailure_LogsTheFailingFields()
+    {
+        var applicationId = SeedApplication();
+
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{applicationId}/overseas-sites/900001/interim-sites/42",
+            new AddInterimSiteRequest
+            {
+                Country = "France",
+                SiteName = "Interim Recycling Site",
+                AddressLine1 = "1 Rue Example",
+                TownOrCity = "Paris",
+                ContactName = "Jane Smith",
+                ContactEmail = "jane.smith@example.com",
+                ContactPhone = "+33 1 23 45 67 89 00 11 22",
+                OperationCodes = ["R12"],
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var entry = SingleValidationWarning("UpdateInterimSite");
+        entry.Message.Should().Contain("ContactPhone (");
+        entry.Message.Should().NotContain("+33 1 23 45 67 89 00 11 22");
+        entry.Message.Should().NotContain("jane.smith@example.com");
+    }
+
+    [Fact]
+    public async Task PatchOverseasSites_RepeatedInterimSite_LogsTheRejection()
+    {
+        var applicationId = SeedApplication();
+        InterimSiteModel Interim42() =>
+            new()
+            {
+                SiteId = 42,
+                SiteNumber = "001",
+                Country = "France",
+                SiteName = "Interim",
+                AddressLine1 = "1 Rue Example",
+                TownOrCity = "Paris",
+                ContactName = "Marie Curie",
+                ContactEmail = "marie@example.com",
+                ContactPhone = "0033111222333",
+                OperationCodes = ["R12"],
+            };
+
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{applicationId}/overseas-sites",
+            new PatchOverseasSitesRequest
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Test Site",
+                        OperationCodes = ["R4"],
+                        InterimSites = [Interim42(), Interim42()],
+                    },
+                ],
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var entry = SingleValidationWarning("PatchOverseasSites");
+        entry.Message.Should().EndWith("Interim site 42 appears more than once.");
+        entry.Message.Should().NotContain("marie@example.com");
+    }
+
+    [Fact]
     public async Task Promote_ValidRequest_DoesNotLogAValidationFailure()
     {
         var applicationId = SeedApplication();
