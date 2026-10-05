@@ -5111,7 +5111,9 @@ public class AccreditationApplicationEndpointsTests
         interimSite.ContactPhone.Should().Be("+33 1 23 45 67 89");
         interimSite.IsNewSite.Should().BeTrue();
         interimSite.SiteId.Should().Be(2);
-        interimSite.SiteNumber.Should().Be("SN-0002");
+        // RA-603: SiteId still comes off the shared ORS+interim sequence. SiteNumber is now its
+        // own registration-scoped 001-999 set, and this is the first one.
+        interimSite.SiteNumber.Should().Be("001");
         interimSite.OperationCodes.Should().BeEquivalentTo(["R12"]);
     }
 
@@ -5184,7 +5186,10 @@ public class AccreditationApplicationEndpointsTests
             TestContext.Current.CancellationToken
         );
         interimSite!.SiteId.Should().Be(13);
-        interimSite.SiteNumber.Should().Be("SN-0013");
+        // The point of the split: SiteId is 13 because ids are shared with the ORS list, while
+        // the number is 001 because the only existing interim site carries a legacy SN-0012 that
+        // does not parse. These two used to be forced to agree.
+        interimSite.SiteNumber.Should().Be("001");
     }
 
     [Fact]
@@ -5266,8 +5271,13 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // RA-603 AC06 reverses this. Adding a second interim site to an ORS used to be a 409 - that
+    // restriction was the thing stopping operators recording their real arrangements, so the
+    // guard is gone and this now asserts the opposite. Kept rather than deleted so the reversal
+    // is visible in one place: a legacy document carrying only the singular interimSite is read
+    // as a one-element list and appended to, rather than rejected.
     [Fact]
-    public async Task AddInterimSite_AlreadyHasInterimSite_Returns409()
+    public async Task AddInterimSite_AlreadyHasInterimSite_NowAppendsASecondOne()
     {
         Reset();
         var app = SeedApplication(configure: a =>
@@ -5302,7 +5312,15 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            app.OrganisationId,
+            app.Id!.Value.ToString()
+        );
+        var site = stored!.OverseasSites!.Sites.Single(s => s.SiteId == 1);
+        site.InterimSites.Should().HaveCount(2);
+        site.InterimSites.Should().Contain(i => i.SiteName == "Existing Interim");
     }
 
     [Fact]
@@ -5372,7 +5390,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<AccreditationApplicationModel>(),
                 "interim",
                 "001",
-                "SN-0002",
+                "001",
                 true,
                 Arg.Any<CancellationToken>()
             );

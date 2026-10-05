@@ -3,44 +3,25 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
 /// <summary>
-/// Protects the server-owned fields on an overseas site from a wholesale client-supplied
-/// replacement (RA-292 AC01/AC02, plus epr-zgrb).
+/// Restores the server-owned fields on overseas sites after <c>PATCH .../overseas-sites</c>,
+/// which replaces the whole site list with the request body (RA-292 AC01/AC02, epr-zgrb).
 ///
-/// Four fields are restored from the persisted site: <see cref="OverseasSiteModel.IsNewSite"/>
-/// (and its interim-site counterpart), <see cref="OverseasSiteModel.RegisteredNowAccredited"/>,
-/// <see cref="OverseasSiteModel.PreviousSites"/>, and <see cref="OverseasSiteModel.OrsId"/>.
-///
-/// They differ only in how exposed they were, not in principle. `PreviousSites` could never
-/// survive a round-trip at all, being `[JsonIgnore]`. `RegisteredNowAccredited` and `OrsId`
-/// survived precisely as long as the client happened to echo them back. `IsNewSite` had a
-/// defaulting hazard on top. The rule is one rule: if the server owns the field, the server
-/// derives it — because "the client currently happens to preserve it" is not a guarantee, and
-/// each of these was found the hard way.
-///
-/// <c>PATCH .../overseas-sites</c> replaces the whole site list with the request body, so any
-/// field the client does not echo back is lost. That is harmless for operator-entered data — the
-/// operator owns it — but <see cref="OverseasSiteModel.IsNewSite"/> now drives the "new" badge a
-/// regulator uses to decide what needs validating, so it must be derived here rather than
-/// accepted from a client, exactly as <see cref="PrnsAuthoriserMerge"/> does for authority-to-issue
-/// contacts. Without this, a PATCH that simply omits <c>isNewSite</c> would flip every site to new
-/// — including registered sites that ReEx correctly marked as not new — which is indistinguishable
-/// from the badge being broken.
+/// The rule: if the server owns a field, the server derives it. Restored from the persisted site:
+/// <see cref="OverseasSiteModel.OrsId"/>, <see cref="OverseasSiteModel.IsNewSite"/>,
+/// <see cref="OverseasSiteModel.RegisteredNowAccredited"/> and
+/// <see cref="OverseasSiteModel.PreviousSites"/>; and on each interim site, IsNewSite, CreatedAt,
+/// RemovedAt and (when the client sends none) OperationCodes. Same approach as
+/// <see cref="PrnsAuthoriserMerge"/>.
 /// </summary>
 public static class OverseasSiteMerge
 {
     /// <summary>
-    /// Returns the incoming sites with the server-owned fields restored from
-    /// <paramref name="persisted"/>, matching on <c>SiteId</c> (the stable key; ORS and interim
-    /// ids come from one shared sequence, but they are looked up separately so the two id spaces
-    /// can never cross-contaminate).
+    /// Returns the incoming sites with server-owned fields restored from
+    /// <paramref name="persisted"/>, matched on <c>SiteId</c>. ORS and interim ids are looked up
+    /// separately so the two can never be confused. An unknown id is treated as new.
     ///
-    /// A known <c>SiteId</c> keeps the persisted value and the client's is discarded. An unknown
-    /// one is treated as new, mirroring the unknown-email rule for authorisers — though sites are
-    /// only ever created through the dedicated add-site endpoints, so an unknown id arriving on a
-    /// PATCH is anomalous in the first place.
-    ///
-    /// The incoming list replaces the persisted one wholesale: a site the client omitted is
-    /// genuinely dropped, never resurrected.
+    /// ORS sites the client omits are dropped. Interim sites are never dropped: see
+    /// <see cref="ReattachOmittedInterimSites"/>.
     /// </summary>
     public static List<OverseasSiteModel> Merge(
         IEnumerable<OverseasSiteModel>? persisted,
@@ -52,94 +33,126 @@ public static class OverseasSiteMerge
 
         var persistedSites = new Dictionary<int, OverseasSiteModel>();
         var persistedInterimSites = new Dictionary<int, InterimSiteModel>();
+        // RA-603: which interim sites each persisted ORS holds, so an omitted one can be told
+        // apart from one it never had.
+        var persistedInterimSitesByParent = new Dictionary<int, List<InterimSiteModel>>();
         foreach (var site in persisted ?? [])
         {
             // First entry wins if the persisted list somehow holds the same id twice.
             persistedSites.TryAdd(site.SiteId, site);
-            if (site.InterimSite is not null)
+
+            // A pre-RA-603 document carries only the singular field; read it as a list.
+            InterimSiteSync.Normalise(site);
+            persistedInterimSitesByParent.TryAdd(site.SiteId, site.InterimSites);
+            foreach (var interim in site.InterimSites)
             {
-                persistedInterimSites.TryAdd(site.InterimSite.SiteId, site.InterimSite);
+                persistedInterimSites.TryAdd(interim.SiteId, interim);
             }
         }
 
-        // Deliberately mutates the incoming instances rather than rebuilding them. These come
-        // straight from model binding and are not shared, and a field-by-field clone would be one
-        // more place to forget a field when the model grows — the very failure this ticket exists
-        // to fix.
+        // Mutates the incoming instances rather than cloning them: they come straight from model
+        // binding and are not shared, and a field-by-field clone is one more place to miss a field.
         var merged = incoming.ToList();
         foreach (var site in merged)
         {
             if (persistedSites.TryGetValue(site.SiteId, out var knownSite))
             {
-                // Fixed at creation and never changed by any journey: AddOverseasSite sets it,
-                // PromoteOverseasSiteRequest has no OrsId field, ApplyPromotedFields doesn't touch
-                // it, and RestoreSnapshotFields doesn't restore it. So a PATCH altering it is
-                // always wrong.
-                //
-                // This one is load-bearing beyond the operator journey. RA-507: HttpReExApiAdapter
-                // now populates OrsId from ReEx's own three-digit ORS id for every ReEx-sourced
-                // site, so a null OrsId here only ever means a legacy document persisted before
-                // that fix -- it is no longer a live discriminator between ReEx-sourced and
-                // operator-added sites. Restoring the persisted value regardless protects the
-                // OrsId-uniqueness invariant that AddOverseasSite enforces at line ~570 either way.
+                // Fixed at creation and never changed by any journey, and the key the OrsId
+                // uniqueness guard relies on - so a PATCH altering it is always wrong.
                 site.OrsId = knownSite.OrsId;
 
                 site.IsNewSite = knownSite.IsNewSite;
 
-                // Set only by PromoteOverseasSite/RevertOverseasSite, never by the operator. It is
-                // serialised (unlike PreviousSites below), so it round-trips whenever the client
-                // happens to echo it back — but a body that simply omits the key deserialises to
-                // false and silently un-promotes the site, after which revert fails on the
-                // promote-flag guard. Deriving it here removes that dependence on the client.
+                // Set only by promote/revert. A body omitting it would deserialise to false and
+                // silently un-promote the site.
                 site.RegisteredNowAccredited = knownSite.RegisteredNowAccredited;
 
-                // The promote/revert undo stack is [JsonIgnore], so it is never sent to the
-                // frontend and can never come back on a PATCH. Carrying it across keeps a save of
-                // the site list from silently destroying a promoted site's revert target.
+                // [JsonIgnore], so it can never come back on a PATCH; carrying it across keeps a
+                // promoted site's revert target.
                 site.PreviousSites = knownSite.PreviousSites;
             }
             else
             {
-                // Same rule as the known branch — derive from persisted state — which lands on the
-                // opposite literal because the ground state of each concept differs. A site the
-                // server has never seen is by definition new, and equally cannot have been
-                // promoted: promotion only ever happens via PromoteOverseasSite against a site
-                // that is already persisted.
+                // A site the server has never seen is new and cannot have been promoted. OrsId is
+                // left as supplied - there is nothing persisted to restore.
                 site.IsNewSite = true;
                 site.RegisteredNowAccredited = false;
-
-                // OrsId is deliberately left as supplied here. There is no persisted value to
-                // restore, and forcing it to null would destroy data the client legitimately sent
-                // for a site the server has never seen.
             }
 
-            // The `is not null` guard below is what makes a PATCH body with InterimSite: null
-            // genuinely clear an existing interim site: nothing downstream of this method
-            // re-populates it, so an incoming null stays null on the merged site with no side
-            // effects on any of its other fields.
-            if (site.InterimSite is not null)
-            {
-                var hasPersistedInterim = persistedInterimSites.TryGetValue(
-                    site.InterimSite.SiteId,
-                    out var persistedInterim
-                );
+            // RA-603: a client sending only the singular field is read as a one-element list.
+            // When the list IS present it is authoritative and the singular field is ignored.
+            InterimSiteSync.Normalise(site);
 
-                site.InterimSite.IsNewSite = !hasPersistedInterim || persistedInterim!.IsNewSite;
+            RestoreServerOwnedInterimFields(site, persistedInterimSites);
+            ReattachOmittedInterimSites(site, persistedInterimSitesByParent);
 
-                // RA-486: unlike SiteName/AddressLine1/ContactName, OperationCodes is not
-                // `required` on InterimSiteModel — it defaults to `[]` so pre-RA-486 persisted
-                // documents still deserialise. That means a PATCH body that omits it (or carries
-                // an empty list) binds to [] rather than failing model binding, and would
-                // otherwise wipe the persisted codes below the ≥1-of-R12/R13 minimum. Restore from
-                // the persisted value whenever the incoming list is empty, mirroring OrsId/
-                // RegisteredNowAccredited/PreviousSites above.
-                if (site.InterimSite.OperationCodes.Count == 0 && hasPersistedInterim)
-                {
-                    site.InterimSite.OperationCodes = persistedInterim!.OperationCodes;
-                }
-            }
+            // Re-point the legacy mirror at the first interim site still active.
+            InterimSiteSync.SyncMirror(site);
         }
 
         return merged;
+    }
+
+    /// <summary>
+    /// RA-603: restores the interim-site fields the server owns, so a PATCH cannot set them.
+    /// </summary>
+    private static void RestoreServerOwnedInterimFields(
+        OverseasSiteModel site,
+        Dictionary<int, InterimSiteModel> persistedInterimSites
+    )
+    {
+        foreach (var interim in site.InterimSites)
+        {
+            var hasPersistedInterim = persistedInterimSites.TryGetValue(
+                interim.SiteId,
+                out var persistedInterim
+            );
+
+            interim.IsNewSite = !hasPersistedInterim || persistedInterim!.IsNewSite;
+
+            // RA-486: OperationCodes defaults to [] so older documents still deserialise, which
+            // means a body that omits it would otherwise wipe the persisted codes.
+            if (interim.OperationCodes.Count == 0 && hasPersistedInterim)
+            {
+                interim.OperationCodes = persistedInterim!.OperationCodes;
+            }
+
+            // AC05: RemovedAt IS the withdrawal, so accepting it from a client would let a bulk
+            // PATCH un-withdraw an interim site and bypass the restore endpoint.
+            if (hasPersistedInterim)
+            {
+                interim.CreatedAt = persistedInterim!.CreatedAt;
+                interim.RemovedAt = persistedInterim.RemovedAt;
+            }
+        }
+    }
+
+    /// <summary>
+    /// RA-603 AC05: nothing here drops an interim site. The frontend leaves withdrawn ones out of
+    /// what it sends, so a wholesale replace would erase the records AC05 keeps for reporting. An
+    /// interim site the client omitted is reattached: as persisted if already withdrawn, otherwise
+    /// withdrawn now rather than destroyed.
+    ///
+    /// For a pre-RA-603 client that sends only the singular field, <c>interimSite: null</c>
+    /// therefore still withdraws the site. A body that also carries the list does not: the list is
+    /// authoritative, and a site still in it stays active.
+    /// </summary>
+    private static void ReattachOmittedInterimSites(
+        OverseasSiteModel site,
+        Dictionary<int, List<InterimSiteModel>> persistedInterimSitesByParent
+    )
+    {
+        if (!persistedInterimSitesByParent.TryGetValue(site.SiteId, out var persistedInterims))
+            return;
+
+        var sentIds = site.InterimSites.Select(i => i.SiteId).ToHashSet();
+        foreach (var omitted in persistedInterims)
+        {
+            if (sentIds.Contains(omitted.SiteId))
+                continue;
+
+            omitted.RemovedAt ??= DateTime.UtcNow;
+            site.InterimSites.Add(omitted);
+        }
     }
 }

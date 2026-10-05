@@ -167,4 +167,184 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
 
         result.Should().BeEmpty();
     }
+
+    // ── RA-603: interim site numbers ─────────────────────────────────────────
+    //
+    // These run against a real mongod on purpose. The fake persistence cannot prove the nested
+    // filter below actually translates — a site number lives on an interim site inside an overseas
+    // site, so the absence guard is an ElemMatch over the ORS list whose predicate is itself an Any
+    // over that ORS's interim sites. A driver that failed to translate that would throw here and
+    // pass every fake-backed test.
+
+    private static OverseasSiteModel SiteWithInterim(
+        int siteId,
+        params InterimSiteModel[] interimSites
+    ) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteName = "ORS " + siteId,
+            InterimSites = [.. interimSites],
+        };
+
+    private static InterimSiteModel Interim(
+        int siteId,
+        string siteNumber,
+        DateTime? removedAt = null
+    ) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = siteNumber,
+            Country = "France",
+            SiteName = "Interim " + siteId,
+            AddressLine1 = "1 Rue Example",
+            TownOrCity = "Paris",
+            ContactName = "Marie Curie",
+            ContactEmail = "marie@example.com",
+            ContactPhone = "0033111222333",
+            RemovedAt = removedAt,
+        };
+
+    [Fact]
+    public async Task GetInterimSiteNumbersByRegistrationAsync_FlattensAcrossApplicationsAndOverseasSites()
+    {
+        var current = BuildApplication();
+        current.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [SiteWithInterim(1, Interim(2, "001")), SiteWithInterim(3, Interim(4, "002"))],
+        };
+        var priorYear = BuildApplication(year: 2025);
+        priorYear.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [SiteWithInterim(1, Interim(2, "003"))],
+        };
+        await _sut.CreateAsync(current);
+        await _sut.CreateAsync(priorYear);
+
+        var result = await _sut.GetInterimSiteNumbersByRegistrationAsync("reg-1");
+
+        result.Should().BeEquivalentTo(["001", "002", "003"]);
+    }
+
+    // AC05 keeps a withdrawn record permanently, so its number stays claimed.
+    [Fact]
+    public async Task GetInterimSiteNumbersByRegistrationAsync_IncludesWithdrawnInterimSites()
+    {
+        var application = BuildApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [SiteWithInterim(1, Interim(2, "001", removedAt: DateTime.UtcNow))],
+        };
+        await _sut.CreateAsync(application);
+
+        var result = await _sut.GetInterimSiteNumbersByRegistrationAsync("reg-1");
+
+        result.Should().BeEquivalentTo(["001"]);
+    }
+
+    // A document written before RA-603 carries only the singular mirror and no list.
+    [Fact]
+    public async Task GetInterimSiteNumbersByRegistrationAsync_ReadsTheLegacySingularField()
+    {
+        var application = BuildApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    SiteName = "ORS 1",
+                    InterimSite = Interim(2, "007"),
+                },
+            ],
+        };
+        await _sut.CreateAsync(application);
+
+        var result = await _sut.GetInterimSiteNumbersByRegistrationAsync("reg-1");
+
+        result.Should().BeEquivalentTo(["007"]);
+    }
+
+    [Fact]
+    public async Task GetInterimSiteNumbersByRegistrationAsync_IgnoresOtherRegistrations()
+    {
+        var other = BuildApplication(registrationId: "some-other-reg");
+        other.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [SiteWithInterim(1, Interim(2, "500"))],
+        };
+        await _sut.CreateAsync(other);
+
+        var result = await _sut.GetInterimSiteNumbersByRegistrationAsync("reg-1");
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateIfInterimSiteNumberAbsentAsync_NumberNotYetUsed_Persists()
+    {
+        var application = BuildApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [SiteWithInterim(1)],
+        };
+        await _sut.CreateAsync(application);
+
+        application.OverseasSites.Sites[0].InterimSites.Add(Interim(2, "001"));
+        var result = await _sut.UpdateIfInterimSiteNumberAbsentAsync(application, "001");
+
+        result.Should().NotBeNull();
+        var stored = await _sut.GetByIdAsync("org-1", application.Id!.Value.ToString());
+        stored!
+            .OverseasSites!.Sites[0]
+            .InterimSites.Select(i => i.SiteNumber)
+            .Should()
+            .BeEquivalentTo(["001"]);
+    }
+
+    // The concurrency guard: a number another writer already claimed is refused rather than
+    // duplicated, which is what makes AddInterimSite's retry loop necessary and safe.
+    [Fact]
+    public async Task UpdateIfInterimSiteNumberAbsentAsync_NumberAlreadyClaimed_RefusesTheWrite()
+    {
+        var application = BuildApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [SiteWithInterim(1, Interim(2, "001"))],
+        };
+        await _sut.CreateAsync(application);
+
+        var result = await _sut.UpdateIfInterimSiteNumberAbsentAsync(application, "001");
+
+        result.Should().BeNull();
+    }
+
+    // RA-603 review (Aysha): the number scope reads the legacy singular mirror (see
+    // GetInterimSiteNumbersByRegistrationAsync_ReadsTheLegacySingularField), so the write guard
+    // has to as well - otherwise a number held only in an un-normalised mirror is invisible to it.
+    // The Version matches, so a refusal here can only come from the number guard.
+    [Fact]
+    public async Task UpdateIfInterimSiteNumberAbsentAsync_NumberHeldOnlyByALegacyMirror_RefusesTheWrite()
+    {
+        var application = BuildApplication();
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                new OverseasSiteModel
+                {
+                    SiteId = 1,
+                    SiteName = "ORS 1",
+                    InterimSite = Interim(2, "005"),
+                },
+            ],
+        };
+        await _sut.CreateAsync(application);
+
+        var result = await _sut.UpdateIfInterimSiteNumberAbsentAsync(application, "005");
+
+        result.Should().BeNull();
+    }
 }

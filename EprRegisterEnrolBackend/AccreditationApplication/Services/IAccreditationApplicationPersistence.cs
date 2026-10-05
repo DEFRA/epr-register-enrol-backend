@@ -34,6 +34,25 @@ public interface IAccreditationApplicationPersistence
     /// </summary>
     Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId);
 
+    /// <summary>
+    /// RA-603: every interim site's SiteNumber across every application under a registration.
+    /// The interim counterpart of <see cref="GetOrsIdsByRegistrationAsync"/> - interim numbers are
+    /// their own 001-999 set, but scoped the same way, because a registration spans years and a
+    /// number reissued next year would collide with one already in a submitted return.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(string registrationId);
+
+    /// <summary>
+    /// RA-603: persists only if no interim site under this application already carries
+    /// <paramref name="siteNumber"/>. The interim counterpart of
+    /// <see cref="UpdateIfOrsIdAbsentAsync"/>, and the reason two concurrent writers cannot mint
+    /// the same regulator-visible number.
+    /// </summary>
+    Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
+        AccreditationApplicationModel application,
+        string siteNumber
+    );
+
     Task<AccreditationApplicationModel?> GetByIdAsync(string organisationId, string applicationId);
     Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId);
     Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application);

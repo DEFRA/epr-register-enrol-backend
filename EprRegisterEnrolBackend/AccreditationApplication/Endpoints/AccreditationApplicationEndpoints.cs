@@ -78,6 +78,32 @@ public static class AccreditationApplicationEndpoints
                 AddInterimSite
             )
         );
+        // RA-603: the per-interim-site routes. The singular route above stays for callers that
+        // have not moved over, minus its duplicate guard.
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-sites",
+                AddInterimSite
+            )
+        );
+        FrontendOnly(
+            group.MapPatch(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-sites/{interimSiteId}",
+                UpdateInterimSite
+            )
+        );
+        FrontendOnly(
+            group.MapDelete(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-sites/{interimSiteId}",
+                WithdrawInterimSite
+            )
+        );
+        FrontendOnly(
+            group.MapPost(
+                "{organisationId}/{applicationId}/overseas-sites/{siteId}/interim-sites/{interimSiteId}/restore",
+                RestoreInterimSite
+            )
+        );
         FrontendOnly(
             group.MapPost(
                 "{organisationId}/{applicationId}/overseas-sites/{siteId}/bes-evidence/files",
@@ -184,6 +210,24 @@ public static class AccreditationApplicationEndpoints
     // RA-252 / RA-415: an application in a terminal status (Withdrawn, Approved or Rejected)
     // must not be editable through any of the ordinary write endpoints, even if the frontend's
     // own session guard fails open or is bypassed.
+    // Terminal application, or an overseas-sites section the current status does not allow
+    // writing to. IsSectionEditable is what keeps a Queried section writable on a locked
+    // application (AC12), so overseas-site writes go through this rather than re-implementing it.
+    private static IResult? RejectIfOverseasSitesNotEditable(
+        AccreditationApplicationModel application
+    ) =>
+        RejectIfTerminal(application)
+        ?? (
+            AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+                ? null
+                : Results.Conflict(
+                    "Overseas sites section is not editable in the application's current status."
+                )
+        );
+
     private static IResult? RejectIfTerminal(AccreditationApplicationModel application) =>
         application.ApplicationStatus
             is ApplicationStatus.Withdrawn
@@ -1147,6 +1191,9 @@ public static class AccreditationApplicationEndpoints
         if (application.OverseasSites is null)
             application.OverseasSites = new AccreditationApplicationOverseasSites();
 
+        if (FindRepeatedInterimSite(request.Sites) is { } duplicateId)
+            return Results.BadRequest($"Interim site {duplicateId} appears more than once.");
+
         // RA-292 AC01/AC02: isNewSite (site and interim) is re-derived server-side against the
         // persisted list; whatever the client sent for it is discarded.
         if (request.Sites != null)
@@ -1219,12 +1266,12 @@ public static class AccreditationApplicationEndpoints
                 $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
             );
 
-        var (errorResult, newSite, updated) = await TryAddOverseasSiteWithGeneratedIdAsync(
+        var (errorResult, newSite, updated) = await AllocateGeneratedIdAsync(
             persistence,
             organisationId,
             applicationId,
             application,
-            request
+            OrsIdAllocation(persistence, request)
         );
         if (errorResult is not null || newSite is null || updated is null)
             return errorResult ?? Results.Problem("Failed to add overseas site.");
@@ -1261,78 +1308,117 @@ public static class AccreditationApplicationEndpoints
         return Results.Created(string.Empty, newSite);
     }
 
-    // RA-482: pulled out of AddOverseasSite to keep that method's cognitive complexity down —
-    // this owns the whole generate-write-retry loop, including the capacity guard and the
-    // re-fetch-and-retry path, and reports back either a terminal error IResult or the
-    // successfully persisted site/application pair (never a mix of the two).
+    /// <summary>
+    /// What <see cref="AllocateGeneratedIdAsync{T}"/> needs to know about one kind of generated
+    /// identifier: where its scope comes from, how a new record claiming it is built and attached,
+    /// and which guarded write persists it. ORS ids (RA-482) and interim site numbers (RA-603)
+    /// differ only in these, so the retry rules around them exist once.
+    /// </summary>
+    private sealed record GeneratedIdAllocation<T>(
+        string CapacityNoun,
+        string IdName,
+        Func<AccreditationApplicationModel, Task<IEnumerable<string?>>> Scope,
+        Func<AccreditationApplicationModel, string, (IResult? Error, T? Created)> Attach,
+        Func<AccreditationApplicationModel, string, Task<AccreditationApplicationModel?>> WriteIfAbsent
+    )
+        where T : class;
+
+    // RA-482/RA-603: generate an id from the registration-wide scope, attach the new record, and
+    // persist only if no concurrent writer has claimed that id first. A lost race re-reads and
+    // tries again with a fresh id, bounded so a stuck conflict fails loudly. Reports either an
+    // error or the created record with its persisted application, never a mix.
+    //
+    // The guarded write also compares Version, so it can lose to ANY concurrent write, a status
+    // change included. That is why the re-read is re-checked for editability before retrying:
+    // without it, a retry could add to an application that has since become terminal.
     private static async Task<(
         IResult? ErrorResult,
-        OverseasSiteModel? NewSite,
+        T? Created,
         AccreditationApplicationModel? Updated
-    )> TryAddOverseasSiteWithGeneratedIdAsync(
+    )> AllocateGeneratedIdAsync<T>(
         IAccreditationApplicationPersistence persistence,
         string organisationId,
         string applicationId,
         AccreditationApplicationModel application,
-        AddOverseasSiteRequest request
+        GeneratedIdAllocation<T> allocation
     )
+        where T : class
     {
-        // RA-482: OrsId is server-generated (max existing numeric id + 1, zero-padded, scoped by
-        // RegistrationId across every application under it, falling back to just this
-        // application when no RegistrationId is set yet) rather than accepted from the client.
-        // The write is guarded so a concurrent AddOverseasSite call under the same registration
-        // can't silently produce a duplicate: UpdateIfOrsIdAbsentAsync only persists if nothing
-        // else already inserted that exact id, and a failed attempt retries with a freshly
-        // computed id. Bounded, not unlimited, so a genuinely stuck conflict fails loudly.
-        const int maxOrsIdAttempts = 3;
+        const int maxAttempts = 3;
 
-        // Callers already guarantee this before calling in, but that guarantee doesn't cross
-        // the method boundary for the compiler's nullable flow analysis -- assert it locally too.
-        application.OverseasSites ??= new AccreditationApplicationOverseasSites();
-
-        for (var attempt = 1; attempt <= maxOrsIdAttempts; attempt++)
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            var scope = await OrsIdScope(persistence, application);
-            var generated = OrsIdGenerator.GenerateNext(scope);
+            var generated = OrsIdGenerator.GenerateNext(await allocation.Scope(application));
             if (generated.CapacityExceeded)
                 return (
                     Results.UnprocessableEntity(
-                        "This registration has reached the maximum of 999 overseas sites."
+                        $"This registration has reached the maximum of 999 {allocation.CapacityNoun}."
                     ),
                     null,
                     null
                 );
 
-            var newSite = BuildOverseasSite(application.OverseasSites, generated.OrsId!, request);
+            var (attachError, created) = allocation.Attach(application, generated.OrsId!);
+            if (attachError is not null || created is null)
+                return (attachError ?? Results.Problem("Failed to attach the new site."), null, null);
 
-            application.OverseasSites.Sites.Add(newSite);
-            RecomputeOverseasSitesSectionStatus(application.OverseasSites);
-            application.DateLastEdited = DateTime.UtcNow;
-
-            if (application.ApplicationStatus == ApplicationStatus.Saved)
-                application.ApplicationStatus = ApplicationStatus.Started;
-
-            var updated = await persistence.UpdateIfOrsIdAbsentAsync(application, generated.OrsId!);
+            var updated = await allocation.WriteIfAbsent(application, generated.OrsId!);
             if (updated is not null)
-                return (null, newSite, updated);
+                return (null, created, updated);
 
-            // Lost the race to a concurrent writer — re-fetch the now-current document and retry
-            // with a freshly computed id rather than risking a duplicate.
             var refetched = await persistence.GetByIdAsync(organisationId, applicationId);
             if (refetched is null)
                 return (Results.NotFound(), null, null);
+            if (RejectIfOverseasSitesNotEditable(refetched) is { } notEditable)
+                return (notEditable, null, null);
             application = refetched;
-            application.OverseasSites ??= new AccreditationApplicationOverseasSites();
         }
 
         return (
             Results.Conflict(
-                "Could not allocate a unique ORS id after several attempts; please retry."
+                $"Could not allocate a unique {allocation.IdName} after several attempts; please retry."
             ),
             null,
             null
         );
     }
+
+    // RA-482: OrsId is server-generated (max existing numeric id + 1, zero-padded) across every
+    // application under the registration, never taken from the client.
+    private static GeneratedIdAllocation<OverseasSiteModel> OrsIdAllocation(
+        IAccreditationApplicationPersistence persistence,
+        AddOverseasSiteRequest request
+    ) =>
+        new(
+            CapacityNoun: "overseas sites",
+            IdName: "ORS id",
+            Scope: application => OrsIdScope(persistence, application),
+            Attach: (application, orsId) =>
+            {
+                application.OverseasSites ??= new AccreditationApplicationOverseasSites();
+                var newSite = BuildOverseasSite(application.OverseasSites, orsId, request);
+                application.OverseasSites.Sites.Add(newSite);
+                RecomputeOverseasSitesSectionStatus(application.OverseasSites);
+                application.DateLastEdited = DateTime.UtcNow;
+                if (application.ApplicationStatus == ApplicationStatus.Saved)
+                    application.ApplicationStatus = ApplicationStatus.Started;
+                return (null, newSite);
+            },
+            WriteIfAbsent: persistence.UpdateIfOrsIdAbsentAsync
+        );
+
+    // RA-603: interim site ids are unique application-wide, but a bulk PATCH body is
+    // client-shaped. One listed twice - under two overseas sites, or twice under the same one -
+    // would be stored twice, and a later withdraw only stamps the first copy, so it is refused.
+    // Ids of 0 or less are not yet allocated and are not compared.
+    private static int? FindRepeatedInterimSite(List<OverseasSiteModel>? sites) =>
+        (sites ?? [])
+            .SelectMany(site => InterimSiteSync.All(site).Select(interim => interim.SiteId))
+            .Where(interimId => interimId > 0)
+            .GroupBy(interimId => interimId)
+            .Where(group => group.Skip(1).Any())
+            .Select(group => (int?)group.Key)
+            .FirstOrDefault();
 
     private static OverseasSiteModel BuildOverseasSite(
         AccreditationApplicationOverseasSites overseasSites,
@@ -1392,6 +1478,31 @@ public static class AccreditationApplicationEndpoints
         return await persistence.GetOrsIdsByRegistrationAsync(application.RegistrationId);
     }
 
+    // RA-603: the interim site NUMBER allocation scope - not to be confused with NextSiteId
+    // below, which allocates the internal SiteId. The two used to be the same counter, which is
+    // why interim numbers skipped whenever an ORS was added.
+    //
+    // Scoped exactly like OrsIdScope above, and for the same reason: a registration is
+    // established once and renewed annually via a new application each year, so a number
+    // reissued next year would collide with one already sitting in a submitted return. Withdrawn
+    // interim sites are included - their numbers stay claimed for as long as the record does,
+    // which under AC05 is permanently. Legacy SN-000N values come through untouched and simply
+    // do not parse, which is what makes them harmless here.
+    private static async Task<IEnumerable<string?>> InterimSiteNumberScope(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel application
+    )
+    {
+        if (application.RegistrationId is null)
+            return (application.OverseasSites?.Sites ?? [])
+                .SelectMany(InterimSiteSync.All)
+                .Select(i => i.SiteNumber);
+
+        return await persistence.GetInterimSiteNumbersByRegistrationAsync(
+            application.RegistrationId
+        );
+    }
+
     // Site numbers must be unique application-wide across both ORS sites and their nested
     // interim sites (RA-294), so the next id is the max across both, not just the ORS list.
     private static int NextSiteId(AccreditationApplicationOverseasSites overseasSites)
@@ -1401,8 +1512,15 @@ public static class AccreditationApplicationEndpoints
         {
             if (site.SiteId > maxSiteId)
                 maxSiteId = site.SiteId;
-            if (site.InterimSite is not null && site.InterimSite.SiteId > maxSiteId)
-                maxSiteId = site.InterimSite.SiteId;
+
+            // RA-603: every interim site, the legacy mirror and withdrawn ones included - their
+            // ids stay claimed for as long as the record does, which is forever (AC05). Reads
+            // only; a caller that is about to mutate the list normalises it itself.
+            foreach (var interimSiteId in InterimSiteSync.All(site).Select(i => i.SiteId))
+            {
+                if (interimSiteId > maxSiteId)
+                    maxSiteId = interimSiteId;
+            }
         }
         return maxSiteId + 1;
     }
@@ -1806,6 +1924,193 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(site);
     }
 
+    /// <summary>
+    /// RA-603: the guard stack every interim-site route shares - load, reject a terminal
+    /// application, reject a section that is not editable, find the ORS - plus the normalisation
+    /// that lets a pre-RA-603 document (singular field only) be mutated as a list.
+    ///
+    /// Extracted so the four routes cannot drift apart. The editability check in particular is
+    /// what AC12 rests on: IsSectionEditable returns true for a Queried section even on a locked
+    /// application, so an operator answering a regulator's query can still change their interim
+    /// sites. A route that reimplemented this and forgot that clause would fail AC12 silently.
+    /// </summary>
+    private static async Task<(
+        IResult? Failure,
+        AccreditationApplicationModel? Application,
+        OverseasSiteModel? Site
+    )> ResolveEditableOverseasSiteAsync(
+        IAccreditationApplicationPersistence persistence,
+        string organisationId,
+        string applicationId,
+        int siteId
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return (Results.NotFound(), null, null);
+
+        if (RejectIfOverseasSitesNotEditable(application) is { } notEditable)
+            return (notEditable, null, null);
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return (Results.NotFound(), null, null);
+
+        // The list is what every mutation below edits, so promote a legacy singular value into it
+        // before anything touches it.
+        InterimSiteSync.Normalise(site);
+        return (null, application, site);
+    }
+
+    /// <summary>
+    /// RA-603: edits one interim site in place. SiteId, SiteNumber, CreatedAt and RemovedAt are
+    /// server-owned and are not taken from the request - the request shape is the same
+    /// <see cref="AddInterimSiteRequest"/> the create route uses, so the R12/R13 rule is enforced
+    /// by the same validator rather than a second copy of it.
+    /// </summary>
+    private static async Task<IResult> UpdateInterimSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        int interimSiteId,
+        AddInterimSiteRequest request,
+        [AsParameters] UpdateInterimSiteServices services
+    )
+    {
+        var (persistence, validator, cancellationToken) = services;
+        var validation = await validator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
+
+        var interimSite = site!.InterimSites.FirstOrDefault(i => i.SiteId == interimSiteId);
+        if (interimSite is null)
+            return Results.NotFound();
+
+        // Editing something the operator has withdrawn would silently resurrect it into every
+        // active list; restoring it is a deliberate, separate action.
+        if (interimSite.RemovedAt is not null)
+            return Results.Conflict(
+                $"Interim site '{interimSiteId}' has been withdrawn and cannot be edited."
+            );
+
+        interimSite.Country = request.Country;
+        interimSite.SiteName = request.SiteName;
+        interimSite.AddressLine1 = request.AddressLine1;
+        interimSite.AddressLine2 = request.AddressLine2;
+        interimSite.TownOrCity = request.TownOrCity;
+        interimSite.StateOrRegion = request.StateOrRegion;
+        interimSite.Postcode = request.Postcode;
+        interimSite.ContactName = request.ContactName;
+        interimSite.ContactEmail = request.ContactEmail;
+        interimSite.ContactPhone = request.ContactPhone;
+        interimSite.OperationCodes = request.OperationCodes;
+
+        InterimSiteSync.SyncMirror(site);
+        application!.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? LostInterimSiteRace(interimSiteId)
+            : Results.Ok(interimSite);
+    }
+
+    /// <summary>
+    /// RA-603 AC05: withdraws an interim site. A soft delete - the record stays in the document so
+    /// it remains available for reporting, and only stops appearing wherever active sites are
+    /// listed. Idempotent, and it never overwrites an earlier withdrawal date.
+    /// </summary>
+    private static async Task<IResult> WithdrawInterimSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        int interimSiteId,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
+
+        var interimSite = site!.InterimSites.FirstOrDefault(i => i.SiteId == interimSiteId);
+        if (interimSite is null)
+            return Results.NotFound();
+
+        interimSite.RemovedAt ??= DateTime.UtcNow;
+
+        InterimSiteSync.SyncMirror(site);
+        application!.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? LostInterimSiteRace(interimSiteId)
+            : Results.NoContent();
+    }
+
+    /// <summary>
+    /// RA-603 AC05: brings a withdrawn interim site back. Clearing RemovedAt is the whole
+    /// operation - SiteId, SiteNumber, CreatedAt and IsNewSite are all left exactly as they were,
+    /// so the site that returns is the one that went away rather than a lookalike, and the
+    /// withdraw/restore pair stays readable in the record.
+    ///
+    /// Called restore rather than revert: the ORS already has a /revert route, which un-promotes a
+    /// registered site and is a different thing entirely.
+    /// </summary>
+    private static async Task<IResult> RestoreInterimSite(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        int interimSiteId,
+        IAccreditationApplicationPersistence persistence
+    )
+    {
+        var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
+
+        var interimSite = site!.InterimSites.FirstOrDefault(i => i.SiteId == interimSiteId);
+        if (interimSite is null)
+            return Results.NotFound();
+
+        interimSite.RemovedAt = null;
+
+        InterimSiteSync.SyncMirror(site);
+        application!.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application);
+        return updated is null
+            ? LostInterimSiteRace(interimSiteId)
+            : Results.Ok(interimSite);
+    }
+
+    // RA-603: UpdateAsync is version-guarded, so null from it on these routes means another write
+    // to the application landed between our read and this write. That is a lost race, not a server
+    // fault - report it as 409, the same status the create route ends in once its retries are
+    // spent. No retry here: re-applying an edit over state the operator never saw is worse than
+    // asking them to reload, and withdraw/restore are idempotent so a client retry is safe.
+    private static IResult LostInterimSiteRace(int interimSiteId) =>
+        Results.Conflict(
+            $"The application changed while interim site '{interimSiteId}' was being saved; please reload and try again."
+        );
+
     private static async Task<IResult> AddInterimSite(
         string organisationId,
         string applicationId,
@@ -1830,69 +2135,38 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
+        var (failure, application, _) = await ResolveEditableOverseasSiteAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            siteId
+        );
+        if (failure is not null)
+            return failure;
 
-        if (
-            !AccreditationApplicationSections.IsSectionEditable(
-                application.ApplicationStatus,
-                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
-            )
-        )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
-
-        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        if (site is null)
-            return Results.NotFound();
-
-        if (site.InterimSite is not null)
-            return Results.Conflict(
-                $"An interim site already exists for overseas site '{siteId}'."
-            );
-
-        var nextSiteId = NextSiteId(application.OverseasSites!);
-
-        var interimSite = new InterimSiteModel
-        {
-            SiteId = nextSiteId,
-            SiteNumber = $"SN-{nextSiteId:D4}",
-            Country = request.Country,
-            SiteName = request.SiteName,
-            AddressLine1 = request.AddressLine1,
-            AddressLine2 = request.AddressLine2,
-            TownOrCity = request.TownOrCity,
-            StateOrRegion = request.StateOrRegion,
-            Postcode = request.Postcode,
-            ContactName = request.ContactName,
-            ContactEmail = request.ContactEmail,
-            ContactPhone = request.ContactPhone,
-            OperationCodes = request.OperationCodes,
-            IsNewSite = true,
-        };
-
-        site.InterimSite = interimSite;
-        application.DateLastEdited = DateTime.UtcNow;
-
-        var updated = await persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to add interim site.");
+        var (allocationError, interimSite, updated) = await AllocateGeneratedIdAsync(
+            persistence,
+            organisationId,
+            applicationId,
+            application!,
+            InterimSiteNumberAllocation(persistence, siteId, request)
+        );
+        if (allocationError is not null)
+            return allocationError;
 
         // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
         // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s).
-        if (updated.CaseManagementWorkItemId is not null)
+        if (updated!.CaseManagementWorkItemId is not null)
         {
             try
             {
                 await caseWorkingAdapter.NotifySiteAddedAsync(
                     updated,
                     siteType: "interim",
-                    orsId: site.OrsId ?? string.Empty,
-                    siteNumber: interimSite.SiteNumber,
+                    orsId: updated
+                        .OverseasSites!.Sites.First(s => s.SiteId == siteId)
+                        .OrsId ?? string.Empty,
+                    siteNumber: interimSite!.SiteNumber,
                     isNewSite: interimSite.IsNewSite,
                     cancellationToken: cancellationToken
                 );
@@ -1911,6 +2185,76 @@ public static class AccreditationApplicationEndpoints
 
         return Results.Created(string.Empty, interimSite);
     }
+
+    // RA-603: an interim site's regulator-visible number comes from its own registration-wide
+    // sequence; its SiteId stays on the shared ORS+interim sequence, which is what routes address.
+    private static GeneratedIdAllocation<InterimSiteModel> InterimSiteNumberAllocation(
+        IAccreditationApplicationPersistence persistence,
+        int siteId,
+        AddInterimSiteRequest request
+    ) =>
+        new(
+            CapacityNoun: "interim sites",
+            IdName: "interim site number",
+            Scope: application => InterimSiteNumberScope(persistence, application),
+            Attach: (application, siteNumber) =>
+            {
+                var site = application.OverseasSites?.Sites.FirstOrDefault(s =>
+                    s.SiteId == siteId
+                );
+                if (site is null)
+                    return (Results.NotFound(), null);
+
+                // A retry works on a re-read document, which can hold a pre-RA-603 ORS whose only
+                // interim site is still in the singular field. Promote it into the list before
+                // appending, or it would be lost.
+                InterimSiteSync.Normalise(site);
+                var interimSite = BuildInterimSite(
+                    NextSiteId(application.OverseasSites!),
+                    siteNumber,
+                    request
+                );
+                site.InterimSites.Add(interimSite);
+                InterimSiteSync.SyncMirror(site);
+                application.DateLastEdited = DateTime.UtcNow;
+                return (null, interimSite);
+            },
+            WriteIfAbsent: persistence.UpdateIfInterimSiteNumberAbsentAsync
+        );
+
+    private static InterimSiteModel BuildInterimSite(
+        int siteId,
+        string siteNumber,
+        AddInterimSiteRequest request
+    ) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = siteNumber,
+            Country = request.Country,
+            SiteName = request.SiteName,
+            AddressLine1 = request.AddressLine1,
+            AddressLine2 = request.AddressLine2,
+            TownOrCity = request.TownOrCity,
+            StateOrRegion = request.StateOrRegion,
+            Postcode = request.Postcode,
+            ContactName = request.ContactName,
+            ContactEmail = request.ContactEmail,
+            ContactPhone = request.ContactPhone,
+            OperationCodes = request.OperationCodes,
+            IsNewSite = true,
+            CreatedAt = DateTime.UtcNow,
+        };
+
+    // Bundles UpdateInterimSite's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) — the route itself
+    // needs four path segments plus a body, which leaves no room for three more. Same reasoning
+    // and same shape as AddBesEvidenceFileServices below.
+    private sealed record UpdateInterimSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddInterimSiteRequest> Validator,
+        CancellationToken CancellationToken
+    );
 
     // Bundles AddBesEvidenceFile's DI-service/framework parameters under one [AsParameters]
     // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
@@ -2073,9 +2417,7 @@ public static class AccreditationApplicationEndpoints
             );
 
         var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        return site is null
-            ? (null, null, Results.NotFound())
-            : (application, site, null);
+        return site is null ? (null, null, Results.NotFound()) : (application, site, null);
     }
 
     private static async Task<IResult> DeleteBesEvidenceFile(
