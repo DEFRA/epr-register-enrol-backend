@@ -6551,6 +6551,110 @@ public class AccreditationApplicationEndpointsTests
         body!.BesEvidence!.SectionStatus.Should().Be(SectionStatus.Completed);
     }
 
+    [Fact]
+    public async Task Resubmit_NewOrsAddedAndBesEvidenceUploadedDuringQuery_BesEvidenceRecomputesToCompleted()
+    {
+        // Reported bug: on a queried application where ORS and BES are both queried, adding a
+        // new ORS, uploading its BES evidence and resubmitting leaves the BES task InProgress
+        // (and its link hidden), even though every site that needs evidence has a clean upload.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.Queried,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = Guid.NewGuid();
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    SectionStatus = SectionStatus.Queried,
+                    Sites =
+                    [
+                        new OverseasSiteModel
+                        {
+                            SiteId = 1,
+                            SiteName = "Existing site",
+                            Country = "Vietnam",
+                            Selected = true,
+                            BesEvidence = new BesEvidenceModel
+                            {
+                                BesEvidenceUploads =
+                                [
+                                    new BesEvidenceFileModel
+                                    {
+                                        FileId = "file-1",
+                                        Filename = "evidence.pdf",
+                                        ScanStatus = "Clean",
+                                        S3Key = "key-1",
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                };
+                a.BesEvidence = new AccreditationApplicationBesEvidence
+                {
+                    SectionStatus = SectionStatus.Queried,
+                };
+                a.Query = new AccreditationApplicationQuery
+                {
+                    QueryNote = "clarify ORS and BES",
+                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
+                };
+            }
+        );
+        _factory
+            .MockCaseWorkingAdapter.ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(new ResumeFromQueryResult(true)));
+
+        var addSite = ValidAddOrsRequest();
+        addSite.Country = "Vietnam";
+        var addResponse = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites",
+            addSite,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        addResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var newSite = await addResponse.Content.ReadFromJsonAsync<OverseasSiteModel>(
+            JsonOptions,
+            TestContext.Current.CancellationToken
+        );
+
+        var fileUploadId = await SeedValidatedUpload(
+            "bes-file-new",
+            "new-site-evidence.pdf",
+            "bes-evidence/bes-file-new"
+        );
+        var uploadResponse = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/{newSite!.SiteId}/bes-evidence/files",
+            new AddBesEvidenceFileRequest { FileUploadId = fileUploadId },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        uploadResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/resubmit",
+            new ResubmitRequest
+            {
+                FullName = "Jane",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.OverseasSites!.SectionStatus.Should().Be(SectionStatus.Completed);
+        body.BesEvidence!.SectionStatus.Should().Be(SectionStatus.Completed);
+    }
+
     // --- StatusChangedFromCaseManagement ---
 
     [Theory]

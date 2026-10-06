@@ -8,6 +8,7 @@ using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Utils;
+using EprRegisterEnrolBackend.Utils.Logging;
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
@@ -1168,7 +1169,8 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         PatchOverseasSitesRequest request,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        ILoggerFactory loggerFactory
     )
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
@@ -1191,7 +1193,16 @@ public static class AccreditationApplicationEndpoints
             application.OverseasSites = new AccreditationApplicationOverseasSites();
 
         if (FindRepeatedInterimSite(request.Sites) is { } duplicateId)
-            return Results.BadRequest($"Interim site {duplicateId} appears more than once.");
+        {
+            var reason = $"Interim site {duplicateId} appears more than once.";
+            ValidationFailureLog.LogValidationFailure(
+                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(PatchOverseasSites),
+                applicationId,
+                reason
+            );
+            return Results.BadRequest(reason);
+        }
 
         // RA-292 AC01/AC02: isNewSite (site and interim) is re-derived server-side against the
         // persisted list; whatever the client sent for it is discarded.
@@ -1231,7 +1242,15 @@ public static class AccreditationApplicationEndpoints
     {
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(AddOverseasSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -1659,6 +1678,7 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence Persistence,
         IValidator<PromoteOverseasSiteRequest> Validator,
         IRecyclingOperationsAuditPersistence AuditPersistence,
+        ILoggerFactory LoggerFactory,
         HttpContext HttpContext,
         CancellationToken CancellationToken
     );
@@ -1688,7 +1708,15 @@ public static class AccreditationApplicationEndpoints
             services.CancellationToken
         );
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                services.LoggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(UpdateOverseasSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -1802,12 +1830,21 @@ public static class AccreditationApplicationEndpoints
         int siteId,
         PromoteOverseasSiteRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PromoteOverseasSiteRequest> validator
+        IValidator<PromoteOverseasSiteRequest> validator,
+        ILoggerFactory loggerFactory
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(PromoteOverseasSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
@@ -1950,10 +1987,18 @@ public static class AccreditationApplicationEndpoints
         [AsParameters] UpdateInterimSiteServices services
     )
     {
-        var (persistence, validator, cancellationToken) = services;
+        var (persistence, validator, loggerFactory, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(UpdateInterimSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
             persistence,
@@ -2098,7 +2143,15 @@ public static class AccreditationApplicationEndpoints
     {
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
+        {
+            ValidationFailureLog.LogValidationFailure(
+                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                nameof(AddInterimSite),
+                applicationId,
+                validation
+            );
             return Results.BadRequest(validation.Errors);
+        }
 
         var (failure, application, _) = await ResolveEditableOverseasSiteAsync(
             persistence,
@@ -2218,6 +2271,7 @@ public static class AccreditationApplicationEndpoints
     private sealed record UpdateInterimSiteServices(
         IAccreditationApplicationPersistence Persistence,
         IValidator<AddInterimSiteRequest> Validator,
+        ILoggerFactory LoggerFactory,
         CancellationToken CancellationToken
     );
 
