@@ -131,6 +131,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
     builder.Services.AddSingleton<ChangeRequestPersistence>();
     builder.Services.AddSingleton<ChangeRequestSubmission>();
+    builder.Services.AddSingleton<ChangeRequestCaseReader>();
     builder.Services.Configure<AccreditationChangeSpikeOptions>(
         builder.Configuration.GetSection("AccreditationChangeSpike"));
     builder.Services.ConfigureHttpJsonOptions(options =>
@@ -388,6 +389,7 @@ static WebApplication SetupApplication(WebApplication app)
     // ReEx-backed organisation endpoints (live ReEx lookups, e.g. Defra org link)
     app.UseReExOrganisationEndpoints();
     app.UseFixedAccreditationEndpoints();
+    app.UseChangeRequestOutcomeEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
 

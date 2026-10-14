@@ -23,6 +23,9 @@ public sealed class ChangeRequest
     public string? CaseId { get; set; }
     public string? CaseReference { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? ClosedAt { get; set; }
+    [BsonIgnore]
+    public string? CaseState { get; set; }
 }
 
 public sealed class FixedAccreditationView
@@ -38,4 +41,5 @@ public sealed class FixedAccreditationView
     public required List<OverseasSiteModel> OverseasSites { get; init; }
     public required PreparedOverseasSite Proposal { get; init; }
     public ChangeRequest? ActiveRequest { get; init; }
+    public List<ChangeRequest> History { get; init; } = [];
 }

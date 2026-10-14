@@ -23,8 +23,8 @@ public static class FixedAccreditationEndpoints
     private static Task<IResult> ReadConfiguredTarget(
         IOptions<AccreditationChangeSpikeOptions> options,
         IHostEnvironment environment,
-        IReExApiAdapter reExAdapter, ChangeRequestPersistence persistence, CancellationToken ct) =>
-        ReadBaseline(options.Value, environment, reExAdapter, persistence, ct);
+        IReExApiAdapter reExAdapter, ChangeRequestPersistence persistence, ChangeRequestCaseReader caseReader, CancellationToken ct) =>
+        ReadBaseline(options.Value, environment, reExAdapter, persistence, caseReader, ct);
 
     private static Task<IResult> ReadTarget(
         string organisationId,
@@ -34,7 +34,7 @@ public static class FixedAccreditationEndpoints
         int year,
         IOptions<AccreditationChangeSpikeOptions> options,
         IHostEnvironment environment,
-        IReExApiAdapter reExAdapter, ChangeRequestPersistence persistence, CancellationToken ct)
+        IReExApiAdapter reExAdapter, ChangeRequestPersistence persistence, ChangeRequestCaseReader caseReader, CancellationToken ct)
     {
         var target = options.Value;
         // The development adapter synthesizes accreditation responses for arbitrary inputs.
@@ -44,13 +44,13 @@ public static class FixedAccreditationEndpoints
             || year != target.Year)
             return Task.FromResult<IResult>(Results.NotFound());
 
-        return ReadBaseline(target, environment, reExAdapter, persistence, ct);
+        return ReadBaseline(target, environment, reExAdapter, persistence, caseReader, ct);
     }
 
     private static async Task<IResult> ReadBaseline(
         AccreditationChangeSpikeOptions target,
         IHostEnvironment environment,
-        IReExApiAdapter reExAdapter, ChangeRequestPersistence persistence, CancellationToken ct)
+        IReExApiAdapter reExAdapter, ChangeRequestPersistence persistence, ChangeRequestCaseReader caseReader, CancellationToken ct)
     {
         if (!environment.IsDevelopment() || !target.Enabled
             || string.IsNullOrWhiteSpace(target.AccreditationId)
@@ -74,6 +74,10 @@ public static class FixedAccreditationEndpoints
             || !baseline.IsExporter)
             return Results.NotFound();
 
+        var identity = new AccreditationChangeTarget(target.OrganisationId, target.RegistrationId,
+            target.AccreditationId, target.MaterialType, target.Year);
+        var active = await persistence.ReadActive(identity, ct);
+        await caseReader.ReadState(active, ct);
         return TypedResults.Ok(new FixedAccreditationView
         {
             OrganisationId = target.OrganisationId,
@@ -85,8 +89,8 @@ public static class FixedAccreditationEndpoints
             RegistrationReference = baseline.RegistrationReference ?? "",
             OverseasSites = baseline.OverseasSites,
             Proposal = target.Proposal,
-            ActiveRequest = await persistence.ReadActive(new(target.OrganisationId, target.RegistrationId,
-                target.AccreditationId, target.MaterialType, target.Year), ct),
+            ActiveRequest = active,
+            History = await persistence.ReadHistory(identity, ct),
         });
     }
 
@@ -94,10 +98,10 @@ public static class FixedAccreditationEndpoints
         string accreditationId, MaterialType materialType, int year,
         IOptions<AccreditationChangeSpikeOptions> options, IHostEnvironment environment,
         IReExApiAdapter reExAdapter, ChangeRequestPersistence persistence,
-        ChangeRequestSubmission submission, CancellationToken ct)
+        ChangeRequestSubmission submission, ChangeRequestCaseReader caseReader, CancellationToken ct)
     {
         var result = await ReadTarget(organisationId, registrationId, accreditationId, materialType,
-            year, options, environment, reExAdapter, persistence, ct);
+            year, options, environment, reExAdapter, persistence, caseReader, ct);
         if (result is not Ok<FixedAccreditationView> read) return result;
         var baseline = read.Value!;
         var request = await persistence.StartOrResume(new ChangeRequest

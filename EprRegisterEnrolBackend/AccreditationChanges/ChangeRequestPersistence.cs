@@ -27,6 +27,31 @@ public sealed class ChangeRequestPersistence
         _requests.Find(TargetFilter(target) & Builders<ChangeRequest>.Filter.Eq(r => r.Active, true))
             .FirstOrDefaultAsync(ct)!;
 
+    public Task<List<ChangeRequest>> ReadHistory(AccreditationChangeTarget target, CancellationToken ct) =>
+        _requests.Find(TargetFilter(target) & Builders<ChangeRequest>.Filter.Eq(r => r.Active, false))
+            .SortByDescending(r => r.CreatedAt).ToListAsync(ct);
+
+    public Task<ChangeRequest?> Read(string requestId, CancellationToken ct) =>
+        _requests.Find(r => r.RequestId == requestId).FirstOrDefaultAsync(ct)!;
+
+    public async Task<bool> Refuse(ChangeRequestOutcome outcome, CancellationToken ct)
+    {
+        var filter = Builders<ChangeRequest>.Filter.Eq(r => r.RequestId, outcome.RequestId)
+            & TargetFilter(outcome.Target)
+            & Builders<ChangeRequest>.Filter.Eq(r => r.CaseId, outcome.CaseId)
+            & Builders<ChangeRequest>.Filter.Eq(r => r.ProposedSiteId, outcome.ProposedSiteId)
+            & Builders<ChangeRequest>.Filter.Eq(r => r.Active, true)
+            & Builders<ChangeRequest>.Filter.Eq(r => r.Status, "submitted");
+        var result = await _requests.UpdateOneAsync(filter, Builders<ChangeRequest>.Update
+            .Set(r => r.Status, "rejected").Set(r => r.Active, false).Set(r => r.ClosedAt, DateTime.UtcNow),
+            cancellationToken: ct);
+        if (result.MatchedCount == 1) return true;
+        var existing = await Read(outcome.RequestId, ct);
+        return existing is { Active: false, Status: "rejected" }
+            && existing.Target == outcome.Target && existing.CaseId == outcome.CaseId
+            && existing.ProposedSiteId == outcome.ProposedSiteId;
+    }
+
     public async Task<ChangeRequest> StartOrResume(ChangeRequest request, CancellationToken ct)
     {
         var existing = await ReadActive(request.Target, ct);
