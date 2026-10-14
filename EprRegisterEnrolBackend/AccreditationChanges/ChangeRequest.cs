@@ -24,6 +24,7 @@ public sealed class ChangeRequest
     public string? CaseReference { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ClosedAt { get; set; }
+    public bool WithdrawalPending { get; set; }
     [BsonIgnore]
     public string? CaseState { get; set; }
 }

@@ -28,6 +28,60 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
         });
 
     [Fact]
+    public async Task Withdrawal_RetriesUnconfirmedClosurePreservesHistoryAndCannotCloseANewAttempt()
+    {
+        using var parent = Factory();
+        var handler = new ReceiptHandler { ValidImmediately = true };
+        using var factory = parent.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.AddHttpClient("DefaultClient").ConfigurePrimaryHttpMessageHandler(() => handler)));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Secret);
+        using var submission = await client.PostAsync(Target + "/submit", null, TestContext.Current.CancellationToken);
+        var original = await submission.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        var path = Target + "/requests/" + original.GetProperty("requestId").GetString() + "/withdraw";
+        var before = await client.GetFromJsonAsync<JsonElement>(Target, TestContext.Current.CancellationToken);
+        before.GetProperty("activeRequest").GetProperty("caseState").GetString().Should().Be("submitted");
+
+        handler.WithdrawalUnconfirmed = true;
+        (await client.PostAsync(path, null, TestContext.Current.CancellationToken)).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        var unconfirmed = await client.GetFromJsonAsync<JsonElement>(Target, TestContext.Current.CancellationToken);
+        var active = unconfirmed.GetProperty("activeRequest");
+        active.GetProperty("active").GetBoolean().Should().BeTrue();
+        active.GetProperty("status").GetString().Should().Be("submitted");
+        active.GetProperty("caseState").GetString().Should().Be("withdrawn");
+        active.GetProperty("withdrawalPending").GetBoolean().Should().BeTrue();
+        unconfirmed.GetProperty("history").GetArrayLength().Should().Be(0);
+        unconfirmed.GetProperty("approvedAdditions").GetArrayLength().Should().Be(0);
+        handler.WithdrawalUnconfirmed = false;
+        handler.WrongCorrelation = true;
+        (await client.PostAsync(path, null, TestContext.Current.CancellationToken)).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        handler.WrongCorrelation = false;
+        (await client.PostAsync(path, null, TestContext.Current.CancellationToken)).StatusCode.Should().Be(HttpStatusCode.OK);
+        var closed = await client.GetFromJsonAsync<JsonElement>(Target, TestContext.Current.CancellationToken);
+        closed.GetProperty("activeRequest").ValueKind.Should().Be(JsonValueKind.Null);
+        closed.GetProperty("history")[0].GetProperty("status").GetString().Should().Be("withdrawn");
+        closed.GetProperty("overseasSites").GetRawText().Should().Be(before.GetProperty("overseasSites").GetRawText());
+        closed.GetProperty("status").GetString().Should().Be("Granted");
+        closed.GetProperty("approvedAdditions").GetArrayLength().Should().Be(0);
+        handler.State = "submitted";
+        using var nextResponse = await client.PostAsync(Target + "/submit", null, TestContext.Current.CancellationToken);
+        var next = await nextResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        foreach (var field in new[] { "requestId", "caseId", "proposedSiteId" })
+            next.GetProperty(field).GetString().Should().NotBe(original.GetProperty(field).GetString());
+        var deliveries = handler.WithdrawalAttempts;
+        (await client.PostAsync(path, null, TestContext.Current.CancellationToken)).StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.WithdrawalAttempts.Should().Be(deliveries);
+        var current = await client.GetFromJsonAsync<JsonElement>(Target, TestContext.Current.CancellationToken);
+        current.GetProperty("activeRequest").GetProperty("requestId").GetString().Should().Be(next.GetProperty("requestId").GetString());
+        handler.State = "assessment-in-progress";
+        var nextPath = Target + "/requests/" + next.GetProperty("requestId").GetString() + "/withdraw";
+        (await client.PostAsync(nextPath, null, TestContext.Current.CancellationToken)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var assessed = await client.GetFromJsonAsync<JsonElement>(Target, TestContext.Current.CancellationToken);
+        assessed.GetProperty("activeRequest").GetProperty("active").GetBoolean().Should().BeTrue();
+        assessed.GetProperty("activeRequest").GetProperty("withdrawalPending").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
     public async Task ConcurrentSubmissions_ReserveOneRequestAndRetainItsIdentitiesAfterUnconfirmedDelivery()
     {
         using var factory = Factory();
@@ -75,7 +129,8 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
             requestId = original.GetProperty("requestId").GetString(),
             caseId = original.GetProperty("caseId").GetString(),
             proposedSiteId = original.GetProperty("proposedSiteId").GetString(),
-            target = original.GetProperty("target"), outcome = "rejected",
+            target = original.GetProperty("target"),
+            outcome = "rejected",
         };
         using var unsigned = await client.PostAsJsonAsync("/api/v1/accreditation-changes/outcome", body, TestContext.Current.CancellationToken);
         unsigned.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
@@ -152,7 +207,8 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
                 requestId = request.GetProperty("requestId").GetString(),
                 caseId = request.GetProperty("caseId").GetString(),
                 proposedSiteId = request.GetProperty("proposedSiteId").GetString(),
-                target = request.GetProperty("target"), outcome = "approved",
+                target = request.GetProperty("target"),
+                outcome = "approved",
             };
             var wrong = JsonSerializer.SerializeToNode(outcome)!;
             foreach (var field in new[] { "requestId", "caseId", "proposedSiteId" })
@@ -264,6 +320,8 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Secret);
         var response = await client.PostAsync("/api/v1/accreditation-changes/" + target + "/submit", null, TestContext.Current.CancellationToken);
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await client.PostAsync("/api/v1/accreditation-changes/" + target + "/requests/" + Guid.NewGuid() + "/withdraw",
+            null, TestContext.Current.CancellationToken)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         using var read = JsonDocument.Parse(await client.GetStringAsync(Target, TestContext.Current.CancellationToken));
         read.RootElement.GetProperty("activeRequest").ValueKind.Should().Be(JsonValueKind.Null);
     }
@@ -299,6 +357,8 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
         using var client = factory.CreateClient();
         var response = await client.PostAsync(Target + "/submit", null, TestContext.Current.CancellationToken);
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await client.PostAsync(Target + "/requests/" + Guid.NewGuid() + "/withdraw", null,
+            TestContext.Current.CancellationToken)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     private sealed class ReceiptHandler : HttpMessageHandler
@@ -308,17 +368,42 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
         public string State { get; set; } = "submitted";
         public bool WrongCorrelation { get; set; }
         public bool Unavailable { get; set; }
+        public bool WithdrawalUnconfirmed { get; set; }
+        public int WithdrawalAttempts { get; private set; }
         private readonly Dictionary<string, Guid> _cases = [];
         private JsonElement _payload;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/withdraw"))
+            {
+                WithdrawalAttempts++;
+                request.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
+                using var withdrawal = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+                withdrawal.RootElement.GetProperty("requestId").GetString().Should().Be(_payload.GetProperty("operatorRequestId").GetString());
+                withdrawal.RootElement.GetProperty("proposedSiteId").GetString().Should().Be(_payload.GetProperty("proposedSiteId").GetString());
+                withdrawal.RootElement.GetProperty("target").GetRawText().Should().Be(_payload.GetProperty("target").GetRawText());
+                if (State == "assessment-in-progress") return new(HttpStatusCode.Conflict);
+                State = "withdrawn";
+                return new HttpResponseMessage(WithdrawalUnconfirmed ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        id = WrongCorrelation ? Guid.NewGuid().ToString() : request.RequestUri.Segments[^2].TrimEnd('/'),
+                        typeId = "add-overseas-site",
+                        stateId = "withdrawn",
+                        payload = _payload
+                    }),
+                };
+            }
             if (request.Method == HttpMethod.Get)
                 return new HttpResponseMessage(Unavailable ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
                 {
                     Content = JsonContent.Create(new
                     {
                         id = WrongCorrelation ? Guid.NewGuid().ToString() : request.RequestUri!.Segments.Last(),
-                        typeId = "add-overseas-site", payload = _payload, stateId = State,
+                        typeId = "add-overseas-site",
+                        payload = _payload,
+                        stateId = State,
                     }),
                 };
             using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
@@ -332,7 +417,9 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
                 Content = JsonContent.Create(new
                 {
                     id = Interlocked.Increment(ref _attempts) == 1 && !ValidImmediately ? Guid.Empty : caseId,
-                    typeId = "add-overseas-site", applicationReference = "AP26EXAMPLE", payload,
+                    typeId = "add-overseas-site",
+                    applicationReference = "AP26EXAMPLE",
+                    payload,
                 }),
             };
         }

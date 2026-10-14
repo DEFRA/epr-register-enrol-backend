@@ -28,15 +28,7 @@ public sealed class ChangeRequestCaseReader(IHttpClientFactory clients, IOptions
             using var response = await clients.CreateClient("DefaultClient").SendAsync(message, timeout.Token);
             response.EnsureSuccessStatusCode();
             var item = await response.Content.ReadFromJsonAsync<JsonElement>(timeout.Token);
-            var payload = item.GetProperty("payload");
-            var target = payload.GetProperty("target").Deserialize<AccreditationChangeTarget>(JsonOptions);
-            if (item.GetProperty("id").GetString() != request.CaseId
-                || item.GetProperty("typeId").GetString() != request.ChangeType
-                || payload.GetProperty("operatorRequestId").GetString() != request.RequestId
-                || payload.GetProperty("proposedSiteId").GetString() != request.ProposedSiteId
-                || target != request.Target)
-                throw new HttpRequestException("Management case correlation does not match this request.");
-            var state = item.GetProperty("stateId").GetString();
+            var state = ReadCorrelatedState(item, request);
             if (state is "submitted" or "assessment-in-progress" or "approved" or "rejected" or "withdrawn")
                 request.CaseState = state;
         }
@@ -45,5 +37,18 @@ public sealed class ChangeRequestCaseReader(IHttpClientFactory clients, IOptions
         {
             logger.LogWarning(ex, "Current management state unavailable for change request {RequestId}", request.RequestId);
         }
+    }
+
+    internal static string? ReadCorrelatedState(JsonElement item, ChangeRequest request)
+    {
+        var payload = item.GetProperty("payload");
+        var target = payload.GetProperty("target").Deserialize<AccreditationChangeTarget>(JsonOptions);
+        if (item.GetProperty("id").GetString() != request.CaseId
+            || item.GetProperty("typeId").GetString() != request.ChangeType
+            || payload.GetProperty("operatorRequestId").GetString() != request.RequestId
+            || payload.GetProperty("proposedSiteId").GetString() != request.ProposedSiteId
+            || target != request.Target)
+            throw new HttpRequestException("Management case correlation does not match this request.");
+        return item.GetProperty("stateId").GetString();
     }
 }

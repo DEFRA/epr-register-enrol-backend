@@ -18,7 +18,8 @@ public sealed class ChangeRequestPersistence
                 .Ascending(r => r.Target.Year),
             new CreateIndexOptions<ChangeRequest>
             {
-                Name = "one_active_request_per_target", Unique = true,
+                Name = "one_active_request_per_target",
+                Unique = true,
                 PartialFilterExpression = Builders<ChangeRequest>.Filter.Eq(r => r.Active, true),
             }));
     }
@@ -43,7 +44,8 @@ public sealed class ChangeRequestPersistence
             & Builders<ChangeRequest>.Filter.Eq(r => r.Active, true)
             & Builders<ChangeRequest>.Filter.Eq(r => r.Status, "submitted");
         var result = await _requests.UpdateOneAsync(filter, Builders<ChangeRequest>.Update
-            .Set(r => r.Status, outcome.Outcome).Set(r => r.Active, false).Set(r => r.ClosedAt, DateTime.UtcNow),
+            .Set(r => r.Status, outcome.Outcome).Set(r => r.Active, false).Set(r => r.WithdrawalPending, false)
+            .Set(r => r.ClosedAt, DateTime.UtcNow),
             cancellationToken: ct);
         if (result.MatchedCount == 1) return true;
         var existing = await Read(outcome.RequestId, ct);
@@ -51,6 +53,10 @@ public sealed class ChangeRequestPersistence
             && existing.Target == outcome.Target && existing.CaseId == outcome.CaseId
             && existing.ProposedSiteId == outcome.ProposedSiteId;
     }
+
+    public Task SetWithdrawalPending(string requestId, bool pending, CancellationToken ct) =>
+        _requests.UpdateOneAsync(r => r.RequestId == requestId && r.Active && r.Status == "submitted",
+            Builders<ChangeRequest>.Update.Set(r => r.WithdrawalPending, pending), cancellationToken: ct);
 
     public async Task<ChangeRequest> StartOrResume(ChangeRequest request, CancellationToken ct)
     {

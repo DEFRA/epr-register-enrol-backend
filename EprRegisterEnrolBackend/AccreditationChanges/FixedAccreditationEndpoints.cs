@@ -18,6 +18,7 @@ public static class FixedAccreditationEndpoints
         group.MapGet("target", ReadConfiguredTarget);
         group.MapGet("{organisationId}/{registrationId}/{accreditationId}/{materialType}/{year:int}", ReadTarget);
         group.MapPost("{organisationId}/{registrationId}/{accreditationId}/{materialType}/{year:int}/submit", Submit);
+        group.MapPost("{organisationId}/{registrationId}/{accreditationId}/{materialType}/{year:int}/requests/{requestId:guid}/withdraw", Withdraw);
     }
 
     private static Task<IResult> ReadConfiguredTarget(
@@ -92,6 +93,31 @@ public static class FixedAccreditationEndpoints
             ActiveRequest = active,
             History = await persistence.ReadHistory(identity, ct),
         });
+    }
+
+    private static async Task<IResult> Withdraw(string organisationId, string registrationId,
+        string accreditationId, MaterialType materialType, int year, Guid requestId,
+        IOptions<AccreditationChangeSpikeOptions> options, IHostEnvironment environment,
+        IReExApiAdapter reExAdapter, ChangeRequestPersistence persistence,
+        ChangeRequestWithdrawal withdrawal, ChangeRequestCaseReader caseReader, CancellationToken ct)
+    {
+        var result = await ReadTarget(organisationId, registrationId, accreditationId, materialType,
+            year, options, environment, reExAdapter, persistence, caseReader, ct);
+        if (result is not Ok<FixedAccreditationView>) return result;
+        var request = await persistence.Read(requestId.ToString(), ct);
+        if (request is null || request.Target != new AccreditationChangeTarget(
+            organisationId, registrationId, accreditationId, materialType, year)) return Results.NotFound();
+        if (!request.Active) return request.Status == "withdrawn" ? Results.Ok() : Results.Conflict();
+        if (request.CaseId is null || request.Status != "submitted") return Results.Conflict();
+        try
+        {
+            return await withdrawal.Withdraw(request, ct) ? Results.Ok() : Results.Conflict();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException
+            or JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+        {
+            return Results.Problem("Withdrawal is unconfirmed. Retry the same request.", statusCode: 503);
+        }
     }
 
     private static async Task<IResult> Submit(string organisationId, string registrationId,

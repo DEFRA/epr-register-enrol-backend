@@ -132,6 +132,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<ChangeRequestPersistence>();
     builder.Services.AddSingleton<ChangeRequestSubmission>();
     builder.Services.AddSingleton<ChangeRequestCaseReader>();
+    builder.Services.AddSingleton<ChangeRequestWithdrawal>();
     builder.Services.Configure<AccreditationChangeSpikeOptions>(
         builder.Configuration.GetSection("AccreditationChangeSpike"));
     builder.Services.ConfigureHttpJsonOptions(options =>
