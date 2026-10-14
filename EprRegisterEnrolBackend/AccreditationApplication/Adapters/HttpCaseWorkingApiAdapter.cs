@@ -804,75 +804,13 @@ public class HttpCaseWorkingApiAdapter(
         return match.Success ? match.Value.ToUpperInvariant() : null;
     }
 
-    private HttpRequestMessage BuildRequest(
-        HttpMethod method,
-        string url,
-        object? body = null,
-        string? userId = null,
-        string? userName = null,
-        JsonSerializerOptions? contentOptions = null
-    )
-    {
-        var request = new HttpRequestMessage(method, url);
-        if (body is not null)
-        {
-            request.Content = JsonContent.Create(body, options: contentOptions ?? JsonOptions);
-        }
+    private HttpRequestMessage BuildRequest(HttpMethod method, string url, object? body = null,
+        string? userId = null, string? userName = null, JsonSerializerOptions? contentOptions = null) =>
+        CaseWorkingRequestFactory.Create(_config, method, url, body, userId, userName, contentOptions ?? JsonOptions);
 
-        request.Headers.Add("x-cdp-client-id", _config.ClientId);
-
-        if (!string.IsNullOrEmpty(userId))
-            request.Headers.Add("x-cdp-user-id", userId);
-        if (!string.IsNullOrEmpty(userName))
-            request.Headers.Add("x-cdp-user-name", userName);
-
-        if (!string.IsNullOrEmpty(_config.SharedSecret))
-        {
-            var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-            var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
-            var signature = ComputeSignature(
-                _config.SharedSecret,
-                _config.ClientId,
-                userId,
-                userName,
-                timestamp,
-                nonce
-            );
-
-            request.Headers.Add("x-cdp-auth-signature", signature);
-            request.Headers.Add("x-cdp-auth-timestamp", timestamp);
-            request.Headers.Add("x-cdp-auth-nonce", nonce);
-        }
-
-        return request;
-    }
-
-    // Port of ManagementBe's ClientIdAuthenticationHandler.ComputeSignature
-    // (v3 canonical payload — see ManagementBe ADR-0005). Must stay in sync —
-    // any change is a breaking change requiring a coordinated deploy.
-    internal static string ComputeSignature(
-        string sharedSecret,
-        string clientId,
-        string? userId,
-        string? userName,
-        string timestamp,
-        string nonce
-    )
-    {
-        var payload = string.Join(
-            '\n',
-            "v3",
-            clientId,
-            userId ?? string.Empty,
-            userName ?? string.Empty,
-            timestamp,
-            nonce
-        );
-        var keyBytes = Encoding.UTF8.GetBytes(sharedSecret);
-        var payloadBytes = Encoding.UTF8.GetBytes(payload);
-        var mac = HMACSHA256.HashData(keyBytes, payloadBytes);
-        return Convert.ToBase64String(mac);
-    }
+    internal static string ComputeSignature(string sharedSecret, string clientId, string? userId,
+        string? userName, string timestamp, string nonce) =>
+        CaseWorkingRequestFactory.ComputeSignature(sharedSecret, clientId, userId, userName, timestamp, nonce);
 
     #region Internal DTOs
 

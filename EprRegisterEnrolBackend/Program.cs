@@ -129,6 +129,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+    builder.Services.AddSingleton<ChangeRequestPersistence>();
+    builder.Services.AddSingleton<ChangeRequestSubmission>();
     builder.Services.Configure<AccreditationChangeSpikeOptions>(
         builder.Configuration.GetSection("AccreditationChangeSpike"));
     builder.Services.ConfigureHttpJsonOptions(options =>
