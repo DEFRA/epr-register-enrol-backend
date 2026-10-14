@@ -42,4 +42,12 @@ public sealed class FixedAccreditationView
     public required PreparedOverseasSite Proposal { get; init; }
     public ChangeRequest? ActiveRequest { get; init; }
     public List<ChangeRequest> History { get; init; } = [];
+    public IEnumerable<ApprovedSiteAddition> ApprovedAdditions => History
+        .Where(request => request.Status == "approved")
+        .OrderBy(request => request.CreatedAt)
+        .Select(request => new ApprovedSiteAddition(request.ProposedSiteId, request.RequestId,
+            request.Proposal.SiteName, request.Proposal.SiteAddress, request.Proposal.Country));
 }
+
+public sealed record ApprovedSiteAddition(string SiteId, string RequestId, string SiteName,
+    string SiteAddress, string Country);

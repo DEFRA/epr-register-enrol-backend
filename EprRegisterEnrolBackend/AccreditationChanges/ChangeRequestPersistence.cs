@@ -34,7 +34,7 @@ public sealed class ChangeRequestPersistence
     public Task<ChangeRequest?> Read(string requestId, CancellationToken ct) =>
         _requests.Find(r => r.RequestId == requestId).FirstOrDefaultAsync(ct)!;
 
-    public async Task<bool> Refuse(ChangeRequestOutcome outcome, CancellationToken ct)
+    public async Task<bool> RecordDecision(ChangeRequestOutcome outcome, CancellationToken ct)
     {
         var filter = Builders<ChangeRequest>.Filter.Eq(r => r.RequestId, outcome.RequestId)
             & TargetFilter(outcome.Target)
@@ -43,11 +43,11 @@ public sealed class ChangeRequestPersistence
             & Builders<ChangeRequest>.Filter.Eq(r => r.Active, true)
             & Builders<ChangeRequest>.Filter.Eq(r => r.Status, "submitted");
         var result = await _requests.UpdateOneAsync(filter, Builders<ChangeRequest>.Update
-            .Set(r => r.Status, "rejected").Set(r => r.Active, false).Set(r => r.ClosedAt, DateTime.UtcNow),
+            .Set(r => r.Status, outcome.Outcome).Set(r => r.Active, false).Set(r => r.ClosedAt, DateTime.UtcNow),
             cancellationToken: ct);
         if (result.MatchedCount == 1) return true;
         var existing = await Read(outcome.RequestId, ct);
-        return existing is { Active: false, Status: "rejected" }
+        return existing is { Active: false } && existing.Status == outcome.Outcome
             && existing.Target == outcome.Target && existing.CaseId == outcome.CaseId
             && existing.ProposedSiteId == outcome.ProposedSiteId;
     }

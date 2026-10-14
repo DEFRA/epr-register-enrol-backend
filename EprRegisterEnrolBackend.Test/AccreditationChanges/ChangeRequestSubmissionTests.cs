@@ -91,7 +91,7 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
         wrongTarget["target"]!["accreditationId"] = "unrelated";
         (await Callback(client, wrongTarget)).StatusCode.Should().Be(HttpStatusCode.Conflict);
         var unsupported = wrong.DeepClone();
-        unsupported["outcome"] = "approved";
+        unsupported["outcome"] = "withdrawn";
         (await Callback(client, unsupported)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
         using var before = JsonDocument.Parse(await client.GetStringAsync(Target, TestContext.Current.CancellationToken));
         before.RootElement.GetProperty("activeRequest").GetProperty("requestId").GetString().Should().Be(body.requestId);
@@ -120,6 +120,96 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
         refreshed.RootElement.GetProperty("history").GetArrayLength().Should().Be(1);
     }
 
+    [Fact]
+    public async Task SeparateApprovals_AddDistinctSitesWithIdenticalDetailsAndReplayCannotChangeEarlierRequests()
+    {
+        using var parent = Factory();
+        var handler = new ReceiptHandler { ValidImmediately = true };
+        using var factory = parent.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.AddHttpClient("DefaultClient").ConfigurePrimaryHttpMessageHandler(() => handler)));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Secret);
+        var baseline = await ReadSummary(client);
+        var applications = await client.GetStringAsync("/api/v1/accreditation-applications/50006", TestContext.Current.CancellationToken);
+        var approved = new List<JsonElement>();
+        var outcomes = new List<object>();
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var submission = await client.PostAsync(Target + "/submit", null, TestContext.Current.CancellationToken);
+            submission.StatusCode.Should().Be(HttpStatusCode.OK);
+            var request = await submission.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+            request.GetProperty("baselineSites").GetRawText().Should().Be(baseline.GetProperty("overseasSites").GetRawText());
+            foreach (var earlier in approved)
+            {
+                foreach (var field in new[] { "requestId", "caseId", "proposedSiteId" })
+                    request.GetProperty(field).GetString().Should().NotBe(earlier.GetProperty(field).GetString());
+                request.GetProperty("proposal").GetRawText().Should().Be(earlier.GetProperty("proposal").GetRawText());
+            }
+            var pending = await ReadSummary(client);
+            pending.GetProperty("approvedAdditions").GetArrayLength().Should().Be(attempt);
+            var outcome = new
+            {
+                requestId = request.GetProperty("requestId").GetString(),
+                caseId = request.GetProperty("caseId").GetString(),
+                proposedSiteId = request.GetProperty("proposedSiteId").GetString(),
+                target = request.GetProperty("target"), outcome = "approved",
+            };
+            var wrong = JsonSerializer.SerializeToNode(outcome)!;
+            foreach (var field in new[] { "requestId", "caseId", "proposedSiteId" })
+            {
+                var mismatch = wrong.DeepClone();
+                mismatch[field] = Guid.NewGuid().ToString();
+                (await Callback(client, mismatch)).StatusCode.Should().BeOneOf(HttpStatusCode.NotFound, HttpStatusCode.Conflict);
+            }
+            var wrongTarget = wrong.DeepClone();
+            wrongTarget["target"]!["year"] = 2027;
+            (await Callback(client, wrongTarget)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+            foreach (var old in outcomes)
+                (await Callback(client, old)).StatusCode.Should().Be(HttpStatusCode.OK);
+            (await ReadSummary(client)).GetProperty("activeRequest").GetProperty("requestId").GetString().Should().Be(outcome.requestId);
+            var deliveries = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Callback(client, outcome)));
+            deliveries.Should().OnlyContain(response => response.StatusCode == HttpStatusCode.OK);
+            var closed = await ReadSummary(client);
+            closed.GetProperty("activeRequest").ValueKind.Should().Be(JsonValueKind.Null);
+            closed.GetProperty("status").GetString().Should().Be("Granted");
+            closed.GetProperty("overseasSites").GetRawText().Should().Be(baseline.GetProperty("overseasSites").GetRawText());
+            closed.GetProperty("approvedAdditions").GetArrayLength().Should().Be(attempt + 1);
+            var history = closed.GetProperty("history").EnumerateArray().Single(entry => entry.GetProperty("requestId").GetString() == outcome.requestId);
+            history.GetProperty("status").GetString().Should().Be("approved");
+            history.GetProperty("active").GetBoolean().Should().BeFalse();
+            history.GetProperty("closedAt").ValueKind.Should().Be(JsonValueKind.String);
+            foreach (var earlier in approved)
+                closed.GetProperty("history").EnumerateArray().Single(entry => entry.GetProperty("requestId").GetString() == earlier.GetProperty("requestId").GetString())
+                    .GetRawText().Should().Be(earlier.GetRawText());
+            approved.Add(history.Clone());
+            outcomes.Add(outcome);
+            var conflict = wrong.DeepClone();
+            conflict["outcome"] = "rejected";
+            (await Callback(client, conflict)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        }
+        var beforeReplay = await ReadSummary(client);
+        foreach (var outcome in outcomes)
+            (await Callback(client, outcome)).StatusCode.Should().Be(HttpStatusCode.OK);
+        var final = await ReadSummary(client);
+        final.GetRawText().Should().Be(beforeReplay.GetRawText());
+        var additions = final.GetProperty("approvedAdditions").EnumerateArray().ToArray();
+        additions.Select(site => site.GetProperty("siteId").GetString()).Should().BeEquivalentTo(approved.Select(request => request.GetProperty("proposedSiteId").GetString()));
+        foreach (var site in additions)
+        {
+            site.GetProperty("siteName").GetString().Should().Be("Spike Glass Recycling");
+            site.GetProperty("siteAddress").GetString().Should().Be("25 Example Road, Hamburg");
+            site.GetProperty("country").GetString().Should().Be("Germany");
+        }
+        (await client.GetStringAsync("/api/v1/accreditation-applications/50006", TestContext.Current.CancellationToken)).Should().Be(applications);
+    }
+
+    private static async Task<JsonElement> ReadSummary(HttpClient client)
+    {
+        using var response = await client.GetAsync(Target, TestContext.Current.CancellationToken);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        return await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+    }
+
     private static Task<HttpResponseMessage> Callback(HttpClient client, object body)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
@@ -143,7 +233,7 @@ public class ChangeRequestSubmissionTests(MongoIntegrationFixture fixture)
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Secret);
         (await client.PostAsync(Target + "/submit", null, TestContext.Current.CancellationToken)).StatusCode.Should().Be(HttpStatusCode.OK);
-        foreach (var state in new[] { "assessment-in-progress", "rejected" })
+        foreach (var state in new[] { "assessment-in-progress", "rejected", "approved" })
         {
             handler.State = state;
             using var read = JsonDocument.Parse(await client.GetStringAsync(Target, TestContext.Current.CancellationToken));

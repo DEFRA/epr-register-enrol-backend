@@ -14,12 +14,12 @@ public static class ChangeRequestOutcomeEndpoints
             IHostEnvironment environment, CancellationToken ct) =>
         {
             if (!environment.IsDevelopment() || !options.Value.Enabled) return Results.NotFound();
-            if (outcome.Outcome != "rejected" || outcome.Target is null
+            if (outcome.Outcome is not ("rejected" or "approved") || outcome.Target is null
                 || !Guid.TryParse(outcome.RequestId, out _) || !Guid.TryParse(outcome.CaseId, out _)
                 || !Guid.TryParse(outcome.ProposedSiteId, out _))
                 return Results.BadRequest();
             if (await persistence.Read(outcome.RequestId, ct) is null) return Results.NotFound();
-            return await persistence.Refuse(outcome, ct) ? Results.Ok() : Results.Conflict();
+            return await persistence.RecordDecision(outcome, ct) ? Results.Ok() : Results.Conflict();
         }).RequireAuthorization(policy => policy
             .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName).RequireAuthenticatedUser());
 }
