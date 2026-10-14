@@ -4,6 +4,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
@@ -128,6 +129,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+    builder.Services.Configure<AccreditationChangeSpikeOptions>(
+        builder.Configuration.GetSection("AccreditationChangeSpike"));
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
     );
@@ -382,6 +385,7 @@ static WebApplication SetupApplication(WebApplication app)
 
     // ReEx-backed organisation endpoints (live ReEx lookups, e.g. Defra org link)
     app.UseReExOrganisationEndpoints();
+    app.UseFixedAccreditationEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
 
