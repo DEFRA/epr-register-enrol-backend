@@ -1,0 +1,1063 @@
+openapi: 3.0.3
+info:
+  title: Registration & Accreditation API (read)
+  version: 0.1.0-draft
+  description: |
+    DRAFT read-only API over the Register & Enrol registration/accreditation data, shaped to
+    closely follow the documents held in `epr-register-enrol-backend`:
+
+    * Organisation / registration / accreditation resources follow `OrganisationModel`
+      (embedded `registrations[]` and `accreditations[]`).
+    * Application, overseas-site and interim-site resources follow `AccreditationApplicationModel`
+      (collection of accreditation applications).
+
+    **Identifiers are business references, never Mongo ObjectIds.** `organisationNumber` is the
+    numeric ReEx org number (`OrgId`, e.g. 500500). `registrationNumber`, `accreditationReference`,
+    `applicationReference` and `orsId` are the human-visible reference strings. Mongo `_id`s,
+    `OrganisationId` (ReEx's internal ObjectId, see RA-503), `Version`, the `Versions[]` snapshots
+    and `PreviousSites` undo stacks are deliberately not exposed.
+
+    **Relationships.** Sub-resources are referenced by id, not inlined, exactly as the documents
+    store them: a registration carries `accreditationReference` and `overseasSites: ["001", ...]`.
+    The one exception is `GET /organisations/{organisationNumber}`, which returns the whole
+    organisation including its full registrations and accreditations.
+
+    Paths are as proposed in the API Schema discussion (Adam Slack). Assumptions are marked
+    `ASSUMPTION` and listed at the end of this description:
+
+    * ASSUMPTION: no authentication scheme is defined yet.
+    * ASSUMPTION: the `{accreditationYearOrReference}` segment accepts either a 4-digit year or the
+      12-character accreditation reference (see the parameter).
+    * ASSUMPTION: registered overseas sites (under a registration) and accredited overseas sites
+      (under an accreditation) share the `OverseasSite` shape; the accredited variant adds the
+      ReEx ORS-A approval fields.
+servers:
+  - url: /
+tags:
+  - name: Organisations
+  - name: Registrations
+  - name: Registered overseas sites
+  - name: Accreditations
+  - name: Accreditation applications
+  - name: Accredited overseas sites
+  - name: Search
+
+paths:
+  /organisations:
+    get:
+      tags: [Organisations]
+      operationId: listOrganisations
+      summary: List organisations
+      parameters:
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Material'
+        - $ref: '#/components/parameters/Year'
+      responses:
+        '200':
+          description: A page of organisation summaries.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/OrganisationSummary' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /organisations/{organisationNumber}:
+    get:
+      tags: [Organisations]
+      operationId: getOrganisation
+      summary: Get an organisation with all its registrations and accreditations
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+      responses:
+        '200':
+          description: The full organisation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organisation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations:
+    get:
+      tags: [Registrations]
+      operationId: listOrganisationRegistrations
+      summary: List an organisation's registrations
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Material'
+        - $ref: '#/components/parameters/Year'
+      responses:
+        '200': { $ref: '#/components/responses/RegistrationPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}:
+    get:
+      tags: [Registrations]
+      operationId: getRegistration
+      summary: Get a registration
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+      responses:
+        '200':
+          description: The registration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Registration' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/overseas-sites:
+    get:
+      tags: [Registered overseas sites]
+      operationId: listRegisteredOverseasSites
+      summary: List the overseas sites registered on a registration
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of overseas sites.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/OverseasSite' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/overseas-sites/{orsId}:
+    get:
+      tags: [Registered overseas sites]
+      operationId: getRegisteredOverseasSite
+      summary: Get a registered overseas site
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/OrsId'
+      responses:
+        '200':
+          description: The overseas site.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OverseasSite' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/overseas-sites/{orsId}/interim-sites:
+    get:
+      tags: [Registered overseas sites]
+      operationId: listRegisteredInterimSites
+      summary: List the interim sites of a registered overseas site
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/OrsId'
+        - $ref: '#/components/parameters/IncludeWithdrawn'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { $ref: '#/components/responses/InterimSitePage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/overseas-sites/{orsId}/interim-sites/{interimSiteId}:
+    get:
+      tags: [Registered overseas sites]
+      operationId: getRegisteredInterimSite
+      summary: Get an interim site of a registered overseas site
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/OrsId'
+        - $ref: '#/components/parameters/InterimSiteId'
+      responses:
+        '200':
+          description: The interim site (withdrawn sites are returned, with `removedAt` set).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InterimSite' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations:
+    get:
+      tags: [Accreditations]
+      operationId: listRegistrationAccreditations
+      summary: List the accreditations of a registration
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Material'
+        - $ref: '#/components/parameters/Year'
+      responses:
+        '200': { $ref: '#/components/responses/AccreditationPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{accreditationYearOrReference}:
+    get:
+      tags: [Accreditations]
+      operationId: getAccreditation
+      summary: Get an accreditation by year or by accreditation reference
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/AccreditationYearOrReference'
+      responses:
+        '200':
+          description: The accreditation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Accreditation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{accreditationYearOrReference}/applications:
+    get:
+      tags: [Accreditation applications]
+      operationId: listAccreditationApplications
+      summary: List the applications for an accreditation
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/AccreditationYearOrReference'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of applications.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AccreditationApplication' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{accreditationYearOrReference}/applications/{applicationReference}:
+    get:
+      tags: [Accreditation applications]
+      operationId: getAccreditationApplication
+      summary: Get an accreditation application by its application reference
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/AccreditationYearOrReference'
+        - $ref: '#/components/parameters/ApplicationReference'
+      responses:
+        '200':
+          description: The application.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccreditationApplication' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{accreditationYearOrReference}/overseas-sites:
+    get:
+      tags: [Accredited overseas sites]
+      operationId: listAccreditedOverseasSites
+      summary: List the overseas sites on an accreditation
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/AccreditationYearOrReference'
+        - name: selected
+          in: query
+          description: Only sites that are (true) or are not (false) approved/included in the accreditation.
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of accredited overseas sites.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AccreditedOverseasSite' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{accreditationYearOrReference}/overseas-sites/{orsId}:
+    get:
+      tags: [Accredited overseas sites]
+      operationId: getAccreditedOverseasSite
+      summary: Get an accredited overseas site
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/AccreditationYearOrReference'
+        - $ref: '#/components/parameters/OrsId'
+      responses:
+        '200':
+          description: The accredited overseas site.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccreditedOverseasSite' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{accreditationYearOrReference}/overseas-sites/{orsId}/interim-sites:
+    get:
+      tags: [Accredited overseas sites]
+      operationId: listAccreditedInterimSites
+      summary: List the interim sites of an accredited overseas site
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/AccreditationYearOrReference'
+        - $ref: '#/components/parameters/OrsId'
+        - $ref: '#/components/parameters/IncludeWithdrawn'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { $ref: '#/components/responses/InterimSitePage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{accreditationYearOrReference}/overseas-sites/{orsId}/interim-sites/{interimSiteId}:
+    get:
+      tags: [Accredited overseas sites]
+      operationId: getAccreditedInterimSite
+      summary: Get an interim site of an accredited overseas site
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+        - $ref: '#/components/parameters/AccreditationYearOrReference'
+        - $ref: '#/components/parameters/OrsId'
+        - $ref: '#/components/parameters/InterimSiteId'
+      responses:
+        '200':
+          description: The interim site (withdrawn sites are returned, with `removedAt` set).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InterimSite' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /registrations:
+    get:
+      tags: [Search]
+      operationId: searchRegistrations
+      summary: Search registrations across all organisations
+      parameters:
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Material'
+        - $ref: '#/components/parameters/Year'
+      responses:
+        '200': { $ref: '#/components/responses/RegistrationPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /accreditations:
+    get:
+      tags: [Search]
+      operationId: searchAccreditations
+      summary: Search accreditations across all organisations
+      parameters:
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Material'
+        - $ref: '#/components/parameters/Year'
+      responses:
+        '200': { $ref: '#/components/responses/AccreditationPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+components:
+  parameters:
+    OrganisationNumber:
+      name: organisationNumber
+      in: path
+      required: true
+      description: ReEx numeric organisation number (`OrgId`), not a Mongo/ReEx ObjectId.
+      schema: { type: integer, format: int32, minimum: 1 }
+      example: 500500
+    RegistrationNumber:
+      name: registrationNumber
+      in: path
+      required: true
+      description: Registration reference (`WasteRegistrationNumber` / `RegistrationReference`).
+      schema: { type: string }
+    AccreditationYearOrReference:
+      name: accreditationYearOrReference
+      in: path
+      required: true
+      description: |
+        Either the 4-digit accreditation year (e.g. `2026`) or the 12-character accreditation
+        reference. The two forms cannot collide because of their different lengths.
+        ASSUMPTION: this resolves to a single accreditation because a registration covers one
+        material, so it has at most one accreditation per year.
+      schema:
+        type: string
+        pattern: '^(\d{4}|[A-Za-z0-9/-]{12})$'
+      examples:
+        year: { value: '2026' }
+    ApplicationReference:
+      name: applicationReference
+      in: path
+      required: true
+      description: The application reference (`ApplicationReference`).
+      schema: { type: string }
+    OrsId:
+      name: orsId
+      in: path
+      required: true
+      description: Overseas reconditioning/recycling site id (`OrsId`), e.g. `001`.
+      schema: { type: string }
+      example: '001'
+    InterimSiteId:
+      name: interimSiteId
+      in: path
+      required: true
+      description: Interim site id (`InterimSiteModel.SiteId`), unique within its parent overseas site.
+      schema: { type: integer, format: int32 }
+    PageNumber:
+      name: pageNumber
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Material:
+      name: material
+      in: query
+      schema: { $ref: '#/components/schemas/MaterialType' }
+    Year:
+      name: year
+      in: query
+      description: Accreditation year.
+      schema: { type: integer, format: int32, minimum: 2000 }
+    IncludeWithdrawn:
+      name: includeWithdrawn
+      in: query
+      description: Include interim sites withdrawn via `removedAt` (they are retained for reporting).
+      schema: { type: boolean, default: false }
+
+  responses:
+    BadRequest:
+      description: Invalid query or path parameter.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: No such resource.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    RegistrationPage:
+      description: A page of registrations.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Registration' }
+    AccreditationPage:
+      description: A page of accreditations.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Accreditation' }
+    InterimSitePage:
+      description: A page of interim sites.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/InterimSite' }
+
+  schemas:
+    # ---- shared ---------------------------------------------------------------------------
+    PageMeta:
+      type: object
+      required: [pageNumber, limit, totalItems]
+      properties:
+        pageNumber: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1 }
+        totalItems: { type: integer, minimum: 0 }
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+    MaterialType:
+      type: string
+      description: Mirrors the `MaterialType` enum.
+      enum: [Steel, Wood, Aluminium, Fibre, Glass, Paper, Plastic]
+    GlassRecyclingProcess:
+      type: string
+      description: Mirrors `GlassRecyclingProcess` (serialised member names).
+      enum: [glass_re_melt, glass_other]
+    Nation:
+      type: string
+      enum: [England, Scotland, Wales, NorthernIreland]
+    Address:
+      type: object
+      description: '`SiteAddressModel`, `NoticeAddressModel` and `RegisteredAddressModel` (all optional here).'
+      properties:
+        line1: { type: string, nullable: true }
+        line2: { type: string, nullable: true }
+        town: { type: string, nullable: true }
+        county: { type: string, nullable: true }
+        country: { type: string, nullable: true }
+        postcode: { type: string, nullable: true }
+        region: { type: string, nullable: true }
+    RegisteredAddress:
+      description: '`RegisteredAddressModel`: an `Address` where line1, town and postcode are mandatory.'
+      allOf:
+        - $ref: '#/components/schemas/Address'
+        - type: object
+          required: [line1, town, postcode]
+    ContactDetails:
+      type: object
+      description: '`ContactDetailsModel`, `PersonModel`, `SubmittedByModel`, `SubmitterContactDetailsModel`, `QuerySubmitterContactDetails` and `PrnsAuthoriser`, which all share these fields. Job title is `title`; where a use makes fields mandatory, that use says so.'
+      properties:
+        fullName: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+        role: { type: string, nullable: true }
+        title: { type: string, nullable: true }
+
+    # ---- organisation ---------------------------------------------------------------------
+    CompanyDetails:
+      type: object
+      properties:
+        name: { type: string, nullable: true }
+        tradingName: { type: string, nullable: true }
+        registrationNumber: { type: string, nullable: true }
+        companiesHouseNumber: { type: string, nullable: true }
+        registeredAddress:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/RegisteredAddress' }]
+          nullable: true
+    Partnership:
+      type: object
+      properties:
+        type: { type: string, nullable: true }
+        partners:
+          type: array
+          nullable: true
+          items:
+            type: object
+            required: [name, type]
+            properties:
+              name: { type: string }
+              type: { type: string }
+    OrganisationSummary:
+      type: object
+      description: '`OrganisationSummaryModel`.'
+      required: [organisationNumber]
+      properties:
+        organisationNumber: { type: integer, format: int32, description: '`OrgId`.' }
+        wasteProcessingTypes: { type: array, nullable: true, items: { type: string } }
+        reprocessingNations: { type: array, nullable: true, items: { type: string } }
+        businessType: { type: string, nullable: true }
+        companyDetails:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/CompanyDetails' }]
+          nullable: true
+        partnership:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/Partnership' }]
+          nullable: true
+        contactDetails:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/ContactDetails' }]
+          nullable: true
+        submittedToRegulator: { type: string, nullable: true }
+    Organisation:
+      description: '`OrganisationModel`: the summary plus users and all registrations and accreditations.'
+      allOf:
+        - $ref: '#/components/schemas/OrganisationSummary'
+        - type: object
+          properties:
+            schemaVersion: { type: integer, format: int32 }
+            version: { type: integer, format: int32 }
+            submitterContactDetails:
+              type: object
+              allOf: [{ $ref: '#/components/schemas/ContactDetails' }]
+              nullable: true
+            users:
+              type: array
+              nullable: true
+              items: { $ref: '#/components/schemas/ContactDetails' }
+            registrations:
+              type: array
+              nullable: true
+              items: { $ref: '#/components/schemas/Registration' }
+            accreditations:
+              type: array
+              nullable: true
+              items: { $ref: '#/components/schemas/Accreditation' }
+
+    # ---- registration ---------------------------------------------------------------------
+    WasteManagementPermit:
+      type: object
+      properties:
+        type: { type: string, nullable: true }
+        permitNumber: { type: string, nullable: true }
+        authorisedWeight: { type: string, nullable: true }
+        permitWindow: { type: string, nullable: true }
+        exemptions:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              reference: { type: string, nullable: true }
+              exemptionCode: { type: string, nullable: true }
+    YearlyMetrics:
+      type: object
+      properties:
+        year: { type: string, nullable: true }
+        metric: { type: string, nullable: true }
+        input:
+          type: object
+          nullable: true
+          properties:
+            type: { type: string, nullable: true }
+            ukPackagingWaste: { type: integer, nullable: true }
+            nonUkPackagingWaste: { type: integer, nullable: true }
+            nonPackagingWaste: { type: integer, nullable: true }
+        output:
+          type: object
+          nullable: true
+          properties:
+            type: { type: string, nullable: true }
+            sentToAnotherSite: { type: integer, nullable: true }
+            contaminants: { type: integer, nullable: true }
+            processLoss: { type: integer, nullable: true }
+    Registration:
+      type: object
+      description: |
+        `RegistrationModel`. Related resources are carried as references exactly as stored:
+        `accreditationReference` (the document's `AccreditationId` ObjectId, replaced by its
+        business reference) and `overseasSites` (ORS ids such as `001`).
+      required: [registrationNumber, status, material, wasteProcessingType]
+      properties:
+        registrationNumber: { type: string, description: '`WasteRegistrationNumber` / `RegistrationReference`.' }
+        siteId: { type: string, nullable: true }
+        formSubmissionTime: { type: string, nullable: true }
+        status: { type: string }
+        material: { type: string }
+        glassRecyclingProcess: { type: string, nullable: true }
+        wasteProcessingType: { type: string }
+        accreditationReference: { type: string, nullable: true }
+        gridReference: { type: string, nullable: true }
+        suppliers: { type: string, nullable: true }
+        plantEquipmentDetails: { type: string, nullable: true }
+        siteAddress:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/Address' }]
+          nullable: true
+        noticeAddress:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/Address' }]
+          nullable: true
+        recyclingProcess: { type: array, nullable: true, items: { type: string } }
+        exportPorts: { type: array, nullable: true, items: { type: string } }
+        wasteManagementPermits:
+          type: array
+          nullable: true
+          items: { $ref: '#/components/schemas/WasteManagementPermit' }
+        approvedPersons:
+          type: array
+          nullable: true
+          items: { $ref: '#/components/schemas/ContactDetails' }
+        yearlyMetrics:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/YearlyMetrics' }]
+          nullable: true
+        contactDetails:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/ContactDetails' }]
+          nullable: true
+        submitterContactDetails:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/ContactDetails' }]
+          nullable: true
+        samplingInspectionPlan: { type: array, nullable: true, items: { type: string } }
+        overseasSites:
+          type: array
+          nullable: true
+          description: ORS ids (`orsId`) registered on this registration.
+          items: { type: string }
+          example: ['001', '002']
+
+    # ---- accreditation --------------------------------------------------------------------
+    PrnIssuance:
+      type: object
+      properties:
+        plannedIssuance: { type: string, nullable: true }
+        signatories:
+          type: array
+          nullable: true
+          items: { $ref: '#/components/schemas/ContactDetails' }
+        prnIncomeBusinessPlan:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              description: { type: string, nullable: true }
+              detailedDescription: { type: string, nullable: true }
+              percentSpent: { type: integer, nullable: true }
+              percentIncomeSpent: { type: integer, nullable: true }
+              usageDescription: { type: string, nullable: true }
+              detailedExplanation: { type: string, nullable: true }
+    Accreditation:
+      type: object
+      description: |
+        `AccreditationModel` (embedded in the organisation), with `accreditationReference` and
+        `year` taken from the matching application document (`AccreditationReference`, `Year`) and
+        `registrationNumber` as the parent link. The embedded ObjectId `id` is not exposed.
+      required: [accreditationReference, registrationNumber, year, status, material, wasteProcessingType]
+      properties:
+        accreditationReference: { type: string }
+        registrationNumber: { type: string }
+        year: { type: integer, format: int32 }
+        formSubmissionTime: { type: string, nullable: true }
+        status: { type: string }
+        material: { type: string }
+        glassRecyclingProcess: { type: string, nullable: true }
+        wasteProcessingType: { type: string }
+        siteAddress:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/Address' }]
+          nullable: true
+        recyclingProcess: { type: array, nullable: true, items: { type: string } }
+        prnIssuance:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/PrnIssuance' }]
+          nullable: true
+        businessPlan:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              description: { type: string, nullable: true }
+              detailedDescription: { type: string, nullable: true }
+              percentSpent: { type: integer, nullable: true }
+        contactDetails:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/ContactDetails' }]
+          nullable: true
+        submitterContactDetails:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/ContactDetails' }]
+          nullable: true
+        samplingInspectionPlan: { type: array, nullable: true, items: { type: string } }
+        overseasSites:
+          type: array
+          nullable: true
+          description: ORS ids (`orsId`) on this accreditation.
+          items: { type: string }
+
+    # ---- accreditation application --------------------------------------------------------
+    ApplicationStatus:
+      type: string
+      enum: [Saved, Started, Submitted, DulyMade, Queried, Updated, AwaitingDecision, Approved, Rejected, Withdrawn]
+    SectionStatus:
+      type: string
+      enum: [NotStarted, InProgress, Completed, Submitted, Queried]
+    UploadedFile:
+      type: object
+      description: '`AccreditationApplicationFile`. S3 coordinates are internal and not exposed.'
+      required: [fileId, filename, contentType, uploadedAt, uploadedByUserId, scanStatus]
+      properties:
+        fileId: { type: string }
+        filename: { type: string }
+        contentType: { type: string }
+        uploadedAt: { type: string, format: date-time }
+        uploadedByUserId: { type: string }
+        scanStatus: { type: string, enum: [Pending, Clean, Infected] }
+        documentType: { type: string, enum: [SamplingPlan, SupportingEvidence], nullable: true }
+    AccreditationApplication:
+      type: object
+      description: |
+        `AccreditationApplicationModel` as stored in Mongo. Not exposed: `_id` (the public key is
+        `applicationReference`), `organisationId`, `version`, `caseManagementStatusUpdatedAt`,
+        every `Versions[]` snapshot list.
+      required: [year, materialType, applicationStatus, isExporter]
+      properties:
+        applicationReference: { type: string, nullable: true }
+        organisationNumber: { type: integer, format: int32, nullable: true, description: '`OrgId`.' }
+        organisationName: { type: string, nullable: true }
+        year: { type: integer, format: int32 }
+        registrationReference: { type: string, nullable: true }
+        previousRegistrationNumbers: { type: array, items: { type: string } }
+        accreditationReference: { type: string, nullable: true }
+        previousAccreditationNumbers: { type: array, items: { type: string } }
+        isExporter: { type: boolean }
+        nation: { type: string, allOf: [{ $ref: '#/components/schemas/Nation' }], nullable: true }
+        siteAddress: { type: string, nullable: true }
+        companyRegisterAddressPostcode: { type: string, nullable: true }
+        companyRegisteredAddress: { type: string, nullable: true }
+        isUkRegisteredAddress: { type: boolean }
+        companiesHouseNumber: { type: string, nullable: true }
+        permitNumbers: { type: array, items: { type: string } }
+        wasteProcessingType: { type: string, nullable: true }
+        materialType: { $ref: '#/components/schemas/MaterialType' }
+        glassRecyclingProcess:
+          type: string
+          allOf: [{ $ref: '#/components/schemas/GlassRecyclingProcess' }]
+          nullable: true
+        applicationStatus: { $ref: '#/components/schemas/ApplicationStatus' }
+        sourceReExAccreditationId: { type: string, nullable: true }
+        sourceYear: { type: integer, format: int32, nullable: true }
+        paymentReference: { type: string, nullable: true }
+        caseManagementReference: { type: string, nullable: true }
+        caseManagementWorkItemId: { type: string, format: uuid, nullable: true }
+        submittedBy:
+          type: object
+          nullable: true
+          description: '`SubmittedByModel`: a `ContactDetails` where fullName and title (job title) are mandatory.'
+          allOf:
+            - $ref: '#/components/schemas/ContactDetails'
+            - type: object
+              required: [fullName, title]
+        submitterContactDetails:
+          allOf: [{ $ref: '#/components/schemas/ContactDetails' }]
+          type: object
+          nullable: true
+        withdrawalReason: { type: string, nullable: true }
+        dateSent: { type: string, format: date-time, nullable: true }
+        dateLastEdited: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        notificationStatus:
+          type: string
+          nullable: true
+          description: Derived at read time from the Case Management work item audit log; never persisted.
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Derived at read time from the Case Management work item SLA; never persisted.
+        prns:
+          type: object
+          properties:
+            plannedTonnageBand:
+              type: string
+              enum: [UpTo500, UpTo5000, UpTo10000, Over10000]
+              nullable: true
+            authorisers:
+              type: array
+              items:
+                description: '`PrnsAuthoriser`: a `ContactDetails` where fullName and email are mandatory, plus `isNew`.'
+                allOf:
+                  - $ref: '#/components/schemas/ContactDetails'
+                  - type: object
+                    required: [fullName, email]
+                    properties:
+                      isNew: { type: boolean }
+            sectionStatus: { $ref: '#/components/schemas/SectionStatus' }
+        businessPlan:
+          type: object
+          description: Percent and detail for each of the seven spend categories.
+          properties:
+            newInfrastructurePercent: { type: integer, nullable: true }
+            priceSupportPercent: { type: integer, nullable: true }
+            businessCollectionsPercent: { type: integer, nullable: true }
+            communicationsPercent: { type: integer, nullable: true }
+            newMarketsPercent: { type: integer, nullable: true }
+            newUsesPercent: { type: integer, nullable: true }
+            otherPercent: { type: integer, nullable: true }
+            newInfrastructureDetail: { type: string, nullable: true }
+            priceSupportDetail: { type: string, nullable: true }
+            businessCollectionsDetail: { type: string, nullable: true }
+            communicationsDetail: { type: string, nullable: true }
+            newMarketsDetail: { type: string, nullable: true }
+            newUsesDetail: { type: string, nullable: true }
+            otherDetail: { type: string, nullable: true }
+            sectionStatus: { $ref: '#/components/schemas/SectionStatus' }
+        samplingPlan:
+          type: object
+          properties:
+            files: { type: array, items: { $ref: '#/components/schemas/UploadedFile' } }
+            sectionStatus: { $ref: '#/components/schemas/SectionStatus' }
+        overseasSites:
+          type: object
+          nullable: true
+          description: The application's overseas-sites section. Use the overseas-sites sub-resource for the sites themselves.
+          properties:
+            sectionStatus: { $ref: '#/components/schemas/SectionStatus' }
+        besEvidence:
+          type: object
+          nullable: true
+          properties:
+            sectionStatus: { $ref: '#/components/schemas/SectionStatus' }
+        query:
+          type: object
+          nullable: true
+          properties:
+            queryNote: { type: string, nullable: true }
+            queriedSectionKeys: { type: array, items: { type: string } }
+            querySubmissions:
+              type: array
+              items:
+                type: object
+                required: [querySubmissionTime, sectionKeys, querySubmitterContactDetails]
+                properties:
+                  querySubmissionTime: { type: string, format: date-time }
+                  sectionKeys: { type: array, items: { type: string } }
+                  querySubmitterContactDetails:
+                    description: A `ContactDetails` where fullName, email and role are mandatory.
+                    allOf:
+                      - $ref: '#/components/schemas/ContactDetails'
+                      - type: object
+                        required: [fullName, email, role]
+
+    # ---- overseas sites -------------------------------------------------------------------
+    InterimSite:
+      type: object
+      description: |
+        `InterimSiteModel`. `removedAt` set means withdrawn; withdrawn sites are retained for
+        reporting and only listed with `includeWithdrawn=true`.
+        Address and contact are normalised: `addressLine1/2`, `townOrCity`, `stateOrRegion`,
+        `country` and `postcode` become `address` (`line1`, `line2`, `town`, `region`, `country`,
+        `postcode`); `contactName/Email/Phone` become `contact` (`fullName`, `email`, `phone`).
+      required: [siteId, siteNumber, siteName, address, contact]
+      properties:
+        siteId: { type: integer, format: int32 }
+        siteNumber: { type: string }
+        siteName: { type: string }
+        address:
+          description: line1, town and country are mandatory.
+          allOf:
+            - $ref: '#/components/schemas/Address'
+            - type: object
+              required: [line1, town, country]
+        contact:
+          description: fullName, email and phone are mandatory.
+          allOf:
+            - $ref: '#/components/schemas/ContactDetails'
+            - type: object
+              required: [fullName, email, phone]
+        operationCodes:
+          type: array
+          description: At least one of R12/R13 is required; R3/R4/R5 optional.
+          items: { type: string }
+        isNewSite: { type: boolean }
+        createdAt: { type: string, format: date-time, nullable: true }
+        removedAt: { type: string, format: date-time, nullable: true }
+    OverseasSite:
+      type: object
+      description: |
+        `OverseasSiteModel` without the accreditation-only fields. Interim sites are a
+        sub-resource; `interimSiteIds` lists the active ones. The legacy single `interimSite`
+        mirror and the `PreviousSites` undo stack are not exposed.
+        Address and contact are normalised as on `InterimSite`: `addressLine1/2`, `townOrCity`
+        and `country` become `address`; `contactName/Email/Phone` become `contact`; the stored
+        flat `siteAddress` string is exposed as `formattedAddress`.
+      required: [siteId, siteName]
+      properties:
+        siteId: { type: integer, format: int32 }
+        orsId: { type: string, nullable: true, example: '001' }
+        siteName: { type: string }
+        formattedAddress: { type: string, nullable: true, description: Pre-formatted single-line address (`SiteAddress`). }
+        address:
+          allOf: [{ $ref: '#/components/schemas/Address' }]
+          type: object
+          nullable: true
+        coordinates: { type: string, nullable: true }
+        contact:
+          allOf: [{ $ref: '#/components/schemas/ContactDetails' }]
+          type: object
+          nullable: true
+        operationCodes: { type: array, items: { type: string } }
+        code1: { type: string, nullable: true }
+        code2: { type: string, nullable: true }
+        code3: { type: string, nullable: true }
+        repatriatedLoads: { type: string, nullable: true }
+        conditionsOfExport: { type: boolean, nullable: true }
+        isEu: { type: boolean }
+        isOecd: { type: boolean }
+        interimSiteIds:
+          type: array
+          description: '`siteId` of each active (non-withdrawn) interim site.'
+          items: { type: integer, format: int32 }
+    AccreditedOverseasSite:
+      description: An overseas site as it stands on an accreditation, with the ReEx ORS-A approval fields.
+      allOf:
+        - $ref: '#/components/schemas/OverseasSite'
+        - type: object
+          properties:
+            validFrom:
+              type: string
+              nullable: true
+              description: ReEx ORS-A approval date (raw ISO date-time string). Null means registered but not yet accredited.
+            selected:
+              type: boolean
+              description: Approved/included in the accreditation.
+            registeredNowAccredited: { type: boolean }
+            isNewSite: { type: boolean }
+            besEvidence:
+              type: object
+              nullable: true
+              properties:
+                doYouWantToUploadMoreEvidence: { type: boolean }
+                besEvidenceUploads:
+                  type: array
+                  items:
+                    type: object
+                    required: [fileId, filename]
+                    properties:
+                      fileId: { type: string }
+                      filename: { type: string }
+                      contentType: { type: string, nullable: true }
+                      scanStatus: { type: string, nullable: true }
+                      besEvidenceValidFromDate: { type: string, nullable: true }
+                      besEvidenceExpiryDate: { type: string, nullable: true }
+                      uploadedAt: { type: string, format: date-time }
+                      uploadedBy: { type: string, nullable: true }
