@@ -1,5 +1,6 @@
 using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Utils;
@@ -29,6 +30,15 @@ public class StubReExApiAdapter(
             ["glass_re_melt"] = GlassRecyclingProcess.Remelt,
             ["glass_other"] = GlassRecyclingProcess.Other,
         };
+
+    // RA-000: E2E test organisations ("e2e-" ids) must never hand GOV.UK Notify a deliverable
+    // address, so every contact email the stub invents for them is Notify's simulated inbox.
+    internal const string TestOrganisationEmail = "simulate-delivered@notifications.service.gov.uk";
+
+    // RA-000: 900000-999999. Six digits, because the org number fills the {OrgId:D6} segment of
+    // regulatory numbers; kept above the five-digit FakeOrganisationPersistence fixture ids.
+    private const int TestOrganisationNumberBase = 900_000;
+    private const int TestOrganisationNumberRange = 100_000;
 
     public async Task<ReExResult<ReExAccreditationDto>> GetAccreditationAsync(
         string organisationId,
@@ -152,6 +162,13 @@ public class StubReExApiAdapter(
         // defaulted to Nation.England regardless of the org's actual regulator/postcode.
         RegulatorNationMapper.TryMap(submittedToRegulator, out var nation);
 
+        // RA-000: E2E test organisations get a recognisable, per-org name so each test can find
+        // its own items in Case Management. Nation is England via the mapper default above (no
+        // fixture org, so no regulator code).
+        var isTestOrganisation = TestOrganisationsConfig.IsTestOrganisation(organisationId);
+        if (isTestOrganisation)
+            organisationName = $"E2E Organisation {organisationId}";
+
         var fixture = new ReExAccreditationDto
         {
             AccreditationId = $"reex-acc-{organisationId}-{materialType}-{year}",
@@ -176,7 +193,11 @@ public class StubReExApiAdapter(
                 PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
                 Authorisers =
                 [
-                    new PrnsAuthoriser { FullName = "Stub Authoriser", Email = "stub@example.com" },
+                    new PrnsAuthoriser
+                    {
+                        FullName = "Stub Authoriser",
+                        Email = isTestOrganisation ? TestOrganisationEmail : "stub@example.com",
+                    },
                 ],
             },
             BusinessPlan = new ReExBusinessPlanDto
@@ -192,7 +213,9 @@ public class StubReExApiAdapter(
             SubmitterContactDetails = new SubmitterContactDetailsDto
             {
                 FullName = "Stub Submitter",
-                Email = "stub.submitter@example.com",
+                Email = isTestOrganisation
+                    ? TestOrganisationEmail
+                    : "stub.submitter@example.com",
                 Phone = "01234 567890",
                 JobTitle = "Stub Job Title",
             },
@@ -247,6 +270,15 @@ public class StubReExApiAdapter(
         // orgId recorded" rather than inventing one - the caller then falls back
         // to its own supplied value, which is what every existing local/dev
         // fixture relies on.
+        // RA-000: an E2E test organisation gets a stable org number derived from its id.
+        // management-be sends OrgId null for any non-numeric organisationId and relies on this
+        // lookup, so without one, approving a test organisation's application would fail at
+        // accreditation-number generation ("Nation, OrgId and Year are required").
+        if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
+            return Task.FromResult(
+                ReExResult<int?>.Success(TestOrganisationNumber(organisationId), 200)
+            );
+
         var orgNumber = int.TryParse(
             organisationId,
             NumberStyles.Integer,
@@ -287,5 +319,15 @@ public class StubReExApiAdapter(
 
         RegulatorNationMapper.TryMap(submittedToRegulator, out var nation);
         return ReExResult<Nation>.Success(nation, 200);
+    }
+
+    // FNV-1a: deterministic across processes and restarts (unlike string.GetHashCode), so a
+    // test organisation keeps the same number for its whole life.
+    internal static int TestOrganisationNumber(string organisationId)
+    {
+        var hash = 2166136261u;
+        foreach (var b in System.Text.Encoding.UTF8.GetBytes(organisationId))
+            hash = (hash ^ b) * 16777619u;
+        return TestOrganisationNumberBase + (int)(hash % TestOrganisationNumberRange);
     }
 }
