@@ -378,4 +378,85 @@ public class StubReExApiAdapterTests
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.Nation.Should().Be(Nation.Wales);
     }
+
+    // ---------------- RA-000: e2e- test organisations ----------------
+
+    private static StubReExApiAdapter NewSut() =>
+        new(new FakeOrganisationPersistence(), EnabledNullLogger<StubReExApiAdapter>.Instance);
+
+    [Fact]
+    public async Task GetAccreditationAsync_TestOrganisation_NamesItAfterItsIdInEngland()
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Plastic, 2025);
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OrganisationName.Should().Be("E2E Organisation e2e-c0ffee");
+        result.Value.Nation.Should().Be(Nation.England);
+        result.Value.IsExporter.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_TestOrganisation_UsesOnlyNotifySimulatedEmails()
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Plastic, 2025);
+
+        const string simulated = "simulate-delivered@notifications.service.gov.uk";
+        result.Value!.SubmitterContactDetails!.Email.Should().Be(simulated);
+        result.Value.Prns!.Authorisers.Should().OnlyContain(a => a.Email == simulated);
+    }
+
+    [Theory]
+    [InlineData("E2E-c0ffee")]
+    [InlineData("not-a-test-org")]
+    public async Task GetAccreditationAsync_NonTestOrganisation_KeepsTheDefaultStubFixture(
+        string organisationId
+    )
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync(organisationId, "reg", MaterialType.Plastic, 2025);
+
+        result.Value!.OrganisationName.Should().Be("Stub Reprocessing Ltd");
+        result.Value.SubmitterContactDetails!.Email.Should().Be("stub.submitter@example.com");
+        result.Value.Prns!.Authorisers.Should().OnlyContain(a => a.Email == "stub@example.com");
+    }
+
+    [Fact]
+    public async Task GetNationAsync_TestOrganisation_ReturnsEngland()
+    {
+        var result = await NewSut()
+            .GetNationAsync("e2e-c0ffee", "e2e-reg-c0ffee", TestContext.Current.CancellationToken);
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(Nation.England);
+    }
+
+    [Fact]
+    public async Task GetOrganisationNumberAsync_TestOrganisation_ReturnsAStableSixDigitNumber()
+    {
+        var sut = NewSut();
+
+        var first = await sut.GetOrganisationNumberAsync(
+            "e2e-c0ffee",
+            TestContext.Current.CancellationToken
+        );
+        var again = await sut.GetOrganisationNumberAsync(
+            "e2e-c0ffee",
+            TestContext.Current.CancellationToken
+        );
+
+        first.IsSuccess.Should().BeTrue(because: first.Error?.Message);
+        first.Value.Should().BeInRange(900_000, 999_999);
+        again.Value.Should().Be(first.Value);
+    }
+
+    [Fact]
+    public void TestOrganisationNumber_DiffersBetweenTestOrganisations()
+    {
+        StubReExApiAdapter
+            .TestOrganisationNumber("e2e-c0ffee")
+            .Should()
+            .NotBe(StubReExApiAdapter.TestOrganisationNumber("e2e-decaf0"));
+    }
 }

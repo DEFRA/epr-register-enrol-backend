@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text.Encodings.Web;
 using EprRegisterEnrolBackend.Auth;
 using FluentAssertions;
@@ -17,11 +18,18 @@ public class FrontendAuthenticationHandlerTests
     private static async Task<AuthenticateResult> AuthenticateAsync(
         HttpContext context,
         string? sharedSecret = TestSecret,
-        bool isDevelopment = false
+        bool isDevelopment = false,
+        string? mgmtTestsSecret = null
     )
     {
         var options = new StaticOptionsMonitor<FrontendAuthenticationOptions>(new());
-        var authConfig = Options.Create(new FrontendAuthConfig { SharedSecret = sharedSecret });
+        var authConfig = Options.Create(
+            new FrontendAuthConfig
+            {
+                SharedSecret = sharedSecret,
+                MgmtTestsSharedSecret = mgmtTestsSecret,
+            }
+        );
         var environment = Substitute.For<IHostEnvironment>();
         environment.EnvironmentName.Returns(
             isDevelopment ? Environments.Development : Environments.Production
@@ -50,6 +58,93 @@ public class FrontendAuthenticationHandlerTests
         if (authorizationHeader is not null)
             context.Request.Headers["Authorization"] = authorizationHeader;
         return context;
+    }
+
+    private const string MgmtTestsSecret = "test-mgmt-tests-shared-secret";
+
+    [Fact]
+    public async Task FrontendBearer_IdentifiesTheFrontendCaller()
+    {
+        var context = CreateRequestContext($"Bearer {TestSecret}");
+
+        var result = await AuthenticateAsync(context, mgmtTestsSecret: MgmtTestsSecret);
+
+        result.Succeeded.Should().BeTrue();
+        result.Principal!.FindFirst(ClaimTypes.NameIdentifier)!.Value.Should()
+            .Be(FrontendAuthenticationHandler.FrontendCallerId);
+    }
+
+    [Fact]
+    public async Task MgmtTestsBearer_WhenConfigured_SucceedsAsTheMgmtTestsCaller()
+    {
+        var context = CreateRequestContext($"Bearer {MgmtTestsSecret}");
+
+        var result = await AuthenticateAsync(context, mgmtTestsSecret: MgmtTestsSecret);
+
+        result.Succeeded.Should().BeTrue();
+        result.Principal!.FindFirst(ClaimTypes.NameIdentifier)!.Value.Should()
+            .Be(FrontendAuthenticationHandler.MgmtTestsCallerId);
+    }
+
+    [Fact]
+    public async Task MgmtTestsBearer_WhenNotConfigured_Fails()
+    {
+        var context = CreateRequestContext($"Bearer {MgmtTestsSecret}");
+
+        var result = await AuthenticateAsync(context, mgmtTestsSecret: null);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WrongSecret_WithBothSecretsConfigured_Fails()
+    {
+        var context = CreateRequestContext("Bearer neither-of-the-two-secrets");
+
+        var result = await AuthenticateAsync(context, mgmtTestsSecret: MgmtTestsSecret);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task EmptyBearerToken_WithMgmtTestsSecretUnsetOrEmpty_Fails(string? mgmtTestsSecret)
+    {
+        var context = CreateRequestContext("Bearer ");
+
+        var result = await AuthenticateAsync(context, mgmtTestsSecret: mgmtTestsSecret);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MissingFrontendSecret_InDevelopment_StillBypassesWhenMgmtTestsSecretSet()
+    {
+        var context = CreateRequestContext(null);
+
+        var result = await AuthenticateAsync(
+            context,
+            sharedSecret: null,
+            isDevelopment: true,
+            mgmtTestsSecret: MgmtTestsSecret
+        );
+
+        result.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MissingFrontendSecret_OutsideDevelopment_FailsClosedEvenForMgmtTestsBearer()
+    {
+        var context = CreateRequestContext($"Bearer {MgmtTestsSecret}");
+
+        var result = await AuthenticateAsync(
+            context,
+            sharedSecret: null,
+            mgmtTestsSecret: MgmtTestsSecret
+        );
+
+        result.Succeeded.Should().BeFalse();
     }
 
     [Fact]
