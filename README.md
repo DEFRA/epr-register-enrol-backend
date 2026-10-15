@@ -95,7 +95,7 @@ for why.
 | `CaseManagementAuth__ExpectedClientId` | No | `epr-register-enrol-management-be` | Expected `x-cdp-client-id` on inbound calls from management-be |
 | `AUTH_SHARED_SECRET__MANAGEMENT_BE` | **Yes** | _(blank)_ | Verifies inbound calls from management-be — must match management-be's `OPERATOR_BACKEND_SHARED_SECRET` exactly |
 | `AUTH_SHARED_SECRET__FRONTEND` | **Yes** | _(blank)_ | Verifies inbound calls from `epr-register-enrol-frontend` — must match frontend's `AUTH_SHARED_SECRET__BACKEND` exactly |
-| `AUTH_SHARED_SECRET__MGMT_TESTS` | **Yes** | _(blank)_ | A second accepted `Authorization: Bearer` on the frontend-authenticated routes, for the `epr-register-enrol-mgmt-tests` E2E suite — must match mgmt-tests' `OPERATOR_BACKEND_SHARED_SECRET`. Ignored (with a startup warning) unless `TestOrganisations__Enabled` is `true`; never set in prod |
+| `AUTH_SHARED_SECRET__MGMT_TESTS` | **Yes** | _(blank)_ | Optional in every environment: set only on non-prod environments running the E2E suite. A second accepted `Authorization: Bearer` on the frontend-authenticated routes, for the `epr-register-enrol-mgmt-tests` E2E suite — must match mgmt-tests' `OPERATOR_BACKEND_SHARED_SECRET`. Ignored (with a startup warning) unless `TestOrganisations__Enabled` is `true`; never set in prod |
 
 The secret-shaped values above (`*_SHARED_SECRET*` and the two
 `REEX_API_BASIC_AUTH_*` vars), except `AUTH_SHARED_SECRET__MGMT_TESTS`, which
