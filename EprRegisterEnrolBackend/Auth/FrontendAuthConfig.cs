@@ -10,4 +10,11 @@ public class FrontendAuthConfig
     /// CaseManagementAuthConfig for the same convention.
     /// </summary>
     public string? SharedSecret { get; set; }
+
+    /// <summary>
+    /// Sourced from <c>AUTH_SHARED_SECRET__MGMT_TESTS</c>, and only when
+    /// <c>TestOrganisations__Enabled</c> is true (see Program.cs) — null otherwise. A second
+    /// accepted Bearer for the epr-register-enrol-mgmt-tests E2E suite.
+    /// </summary>
+    public string? MgmtTestsSharedSecret { get; set; }
 }
