@@ -111,7 +111,7 @@ Records that exist in each environment and return `200`. Do not rely on them in 
 | Environment | Organisation | Registration | Year | Type |
 | --- | --- | --- | --- | --- |
 | dev | `500515` | `R26ER5005150000GR` | 2027 | reprocessor, glass |
-| dev | `500520` | `R26EX5005200002PA` | 2027 | exporter, paper |
+| dev | `500520` | `R26EX5005200002PA` | 2027 | exporter, paper, overseas sites `100` and `101` |
 
 For a `404` example, use any registration number that does not exist, for example
 `NO-SUCH-REGISTRATION`.
