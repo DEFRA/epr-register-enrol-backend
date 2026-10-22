@@ -42,6 +42,9 @@ tags:
   - name: Accredited overseas sites
   - name: Search
 
+security:
+  - cdpHmac: []
+
 paths:
   /organisations:
     get:
@@ -512,6 +515,14 @@ components:
                     type: array
                     items: { $ref: '#/components/schemas/InterimSite' }
 
+  securitySchemes:
+    cdpHmac:
+      type: apiKey
+      in: header
+      name: x-cdp-auth-signature
+      description: >-
+        Client-id plus HMAC-SHA256 request signing. Send x-cdp-client-id, x-cdp-auth-timestamp,
+        x-cdp-auth-nonce and x-cdp-auth-signature. See docs/reex-api-onboarding.md.
   schemas:
     # ---- shared ---------------------------------------------------------------------------
     PageMeta:
@@ -529,6 +540,8 @@ components:
         title: { type: string }
         status: { type: integer }
         detail: { type: string }
+        code: { type: string, description: Stable machine-readable error code, for example `invalid_signature`. }
+        traceId: { type: string, description: Quote this when asking for support. }
     MaterialType:
       type: string
       description: Mirrors the `MaterialType` enum.
