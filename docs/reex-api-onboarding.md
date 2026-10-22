@@ -106,9 +106,18 @@ and no trailing newline, then that you use the secret for this client and enviro
 
 ## Test data
 
-| Environment | Organisation | Registration | Year |
-| --- | --- | --- | --- |
-| _to be confirmed_ | | | |
+Records that exist in each environment and return `200`. Do not rely on them in prod.
+
+| Environment | Organisation | Registration | Year | Type |
+| --- | --- | --- | --- | --- |
+| dev | `500515` | `R26ER5005150000GR` | 2027 | reprocessor, glass |
+| dev | `500520` | `R26EX5005200002PA` | 2027 | exporter, paper |
+| test | _to be confirmed_ | | | |
+| ext-test | _to be confirmed_ | | | |
+| perf-test | _to be confirmed_ | | | |
+
+For a `404` example, use any registration number that does not exist, for example
+`NO-SUCH-REGISTRATION`.
 
 ## Contact
 
