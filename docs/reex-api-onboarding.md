@@ -8,15 +8,16 @@ and versioned collections (RA-677) land; paths live under `/v1`.
 
 | Environment | Base URL |
 | --- | --- |
-| dev | _to be confirmed_ |
-| test | _to be confirmed_ |
-| ext-test | _to be confirmed_ |
-| perf-test | _to be confirmed_ |
-| prod | _to be confirmed_ |
+| dev | `https://epr-register-enrol-backend.dev.cdp-int.defra.cloud` |
+| test | `https://epr-register-enrol-backend.test.cdp-int.defra.cloud` |
+| ext-test | `https://epr-register-enrol-backend.ext-test.cdp-int.defra.cloud` |
+| perf-test | `https://epr-register-enrol-backend.perf-test.cdp-int.defra.cloud` |
+| prod | `https://epr-register-enrol-backend.prod.cdp-int.defra.cloud` |
 
 ## Credentials
 
-Each consumer gets its own **client id** and **secret** per environment. Secrets are created and
+Each consumer gets its own **client id** and **secret** per environment. ReEx's client id is
+`epr-ReEx-Client` (case-sensitive, the same in every environment). Secrets are created and
 rotated in CDP secrets. Never send a secret over Slack or email. To rotate, we add a `_NEXT`
 secret; both work until you have switched, then the old one is removed.
 
