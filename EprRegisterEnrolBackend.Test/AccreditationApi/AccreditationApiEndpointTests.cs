@@ -58,6 +58,7 @@ public class AccreditationApiEndpointTests : IDisposable
     {
         _client.Dispose();
         _factory.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

@@ -256,6 +256,9 @@ public class ServiceClientAuthenticationHandler(
 
         context.Response.StatusCode = status;
         context.Response.ContentType = "application/problem+json";
-        return context.Response.WriteAsync(JsonSerializer.Serialize(problem, ProblemJson));
+        return context.Response.WriteAsync(
+            JsonSerializer.Serialize(problem, ProblemJson),
+            context.RequestAborted
+        );
     }
 }

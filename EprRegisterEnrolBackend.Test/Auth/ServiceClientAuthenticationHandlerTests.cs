@@ -22,7 +22,7 @@ public class ServiceClientAuthenticationHandlerTests
     private readonly FakeCaseManagementAuthNonceStore _nonces = new();
     private readonly CapturingLoggerFactory _logs = new();
 
-    private IServiceClientRegistry Registry(
+    private static ServiceClientRegistry Registry(
         Dictionary<string, string?>? extraSettings = null
     )
     {
@@ -412,7 +412,9 @@ public class ServiceClientAuthenticationHandlerTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
         context.Response.ContentType.Should().Be("application/problem+json");
         context.Response.Body.Position = 0;
-        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync(
+            TestContext.Current.CancellationToken
+        );
         body.Should().Contain("\"code\":\"invalid_signature\"");
         body.Should().Contain("\"status\":401");
         body.Should().NotContain(ReExSecret);
