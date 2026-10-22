@@ -594,7 +594,16 @@ public class AccreditationApiEndpointTests : IDisposable
         var response = await client.SendAsync(request, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var access = logs.Entries.Where(e => e.Category.Contains("ServiceClientAccess")).ToList();
+        // Logged once the response has completed, which can be after the client has it.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        List<CapturingLoggerFactory.Entry> access;
+        while (
+            (access = logs.Entries.Where(e => e.Category.Contains("ServiceClientAccess")).ToList()).Count == 0
+            && DateTime.UtcNow < deadline
+        )
+        {
+            await Task.Delay(25, Ct);
+        }
         access.Should().ContainSingle();
         access[0].Message.Should().Contain($"clientId={ReExClientId}");
         access[0].Message.Should().Contain("clientName=reex");
