@@ -3,22 +3,25 @@ using System.Text.Json.Serialization;
 namespace EprRegisterEnrolBackend.AccreditationApi;
 
 // The wire shapes of the read-only accreditation API for service clients such as ReEx. Field
-// names follow the draft OpenAPI spec (docs/openapi/registration-accreditation-api.yaml), which
-// is under review (RA-644) and will change. camelCase on the wire.
+// names follow the v2 draft OpenAPI spec (docs/openapi/registration-accreditation-api.v2.yaml),
+// which is under review (RA-644) and will change. camelCase on the wire.
 //
 // Fields the spec marks required are always sent. Optional fields this backend does not hold
 // are left out rather than sent as null, so what is present is what is known.
 
-public sealed record AccreditationDto
+/// <summary>
+/// The v2 <c>AccreditationSummary</c>: the accreditation without history or signatories. Returned
+/// by search, and the base of <see cref="AccreditationDto"/>.
+/// </summary>
+public record AccreditationSummaryDto
 {
-    public required string AccreditationReference { get; init; }
+    public required int OrganisationNumber { get; init; }
 
     public required string RegistrationNumber { get; init; }
 
-    public required int Year { get; init; }
+    public required string AccreditationNumber { get; init; }
 
-    /// <summary>A granted accreditation is always <c>approved</c>.</summary>
-    public required string Status { get; init; }
+    public required int AccreditationYear { get; init; }
 
     /// <summary>The material as held: Steel, Wood, Aluminium, Fibre, Glass, Paper or Plastic.</summary>
     public required string Material { get; init; }
@@ -29,32 +32,59 @@ public sealed record AccreditationDto
     /// <summary><c>reprocessor</c> or <c>exporter</c>.</summary>
     public required string WasteProcessingType { get; init; }
 
+    /// <summary>
+    /// <c>approved</c>, <c>suspended</c> or <c>cancelled</c>: the latest status history entry
+    /// whose effective date is on or before today.
+    /// </summary>
+    public required string Status { get; init; }
+
+    /// <summary><c>up_to_500</c>, <c>up_to_5000</c>, <c>up_to_10000</c> or <c>over_10000</c>.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public AddressDto? SiteAddress { get; init; }
+    public string? TonnageBand { get; init; }
+}
+
+/// <summary>
+/// The v2 <c>Accreditation</c>: a summary plus its histories (oldest first) and PRN signatories.
+/// Returned only when getting one accreditation.
+/// </summary>
+public sealed record AccreditationDto : AccreditationSummaryDto
+{
+    public required IReadOnlyList<SignatoryDto> Signatories { get; init; }
+
+    public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
+
+    public required IReadOnlyList<TonnageBandHistoryEntryDto> TonnageBandHistory { get; init; }
+}
+
+public sealed record SignatoryDto
+{
+    public required string FullName { get; init; }
+
+    public required string Email { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public PrnIssuanceDto? PrnIssuance { get; init; }
+    public string? Phone { get; init; }
+}
 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<BusinessPlanItemDto>? BusinessPlan { get; init; }
+public sealed record StatusHistoryEntryDto
+{
+    public required string Status { get; init; }
 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public ContactDetailsDto? SubmitterContactDetails { get; init; }
+    /// <summary>When the status takes effect (UK date), serialised as <c>yyyy-MM-dd</c>.</summary>
+    public required DateOnly EffectiveDate { get; init; }
 
-    /// <summary>The ORS ids on this accreditation; exporters only. See the overseas-sites route.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<string>? OverseasSites { get; init; }
+    public required DateTime RecordedAt { get; init; }
+}
+
+public sealed record TonnageBandHistoryEntryDto
+{
+    public required string TonnageBand { get; init; }
+
+    public required DateTime RecordedAt { get; init; }
 }
 
 public sealed record AddressDto
 {
-    /// <summary>
-    /// The address as one string, which is all that is held for a UK site address. A UK address is
-    /// held in parts only by ReEx.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? FullAddress { get; init; }
-
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Line1 { get; init; }
 
@@ -65,30 +95,16 @@ public sealed record AddressDto
     public string? Town { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? County { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Country { get; init; }
-}
-
-public sealed record PrnIssuanceDto
-{
-    /// <summary>
-    /// The planned tonnage band: UpTo500, UpTo5000, UpTo10000 or Over10000. It is the operator's
-    /// plan from the application, which this backend holds, not a separately approved band.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? PlannedIssuance { get; init; }
-
-    public required IReadOnlyList<ContactDetailsDto> Signatories { get; init; }
-}
-
-public sealed record BusinessPlanItemDto
-{
-    public required string Description { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? DetailedDescription { get; init; }
+    public string? Postcode { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public int? PercentSpent { get; init; }
+    public string? Region { get; init; }
 }
 
 public sealed record ContactDetailsDto
@@ -101,14 +117,35 @@ public sealed record ContactDetailsDto
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Phone { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Title { get; init; }
 }
 
 /// <summary>
-/// An overseas site as it stands on an accreditation. Contact details and BES evidence are not
-/// served yet.
+/// An interim site, returned inside its overseas site. <c>removedAt</c> set means withdrawn.
+/// </summary>
+public sealed record InterimSiteDto
+{
+    public required int SiteId { get; init; }
+
+    public required string SiteNumber { get; init; }
+
+    public required string SiteName { get; init; }
+
+    public required AddressDto Address { get; init; }
+
+    public required ContactDetailsDto Contact { get; init; }
+
+    public required IReadOnlyList<string> OperationCodes { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? CreatedAt { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? RemovedAt { get; init; }
+}
+
+/// <summary>
+/// An overseas site as it stands on an accreditation, with its own status history and its
+/// interim sites. BES evidence is not served.
 /// </summary>
 public sealed record AccreditedOverseasSiteDto
 {
@@ -127,16 +164,10 @@ public sealed record AccreditedOverseasSiteDto
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Coordinates { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ContactDetailsDto? Contact { get; init; }
+
     public required IReadOnlyList<string> OperationCodes { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Code1 { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Code2 { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Code3 { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RepatriatedLoads { get; init; }
@@ -148,22 +179,16 @@ public sealed record AccreditedOverseasSiteDto
 
     public required bool IsOecd { get; init; }
 
-    /// <summary>The <c>siteId</c> of each interim site that has not been withdrawn.</summary>
-    public required IReadOnlyList<int> InterimSiteIds { get; init; }
-
-    /// <summary>
-    /// The date ReEx recorded the site's approval (ORS-A), as a date-time string. Absent means
-    /// the site is registered but not yet accredited.
-    /// </summary>
+    /// <summary>The date the site was approved onto the accreditation (ReEx ORS-A approval).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ValidFrom { get; init; }
+    public DateTime? ValidFrom { get; init; }
 
-    /// <summary>Included in (approved for) the accreditation.</summary>
-    public required bool Selected { get; init; }
+    public required string Status { get; init; }
 
-    public required bool RegisteredNowAccredited { get; init; }
+    public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
 
-    public required bool IsNewSite { get; init; }
+    /// <summary>Active interim sites; withdrawn ones too when <c>includeWithdrawn=true</c>.</summary>
+    public required IReadOnlyList<InterimSiteDto> InterimSites { get; init; }
 }
 
 public sealed record PageDto<T>
