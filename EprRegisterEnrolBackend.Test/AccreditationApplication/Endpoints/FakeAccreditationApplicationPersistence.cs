@@ -103,6 +103,26 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(match is null ? null : ShallowCopy(match));
     }
 
+    public Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(
+        int orgId,
+        string registrationNumber,
+        int year,
+        int firstYear
+    ) =>
+        Task.FromResult(
+            _store
+                .Where(a =>
+                    a.OrgId == orgId
+                    && a.RegistrationReference == registrationNumber
+                    && a.Year == year
+                    && a.Year >= firstYear
+                    && a.ApplicationStatus == ApplicationStatus.Approved
+                    && !string.IsNullOrEmpty(a.AccreditationReference)
+                )
+                .OrderByDescending(a => a.DateLastEdited)
+                .FirstOrDefault()
+        );
+
     public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId)
     {
         IReadOnlyList<string> orsIds = _store

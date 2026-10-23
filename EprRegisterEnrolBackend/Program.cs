@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using EprRegisterEnrolBackend.AccreditationApi;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
@@ -19,6 +20,7 @@ using EprRegisterEnrolBackend.Utils.Http;
 using EprRegisterEnrolBackend.Utils.Logging;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentValidation;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MongoDB.Driver;
@@ -229,8 +231,21 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         .AddScheme<FrontendAuthenticationOptions, FrontendAuthenticationHandler>(
             FrontendAuthenticationHandler.SchemeName,
             _ => { }
+        )
+        .AddScheme<ServiceClientAuthenticationOptions, ServiceClientAuthenticationHandler>(
+            ServiceClientAuthenticationHandler.SchemeName,
+            _ => { }
         );
-    builder.Services.AddAuthorization();
+    // Service clients (for example ReEx) read this backend's data with client-id plus HMAC auth,
+    // the same scheme ManagementBe uses, but with one client id and secret per consumer. The
+    // client ids are non-secret config (ServiceClients__Clients__N__*); each secret is a CDP
+    // secret named AUTH_SHARED_SECRET__<NAME>, plus AUTH_SHARED_SECRET__<NAME>_NEXT during rotation.
+    builder.Services.Configure<ServiceClientsConfig>(
+        builder.Configuration.GetSection(ServiceClientsConfig.SectionName)
+    );
+    builder.Services.AddSingleton<IServiceClientRegistry, ServiceClientRegistry>();
+    builder.Services.AddSingleton<IAuthorizationHandler, ReadOnlyMethodHandler>();
+    builder.Services.AddAuthorization(options => options.AddServiceClientPolicies());
 
     // CaseWorking: config-driven stub/real switch (default: stub). SharedSecret
     // is deliberately NOT part of the CaseWorking__* section — CDP's secrets
@@ -357,6 +372,17 @@ static WebApplication SetupApplication(WebApplication app)
             "AUTH_SHARED_SECRET__MGMT_TESTS is set but TestOrganisations__Enabled is not true — the mgmt-tests Bearer will be rejected."
         );
 
+    // Resolved at startup so a bad ServiceClients config (a client with no id, a duplicate id)
+    // stops the service starting, and a client with no secret is reported before its first request.
+    var configuredServiceClients = app.Services
+        .GetRequiredService<IServiceClientRegistry>()
+        .All;
+    startupLogger.LogInformation(
+        "Service clients with a secret: {Count} ({Names})",
+        configuredServiceClients.Count,
+        string.Join(", ", configuredServiceClients.Select(client => client.Name))
+    );
+
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
@@ -393,6 +419,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseReExOrganisationEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
+    // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
+    app.UseAccreditationApiEndpoints();
 
     if (app.Environment.IsDevelopment())
     {

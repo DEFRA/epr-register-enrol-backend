@@ -33,7 +33,7 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
 
     [Fact]
-    public async Task Constructor_creates_the_nine_declared_indexes()
+    public async Task Constructor_creates_the_ten_declared_indexes()
     {
         _ = new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance);
 
@@ -44,13 +44,23 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
             .Select(i => i["key"].AsBsonDocument.ToString())
             .ToList();
 
-        Assert.Equal(9, keyDocs.Count);
+        Assert.Equal(10, keyDocs.Count);
 
         Assert.Contains(keyDocs, k => k == "{ \"organisationId\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"applicationStatus\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"materialType\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"year\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"sourceReExAccreditationId\" : 1 }");
+        // Backs GetGrantedAccreditationAsync: service clients (ReEx) read an accreditation by
+        // organisation number, registration number and year.
+        Assert.Contains(
+            keyDocs,
+            k =>
+                k.Contains("\"orgId\" : 1")
+                && k.Contains("\"registrationReference\" : 1")
+                && k.Contains("\"year\" : 1")
+                && !k.Contains("organisationId")
+        );
         Assert.Contains(
             keyDocs,
             k =>
