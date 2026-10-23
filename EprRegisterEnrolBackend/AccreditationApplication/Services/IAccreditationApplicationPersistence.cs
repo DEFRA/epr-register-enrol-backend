@@ -32,6 +32,32 @@ public interface IAccreditationApplicationPersistence
     /// then flatten every OverseasSites.Sites.OrsId" - used to scope OrsId generation across a
     /// registration's applications. Skips sites with a null OrsId.
     /// </summary>
+    /// <summary>
+    /// The granted accreditation for an organisation's registration in a year: the approved
+    /// application, with an accreditation number, for the organisation (by its visible
+    /// organisation number) and registration number, from <paramref name="firstYear"/> on. If more
+    /// than one qualifies, the most recently edited. Read-only; this is what a service client such
+    /// as ReEx is served.
+    /// </summary>
+    Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(
+        int orgId,
+        string registrationNumber,
+        int year,
+        int firstYear
+    );
+
+    /// <summary>
+    /// A page of the granted accreditations across all organisations, optionally for one year,
+    /// from <paramref name="firstYear"/> on, ordered by accreditation number. Granted means the
+    /// same as <see cref="GetGrantedAccreditationAsync"/>, and the application must also carry an
+    /// organisation number, since one without cannot be addressed by a service client. Also
+    /// returns the total across all pages. Read-only.
+    /// </summary>
+    Task<(
+        IReadOnlyList<AccreditationApplicationModel> Items,
+        long Total
+    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit);
+
     Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId);
 
     /// <summary>
