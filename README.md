@@ -87,15 +87,20 @@ for why.
 | `ReExApi__BaseUrl` | No | _(blank)_ | Base URL of the external ReEx accreditation/organisations API |
 | `REEX_API_BASIC_AUTH_USERNAME` | **Yes** | _(blank — stub adapter used instead)_ | Basic Auth username for the ReEx API above |
 | `REEX_API_BASIC_AUTH_PASSWORD` | **Yes** | _(blank)_ | Basic Auth password for the ReEx API above |
+| `ReExApi__UseStub` | No | `false` | When `true` outside Development, every ReEx lookup is answered by the stub adapter (e.g. perf-test) |
+| `TestOrganisations__Enabled` | No | `false` | Turns on E2E test organisations and the mgmt-tests caller (see below). The service refuses to start with it `true` when `ENVIRONMENT` is `prod` |
 | `CaseWorking__Url` | No | `http://localhost:8085` | Base URL of `epr-register-enrol-management-be` |
 | `CaseWorking__UseStub` | No | `false` (Development) | When `true`, submissions to management-be are stubbed instead of sent |
 | `CASE_MANAGEMENT_API_SHARED_SECRET` | **Yes** | _(blank)_ | HMAC secret this service signs its outbound calls to management-be with — must match management-be's `AUTH_SHARED_SECRET__BACKEND` exactly |
 | `CaseManagementAuth__ExpectedClientId` | No | `epr-register-enrol-management-be` | Expected `x-cdp-client-id` on inbound calls from management-be |
 | `AUTH_SHARED_SECRET__MANAGEMENT_BE` | **Yes** | _(blank)_ | Verifies inbound calls from management-be — must match management-be's `OPERATOR_BACKEND_SHARED_SECRET` exactly |
 | `AUTH_SHARED_SECRET__FRONTEND` | **Yes** | _(blank)_ | Verifies inbound calls from `epr-register-enrol-frontend` — must match frontend's `AUTH_SHARED_SECRET__BACKEND` exactly |
+| `AUTH_SHARED_SECRET__MGMT_TESTS` | **Yes** | _(blank)_ | Optional in every environment: set only on non-prod environments running the E2E suite. A second accepted `Authorization: Bearer` on the frontend-authenticated routes, for the `epr-register-enrol-mgmt-tests` E2E suite — must match mgmt-tests' `OPERATOR_BACKEND_SHARED_SECRET`. Ignored (with a startup warning) unless `TestOrganisations__Enabled` is `true`; never set in prod |
 
-All five secret-shaped values above (`*_SHARED_SECRET*` and the two
-`REEX_API_BASIC_AUTH_*` vars) are optional in Development — the affected
+The secret-shaped values above (`*_SHARED_SECRET*` and the two
+`REEX_API_BASIC_AUTH_*` vars), except `AUTH_SHARED_SECRET__MGMT_TESTS`, which
+is only ever set on non-prod environments running the E2E suite, are optional
+in Development — the affected
 handlers fall back to a stub adapter or header-trust mode when blank — but
 required in every other environment. `GET /health/ready` reports any that
 are missing by name via `RequiredConfigHealthCheck`.
@@ -112,6 +117,19 @@ AUTH_SHARED_SECRET__FRONTEND=local-dev-frontend-secret-not-real
 REEX_API_BASIC_AUTH_USERNAME=local-dev-user
 REEX_API_BASIC_AUTH_PASSWORD=local-dev-fake-password
 ```
+
+#### E2E test organisations
+
+With `TestOrganisations__Enabled=true`, an `organisationId` starting with the
+lowercase prefix `e2e-` is a test organisation. Outside Development (where the
+stub already answers everything), `TestOrganisationReExApiAdapter` sends every
+ReEx lookup for such an organisation to `StubReExApiAdapter`, while every other
+organisation still goes to the real ReEx API. For an `e2e-` organisation the stub
+returns the name `E2E Organisation <organisationId>`, nation England, a stable
+six-digit org number (900000–999999) and GOV.UK Notify's
+`simulate-delivered@notifications.service.gov.uk` for every contact email.
+`ENVIRONMENT` is the CDP platform environment name, and it is read straight
+from the process environment.
 
 ### Accreditation Applications API
 

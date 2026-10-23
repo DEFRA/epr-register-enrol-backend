@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using EprRegisterEnrolBackend.AccreditationApi;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
@@ -9,7 +10,6 @@ using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
-using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
 using EprRegisterEnrolBackend.StubPersistence.Endpoints;
@@ -20,6 +20,7 @@ using EprRegisterEnrolBackend.Utils.Http;
 using EprRegisterEnrolBackend.Utils.Logging;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentValidation;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MongoDB.Driver;
@@ -188,6 +189,15 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // epr-register-enrol-backend-0i1: nonce replay protection moved from IMemoryCache to a
     // Mongo-backed store (CaseManagementAuthNonceStore) so it survives a restart and is shared
     // across instances - AddMemoryCache() is no longer needed anywhere in this service.
+    // E2E test organisations (RA-000): off by default; throws at startup if switched on in CDP prod.
+    var testOrganisationsConfig =
+        builder.Configuration.GetSection(TestOrganisationsConfig.SectionName).Get<TestOrganisationsConfig>()
+        ?? new TestOrganisationsConfig();
+    TestOrganisationsConfig.EnsureNotEnabledInProduction(
+        testOrganisationsConfig.Enabled,
+        TestOrganisationsConfig.ReadCdpEnvironment()
+    );
+
     builder.Services.AddSingleton<ICaseManagementAuthNonceStore, CaseManagementAuthNonceStore>();
     builder.Services.Configure<CaseManagementAuthConfig>(config =>
     {
@@ -200,9 +210,16 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // caller of the ReEx-backed organisation endpoints. Same flat-env-var convention as
     // CaseManagementAuth above — sourced from AUTH_SHARED_SECRET__FRONTEND, not a nested
     // FrontendAuth__* key.
+    // AUTH_SHARED_SECRET__MGMT_TESTS: a second accepted Bearer, for the
+    // epr-register-enrol-mgmt-tests E2E suite driving the operator journey API directly (RA-000).
+    // Bound only when TestOrganisations__Enabled is on, so setting the secret alone never opens a
+    // second way in, and prod can never have it (EnsureNotEnabledInProduction above).
     builder.Services.Configure<FrontendAuthConfig>(config =>
     {
         config.SharedSecret = builder.Configuration.GetValue<string>("AUTH_SHARED_SECRET:FRONTEND");
+        config.MgmtTestsSharedSecret = testOrganisationsConfig.Enabled
+            ? builder.Configuration.GetValue<string>("AUTH_SHARED_SECRET:MGMT_TESTS")
+            : null;
     });
 
     builder
@@ -214,8 +231,21 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         .AddScheme<FrontendAuthenticationOptions, FrontendAuthenticationHandler>(
             FrontendAuthenticationHandler.SchemeName,
             _ => { }
+        )
+        .AddScheme<ServiceClientAuthenticationOptions, ServiceClientAuthenticationHandler>(
+            ServiceClientAuthenticationHandler.SchemeName,
+            _ => { }
         );
-    builder.Services.AddAuthorization();
+    // Service clients (for example ReEx) read this backend's data with client-id plus HMAC auth,
+    // the same scheme ManagementBe uses, but with one client id and secret per consumer. The
+    // client ids are non-secret config (ServiceClients__Clients__N__*); each secret is a CDP
+    // secret named AUTH_SHARED_SECRET__<NAME>, plus AUTH_SHARED_SECRET__<NAME>_NEXT during rotation.
+    builder.Services.Configure<ServiceClientsConfig>(
+        builder.Configuration.GetSection(ServiceClientsConfig.SectionName)
+    );
+    builder.Services.AddSingleton<IServiceClientRegistry, ServiceClientRegistry>();
+    builder.Services.AddSingleton<IAuthorizationHandler, ReadOnlyMethodHandler>();
+    builder.Services.AddAuthorization(options => options.AddServiceClientPolicies());
 
     // CaseWorking: config-driven stub/real switch (default: stub). SharedSecret
     // is deliberately NOT part of the CaseWorking__* section — CDP's secrets
@@ -242,25 +272,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // ReEx API client (org + overseas-sites)
     builder.Services.AddReExClients(builder.Configuration);
 
-    // ReExApi:UseStub (default false) lets a deployed non-Development environment
-    // (e.g. perf-test) opt into the stub adapter/fixtures without flipping
-    // ASPNETCORE_ENVIRONMENT, which would also pull in unrelated dev-only surface
-    // area handled by the Development-only block below.
-    var reExConfig = new ReExConfig();
-    builder.Configuration.GetSection("ReExApi").Bind(reExConfig);
-
-    if (builder.Environment.IsDevelopment() || reExConfig.UseStub)
-    {
-        builder.Services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
-
-        // Fixtures for StubReExApiAdapter's dev-mode responses — not tied to
-        // any persistence interface, this is the only place it's used.
-        builder.Services.AddSingleton<FakeOrganisationPersistence>();
-    }
-    else
-    {
-        builder.Services.AddSingleton<IReExApiAdapter, HttpReExApiAdapter>();
-    }
+    // IReExApiAdapter: stub / real / e2e- test-organisation composite (see ReExApiAdapterRegistration).
+    builder.Services.AddReExApiAdapter(
+        builder.Configuration,
+        builder.Environment,
+        testOrganisationsConfig.Enabled
+    );
 
     if (builder.Environment.IsDevelopment())
     {
@@ -347,6 +364,24 @@ static WebApplication SetupApplication(WebApplication app)
         startupLogger.LogWarning(
             "AUTH_SHARED_SECRET__FRONTEND is not configured — inbound Frontend-authenticated requests will be rejected."
         );
+    if (
+        string.IsNullOrWhiteSpace(frontendAuthCfg.MgmtTestsSharedSecret)
+        && !string.IsNullOrWhiteSpace(app.Configuration.GetValue<string>("AUTH_SHARED_SECRET:MGMT_TESTS"))
+    )
+        startupLogger.LogWarning(
+            "AUTH_SHARED_SECRET__MGMT_TESTS is set but TestOrganisations__Enabled is not true — the mgmt-tests Bearer will be rejected."
+        );
+
+    // Resolved at startup so a bad ServiceClients config (a client with no id, a duplicate id)
+    // stops the service starting, and a client with no secret is reported before its first request.
+    var configuredServiceClients = app.Services
+        .GetRequiredService<IServiceClientRegistry>()
+        .All;
+    startupLogger.LogInformation(
+        "Service clients with a secret: {Count} ({Names})",
+        configuredServiceClients.Count,
+        string.Join(", ", configuredServiceClients.Select(client => client.Name))
+    );
 
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
@@ -384,6 +419,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseReExOrganisationEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
+    // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
+    app.UseAccreditationApiEndpoints();
 
     if (app.Environment.IsDevelopment())
     {

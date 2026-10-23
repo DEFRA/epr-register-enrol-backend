@@ -113,6 +113,57 @@ public class AccreditationApplicationPersistence(
         return sections.SelectMany(o => o?.Sites ?? []).ToList();
     }
 
+    public async Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(
+        int orgId,
+        string registrationNumber,
+        int year,
+        int firstYear
+    )
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        var filter = filters.And(
+            filters.Eq(a => a.OrgId, orgId),
+            filters.Eq(a => a.RegistrationReference, registrationNumber),
+            filters.Eq(a => a.Year, year),
+            filters.Gte(a => a.Year, firstYear),
+            filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
+            filters.Ne(a => a.AccreditationReference, null),
+            filters.Ne(a => a.AccreditationReference, string.Empty)
+        );
+
+        return await Collection
+            .Find(filter)
+            .SortByDescending(a => a.DateLastEdited)
+            .FirstOrDefaultAsync();
+    }
+
+    public async Task<(
+        IReadOnlyList<AccreditationApplicationModel> Items,
+        long Total
+    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit)
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        var filter = filters.And(
+            filters.Ne(a => a.OrgId, null),
+            filters.Gte(a => a.Year, firstYear),
+            filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
+            filters.Ne(a => a.AccreditationReference, null),
+            filters.Ne(a => a.AccreditationReference, string.Empty)
+        );
+        if (year is not null)
+            filter = filters.And(filter, filters.Eq(a => a.Year, year.Value));
+
+        var total = await Collection.CountDocumentsAsync(filter);
+        var items = await Collection
+            .Find(filter)
+            .SortBy(a => a.AccreditationReference)
+            .ThenBy(a => a.Id)
+            .Skip(skip)
+            .Limit(limit)
+            .ToListAsync();
+        return (items, total);
+    }
+
     public async Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
         string applicationId
@@ -271,10 +322,9 @@ public class AccreditationApplicationPersistence(
     )
     {
         var idFilter = Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, id);
-        var filter =
-            guardFilter is null
-                ? idFilter
-                : Builders<AccreditationApplicationModel>.Filter.And(idFilter, guardFilter);
+        var filter = guardFilter is null
+            ? idFilter
+            : Builders<AccreditationApplicationModel>.Filter.And(idFilter, guardFilter);
         var combinedUpdate = Builders<AccreditationApplicationModel>.Update.Combine(
             update,
             Builders<AccreditationApplicationModel>.Update.Set(a => a.UpdatedAt, DateTime.UtcNow),
@@ -310,6 +360,15 @@ public class AccreditationApplicationPersistence(
             new CreateIndexModel<AccreditationApplicationModel>(builder.Ascending(a => a.Year)),
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Ascending(a => a.SourceReExAccreditationId)
+            ),
+            // Backs GetGrantedAccreditationAsync, called for every service client read of an
+            // accreditation (organisation number, registration number and year).
+            new CreateIndexModel<AccreditationApplicationModel>(
+                builder.Combine(
+                    builder.Ascending(a => a.OrgId),
+                    builder.Ascending(a => a.RegistrationReference),
+                    builder.Ascending(a => a.Year)
+                )
             ),
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Combine(
