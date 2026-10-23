@@ -6917,9 +6917,12 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Theory]
-    [InlineData("assessment-in-progress", ApplicationStatus.Updated)]
-    [InlineData("awaiting-decision", ApplicationStatus.AwaitingDecision)]
-    public async Task StatusChangedFromCaseManagement_MapsPaymentReceivedAndSubmitForDecisionStates(
+    // RA-595: case management moves a duly-made case into assessment with
+    // start-assessment ("Assessment started"); payment-received is gone.
+    [InlineData("start-assessment", "assessment-in-progress", ApplicationStatus.Updated)]
+    [InlineData("submit-for-decision", "awaiting-decision", ApplicationStatus.AwaitingDecision)]
+    public async Task StatusChangedFromCaseManagement_MapsStartAssessmentAndSubmitForDecisionStates(
+        string actionId,
         string toStateId,
         ApplicationStatus expectedStatus
     )
@@ -6937,7 +6940,7 @@ public class AccreditationApplicationEndpointsTests
         var request = new StatusChangedFromCaseManagementRequest
         {
             ToStateId = toStateId,
-            ActionId = "payment-received",
+            ActionId = actionId,
             OccurredAt = DateTime.UtcNow,
         };
         var response = await _client.PostAsJsonAsync(

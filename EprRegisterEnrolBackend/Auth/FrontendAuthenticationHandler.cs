@@ -7,8 +7,10 @@ using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.Auth;
 
-// Verifies inbound calls from epr-register-enrol-frontend, the only caller of the
-// ReEx-backed organisation endpoints (e.g. GetDefraLink). Unlike CaseManagementAuthenticationHandler
+// Verifies inbound calls from epr-register-enrol-frontend, the only production caller of the
+// ReEx-backed organisation endpoints (e.g. GetDefraLink). On non-prod environments with
+// TestOrganisations__Enabled, the epr-register-enrol-mgmt-tests E2E suite is accepted too, with
+// its own secret (FrontendAuthConfig.MgmtTestsSharedSecret). Unlike CaseManagementAuthenticationHandler
 // this guards a plain server-to-server GET rather than a webhook-style push, so it's a static
 // shared-secret comparison — no signature/nonce/replay machinery needed.
 public class FrontendAuthenticationHandler(
@@ -20,6 +22,9 @@ public class FrontendAuthenticationHandler(
 ) : AuthenticationHandler<FrontendAuthenticationOptions>(options, logger, encoder)
 {
     public const string SchemeName = "Frontend";
+
+    public const string FrontendCallerId = "epr-register-enrol-frontend";
+    public const string MgmtTestsCallerId = "epr-register-enrol-mgmt-tests";
 
     private const string BearerPrefix = "Bearer ";
 
@@ -61,22 +66,32 @@ public class FrontendAuthenticationHandler(
         if (!authHeader.StartsWith(BearerPrefix, StringComparison.Ordinal))
             return Task.FromResult(Fail("Authorization header is not a Bearer token."));
 
-        var providedSecret = authHeader[BearerPrefix.Length..];
-        var secretValid = CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(providedSecret),
-            Encoding.UTF8.GetBytes(config.SharedSecret)
-        );
-        if (!secretValid)
+        var callerId = MatchCaller(authHeader[BearerPrefix.Length..], config);
+        if (callerId is null)
             return Task.FromResult(Fail("Invalid shared secret."));
 
         var principal = new ClaimsPrincipal(
-            new ClaimsIdentity(
-                [new Claim(ClaimTypes.NameIdentifier, "epr-register-enrol-frontend")],
-                SchemeName
-            )
+            new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, callerId)], SchemeName)
         );
         return Task.FromResult(
             AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName))
         );
     }
+
+    // Both comparisons always run (no short-circuit) and each is constant-time, so response
+    // timing reveals neither secret nor which caller a near-miss resembled.
+    private static string? MatchCaller(string providedSecret, FrontendAuthConfig config)
+    {
+        var provided = Encoding.UTF8.GetBytes(providedSecret);
+        var isFrontend = SecretMatches(provided, config.SharedSecret);
+        var isMgmtTests = SecretMatches(provided, config.MgmtTestsSharedSecret);
+
+        if (isFrontend)
+            return FrontendCallerId;
+        return isMgmtTests ? MgmtTestsCallerId : null;
+    }
+
+    private static bool SecretMatches(byte[] provided, string? expected) =>
+        !string.IsNullOrEmpty(expected)
+        && CryptographicOperations.FixedTimeEquals(provided, Encoding.UTF8.GetBytes(expected));
 }
