@@ -1,25 +1,110 @@
+using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 namespace EprRegisterEnrolBackend.AccreditationApi;
 
 /// <summary>
-/// Builds the accreditation API's responses from a granted accreditation application. This
+/// Builds the accreditation API's v2 responses from a granted accreditation application. This
 /// backend holds applications, not accreditations of its own, so a granted application is the
-/// accreditation. Nothing is invented: what the application does not hold is left out.
+/// accreditation. Nothing is invented beyond the one-entry histories the v2 mapping document
+/// prescribes for accreditations that predate effective-dated history: what the application
+/// does not hold is left out.
 /// </summary>
 public static class AccreditationApiMapper
 {
-    public static AccreditationDto ToAccreditation(AccreditationApplicationModel application)
+    private const string Approved = "approved";
+
+    public static AccreditationSummaryDto ToSummary(
+        AccreditationApplicationModel application,
+        DateTimeOffset now
+    ) => Summary(application, now, StatusHistory(application, null));
+
+    public static AccreditationDto ToAccreditation(
+        AccreditationApplicationModel application,
+        DateTimeOffset now
+    )
     {
-        var exporter = IsExporter(application);
-        var businessPlan = BusinessPlan(application.BusinessPlan);
+        var history = StatusHistory(application, null);
+        var summary = Summary(application, now, history);
+        var recordedAt = Approval(application);
 
         return new AccreditationDto
         {
-            AccreditationReference = application.AccreditationReference!,
+            OrganisationNumber = summary.OrganisationNumber,
+            RegistrationNumber = summary.RegistrationNumber,
+            AccreditationNumber = summary.AccreditationNumber,
+            AccreditationYear = summary.AccreditationYear,
+            Material = summary.Material,
+            GlassRecyclingProcess = summary.GlassRecyclingProcess,
+            WasteProcessingType = summary.WasteProcessingType,
+            Status = summary.Status,
+            TonnageBand = summary.TonnageBand,
+            Signatories = application
+                .Prns.Authorisers.Select(a => new SignatoryDto
+                {
+                    FullName = a.FullName,
+                    Email = a.Email,
+                })
+                .ToList(),
+            StatusHistory = history,
+            TonnageBandHistory = summary.TonnageBand is null
+                ? []
+                :
+                [
+                    new TonnageBandHistoryEntryDto
+                    {
+                        TonnageBand = summary.TonnageBand,
+                        RecordedAt = recordedAt,
+                    },
+                ],
+        };
+    }
+
+    public static AccreditedOverseasSiteDto ToOverseasSite(
+        AccreditationApplicationModel application,
+        OverseasSiteModel site,
+        bool includeWithdrawn,
+        DateTimeOffset now
+    )
+    {
+        var history = StatusHistory(application, site);
+
+        return new AccreditedOverseasSiteDto
+        {
+            SiteId = site.SiteId,
+            OrsId = site.OrsId,
+            SiteName = site.SiteName,
+            FormattedAddress = Blank(site.SiteAddress),
+            Address = ToOverseasAddress(site),
+            Coordinates = Blank(site.Coordinates),
+            Contact = ToContact(site.ContactName, site.ContactEmail, site.ContactPhone),
+            OperationCodes = site.OperationCodes,
+            RepatriatedLoads = Blank(site.RepatriatedLoads),
+            ConditionsOfExport = site.ConditionsOfExport,
+            IsEu = site.IsEu,
+            IsOecd = site.IsOecd,
+            ValidFrom = ParseInstant(site.ValidFrom),
+            Status = Project(history, now),
+            StatusHistory = history,
+            InterimSites = site
+                .InterimSites.Where(interim => includeWithdrawn || interim.RemovedAt is null)
+                .OrderBy(interim => interim.SiteId)
+                .Select(ToInterimSite)
+                .ToList(),
+        };
+    }
+
+    private static AccreditationSummaryDto Summary(
+        AccreditationApplicationModel application,
+        DateTimeOffset now,
+        IReadOnlyList<StatusHistoryEntryDto> history
+    ) =>
+        new()
+        {
+            OrganisationNumber = application.OrgId!.Value,
             RegistrationNumber = application.RegistrationReference!,
-            Year = application.Year,
-            Status = "approved",
+            AccreditationNumber = application.AccreditationReference!,
+            AccreditationYear = application.Year,
             Material = application.MaterialType.ToString(),
             GlassRecyclingProcess =
                 application.MaterialType == MaterialType.Glass
@@ -30,61 +115,114 @@ public static class AccreditationApiMapper
                         _ => null,
                     }
                     : null,
-            WasteProcessingType = exporter ? "exporter" : "reprocessor",
-            SiteAddress =
-                !exporter && !string.IsNullOrWhiteSpace(application.SiteAddress)
-                    ? new AddressDto { FullAddress = application.SiteAddress }
-                    : null,
-            PrnIssuance = new PrnIssuanceDto
+            WasteProcessingType = IsExporter(application) ? "exporter" : "reprocessor",
+            Status = Project(history, now),
+            TonnageBand = application.Prns.PlannedTonnageBand switch
             {
-                PlannedIssuance = application.Prns.PlannedTonnageBand?.ToString(),
-                Signatories = application
-                    .Prns.Authorisers.Select(a => new ContactDetailsDto
-                    {
-                        FullName = a.FullName,
-                        Email = a.Email,
-                    })
-                    .ToList(),
+                PlannedTonnageBand.UpTo500 => "up_to_500",
+                PlannedTonnageBand.UpTo5000 => "up_to_5000",
+                PlannedTonnageBand.UpTo10000 => "up_to_10000",
+                PlannedTonnageBand.Over10000 => "over_10000",
+                _ => null,
             },
-            BusinessPlan = businessPlan.Count == 0 ? null : businessPlan,
-            SubmitterContactDetails = ToContact(application.SubmitterContactDetails),
-            OverseasSites = exporter
-                ? (application.OverseasSites?.Sites ?? [])
-                    .Where(site => !string.IsNullOrWhiteSpace(site.OrsId))
-                    .Select(site => site.OrsId!)
-                    .Distinct()
-                    .Order(StringComparer.Ordinal)
-                    .ToList()
-                : null,
         };
+
+    // No effective-dated history is held yet, so an accreditation, or one of its sites, has the
+    // single `approved` entry the v2 mapping document prescribes for records that predate it.
+    // It is recorded when the application was approved (the last case management status push,
+    // else the last edit). A site takes effect on its ReEx approval date when it has one.
+    private static List<StatusHistoryEntryDto> StatusHistory(
+        AccreditationApplicationModel application,
+        OverseasSiteModel? site
+    )
+    {
+        var recordedAt = Approval(application);
+        var effective = site is null ? recordedAt : ParseInstant(site.ValidFrom) ?? recordedAt;
+
+        return
+        [
+            new StatusHistoryEntryDto
+            {
+                Status = Approved,
+                EffectiveDate = UkDate(effective),
+                RecordedAt = recordedAt,
+            },
+        ];
     }
 
-    public static AccreditedOverseasSiteDto ToOverseasSite(OverseasSiteModel site) =>
+    // The status for today: the latest entry whose effective date is on or before today. A
+    // record always starts out approved, so a first entry that is not yet effective still
+    // projects as approved rather than as nothing.
+    private static string Project(IReadOnlyList<StatusHistoryEntryDto> history, DateTimeOffset now)
+    {
+        var today = UkDate(now.UtcDateTime);
+        return history
+                .Where(entry => entry.EffectiveDate <= today)
+                .OrderBy(entry => entry.EffectiveDate)
+                .ThenBy(entry => entry.RecordedAt)
+                .Select(entry => entry.Status)
+                .LastOrDefault()
+            ?? Approved;
+    }
+
+    private static DateTime Approval(AccreditationApplicationModel application) =>
+        AsUtc(application.CaseManagementStatusUpdatedAt ?? application.DateLastEdited);
+
+    private static DateOnly UkDate(DateTime utc)
+    {
+        TimeZoneInfo zone;
+        try
+        {
+            zone = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
+        }
+        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
+        {
+            zone = TimeZoneInfo.Utc;
+        }
+
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(AsUtc(utc), zone));
+    }
+
+    private static DateTime AsUtc(DateTime value) =>
+        value.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
+            : value.ToUniversalTime();
+
+    // ValidFrom is held as the raw ISO string ReEx sent; unparseable is treated as absent.
+    private static DateTime? ParseInstant(string? value) =>
+        DateTimeOffset.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal,
+            out var parsed
+        )
+            ? parsed.UtcDateTime
+            : null;
+
+    private static InterimSiteDto ToInterimSite(InterimSiteModel interim) =>
         new()
         {
-            SiteId = site.SiteId,
-            OrsId = site.OrsId,
-            SiteName = site.SiteName,
-            FormattedAddress = Blank(site.SiteAddress),
-            Address = ToOverseasAddress(site),
-            Coordinates = Blank(site.Coordinates),
-            OperationCodes = site.OperationCodes,
-            Code1 = Blank(site.Code1),
-            Code2 = Blank(site.Code2),
-            Code3 = Blank(site.Code3),
-            RepatriatedLoads = Blank(site.RepatriatedLoads),
-            ConditionsOfExport = site.ConditionsOfExport,
-            IsEu = site.IsEu,
-            IsOecd = site.IsOecd,
-            InterimSiteIds = site
-                .InterimSites.Where(interim => interim.RemovedAt is null)
-                .Select(interim => interim.SiteId)
-                .Order()
-                .ToList(),
-            ValidFrom = Blank(site.ValidFrom),
-            Selected = site.Selected,
-            RegisteredNowAccredited = site.RegisteredNowAccredited,
-            IsNewSite = site.IsNewSite,
+            SiteId = interim.SiteId,
+            SiteNumber = interim.SiteNumber,
+            SiteName = interim.SiteName,
+            Address = new AddressDto
+            {
+                Line1 = interim.AddressLine1,
+                Line2 = Blank(interim.AddressLine2),
+                Town = interim.TownOrCity,
+                Country = interim.Country,
+                Postcode = Blank(interim.Postcode),
+                Region = Blank(interim.StateOrRegion),
+            },
+            Contact = new ContactDetailsDto
+            {
+                FullName = interim.ContactName,
+                Email = interim.ContactEmail,
+                Phone = interim.ContactPhone,
+            },
+            OperationCodes = interim.OperationCodes,
+            CreatedAt = interim.CreatedAt is { } created ? AsUtc(created) : null,
+            RemovedAt = interim.RemovedAt is { } removed ? AsUtc(removed) : null,
         };
 
     private static AddressDto? ToOverseasAddress(OverseasSiteModel site)
@@ -97,7 +235,8 @@ public static class AccreditationApiMapper
             Country = Blank(site.Country),
         };
 
-        return address.Line1 is null
+        return
+            address.Line1 is null
             && address.Line2 is null
             && address.Town is null
             && address.Country is null
@@ -105,43 +244,19 @@ public static class AccreditationApiMapper
             : address;
     }
 
-    // The seven business plan categories as the application holds them, in the order the
-    // operator is asked for them. A category with neither a percentage nor an explanation was
-    // not filled in and is left out.
-    private static List<BusinessPlanItemDto> BusinessPlan(AccreditationApplicationBusinessPlan plan)
+    private static ContactDetailsDto? ToContact(string? name, string? email, string? phone)
     {
-        var categories = new (string Description, int? Percent, string? Detail)[]
+        var contact = new ContactDetailsDto
         {
-            ("New infrastructure", plan.NewInfrastructurePercent, plan.NewInfrastructureDetail),
-            ("Price support", plan.PriceSupportPercent, plan.PriceSupportDetail),
-            ("Business collections", plan.BusinessCollectionsPercent, plan.BusinessCollectionsDetail),
-            ("Communications", plan.CommunicationsPercent, plan.CommunicationsDetail),
-            ("New markets", plan.NewMarketsPercent, plan.NewMarketsDetail),
-            ("New uses", plan.NewUsesPercent, plan.NewUsesDetail),
-            ("Other", plan.OtherPercent, plan.OtherDetail),
+            FullName = Blank(name),
+            Email = Blank(email),
+            Phone = Blank(phone),
         };
 
-        return categories
-            .Where(c => c.Percent is not null || !string.IsNullOrWhiteSpace(c.Detail))
-            .Select(c => new BusinessPlanItemDto
-            {
-                Description = c.Description,
-                DetailedDescription = Blank(c.Detail),
-                PercentSpent = c.Percent,
-            })
-            .ToList();
-    }
-
-    private static ContactDetailsDto? ToContact(SubmitterContactDetailsModel? contact) =>
-        contact is null
+        return contact.FullName is null && contact.Email is null && contact.Phone is null
             ? null
-            : new ContactDetailsDto
-            {
-                FullName = Blank(contact.FullName),
-                Email = Blank(contact.Email),
-                Phone = Blank(contact.Phone),
-                Title = Blank(contact.JobTitle),
-            };
+            : contact;
+    }
 
     private static bool IsExporter(AccreditationApplicationModel application) =>
         string.IsNullOrWhiteSpace(application.WasteProcessingType)

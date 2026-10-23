@@ -20,6 +20,7 @@ public static partial class AccreditationApiEndpoints
 
     private const int DefaultLimit = 20;
     private const int MaxLimit = 100;
+    private const int MinSearchYear = 2000;
 
     public static void UseAccreditationApiEndpoints(this IEndpointRouteBuilder app)
     {
@@ -28,6 +29,7 @@ public static partial class AccreditationApiEndpoints
             .AddEndpointFilter<ServiceClientAccessLogFilter>()
             .WithTags("Service clients");
 
+        group.MapGet("/v1/accreditations", SearchAccreditations).WithName("SearchAccreditations");
         group.MapGet(AccreditationRoute, GetAccreditation).WithName("GetAccreditation");
         group
             .MapGet($"{AccreditationRoute}/overseas-sites", ListOverseasSites)
@@ -35,6 +37,59 @@ public static partial class AccreditationApiEndpoints
         group
             .MapGet($"{AccreditationRoute}/overseas-sites/{{orsId}}", GetOverseasSite)
             .WithName("GetAccreditedOverseasSite");
+    }
+
+    private static async Task<IResult> SearchAccreditations(
+        HttpContext http,
+        IAccreditationApplicationPersistence persistence,
+        IOptions<ServiceClientsConfig> config
+    )
+    {
+        var query = http.Request.Query;
+        var paging = ParsePaging(query["pageNumber"], query["limit"]);
+        if (paging.Problem is not null)
+            return paging.Problem;
+
+        int? year = null;
+        if (query.TryGetValue("year", out var yearValue))
+        {
+            if (
+                !int.TryParse(
+                    yearValue.ToString(),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var parsedYear
+                )
+                || parsedYear < MinSearchYear
+            )
+            {
+                return new ServiceProblemResult(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_year",
+                    $"year must be a whole number from {MinSearchYear}, for example 2027."
+                );
+            }
+
+            year = parsedYear;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var (items, total) = await persistence.SearchGrantedAccreditationsAsync(
+            year,
+            config.Value.FirstAccreditationYear,
+            (paging.PageNumber - 1) * paging.Limit,
+            paging.Limit
+        );
+
+        return Results.Ok(
+            new PageDto<AccreditationSummaryDto>
+            {
+                PageNumber = paging.PageNumber,
+                Limit = paging.Limit,
+                TotalItems = (int)total,
+                Items = items.Select(a => AccreditationApiMapper.ToSummary(a, now)).ToList(),
+            }
+        );
     }
 
     private static async Task<IResult> GetAccreditation(
@@ -45,8 +100,15 @@ public static partial class AccreditationApiEndpoints
         IOptions<ServiceClientsConfig> config
     )
     {
-        var lookup = await Resolve(organisationNumber, registrationNumber, year, persistence, config);
-        return lookup.Problem ?? Results.Ok(AccreditationApiMapper.ToAccreditation(lookup.Application!));
+        var lookup = await Resolve(
+            organisationNumber,
+            registrationNumber,
+            year,
+            persistence,
+            config
+        );
+        return lookup.Problem
+            ?? Results.Ok(AccreditationApiMapper.ToAccreditation(lookup.Application!, DateTimeOffset.UtcNow));
     }
 
     private static async Task<IResult> ListOverseasSites(
@@ -63,27 +125,23 @@ public static partial class AccreditationApiEndpoints
         if (paging.Problem is not null)
             return paging.Problem;
 
-        bool? selected = null;
-        if (query.TryGetValue("selected", out var selectedValue))
-        {
-            if (!bool.TryParse(selectedValue.ToString(), out var parsed))
-            {
-                return new ServiceProblemResult(
-                    StatusCodes.Status400BadRequest,
-                    "invalid_selected",
-                    "selected must be true or false."
-                );
-            }
+        var withdrawn = ParseIncludeWithdrawn(query["includeWithdrawn"]);
+        if (withdrawn.Problem is not null)
+            return withdrawn.Problem;
 
-            selected = parsed;
-        }
-
-        var lookup = await Resolve(organisationNumber, registrationNumber, year, persistence, config);
+        var lookup = await Resolve(
+            organisationNumber,
+            registrationNumber,
+            year,
+            persistence,
+            config
+        );
         if (lookup.Problem is not null)
             return lookup.Problem;
 
-        var sites = (lookup.Application!.OverseasSites?.Sites ?? [])
-            .Where(site => selected is null || site.Selected == selected)
+        var application = lookup.Application!;
+        var now = DateTimeOffset.UtcNow;
+        var sites = AccreditedSites(application)
             .OrderBy(site => site.OrsId, StringComparer.Ordinal)
             .ThenBy(site => site.SiteId)
             .ToList();
@@ -97,7 +155,14 @@ public static partial class AccreditationApiEndpoints
                 Items = sites
                     .Skip((paging.PageNumber - 1) * paging.Limit)
                     .Take(paging.Limit)
-                    .Select(AccreditationApiMapper.ToOverseasSite)
+                    .Select(site =>
+                        AccreditationApiMapper.ToOverseasSite(
+                            application,
+                            site,
+                            withdrawn.Include,
+                            now
+                        )
+                    )
                     .ToList(),
             }
         );
@@ -108,6 +173,7 @@ public static partial class AccreditationApiEndpoints
         string registrationNumber,
         string year,
         string orsId,
+        HttpContext http,
         IAccreditationApplicationPersistence persistence,
         IOptions<ServiceClientsConfig> config
     )
@@ -121,11 +187,22 @@ public static partial class AccreditationApiEndpoints
             );
         }
 
-        var lookup = await Resolve(organisationNumber, registrationNumber, year, persistence, config);
+        var withdrawn = ParseIncludeWithdrawn(http.Request.Query["includeWithdrawn"]);
+        if (withdrawn.Problem is not null)
+            return withdrawn.Problem;
+
+        var lookup = await Resolve(
+            organisationNumber,
+            registrationNumber,
+            year,
+            persistence,
+            config
+        );
         if (lookup.Problem is not null)
             return lookup.Problem;
 
-        var site = (lookup.Application!.OverseasSites?.Sites ?? []).FirstOrDefault(s =>
+        var application = lookup.Application!;
+        var site = AccreditedSites(application).FirstOrDefault(s =>
             string.Equals(s.OrsId, orsId, StringComparison.Ordinal)
         );
 
@@ -135,7 +212,39 @@ public static partial class AccreditationApiEndpoints
                 "overseas_site_not_found",
                 $"No overseas site {orsId} was found on the {year} accreditation of registration {registrationNumber}."
             )
-            : Results.Ok(AccreditationApiMapper.ToOverseasSite(site));
+            : Results.Ok(
+                AccreditationApiMapper.ToOverseasSite(
+                    application,
+                    site,
+                    withdrawn.Include,
+                    DateTimeOffset.UtcNow
+                )
+            );
+    }
+
+    // Only the sites included in the accreditation. A site the organisation registered but did
+    // not select for it is not on the accreditation, so it is not served.
+    private static IEnumerable<OverseasSiteModel> AccreditedSites(
+        AccreditationApplicationModel application
+    ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
+
+    private sealed record Withdrawn(bool Include, IResult? Problem);
+
+    private static Withdrawn ParseIncludeWithdrawn(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return new Withdrawn(false, null);
+
+        return bool.TryParse(value, out var include)
+            ? new Withdrawn(include, null)
+            : new Withdrawn(
+                false,
+                new ServiceProblemResult(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_include_withdrawn",
+                    "includeWithdrawn must be true or false."
+                )
+            );
     }
 
     private sealed record Lookup(AccreditationApplicationModel? Application, IResult? Problem);
@@ -176,7 +285,12 @@ public static partial class AccreditationApiEndpoints
 
         if (
             year.Length != 4
-            || !int.TryParse(year, NumberStyles.None, CultureInfo.InvariantCulture, out var accreditationYear)
+            || !int.TryParse(
+                year,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var accreditationYear
+            )
         )
         {
             return Bad("invalid_year", "year must be a four digit year, for example 2027.");

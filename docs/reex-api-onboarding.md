@@ -75,13 +75,18 @@ Accreditations for 2027 onwards are served.
 
 | Route | Returns |
 | --- | --- |
-| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the accreditation |
-| `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20&selected=true` | a page of overseas sites (limit max 100) |
-| `…/accreditations/{year}/overseas-sites/{orsId}` | one overseas site (`orsId` is three digits, e.g. `001`) |
+| `GET /v1/accreditations?year=2027&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100; `year` optional) |
+| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the accreditation, with status and tonnage band history and signatories |
+| `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20&includeWithdrawn=false` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
+| `…/accreditations/{year}/overseas-sites/{orsId}?includeWithdrawn=false` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
 
-Notes: optional fields with no value are omitted. `prnIssuance.plannedIssuance` is the
-operator's planned tonnage band. UK site addresses are returned as `fullAddress`. Contact details
-and BES evidence for overseas sites are not served yet.
+Notes: optional fields with no value are omitted. The shapes follow the v2 draft spec
+(`docs/openapi/registration-accreditation-api.v2.yaml`). `status` is the latest `statusHistory`
+entry effective today. Until effective-dated history is recorded, each history has one `approved`
+entry, and `tonnageBand` is the operator's planned band. Signatories are returned only when getting
+one accreditation, never in search. Only overseas sites included in the accreditation are served.
+Withdrawn interim sites (`removedAt` set) are returned only with `includeWithdrawn=true`. BES
+evidence is not served.
 
 ## Errors
 
@@ -98,7 +103,7 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 | 401 | `reused_nonce` | this nonce was already used |
 | 404 | `accreditation_not_found` | no granted accreditation for that organisation, registration and year |
 | 404 | `overseas_site_not_found` | no such overseas site on the accreditation |
-| 400 | `invalid_organisation_number`, `invalid_registration_number`, `invalid_year`, `invalid_ors_id`, `invalid_paging`, `invalid_selected` | bad input |
+| 400 | `invalid_organisation_number`, `invalid_registration_number`, `invalid_year`, `invalid_ors_id`, `invalid_paging`, `invalid_include_withdrawn` | bad input |
 | 405 | | any method other than GET |
 
 401 troubleshooting: check clock skew first, then that the payload has exactly two empty lines
