@@ -123,6 +123,26 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 .FirstOrDefault()
         );
 
+    public Task<(
+        IReadOnlyList<AccreditationApplicationModel> Items,
+        long Total
+    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit)
+    {
+        var matches = _store
+            .Where(a =>
+                a.OrgId is not null
+                && a.Year >= firstYear
+                && (year is null || a.Year == year)
+                && a.ApplicationStatus == ApplicationStatus.Approved
+                && !string.IsNullOrEmpty(a.AccreditationReference)
+            )
+            .OrderBy(a => a.AccreditationReference, StringComparer.Ordinal)
+            .ToList();
+        return Task.FromResult<(IReadOnlyList<AccreditationApplicationModel>, long)>(
+            (matches.Skip(skip).Take(limit).ToList(), matches.Count)
+        );
+    }
+
     public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId)
     {
         IReadOnlyList<string> orsIds = _store
@@ -356,7 +376,11 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     private static bool MatchesCondition(BsonValue? actual, BsonValue expected)
     {
-        if (expected is BsonDocument condDoc && condDoc.ElementCount > 0 && condDoc.Names.All(n => n.StartsWith('$')))
+        if (
+            expected is BsonDocument condDoc
+            && condDoc.ElementCount > 0
+            && condDoc.Names.All(n => n.StartsWith('$'))
+        )
         {
             foreach (var condition in condDoc)
             {

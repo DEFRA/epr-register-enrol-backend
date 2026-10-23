@@ -151,14 +151,23 @@ public class AccreditationApiEndpointTests : IDisposable
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
         var body = await Json(response);
-        body.GetProperty("accreditationReference").GetString().Should().Be("A27EX5000270012AL");
+        body.GetProperty("organisationNumber").GetInt32().Should().Be(Org);
+        body.GetProperty("accreditationNumber").GetString().Should().Be("A27EX5000270012AL");
         body.GetProperty("registrationNumber").GetString().Should().Be(Registration);
-        body.GetProperty("year").GetInt32().Should().Be(2027);
+        body.GetProperty("accreditationYear").GetInt32().Should().Be(2027);
         body.GetProperty("status").GetString().Should().Be("approved");
         body.GetProperty("material").GetString().Should().Be("Aluminium");
         body.GetProperty("wasteProcessingType").GetString().Should().Be("exporter");
-        body.GetProperty("overseasSites").EnumerateArray().Select(e => e.GetString())
-            .Should().Equal("001", "002", "003");
+        body.GetProperty("signatories").GetArrayLength().Should().Be(0);
+        var history = body.GetProperty("statusHistory").EnumerateArray().Single();
+        history.GetProperty("status").GetString().Should().Be("approved");
+        history.GetProperty("effectiveDate").GetString().Should().MatchRegex(@"^\d{4}-\d{2}-\d{2}$");
+        history.GetProperty("recordedAt").GetDateTime().Should().BeAfter(DateTime.MinValue);
+        body.GetProperty("tonnageBandHistory").GetArrayLength().Should().Be(0);
+        body.TryGetProperty("overseasSites", out _).Should().BeFalse();
+        body.TryGetProperty("accreditationReference", out _).Should().BeFalse();
+        body.TryGetProperty("businessPlan", out _).Should().BeFalse();
+        body.TryGetProperty("prnIssuance", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -181,8 +190,8 @@ public class AccreditationApiEndpointTests : IDisposable
             await Get($"/v1/organisations/{Org}/registrations/{Registration}/accreditations/2028")
         );
 
-        body.GetProperty("accreditationReference").GetString().Should().Be("A28");
-        body.GetProperty("year").GetInt32().Should().Be(2028);
+        body.GetProperty("accreditationNumber").GetString().Should().Be("A28");
+        body.GetProperty("accreditationYear").GetInt32().Should().Be(2028);
     }
 
     [Theory]
@@ -265,7 +274,7 @@ public class AccreditationApiEndpointTests : IDisposable
 
         var body = await Json(await Get(AccreditationPath));
 
-        body.GetProperty("accreditationReference").GetString().Should().Be("A27-NEWER");
+        body.GetProperty("accreditationNumber").GetString().Should().Be("A27-NEWER");
     }
 
     [Theory]
@@ -288,7 +297,7 @@ public class AccreditationApiEndpointTests : IDisposable
     // ---- GET overseas sites ----
 
     [Fact]
-    public async Task OverseasSites_AreListed_WithTheirApproval()
+    public async Task OverseasSites_AreListed_OnlyThoseIncludedInTheAccreditation()
     {
         await Seed();
 
@@ -296,42 +305,98 @@ public class AccreditationApiEndpointTests : IDisposable
 
         body.GetProperty("pageNumber").GetInt32().Should().Be(1);
         body.GetProperty("limit").GetInt32().Should().Be(20);
-        body.GetProperty("totalItems").GetInt32().Should().Be(3);
+        body.GetProperty("totalItems").GetInt32().Should().Be(2);
         var items = body.GetProperty("items").EnumerateArray().ToList();
-        items.Select(i => i.GetProperty("orsId").GetString()).Should().Equal("001", "002", "003");
-        items[0].GetProperty("validFrom").GetString().Should().Be("2026-03-14T00:00:00.000Z");
-        items[0].GetProperty("selected").GetBoolean().Should().BeTrue();
+        items.Select(i => i.GetProperty("orsId").GetString()).Should().Equal("001", "002");
+        items[0].GetProperty("validFrom").GetDateTime().Should().Be(
+            new DateTime(2026, 3, 14, 0, 0, 0, DateTimeKind.Utc)
+        );
+        items[0].GetProperty("status").GetString().Should().Be("approved");
+        items[0].GetProperty("statusHistory").EnumerateArray().Single()
+            .GetProperty("effectiveDate").GetString().Should().Be("2026-03-14");
+        items[0].GetProperty("interimSites").GetArrayLength().Should().Be(0);
         items[1].TryGetProperty("validFrom", out _).Should().BeFalse();
-        items[2].GetProperty("selected").GetBoolean().Should().BeFalse();
+        foreach (var item in items)
+        {
+            item.TryGetProperty("selected", out _).Should().BeFalse();
+            item.TryGetProperty("interimSiteIds", out _).Should().BeFalse();
+            item.TryGetProperty("isNewSite", out _).Should().BeFalse();
+            item.TryGetProperty("code1", out _).Should().BeFalse();
+        }
     }
 
-    [Theory]
-    [InlineData("true", new[] { "001", "002" })]
-    [InlineData("false", new[] { "003" })]
-    public async Task OverseasSites_CanBeFilteredBySelected(string selected, string[] expected)
+    [Fact]
+    public async Task OverseasSites_ServeInterimSitesInline_WithdrawnOnlyWhenAskedFor()
     {
-        await Seed();
+        await Seed(
+            configure: a =>
+                a.OverseasSites!.Sites[0].InterimSites =
+                [
+                    Interim(11, removed: false),
+                    Interim(12, removed: true),
+                ]
+        );
 
-        var body = await Json(await Get($"{AccreditationPath}/overseas-sites?selected={selected}"));
+        var defaults = await Json(await Get($"{AccreditationPath}/overseas-sites/001"));
+        var all = await Json(
+            await Get($"{AccreditationPath}/overseas-sites/001?includeWithdrawn=true")
+        );
 
-        body.GetProperty("items").EnumerateArray()
-            .Select(i => i.GetProperty("orsId").GetString())
-            .Should().Equal(expected);
-        body.GetProperty("totalItems").GetInt32().Should().Be(expected.Length);
+        defaults.GetProperty("interimSites").EnumerateArray()
+            .Select(i => i.GetProperty("siteId").GetInt32()).Should().Equal(11);
+        var interims = all.GetProperty("interimSites").EnumerateArray().ToList();
+        interims.Select(i => i.GetProperty("siteId").GetInt32()).Should().Equal(11, 12);
+        interims[0].GetProperty("siteNumber").GetString().Should().Be("011");
+        interims[0].GetProperty("address").GetProperty("line1").GetString().Should().Be("Line 1");
+        interims[0].GetProperty("contact").GetProperty("email").GetString().Should().Be("e@example.com");
+        interims[0].TryGetProperty("removedAt", out _).Should().BeFalse();
+        interims[1].GetProperty("removedAt").GetDateTime().Should().BeAfter(DateTime.MinValue);
     }
+
+    [Fact]
+    public async Task OverseasSites_ListHonoursIncludeWithdrawn()
+    {
+        await Seed(configure: a => a.OverseasSites!.Sites[1].InterimSites = [Interim(21, removed: true)]);
+
+        var hidden = await Json(await Get($"{AccreditationPath}/overseas-sites"));
+        var shown = await Json(await Get($"{AccreditationPath}/overseas-sites?includeWithdrawn=true"));
+
+        hidden.GetProperty("items")[1].GetProperty("interimSites").GetArrayLength().Should().Be(0);
+        shown.GetProperty("items")[1].GetProperty("interimSites").GetArrayLength().Should().Be(1);
+    }
+
+    private static InterimSiteModel Interim(int id, bool removed) =>
+        new()
+        {
+            SiteId = id,
+            SiteNumber = id.ToString("000"),
+            Country = "Germany",
+            SiteName = $"Interim {id}",
+            AddressLine1 = "Line 1",
+            TownOrCity = "Town",
+            ContactName = "n",
+            ContactEmail = "e@example.com",
+            ContactPhone = "1",
+            RemovedAt = removed ? DateTime.UtcNow : null,
+        };
 
     [Fact]
     public async Task OverseasSites_ArePaged()
     {
         await Seed();
 
-        var body = await Json(await Get($"{AccreditationPath}/overseas-sites?pageNumber=2&limit=2"));
+        var body = await Json(
+            await Get($"{AccreditationPath}/overseas-sites?pageNumber=2&limit=1")
+        );
 
         body.GetProperty("pageNumber").GetInt32().Should().Be(2);
-        body.GetProperty("limit").GetInt32().Should().Be(2);
-        body.GetProperty("totalItems").GetInt32().Should().Be(3);
-        body.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("orsId").GetString())
-            .Should().Equal("003");
+        body.GetProperty("limit").GetInt32().Should().Be(1);
+        body.GetProperty("totalItems").GetInt32().Should().Be(2);
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("orsId").GetString())
+            .Should()
+            .Equal("002");
     }
 
     [Theory]
@@ -339,7 +404,7 @@ public class AccreditationApiEndpointTests : IDisposable
     [InlineData("pageNumber=x", "invalid_paging")]
     [InlineData("limit=0", "invalid_paging")]
     [InlineData("limit=101", "invalid_paging")]
-    [InlineData("selected=maybe", "invalid_selected")]
+    [InlineData("includeWithdrawn=maybe", "invalid_include_withdrawn")]
     public async Task OverseasSites_InvalidQuery_Is400(string query, string code)
     {
         await Seed();
@@ -370,14 +435,26 @@ public class AccreditationApiEndpointTests : IDisposable
         body.GetProperty("siteName").GetString().Should().Be("Site 002");
     }
 
-    [Fact]
-    public async Task OverseasSite_NotOnTheAccreditation_Is404()
+    [Theory]
+    [InlineData("999")] // unknown
+    [InlineData("003")] // registered, but not included in the accreditation
+    public async Task OverseasSite_NotOnTheAccreditation_Is404(string orsId)
     {
         await Seed();
 
-        var response = await Get($"{AccreditationPath}/overseas-sites/999");
+        var response = await Get($"{AccreditationPath}/overseas-sites/{orsId}");
 
         await AssertProblem(response, HttpStatusCode.NotFound, "overseas_site_not_found");
+    }
+
+    [Fact]
+    public async Task OverseasSite_WithABadIncludeWithdrawn_Is400()
+    {
+        await Seed();
+
+        var response = await Get($"{AccreditationPath}/overseas-sites/001?includeWithdrawn=maybe");
+
+        await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_include_withdrawn");
     }
 
     [Theory]
@@ -393,11 +470,161 @@ public class AccreditationApiEndpointTests : IDisposable
         await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_ors_id");
     }
 
+    // ---- search ----
+
+    [Fact]
+    public async Task Search_ReturnsSummaries_AcrossOrganisations()
+    {
+        await Seed(
+            accreditation: "A27EX5000270012AL",
+            configure: a =>
+            {
+                a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo5000;
+            }
+        );
+        await Seed(
+            accreditation: "A27RE5000280012GL",
+            registration: "R27RE5000280012GL",
+            orgId: 500028,
+            configure: a =>
+            {
+                a.MaterialType = MaterialType.Glass;
+                a.GlassRecyclingProcess = GlassRecyclingProcess.Remelt;
+                a.IsExporter = false;
+                a.WasteProcessingType = "reprocessor";
+            }
+        );
+
+        var response = await Get("/v1/accreditations");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("pageNumber").GetInt32().Should().Be(1);
+        body.GetProperty("limit").GetInt32().Should().Be(20);
+        body.GetProperty("totalItems").GetInt32().Should().Be(2);
+        var items = body.GetProperty("items").EnumerateArray().ToList();
+        items
+            .Select(i => i.GetProperty("accreditationNumber").GetString())
+            .Should()
+            .Equal("A27EX5000270012AL", "A27RE5000280012GL");
+
+        var exporter = items[0];
+        exporter.GetProperty("organisationNumber").GetInt32().Should().Be(Org);
+        exporter.GetProperty("registrationNumber").GetString().Should().Be(Registration);
+        exporter.GetProperty("accreditationYear").GetInt32().Should().Be(2027);
+        exporter.GetProperty("material").GetString().Should().Be("Aluminium");
+        exporter.GetProperty("wasteProcessingType").GetString().Should().Be("exporter");
+        exporter.GetProperty("status").GetString().Should().Be("approved");
+        exporter.GetProperty("tonnageBand").GetString().Should().Be("up_to_5000");
+        exporter.TryGetProperty("glassRecyclingProcess", out _).Should().BeFalse();
+
+        var glass = items[1];
+        glass.GetProperty("organisationNumber").GetInt32().Should().Be(500028);
+        glass.GetProperty("glassRecyclingProcess").GetString().Should().Be("glass_re_melt");
+        glass.GetProperty("wasteProcessingType").GetString().Should().Be("reprocessor");
+        glass.TryGetProperty("tonnageBand", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Search_DoesNotExposeHistoryOrPersonalData()
+    {
+        await Seed();
+
+        var item = (await Json(await Get("/v1/accreditations")))
+            .GetProperty("items")
+            .EnumerateArray()
+            .Single();
+
+        item.TryGetProperty("signatories", out _).Should().BeFalse();
+        item.TryGetProperty("statusHistory", out _).Should().BeFalse();
+        item.TryGetProperty("tonnageBandHistory", out _).Should().BeFalse();
+        item.TryGetProperty("businessPlan", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Search_FiltersByYear()
+    {
+        await Seed(year: 2027, accreditation: "A27EX5000270012AL");
+        await Seed(year: 2028, accreditation: "A28EX5000270012AL");
+
+        var body = await Json(await Get("/v1/accreditations?year=2028"));
+
+        body.GetProperty("totalItems").GetInt32().Should().Be(1);
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("accreditationNumber").GetString())
+            .Should()
+            .Equal("A28EX5000270012AL");
+    }
+
+    [Fact]
+    public async Task Search_OnlyServesGrantedAccreditations()
+    {
+        await Seed(accreditation: "A27EX5000270012AL");
+        await Seed(status: ApplicationStatus.Submitted, accreditation: "A27EX5000270099AL");
+        await Seed(accreditation: null, registration: "R27EX5000270013AL");
+        await Seed(year: 2026, accreditation: "A26EX5000270012AL");
+        await Seed(accreditation: "A27EX5000290012AL", orgId: 0, configure: a => a.OrgId = null);
+
+        var body = await Json(await Get("/v1/accreditations"));
+
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("accreditationNumber").GetString())
+            .Should()
+            .Equal("A27EX5000270012AL");
+        body.GetProperty("totalItems").GetInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Search_IsPaged()
+    {
+        await Seed(accreditation: "A27EX5000270011AL");
+        await Seed(accreditation: "A27EX5000270012AL");
+        await Seed(accreditation: "A27EX5000270013AL");
+
+        var body = await Json(await Get("/v1/accreditations?pageNumber=2&limit=2"));
+
+        body.GetProperty("pageNumber").GetInt32().Should().Be(2);
+        body.GetProperty("limit").GetInt32().Should().Be(2);
+        body.GetProperty("totalItems").GetInt32().Should().Be(3);
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("accreditationNumber").GetString())
+            .Should()
+            .Equal("A27EX5000270013AL");
+    }
+
+    [Fact]
+    public async Task Search_WithNothingGranted_IsAnEmptyPage()
+    {
+        var response = await Get("/v1/accreditations");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("totalItems").GetInt32().Should().Be(0);
+        body.GetProperty("items").GetArrayLength().Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("year=abc", "invalid_year")]
+    [InlineData("year=1999", "invalid_year")]
+    [InlineData("year=-2027", "invalid_year")]
+    [InlineData("pageNumber=0", "invalid_paging")]
+    [InlineData("limit=101", "invalid_paging")]
+    public async Task Search_InvalidQuery_Is400(string query, string code)
+    {
+        var response = await Get($"/v1/accreditations?{query}");
+
+        await AssertProblem(response, HttpStatusCode.BadRequest, code);
+    }
+
     // ---- authentication ----
 
     public static TheoryData<string> Routes() =>
         new()
         {
+            "/v1/accreditations",
             AccreditationPath,
             $"{AccreditationPath}/overseas-sites",
             $"{AccreditationPath}/overseas-sites/001",
@@ -542,7 +769,14 @@ public class AccreditationApiEndpointTests : IDisposable
     {
         await Seed();
 
-        foreach (var path in new[] { AccreditationPath, $"{AccreditationPath}/overseas-sites", $"{AccreditationPath}/overseas-sites/001" })
+        foreach (
+            var path in new[]
+            {
+                AccreditationPath,
+                $"{AccreditationPath}/overseas-sites",
+                $"{AccreditationPath}/overseas-sites/001",
+            }
+        )
         {
             var response = await _client.SendAsync(
                 ServiceClientSigner.Request(new HttpMethod(method), path, ReExClientId, ReExSecret),
@@ -554,8 +788,14 @@ public class AccreditationApiEndpointTests : IDisposable
     }
 
     [Theory]
-    [InlineData("POST", "/api/v1/accreditation-applications/case-management/5e33055f-c610-4cbf-ae5a-7a7843fd08b9/status")]
-    [InlineData("POST", "/api/v1/accreditation-applications/case-management/5e33055f-c610-4cbf-ae5a-7a7843fd08b9/query")]
+    [InlineData(
+        "POST",
+        "/api/v1/accreditation-applications/case-management/5e33055f-c610-4cbf-ae5a-7a7843fd08b9/status"
+    )]
+    [InlineData(
+        "POST",
+        "/api/v1/accreditation-applications/case-management/5e33055f-c610-4cbf-ae5a-7a7843fd08b9/query"
+    )]
     [InlineData("PATCH", "/api/v1/accreditation-applications/org-1/app-1/prns")]
     [InlineData("POST", "/api/v1/accreditation-applications/org-1/app-1/submit")]
     public async Task ServiceClientCredentials_DoNotOpenAnyRouteThatRecordsChanges(
@@ -598,7 +838,11 @@ public class AccreditationApiEndpointTests : IDisposable
         var deadline = DateTime.UtcNow.AddSeconds(5);
         List<CapturingLoggerFactory.Entry> access;
         while (
-            (access = logs.Entries.Where(e => e.Category.Contains("ServiceClientAccess")).ToList()).Count == 0
+            (
+                access = logs
+                    .Entries.Where(e => e.Category.Contains("ServiceClientAccess"))
+                    .ToList()
+            ).Count == 0
             && DateTime.UtcNow < deadline
         )
         {

@@ -46,6 +46,18 @@ public interface IAccreditationApplicationPersistence
         int firstYear
     );
 
+    /// <summary>
+    /// A page of the granted accreditations across all organisations, optionally for one year,
+    /// from <paramref name="firstYear"/> on, ordered by accreditation number. Granted means the
+    /// same as <see cref="GetGrantedAccreditationAsync"/>, and the application must also carry an
+    /// organisation number, since one without cannot be addressed by a service client. Also
+    /// returns the total across all pages. Read-only.
+    /// </summary>
+    Task<(
+        IReadOnlyList<AccreditationApplicationModel> Items,
+        long Total
+    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit);
+
     Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId);
 
     /// <summary>
