@@ -367,7 +367,7 @@ public class AccreditationApplicationEndpointsTests
                             MaterialType = MaterialType.Steel,
                             Year = 2025,
                             OrganisationName = "Acme Reprocessing Ltd",
-                            RegistrationReference = "REP-001",
+                            RegistrationReference = "R25ER0000010001PL",
                             SiteAddress = "1 Factory Lane, Manchester, M1 1AA",
                             IsExporter = false,
                             CompanyRegisterAddressPostcode = "EC1A 1BB",
@@ -394,7 +394,7 @@ public class AccreditationApplicationEndpointsTests
         );
         body!.OrganisationName.Should().Be("Acme Reprocessing Ltd");
         body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
-        body.RegistrationReference.Should().Be("REP-001");
+        body.RegistrationReference.Should().Be("R25ER0000010001PL");
         body.CompanyRegisterAddressPostcode.Should().Be("EC1A 1BB");
         body.CompaniesHouseNumber.Should().Be("01234567");
         body.PermitNumbers.Should().BeEquivalentTo(["WML123456", "PPC456789"]);

@@ -28,7 +28,7 @@ public class HttpCaseWorkingApiAdapterTests
             OrganisationName = "Acme Recycling Ltd",
             Year = 2026,
             RegistrationId = "reg-001",
-            RegistrationReference = "EPR-100023",
+            RegistrationReference = "R25ER1000230001PL",
             MaterialType = MaterialType.Plastic,
             ApplicationStatus = ApplicationStatus.Started,
             SiteAddress = "123 High Street, London, SW1A 1AA",
@@ -358,7 +358,7 @@ public class HttpCaseWorkingApiAdapterTests
 
         var payload = root.GetProperty("payload");
         payload.GetProperty("organisationName").GetString().Should().Be("Acme Recycling Ltd");
-        payload.GetProperty("registrationNumber").GetString().Should().Be("EPR-100023");
+        payload.GetProperty("registrationNumber").GetString().Should().Be("R25ER1000230001PL");
         payload.GetProperty("material").GetString().Should().Be("plastic");
         payload.GetProperty("previousAccreditationYear").GetInt32().Should().Be(2025);
         payload.GetProperty("complianceIssuesReported").GetInt32().Should().Be(0);
@@ -2367,7 +2367,7 @@ public class HttpCaseWorkingApiAdapterTests
         var payload = await CapturedSubmitPayload(application);
 
         payload.TryGetProperty("paymentReference", out _).Should().BeFalse();
-        payload.GetProperty("registrationNumber").GetString().Should().Be("EPR-100023");
+        payload.GetProperty("registrationNumber").GetString().Should().Be("R25ER1000230001PL");
     }
 
     // RA-503: PaymentReference is the operator's real, nation-specific bank reference

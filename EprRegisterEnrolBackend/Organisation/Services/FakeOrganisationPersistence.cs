@@ -24,15 +24,17 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50016 = ObjectId.Parse("aaa000000000000000050016");
     public static readonly ObjectId Reg50017 = ObjectId.Parse("aaa000000000000000050017");
 
-    private static readonly string[] PerfTestMaterials =
+    // RA-690: each material's registration reference code. Perftest glass registrations have no
+    // GlassRecyclingProcess, so they take "other" (GO), as StubReExApiAdapter does.
+    private static readonly (string Material, string Code)[] PerfTestMaterials =
     [
-        "plastic",
-        "glass",
-        "steel",
-        "aluminium",
-        "paper",
-        "wood",
-        "fibre",
+        ("plastic", "PL"),
+        ("glass", "GO"),
+        ("steel", "ST"),
+        ("aluminium", "AL"),
+        ("paper", "PA"),
+        ("wood", "WO"),
+        ("fibre", "FB"),
     ];
 
     // RA-553: cycles the 100 perftest reprocessors/exporters evenly across all four
@@ -42,14 +44,15 @@ public class FakeOrganisationPersistence
     private static readonly (
         string RegulatorCode,
         string Nation,
+        char AgencyLetter,
         string Town,
         string Postcode
     )[] PerfTestRegulatorAreas =
     [
-        ("ea", "england", "London", "SW1A 1AA"),
-        ("sepa", "scotland", "Edinburgh", "EH1 1AA"),
-        ("nrw", "wales", "Cardiff", "CF10 1AA"),
-        ("niea", "northern_ireland", "Belfast", "BT1 1AA"),
+        ("ea", "england", 'E', "London", "SW1A 1AA"),
+        ("sepa", "scotland", 'S', "Edinburgh", "EH1 1AA"),
+        ("nrw", "wales", 'W', "Cardiff", "CF10 1AA"),
+        ("niea", "northern_ireland", 'N', "Belfast", "BT1 1AA"),
     ];
 
     private readonly List<OrganisationModel> _store = new();
@@ -74,7 +77,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "Operator Export Company",
                     TradingName = "Op Export Co",
-                    RegistrationNumber = "11044891",
+                    RegistrationNumber = "R26ER0000010001PL",
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "29 Acacia Road",
@@ -111,7 +114,7 @@ public class FakeOrganisationPersistence
                 CompanyDetails = new CompanyDetailsModel
                 {
                     Name = "Another Company",
-                    RegistrationNumber = "99999999",
+                    RegistrationNumber = "R26SR0000020001PL",
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "1 Example Street",
@@ -141,7 +144,7 @@ public class FakeOrganisationPersistence
                 CompanyDetails = new CompanyDetailsModel
                 {
                     Name = "Third Company",
-                    RegistrationNumber = "11111111",
+                    RegistrationNumber = "R26NX0000030001PL",
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "1 Example Street",
@@ -172,7 +175,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "NEWDEV RECYCLING LIMITED",
                     TradingName = "NEWDEV RECYCLING LIMITED",
-                    RegistrationNumber = "R26ER5000390068PL",
+                    RegistrationNumber = "R26ER0500010001PL",
                     CompaniesHouseNumber = "12345001",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -225,7 +228,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "Beta Recycling Co",
                     TradingName = "Beta Recycling Co",
-                    RegistrationNumber = "R26ER5000390068PL",
+                    RegistrationNumber = "R26ER0500020001GR",
                     CompaniesHouseNumber = "12345002",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -281,7 +284,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "Export Plastics Ltd",
                     TradingName = "Export Plastics",
-                    RegistrationNumber = "EXP-50005",
+                    RegistrationNumber = "R26EX0500050001PL",
                     CompaniesHouseNumber = "12345005",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -329,7 +332,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "Global Glass Exports",
                     TradingName = "Global Glass",
-                    RegistrationNumber = "EXP-50006",
+                    RegistrationNumber = "R26EX0500060001GO",
                     CompaniesHouseNumber = "12345006",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -394,7 +397,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "Interim Site Test Exports Ltd",
                     TradingName = "Interim Site Test Exports",
-                    RegistrationNumber = "EXP-50013",
+                    RegistrationNumber = "R26EX0500130001PL",
                     CompaniesHouseNumber = "12345013",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -455,7 +458,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "ORS Fee Test Exports Ltd",
                     TradingName = "ORS Fee Test Exports",
-                    RegistrationNumber = "EXP-50014",
+                    RegistrationNumber = "R26EX0500140001PL",
                     CompaniesHouseNumber = "12345014",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -521,7 +524,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "Exporter Accreditation Test Exports Ltd",
                     TradingName = "Exporter Accreditation Test Exports",
-                    RegistrationNumber = "EXP-50015",
+                    RegistrationNumber = "R26EX0500150001PL",
                     CompaniesHouseNumber = "12345015",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -580,7 +583,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "Section Lock Test Recycling Ltd",
                     TradingName = "Section Lock Test Recycling",
-                    RegistrationNumber = "R26ER5000390068PL",
+                    RegistrationNumber = "R26ER0500160001PL",
                     CompaniesHouseNumber = "12345016",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -640,7 +643,7 @@ public class FakeOrganisationPersistence
                 {
                     Name = "Coordinate Precision Test Exports Ltd",
                     TradingName = "Coordinate Precision Test Exports",
-                    RegistrationNumber = "EXP-50017",
+                    RegistrationNumber = "R26EX0500170001PL",
                     CompaniesHouseNumber = "12345017",
                     RegisteredAddress = new RegisteredAddressModel
                     {
@@ -686,8 +689,8 @@ public class FakeOrganisationPersistence
         for (var i = 1; i <= 100; i++)
         {
             var orgId = 60000 + i;
-            var material = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
-            var (regulatorCode, nation, town, postcode) = PerfTestRegulatorAreas[
+            var (material, materialCode) = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
+            var (regulatorCode, nation, agencyLetter, town, postcode) = PerfTestRegulatorAreas[
                 (i - 1) % PerfTestRegulatorAreas.Length
             ];
             var registrationId = ObjectId.Parse($"aaa{orgId:000000000000000000000}");
@@ -706,7 +709,7 @@ public class FakeOrganisationPersistence
                     {
                         Name = $"PerfTest Reprocessor {i:000}",
                         TradingName = $"PerfTest Reprocessor {i:000}",
-                        RegistrationNumber = $"PERF-{orgId}",
+                        RegistrationNumber = $"R26{agencyLetter}R{orgId:D6}0001{materialCode}",
                         CompaniesHouseNumber = $"PERF{orgId}",
                         RegisteredAddress = new RegisteredAddressModel
                         {
@@ -753,8 +756,8 @@ public class FakeOrganisationPersistence
         for (var i = 1; i <= 100; i++)
         {
             var orgId = 61000 + i;
-            var material = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
-            var (regulatorCode, nation, town, postcode) = PerfTestRegulatorAreas[
+            var (material, materialCode) = PerfTestMaterials[(i - 1) % PerfTestMaterials.Length];
+            var (regulatorCode, nation, agencyLetter, town, postcode) = PerfTestRegulatorAreas[
                 (i - 1) % PerfTestRegulatorAreas.Length
             ];
             var registrationId = ObjectId.Parse($"aaa{orgId:000000000000000000000}");
@@ -778,7 +781,7 @@ public class FakeOrganisationPersistence
                     {
                         Name = $"PerfTest Exporter {i:000}",
                         TradingName = $"PerfTest Exporter {i:000}",
-                        RegistrationNumber = $"PERF-{orgId}",
+                        RegistrationNumber = $"R26{agencyLetter}X{orgId:D6}0001{materialCode}",
                         CompaniesHouseNumber = $"PERF{orgId}",
                         RegisteredAddress = new RegisteredAddressModel
                         {

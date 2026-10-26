@@ -491,7 +491,7 @@ public class ReExClientTests
               "accreditations": [
                 {
                   "id": "acc-1",
-                  "accreditationNumber": "ACC/2024/001",
+                  "accreditationNumber": "A24ER0000010001PL",
                   "status": "approved",
                   "prnIssuance": {
                     "tonnageBand": "upTo1000",
@@ -512,7 +512,7 @@ public class ReExClientTests
 
         result.IsSuccess.Should().BeTrue();
         var acc = result.Value!.Accreditations[0];
-        acc.AccreditationNumber.Should().Be("ACC/2024/001");
+        acc.AccreditationNumber.Should().Be("A24ER0000010001PL");
         acc.Status.Should().Be("approved");
         acc.PrnIssuance!.TonnageBand.Should().Be("upTo1000");
         acc.PrnIssuance.Signatories[0].FullName.Should().Be("Jane Smith");

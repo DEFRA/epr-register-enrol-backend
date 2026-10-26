@@ -201,7 +201,7 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
                 { "type": "waste_exemption" }
               ],
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -221,7 +221,7 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
               "exportPorts": ["Southampton", "Portsmouth"],
               "wasteProcessingType": "exporter",
               "accreditationId": "acc-exporter-1",
-              "registrationNumber": "E25SR500020912AL",
+              "registrationNumber": "R25EX5000000913AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "status": "approved",
@@ -244,7 +244,7 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             },
@@ -263,7 +263,7 @@ public class SeedRealReExWiringTests : IClassFixture<SeedRealReExWiringTestFacto
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "E-ACC12245AL",
+              "accreditationNumber": "A26EX5000000913AL",
               "status": "approved"
             }
           ]

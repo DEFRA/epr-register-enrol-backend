@@ -1,5 +1,6 @@
 using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx;
@@ -40,6 +41,11 @@ public class StubReExApiAdapter(
     private const int TestOrganisationNumberBase = 900_000;
     private const int TestOrganisationNumberRange = 100_000;
 
+    // RA-690: the 6-digit OrgId and 4-digit sequence segments of the derived registration
+    // reference.
+    private const int ReferenceOrganisationNumberRange = 1_000_000;
+    private const uint RegistrationSequenceRange = 10_000;
+
     public async Task<ReExResult<ReExAccreditationDto>> GetAccreditationAsync(
         string organisationId,
         string registrationId,
@@ -59,7 +65,6 @@ public class StubReExApiAdapter(
         }
 
         string? organisationName = null;
-        string? registrationReference = null;
         string? siteAddress = null;
         string? companyRegisterAddressPostcode = null;
         string? companyRegisteredAddress = null;
@@ -76,7 +81,6 @@ public class StubReExApiAdapter(
             var org = await fakeOrgs.GetByOrgIdAsync(orgIdInt);
             submittedToRegulator = org?.SubmittedToRegulator;
             organisationName = org?.CompanyDetails?.Name;
-            registrationReference = org?.CompanyDetails?.RegistrationNumber;
             companyRegisterAddressPostcode = org?.CompanyDetails?.RegisteredAddress?.Postcode;
             companiesHouseNumber = org?.CompanyDetails?.CompaniesHouseNumber;
             companyRegisteredAddress = org?.CompanyDetails?.RegisteredAddress is { } regAddr
@@ -176,7 +180,15 @@ public class StubReExApiAdapter(
             MaterialType = materialType,
             Year = year,
             OrganisationName = organisationName ?? "Stub Reprocessing Ltd",
-            RegistrationReference = registrationReference ?? "STUB-REG-001",
+            RegistrationReference = DerivedRegistrationReference(
+                organisationId,
+                registrationId,
+                materialType,
+                glassRecyclingProcess,
+                year,
+                nation,
+                isExporter
+            ),
             SiteAddress = siteAddress,
             IsExporter = isExporter,
             Nation = nation,
@@ -321,13 +333,72 @@ public class StubReExApiAdapter(
         return ReExResult<Nation>.Success(nation, 200);
     }
 
+    // RA-690: a valid 17-character registration reference, derived so it is the same every time
+    // a given registration is seeded and differs between registrations - approval derives the
+    // accreditation reference from it, so a malformed or shared one would fail approval (invalid
+    // source, or a clash with another application's reference on repeated e2e runs). Uniqueness
+    // is probabilistic: the 4-digit sequence is a hash, so two registrations of one organisation
+    // collide about 1 time in 10,000 - fine for stub data, where each e2e organisation also has
+    // its own org number.
+    private static string DerivedRegistrationReference(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        GlassRecyclingProcess? glassRecyclingProcess,
+        int year,
+        Nation nation,
+        bool isExporter
+    )
+    {
+        var agencyLetter = RegulatoryReferenceCodes.AgencyLetterFor(nation);
+        var processTypeLetter = RegulatoryReferenceCodes.ProcessTypeLetterFor(isExporter);
+        // Real ReEx always reports a glass registration's recycling process; when the stub's
+        // fixture has none (or an unrecognised one), "other" is the honest fallback.
+        var materialCode = RegulatoryReferenceCodes.MaterialCodeFor(
+            materialType,
+            materialType == MaterialType.Glass
+                ? glassRecyclingProcess ?? GlassRecyclingProcess.Other
+                : glassRecyclingProcess
+        );
+        var sequence = Fnv1a(registrationId) % RegistrationSequenceRange;
+
+        return $"R{year % 100:D2}{agencyLetter}{processTypeLetter}"
+            + $"{ReferenceOrganisationNumber(organisationId):D6}{sequence:D4}{materialCode}";
+    }
+
+    // The stub's own organisation number when it has one that fits the 6-digit OrgId segment
+    // (a test organisation's 900000-999999 number, or a numeric fixture id); otherwise a stable
+    // hash of the id, e.g. for the UUID a real ReEx organisation id is.
+    private static int ReferenceOrganisationNumber(string organisationId)
+    {
+        if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
+            return TestOrganisationNumber(organisationId);
+
+        if (
+            int.TryParse(
+                organisationId,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var orgNumber
+            )
+            && orgNumber < ReferenceOrganisationNumberRange
+        )
+            return orgNumber;
+
+        return (int)(Fnv1a(organisationId) % ReferenceOrganisationNumberRange);
+    }
+
+    internal static int TestOrganisationNumber(string organisationId) =>
+        TestOrganisationNumberBase + (int)(Fnv1a(organisationId) % TestOrganisationNumberRange);
+
     // FNV-1a: deterministic across processes and restarts (unlike string.GetHashCode), so a
-    // test organisation keeps the same number for its whole life.
-    internal static int TestOrganisationNumber(string organisationId)
+    // test organisation keeps the same number, and a registration the same reference, for its
+    // whole life.
+    private static uint Fnv1a(string value)
     {
         var hash = 2166136261u;
-        foreach (var b in System.Text.Encoding.UTF8.GetBytes(organisationId))
+        foreach (var b in System.Text.Encoding.UTF8.GetBytes(value))
             hash = (hash ^ b) * 16777619u;
-        return TestOrganisationNumberBase + (int)(hash % TestOrganisationNumberRange);
+        return hash;
     }
 }
