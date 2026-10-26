@@ -13,14 +13,18 @@ Several v2 fields have **no current source**, because the API is shaped to the t
 (Accreditation separate from Application, with status and tonnage band history). These fields are
 marked **new**, with the entity they will come from.
 
+The "Today" columns show where each value lives now, which is where the migration copies it from.
+**The API itself never reads the App document.** It is built on the target model only and goes live
+after the migration (domain model design, decision D3).
+
 ## Source models
 
 | Short name | C# model | In Mongo? |
 | --- | --- | --- |
-| **App** | `AccreditationApplication/Models/AccreditationApplicationModel.cs` | **Yes.** Collection `accreditationApplications`. Today the only source for v2 fields. |
+| **App** | `AccreditationApplication/Models/AccreditationApplicationModel.cs` | **Yes.** Collection `accreditationApplications`. Today the only source for v2 fields, and the migration's source. Not read by the API. |
 | **Org** | `Organisation/Models/OrganisationModel.cs` | **No.** ReEx-shaped fixture. Internal-only in v2: nothing is exposed directly. |
-| **Accreditation** (target) | not built | **New.** Created when an application is approved. Owns `statusHistory`. |
-| **TonnageBand** (target) | not built | **New.** Its own entity with history, linked to an accreditation (and later a registration). |
+| **Accreditation** (target) | not built | **New.** Created when an application is approved. Owns its status and its tonnage band; `statusHistory` and `tonnageBandHistory` are both projected from its version history. |
+| **OverseasSite** (target) | not built | **New.** One per registered overseas site. Its interim sites are embedded in it (`interimSites[]`), not held as separate entities. |
 
 ## What v2 removed, and why
 
@@ -67,8 +71,8 @@ marked **new**, with the entity they will come from.
 | `wasteProcessingType` | App `WasteProcessingType` → `wasteProcessingType` | Accreditation (via Registration) | |
 | `statusHistory[]` | none | **new**: Accreditation status history | each entry is `status`, `effectiveDate` and `recordedAt`. The first entry is `approved`, written when the application is approved |
 | `status` | none | **derived** from `statusHistory` | the latest entry whose `effectiveDate` is on or before today. Never stored, so a forward-dated change takes effect without a write |
-| `tonnageBandHistory[]` | App `Prns.PlannedTonnageBand` → `prns.plannedTonnageBand` (single value, int32) | **new**: TonnageBand entity | each entry is `tonnageBand` and `recordedAt`. No `effectiveDate`: a band cannot be forward-dated or backdated. First entry from the seed (ReEx `prnIssuance.tonnageBand` / Org `PrnIssuance.PlannedIssuance`) or the application; later entries from in-year changes |
-| `tonnageBand` | as above | **derived** from `tonnageBandHistory` | the latest entry. Included in search because it is on the public register |
+| `tonnageBandHistory[]` | App `Prns.PlannedTonnageBand` → `prns.plannedTonnageBand` (single value, int32) | **new**: Accreditation `tonnageBand`, one entry per version where it changed | each entry is `tonnageBand` and `recordedAt`. No `effectiveDate`: a band cannot be forward-dated or backdated. First entry from the seed (ReEx `prnIssuance.tonnageBand` / Org `PrnIssuance.PlannedIssuance`) or the application; later entries from in-year changes |
+| `tonnageBand` | as above | Accreditation `tonnageBand` | the current value, which is also the latest history entry. Included in search because it is on the public register |
 | `signatories[]` | App `Prns.Authorisers` → `prns.authorisers` (`fullName`, `email`; `isNew` not exposed). Seeded: Org `PrnIssuance.Signatories` → `prnIssuance.signatories` | Accreditation | get-one only, never in search. Personal data. When both exist, the application's list replaces the seed's (no merge) |
 
 ### Tonnage band values
@@ -96,8 +100,9 @@ history, so the migration writes one entry each:
 
 - `statusHistory`: one entry with the ReEx status. `effectiveDate` is ReEx `validFrom` if present,
   otherwise the approval date. `recordedAt` is the migration time.
-- `tonnageBandHistory`: one entry from `prnIssuance.tonnageBand` (or `prns.plannedTonnageBand`),
-  with `recordedAt` set to the migration time.
+- `tonnageBandHistory`: the band from `prnIssuance.tonnageBand` (or `prns.plannedTonnageBand`) is
+  carried on the accreditation's back-dated status versions, so its first entry has the same
+  back-dated date as the first status entry (domain model design, decision D2a).
 - Each accredited overseas site: one `approved` status entry, with `effectiveDate` from the site's
   `validFrom`.
 
@@ -126,7 +131,8 @@ accreditation (`selected == true`). Paths are relative to `overseasSites.sites[]
 
 Source: App `InterimSiteModel` at `overseasSites.sites[].interimSites[]`, returned inside the
 overseas site's `interimSites[]`. Unchanged from v0.1 except that `isNewSite` is dropped and there
-are no separate endpoints.
+are no separate endpoints. In the target model an interim site is part of its overseas site: it is
+embedded in the OverseasSite's `interimSites[]`, and changes to it are versions of that overseas site.
 
 | API field | C# | Mongo field | Notes |
 | --- | --- | --- | --- |
@@ -142,5 +148,6 @@ are no separate endpoints.
 
 - **Tonnage band dating (working assumption).** Bands cannot be forward-dated or backdated, so
   history entries carry only `recordedAt`. If the business later says otherwise, add
-  `effectiveDate` as on status history.
+  `effectiveDate` as on status history. Migrated accreditations are the exception: their band
+  history is back-dated along with their status history (D2a).
 - **Authentication** is still undefined. Expected to be HMAC request signing; details to follow.
