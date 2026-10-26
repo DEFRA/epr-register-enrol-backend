@@ -282,10 +282,10 @@ public class StubReExApiAdapter(
         // orgId recorded" rather than inventing one - the caller then falls back
         // to its own supplied value, which is what every existing local/dev
         // fixture relies on.
-        // RA-000: an E2E test organisation gets a stable org number derived from its id.
-        // management-be sends OrgId null for any non-numeric organisationId and relies on this
-        // lookup, so without one, approving a test organisation's application would fail at
-        // accreditation-number generation ("Nation, OrgId and Year are required").
+        // RA-000: an E2E test organisation gets a stable org number derived from its id, so
+        // it behaves like a real ReEx organisation that has one recorded (e.g. Submit stamps
+        // it as the application's OrgId). RA-690: accreditation-number no longer needs it -
+        // that reference is derived from the registration reference.
         if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
             return Task.FromResult(
                 ReExResult<int?>.Success(TestOrganisationNumber(organisationId), 200)

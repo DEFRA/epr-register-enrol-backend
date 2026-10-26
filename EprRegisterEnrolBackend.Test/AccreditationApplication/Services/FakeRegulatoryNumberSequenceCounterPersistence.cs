@@ -17,6 +17,9 @@ public class FakeRegulatoryNumberSequenceCounterPersistence
 
     public void Clear() => _store.Clear();
 
+    // RA-690: lets a test assert no counter at all was drawn from, not just one named pool.
+    public bool IsEmpty => _store.IsEmpty;
+
     public Task<int> IncrementAsync(string key, CancellationToken ct = default)
     {
         var next = _store.AddOrUpdate(key, 1, (_, current) => current + 1);

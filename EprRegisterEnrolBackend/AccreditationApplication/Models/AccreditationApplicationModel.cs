@@ -97,11 +97,13 @@ public class AccreditationApplicationModel
 
     // RA-448: no ReEx-sourced equivalent exists for accreditation (unlike
     // RegistrationReference) - always issued by this backend's own endpoint.
+    // RA-690: derived from the registration reference, never from a counter, and
+    // never regenerated once issued.
     public string? AccreditationReference { get; set; }
 
-    // RA-448: "reapply for accreditation" regenerate - a YY-increment string
-    // transform, kept distinct from PreviousRegistrationNumbers since a reader
-    // later needs to tell at a glance which history belongs to which number.
+    // RA-448's "reapply for accreditation" regenerate history. RA-690 removed that
+    // path, so nothing writes this any more; it stays so existing documents still
+    // deserialise.
     public List<string> PreviousAccreditationNumbers { get; set; } = [];
 
     public SubmittedByModel? SubmittedBy { get; set; }
