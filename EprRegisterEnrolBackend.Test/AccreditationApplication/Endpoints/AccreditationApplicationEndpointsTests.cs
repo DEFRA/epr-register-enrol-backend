@@ -6761,7 +6761,8 @@ public class AccreditationApplicationEndpointsTests
     [Theory]
     [InlineData(ApplicationStatus.Saved)]
     [InlineData(ApplicationStatus.Started)]
-    [InlineData(ApplicationStatus.Approved)]
+    // Approved receiving "approved" is an idempotent repeat (200) since RA-527 — see
+    // StatusChangedFromCaseManagement_RepeatOfCurrentFinalStatus_Returns200AndWritesNothing.
     [InlineData(ApplicationStatus.Rejected)]
     [InlineData(ApplicationStatus.Withdrawn)]
     public async Task StatusChangedFromCaseManagement_ApproveFromIllegalStatus_Returns409(
@@ -6882,8 +6883,12 @@ public class AccreditationApplicationEndpointsTests
     [Theory]
     [InlineData(ApplicationStatus.Withdrawn, "duly-made")]
     [InlineData(ApplicationStatus.Withdrawn, "submitted")]
+    [InlineData(ApplicationStatus.Withdrawn, "approved")]
+    [InlineData(ApplicationStatus.Withdrawn, "rejected")]
     [InlineData(ApplicationStatus.Approved, "duly-made")]
+    [InlineData(ApplicationStatus.Approved, "rejected")]
     [InlineData(ApplicationStatus.Rejected, "updated")]
+    [InlineData(ApplicationStatus.Rejected, "approved")]
     public async Task StatusChangedFromCaseManagement_MappedPushFromTerminalStatus_Returns409AndLeavesStatusUnchanged(
         ApplicationStatus fromStatus,
         string toStateId
@@ -6914,6 +6919,97 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
         stored!.ApplicationStatus.Should().Be(fromStatus);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Approved, "approved")]
+    [InlineData(ApplicationStatus.Rejected, "rejected")]
+    public async Task StatusChangedFromCaseManagement_RepeatOfCurrentFinalStatus_Returns200AndWritesNothing(
+        ApplicationStatus finalStatus,
+        string toStateId
+    )
+    {
+        // RA-527: the Case Management service's step 2 (confirm applicant contact) pushes the
+        // final status, then writes its own record. If that write fails or the reply is lost, the
+        // regulator retries with a newer OccurredAt. The repeat must be accepted (200) rather than
+        // refused by the terminal-status guard, or every retry fails and the work item is stuck.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var watermark = DateTime.UtcNow.AddMinutes(-5);
+        var lastEdited = DateTime.UtcNow.AddMinutes(-5);
+        SeedApplication(
+            status: finalStatus,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = watermark;
+                a.DateLastEdited = lastEdited;
+            }
+        );
+        // Any write attempt would fail and surface as a 500, so a 200 also shows nothing was written.
+        _factory.FakePersistence.FailNextUpdate = true;
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = toStateId,
+            ActionId = "confirm-applicant-contact",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(finalStatus);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(finalStatus);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(watermark);
+        stored.DateLastEdited.Should().Be(lastEdited);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task StatusChangedFromCaseManagement_StalePushToTerminalApplication_OrderingGuardRunsFirstAndReturns200NoOp(
+        int secondsRelativeToWatermark
+    )
+    {
+        // The ordering guard still runs before the terminal-status guard: an equal or older
+        // OccurredAt is a 200 no-op even when the push would otherwise be a 409.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var watermark = DateTime.UtcNow;
+        SeedApplication(
+            status: ApplicationStatus.Approved,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = watermark;
+            }
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "rejected",
+            ActionId = "reject",
+            OccurredAt = watermark.AddSeconds(secondsRelativeToWatermark),
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(watermark);
     }
 
     [Theory]
