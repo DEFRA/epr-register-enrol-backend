@@ -10,6 +10,8 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.TestData;
 
@@ -341,5 +343,72 @@ public class AccreditationApiTestDataStartupTests
         {
             await fixture.DisposeAsync();
         }
+    }
+}
+
+// The startup seeding service must never take the host down: a failure is logged, shutdown is
+// honoured, and with the setting off it does nothing.
+public class AccreditationApiTestDataSeedingServiceTests
+{
+    private static AccreditationApiTestDataSeedingService Service(
+        IAccreditationApplicationPersistence persistence,
+        bool seedOnStartup
+    )
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(persistence);
+        services.AddSingleton(
+            new AccreditationApiTestDataSeeder(
+                persistence,
+                NullLogger<AccreditationApiTestDataSeeder>.Instance
+            )
+        );
+        return new AccreditationApiTestDataSeedingService(
+            services.BuildServiceProvider(),
+            Options.Create(new TestDataConfig { SeedOnStartup = seedOnStartup }),
+            NullLogger<AccreditationApiTestDataSeedingService>.Instance
+        );
+    }
+
+    [Fact]
+    public async Task WhenSwitchedOff_NothingIsSeeded()
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        using var service = Service(persistence, seedOnStartup: false);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await service.ExecuteTask!;
+
+        await persistence.DidNotReceiveWithAnyArgs().UpsertAsync(default!);
+    }
+
+    [Fact]
+    public async Task WhenSeedingFails_TheErrorIsLogged_AndTheServiceDoesNotThrow()
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        persistence
+            .UpsertAsync(Arg.Any<AccreditationApplicationModel>())
+            .Returns(Task.FromException(new InvalidOperationException("mongo is down")));
+        using var service = Service(persistence, seedOnStartup: true);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        await service.ExecuteTask!;
+        await persistence.Received(1).UpsertAsync(Arg.Any<AccreditationApplicationModel>());
+    }
+
+    [Fact]
+    public async Task WhenTheHostStopsMidSeed_TheServiceEndsWithoutThrowing()
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        persistence
+            .UpsertAsync(Arg.Any<AccreditationApplicationModel>())
+            .Returns(new TaskCompletionSource().Task);
+        using var service = Service(persistence, seedOnStartup: true);
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        await service.StopAsync(new CancellationToken(canceled: true));
+
+        await service.ExecuteTask!;
     }
 }
