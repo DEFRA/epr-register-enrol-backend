@@ -407,8 +407,10 @@ public class AccreditationApiTestDataSeedingServiceTests
         using var service = Service(persistence, seedOnStartup: true);
         await service.StartAsync(TestContext.Current.CancellationToken);
 
-        await service.StopAsync(CancellationToken.None);
-
-        await service.ExecuteTask!;
+        var ex = await Record.ExceptionAsync(() => service.StopAsync(CancellationToken.None));
+        ex.Should().BeNull(ex?.ToString());
+        var finished = await Task.WhenAny(service.ExecuteTask!, Task.Delay(5000, TestContext.Current.CancellationToken));
+        finished.Should().BeSameAs(service.ExecuteTask, "the service should end when the host stops");
+        service.ExecuteTask!.Status.Should().Be(TaskStatus.RanToCompletion, service.ExecuteTask.Exception?.ToString());
     }
 }
