@@ -1105,10 +1105,11 @@ status, where ReEx's own status was the truth before.
 | --- | --- |
 | Saved, Started | Linked to the Registration. New sites become **Proposed** and edits become `proposedChanges`. The operator sees no difference, because the facade overlays the proposal |
 | Submitted, DulyMade, Queried, Updated, AwaitingDecision | As above. The management-be snapshot is untouched (it owns its copy). Pushes still find the application by `caseManagementWorkItemId`. Under dual-write a later approval runs the approval transaction normally |
-| Approved | Accreditation created by backfill (§6.1, step 4) |
-| Approved **between** the backfill run and the dual-write deploy | Caught by the post-phase-4 backfill sweep. Accreditation creation is idempotent on `applicationId` |
 | Rejected, Withdrawn | Linked. Their Proposed sites become Discarded |
 | Duplicate live applications for one key (possible, see Seed comment `:703-714`) | Both linked to the same Registration and listed in the survey and conflicts. No automatic merge |
+
+There is no row for Approved applications: approvals in this service go live after the migration, so
+none exist when it runs (v4, D4).
 
 ---
 
