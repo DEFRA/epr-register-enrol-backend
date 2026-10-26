@@ -407,7 +407,7 @@ public class AccreditationApiTestDataSeedingServiceTests
         using var service = Service(persistence, seedOnStartup: true);
         await service.StartAsync(TestContext.Current.CancellationToken);
 
-        await service.StopAsync(new CancellationToken(canceled: true));
+        await service.StopAsync(CancellationToken.None);
 
         await service.ExecuteTask!;
     }
