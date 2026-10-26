@@ -63,6 +63,19 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         stored.Version++;
     }
 
+    public Task UpsertAsync(AccreditationApplicationModel application)
+    {
+        _store.RemoveAll(a => a.Id == application.Id);
+        _store.Add(application);
+        return Task.CompletedTask;
+    }
+
+    public Task<long> DeleteManyAsync(IEnumerable<ObjectId> ids)
+    {
+        var idList = ids.ToList();
+        return Task.FromResult((long)_store.RemoveAll(a => a.Id is { } id && idList.Contains(id)));
+    }
+
     public Task<AccreditationApplicationModel?> CreateAsync(
         AccreditationApplicationModel application
     )
