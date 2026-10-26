@@ -81,6 +81,17 @@ public interface IAccreditationApplicationPersistence
 
     Task<AccreditationApplicationModel?> GetByIdAsync(string organisationId, string applicationId);
     Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId);
+
+    /// <summary>
+    /// RA-691: every application currently holding <paramref name="accreditationReference"/> as
+    /// its AccreditationReference. A list, not a single result: nothing enforces uniqueness on
+    /// that field, and AccreditationReferenceCorrectionMigration must be able to see (and refuse
+    /// to act on) a value held by more than one record.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetByAccreditationReferenceAsync(
+        string accreditationReference,
+        CancellationToken cancellationToken = default
+    );
     Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application);
 
     /// <summary>
