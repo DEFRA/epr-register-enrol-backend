@@ -142,42 +142,13 @@ public class AccreditationReferenceCorrectionMigration(
         }
 
         foreach (var plan in plans)
-        {
-            var c = plan.Correction;
-            if (plan.AlreadyCorrect)
-            {
-                if (logger.IsEnabled(LogLevel.Information))
-                {
-                    logger.LogInformation(
-                        "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId} "
-                            + "already holds {Corrected}; skipped",
-                        mode,
-                        c.OrganisationName,
-                        c.OrgId,
-                        plan.ApplicationId,
-                        c.Corrected
-                    );
-                }
-                continue;
-            }
-
-            if (logger.IsEnabled(LogLevel.Information))
-            {
-                logger.LogInformation(
-                    "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId}: "
-                        + "{Incorrect} -> {Corrected}",
-                    mode,
-                    c.OrganisationName,
-                    c.OrgId,
-                    plan.ApplicationId,
-                    c.Incorrect,
-                    c.Corrected
-                );
-            }
-
-            if (apply)
-                await ApplyAsync(persistence, plan, settings.SpotCheckConfirmedBy!, cancellationToken);
-        }
+            await ReportAndApplyAsync(
+                persistence,
+                plan,
+                mode,
+                apply ? settings.SpotCheckConfirmedBy : null,
+                cancellationToken
+            );
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
@@ -185,6 +156,52 @@ public class AccreditationReferenceCorrectionMigration(
                 mode
             );
         return apply ? RunResult.Applied : RunResult.DryRun;
+    }
+
+    // Logs one planned change (or skip) and, when confirmedBy is set (an authorised apply run),
+    // writes it.
+    private async Task ReportAndApplyAsync(
+        IAccreditationApplicationPersistence persistence,
+        Plan plan,
+        string mode,
+        string? confirmedBy,
+        CancellationToken cancellationToken
+    )
+    {
+        var c = plan.Correction;
+        if (plan.AlreadyCorrect)
+        {
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId} "
+                        + "already holds {Corrected}; skipped",
+                    mode,
+                    c.OrganisationName,
+                    c.OrgId,
+                    plan.ApplicationId,
+                    c.Corrected
+                );
+            }
+            return;
+        }
+
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId}: "
+                    + "{Incorrect} -> {Corrected}",
+                mode,
+                c.OrganisationName,
+                c.OrgId,
+                plan.ApplicationId,
+                c.Incorrect,
+                c.Corrected
+            );
+        }
+
+        if (confirmedBy is not null)
+            await ApplyAsync(persistence, plan, confirmedBy, cancellationToken);
     }
 
     private async Task<Plan?> PlanAsync(
