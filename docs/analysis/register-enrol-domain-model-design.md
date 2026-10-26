@@ -2,7 +2,7 @@
 
 **Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v4, with the 2026-10-26 review with Adam folded in · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26
 
-**Changes in v4 (2026-10-26): review with Adam** (decisions D1–D3, §9.5)
+**Changes in v4 (2026-10-26): review with Adam** (decisions D1–D5, §9.5)
 
 - **Interim sites are part of their Overseas site (D1).** They are no longer a separate entity or
   collection. They are an embedded `interimSites[]` array on the OverseasSite document, and every
@@ -21,6 +21,12 @@
   has run and full dual-write (phase 4) keeps the new collections current (§6). The phased
   dual-write, shadow-read and facade plan is still how the **existing** operator and case-management
   endpoints move.
+- **No back-dating of this service's approvals (D4).** The migration goes live before approvals in this
+  service do, so only ReEx `statusHistory` is back-dated (§4.3, §6.1).
+- **Accreditations are addressed by organisation, registration and year (D5)**, as ReEx asked:
+  `/v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}`.
+  `year` is the year the accreditation applies to, not the year it was created or approved.
+  `accreditationNumber` is returned but is not a path identifier (§5.3, §6.4).
 
 **Changes in v3 (2026-10-22): the effect of the v2 API YAML** (`docs/openapi/registration-accreditation-api.v2.yaml` and `.v2.mapping.md`)
 
@@ -303,7 +309,7 @@ From read-only sweeps of the sibling repos. Each item affects facade fidelity or
 | **OverseasSite / ORS** (`overseasSites`) | `_id`; unique (`registrationId`, `orsId`). **`orsId` is the stable, user-visible identity** (A22): 3 digits, allocated once per registration, kept across years and never reissued | `orsId` ("001"–"999"), `siteName`, `address{line1, line2, town, country}`, `formattedAddress`, `country`, `isEu`, `isOecd`, `coordinates`, `contact{fullName, email, phone}`, `operationCodes[]` (R-codes), `baselOecdCodes[]` (Basel/OECD waste codes, as an ordered list; a maximum of 3 is a validation rule, not the storage shape; empty for sites seeded from ReEx), `repatriatedLoads`, `conditionsOfExport`, `status` (Proposed, Active, Discarded), `origin` (ReEx or Operator), `proposedByApplicationId`, **`interimSites[]`** (embedded, v4; see the next row) | n → 1 Registration; embeds 0..n interim sites | Registration-scoped. Operator-proposed until its application is approved |
 | *Interim site* (**embedded** in `overseasSites.interimSites[]`; no collection of its own, v4 D1) | No `_id`. **`siteNumber` is the stable identity** (A22): 3 digits from its own per-registration pool, separate from ORS ids ([Q30](#q30)), kept across years. Uniqueness across the registration comes from a **multikey unique index** on the ORS collection (§4.2). Legacy `SN-000N` values are renumbered once if the survey finds any ([Q30](#q30)) | `siteNumber`; `previousSiteNumbers[]`; `siteName`; `address{line1, line2, town, region, country, postcode}`; `contact{…}`; `operationCodes[]` (R12/R13 mandatory); `status` (Proposed, Active, Withdrawn, Discarded); `proposedByApplicationId`; `createdAt`; `removedAt` | Part of its ORS | Same as ORS. **No suspension of its own (Q5).** It can only be removed from its ORS (`removedAt`, status Withdrawn) or restored (RA-603). **Every change is a new version of its ORS**, so its history is the ORS's history. It appears on every accreditation that covers its ORS, and is suspended implicitly when that ORS is (Q6) |
 | **Application** (`accreditationApplications`, existing) | `_id` unchanged (public `{applicationId}`); unique sparse `applicationReference` | `registrationId` → Registration (new FK); `year` (accreditation year applied for); `sourceAccreditationId` → Accreditation (prior year); `status`; `paymentReference`; `caseManagementWorkItemId`; `caseManagementStatusUpdatedAt`; `submittedBy`; `withdrawalReason`; `dateSent`; `dateLastEdited`; `query`; sections (`prns`, `businessPlan`, `samplingPlan`, `besEvidence`, `overseasSites`), each with `sectionStatus` and submission `versions[]`; `siteSelections[]`; `reservedAccreditationNumber` | n → 1 Registration; 0..1 → 1 Accreditation (`accreditationId`, set on approval) | This service. Operator via frontend; case management via pushes |
-| **Accreditation** (`accreditations`) | `_id`; unique `applicationId` (sparse, null for ReEx imports); unique `accreditationNumber`, **globally unique** across organisations (v2 assumption, A20); unique (`registrationId`, `year`) | `registrationId` → Registration (**only** link upward); `year`; `accreditationNumber` (**immutable once approved**, Q7); `status` (approved, suspended or cancelled; **stored, recorded-time only**, Q21; history via §4.2, with the API's `statusHistory[]` projected from it, §4.4); `periodStart`/`periodEnd` (business validity, **not** history); `signatories[]` {fullName, email, phone?} (was `prnIssuance.authorisers`); `businessPlan{…}` (**owned, not exposed**, v2); `samplingPlanFiles[]` (refs; **kept, not exposed**, Q11); `recyclingProcess[]` (**kept, not exposed**, Q11; source to be confirmed); `sites[]` = {`overseasSiteId`, `orsId`, `status` (approved or suspended; same rules), `besEvidence[]`, `reExValidFrom`}. The interim sites of an accredited ORS are **that ORS's embedded interim sites**, with no separate per-accreditation membership (Q24); `tonnageBand` (v4 D2: `up_to_500`, `up_to_5000`, `up_to_10000` or `over_10000`, which are ReEx's `TONNAGE_BAND` values; **stored, recorded-time only**, A19; each change is a new Accreditation version with `lastChange.reason = TonnageBandChanged`, and the API's `tonnageBandHistory[]` is projected from those versions, §4.4; it is on the public register); `source` (Application or ReEx); `reExAccreditationId` | n → 1 Registration; 1 → 1 approving Application; references ⊆ the registration's ORSs (and so their embedded interim sites) | This service. Created by the approval push, or by **backfill import** of ReEx accreditations (A11). Suspended, cancelled and reinstated manually by the regulator (Q14). **Read by ReEx** through the v2 API (Q2). The first `tonnageBand` comes from the application's `prns.plannedTonnageBand`, or ReEx's `prnIssuance.tonnageBand` for imported accreditations; later values come from in-year changes |
+| **Accreditation** (`accreditations`) | `_id`; unique `applicationId` (sparse, null for ReEx imports); unique `accreditationNumber`, **globally unique** across organisations (v2 assumption, A20); unique (`registrationId`, `year`) | `registrationId` → Registration (**only** link upward); `year` (the year the accreditation **applies to**, not the year it was created or approved; part of the API path, D5); `accreditationNumber` (**immutable once approved**, Q7); `status` (approved, suspended or cancelled; **stored, recorded-time only**, Q21; history via §4.2, with the API's `statusHistory[]` projected from it, §4.4); `periodStart`/`periodEnd` (business validity, **not** history); `signatories[]` {fullName, email, phone?} (was `prnIssuance.authorisers`); `businessPlan{…}` (**owned, not exposed**, v2); `samplingPlanFiles[]` (refs; **kept, not exposed**, Q11); `recyclingProcess[]` (**kept, not exposed**, Q11; source to be confirmed); `sites[]` = {`overseasSiteId`, `orsId`, `status` (approved or suspended; same rules), `besEvidence[]`, `reExValidFrom`}. The interim sites of an accredited ORS are **that ORS's embedded interim sites**, with no separate per-accreditation membership (Q24); `tonnageBand` (v4 D2: `up_to_500`, `up_to_5000`, `up_to_10000` or `over_10000`, which are ReEx's `TONNAGE_BAND` values; **stored, recorded-time only**, A19; each change is a new Accreditation version with `lastChange.reason = TonnageBandChanged`, and the API's `tonnageBandHistory[]` is projected from those versions, §4.4; it is on the public register); `source` (Application or ReEx); `reExAccreditationId` | n → 1 Registration; 1 → 1 approving Application; references ⊆ the registration's ORSs (and so their embedded interim sites) | This service. Created by the approval push, or by **backfill import** of ReEx accreditations (A11). Suspended, cancelled and reinstated manually by the regulator (Q14). **Read by ReEx** through the v2 API (Q2). The first `tonnageBand` comes from the application's `prns.plannedTonnageBand`, or ReEx's `prnIssuance.tonnageBand` for imported accreditations; later values come from in-year changes |
 
 `siteSelections[]` on Application is one entry per site the application touches:
 
@@ -692,7 +698,6 @@ mirrors loading a SQL Server temporal table's history with `SYSTEM_VERSIONING = 
 - **Scope:** the Accreditation's and each accredited site's `status`, written by **backfill only**
   (B7, B7a). Normal writes stay strictly recorded-time (Q21).
 - **What gets written:** a sequence of back-dated Accreditation versions, built from:
-  - the approval date (`caseManagementStatusUpdatedAt`, for applications approved in this service)
   - ReEx's `statusHistory` (`{status, updatedAt}`), for ReEx accreditations, including past suspensions
   - each ORS's approval date (`reExValidFrom`), for the site's first `approved` entry
 
@@ -892,7 +897,8 @@ target from §3.
 
 | v2 element | Model source | Flag / note |
 | --- | --- | --- |
-| `accreditationNumber` | Accreditation.`accreditationNumber` (unique index) | Only approved accreditations are addressable. A reserved number on an undecided Application must **not** resolve |
+| `organisationNumber`, `registrationNumber`, `year` (v4, D5: the path that identifies one accreditation) | Registration by `registrationNumber`, checked against Organisation.`organisationNumber`; then Accreditation by the unique (`registrationId`, `year`) index (A4) | `year` is the **year the accreditation applies to**, not the year it was created or approved. A registration that doesn't belong to the organisation returns 404. An old `registrationNumber` resolves as Q10 says. Organisations without an `organisationNumber` can't be reached (Q9). Only approved accreditations are addressable: an undecided Application for that year must **not** resolve |
+| `accreditationNumber` | Accreditation.`accreditationNumber` (unique index) | Returned in the body and in search; **not** a path identifier (D5) |
 | `orsId` | `sites[].orsId` | |
 | `year` (search) | Accreditation.`year` | Index `{year: 1, accreditationNumber: 1}` |
 | `pageNumber`, `limit` | — | |
@@ -935,7 +941,9 @@ target from §3.
 
 - Organisation, Registration and Application are not exposed (consistent with A16 and the
   Application-as-proposal model).
-- No `{accreditationYearOrReference}` segment: accreditations are addressed by number only.
+- No `{accreditationYearOrReference}` segment. Accreditations are addressed by
+  `organisationNumber`, `registrationNumber` and the accreditation `year`, as the ReEx team asked
+  (v4, D5). An accreditation id or number in the path was considered and not used.
 - Application flags (`isNewSite`, `selected`, `registeredNowAccredited`) are not exposed.
 - The sampling plan, uploaded files and business plan are not exposed.
 - Interim-site endpoints and `interimSiteIds` are gone.
@@ -1004,6 +1012,8 @@ The run is idempotent, resumable from a checkpoint in `domainModelMigrations`, p
    - `source: Application`
    - Version 1's `validFrom` is the backfill time (Q22: no back-dating). The approval time
      (`caseManagementStatusUpdatedAt`) is kept as the `approvedAt` attribute.
+   - **No status back-dating is needed here (v4, D4).** The migration to the new model goes live
+     before approvals in this service go live, so there is no approval history to back-date.
 5. **Accreditations from ReEx (A11).** For every registration in scope, import ReEx's accreditations
    from the same organisation response:
    - number, status, `validFrom`/`validTo` into `periodStart`/`periodEnd`, `prnIssuance`, and ORS-A sites
@@ -1016,9 +1026,10 @@ The run is idempotent, resumable from a checkpoint in `domainModelMigrations`, p
      `year`) where an application-sourced one exists. Any clash between ReEx and this service for the same
      registration and year goes to `migrationConflicts`
    **v3: status, tonnage band and codes for steps 4–5:**
-   - **Status:** back-dated status versions (Q32, §4.3). For accreditations approved in this service: an
-     `approved` version at the approval date. For ReEx ones: one version per ReEx `statusHistory` entry.
-     For each accredited ORS: an `approved` entry at its approval date (`reExValidFrom`). Non-status
+   - **Status:** back-dated status versions (Q32, §4.3), for **ReEx-imported accreditations only**: one
+     version per ReEx `statusHistory` entry, and for each accredited ORS an `approved` entry at its
+     approval date (`reExValidFrom`). Accreditations approved in this service are **not** back-dated
+     (step 4, D4). Non-status
      fields are not back-dated (Q22).
    - **Interim sites in legacy `SN-000N` format:** renumbered once into the registration's 3-digit pool,
      if the B1 survey finds any (Q30b). The old number is kept as `previousSiteNumbers[]`, and the
@@ -1077,7 +1088,8 @@ ReEx stops PRN issuance by asking this service whether an accreditation is valid
 status, where ReEx's own status was the truth before.
 
 - Endpoint, provisional pending the YAML review:
-  `GET …/accreditations/{accreditationNumber}/validity?at={timestamp}&orsId={orsId}`
+  `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}/validity?at={timestamp}&orsId={orsId}`
+  (addressed the same way as the v2 paths, D5)
   - Returns the effective status from the §3.4 table. `orsId` is optional.
   - Without `at`, it answers for now. With `at`, it is an as-of query (§4.2).
 - Auth: a new caller identity for ReEx (`epr-backend`), separate from the frontend and CM schemes.
@@ -1275,7 +1287,8 @@ The working default noted for each one is what the plan assumes until it is answ
   exist, **renumber once** into the 3-digit pool during backfill, keeping the old value in
   `previousSiteNumbers[]`.
 - <a id="q32"></a>**Q32. ✅ Answered:** migration **may back-date status history** (approval dates and
-  ReEx `statusHistory`). It is a migration-only exception (§4.3).
+  ReEx `statusHistory`). It is a migration-only exception (§4.3). *v4 (D4): in practice only ReEx
+  `statusHistory` is back-dated, because approvals in this service go live after the migration.*
 - **Q29. ✅ Answered:** add Basel/OECD codes to v2 as a list (`baselOecdCodes: string[]`) on
   `AccreditedOverseasSite`. It may be empty for sites seeded from ReEx.
 - <a id="q27"></a>**Q27. ✅ Answered:** an accreditation's sites show **current** details by default, with an
@@ -1292,6 +1305,8 @@ The working default noted for each one is what the plan assumes until it is answ
 | <a id="d2"></a>D2 | **Tonnage band is part of the Accreditation**, not modelled separately. It is a stored field, each change is a new Accreditation version, and `tonnageBandHistory[]` is projected from versions | §3.2, §3.3, §4.4, §5.1, §5.3, §6.1, §6.2, A25, B23 |
 | <a id="d2a"></a>D2a | **Migration back-dates the band along with status.** Back-dated status versions carry the band, so its history starts at the earliest back-dated date. This revises A19 and Q22 for the band, for migration only | §4.3, §6.1, A19 |
 | <a id="d3"></a>D3 | **The v2 API reads only the new model.** It doesn't exist yet, so it is built on the split collections from the start, never reads the legacy document, and goes live after backfill and full dual-write (phase 4a). The existing endpoints keep the phased plan | §1, §6, §6.4, A26, B13 |
+| <a id="d4"></a>D4 | **Approvals made in this service are not back-dated.** The migration goes live before approvals in this service do, so backfill step 4 dates version 1 at backfill time and only ReEx `statusHistory` is back-dated | §4.3, §6.1, Q32, B7 |
+| <a id="d5"></a>D5 | **Accreditations are addressed by `organisationNumber`, `registrationNumber` and `year`**, as the consuming client (ReEx) asked, instead of by accreditation id or number. `year` is the year the accreditation applies to, not the year it was created or approved | §2.4, §3.2, §5.3, §6.4 |
 
 ---
 
@@ -1309,7 +1324,7 @@ Priority runs from 0 (critical) to 4 (backlog).
 | B4 | Expand: Organisation, Registration, OverseasSite and Accreditation entities, with collections and indexes (string enums). v3: ORS `baselOecdCodes[]` (list, with migration from `code1`–`code3`), Accreditation `signatories[]`, globally unique `accreditationNumber`, index `{year, accreditationNumber}`. v4: interim sites embedded in ORS `interimSites[]`, with the partial multikey unique index on (`registrationId`, `interimSites.siteNumber`) and the in-document duplicate check (§4.2); Accreditation `tonnageBand` | feature | 1 | B3 | Collections and indexes created by the reconciler; no `interimSites` or `tonnageBands` collection; no callers |
 | B5 | Additive FK fields on Application (`registrationKey`, `siteSelections[].overseasSiteId`, `accreditationId`, `reservedAccreditationNumber`) | task | 2 | B4 | Round-trip tests prove legacy reads are unaffected |
 | B6 | Seed dual-write: upsert Organisation, Registration and ORS from ReEx (flag `DualWriteSeed`). **No** Accreditation at seed (A11) | feature | 1 | B4, B5 | Seed behaviour unchanged with the flag off; entities created with it on; failure is non-fatal and counted |
-| B7 | Backfill service, checkpoint, conflict report and readiness check. Non-status history starts at migration time; status history back-dated from approval dates (§4.3) | feature | 1 | B1, B6 | Idempotent re-run; reconciliation report; §6.1 steps 1–4 and 6 tested on fixtures for every status; `SN-000N` renumbering if the survey finds any (Q30b) |
+| B7 | Backfill service, checkpoint, conflict report and readiness check. Non-status history starts at migration time; accreditations approved in this service are not back-dated (D4) | feature | 1 | B1, B6 | Idempotent re-run; reconciliation report; §6.1 steps 1–4 and 6 tested on fixtures for every status; `SN-000N` renumbering if the survey finds any (Q30b) |
 | B7a | Backfill: import **ReEx accreditations**, with ReEx `statusHistory` written as back-dated status versions (Q32), and link `sourceAccreditationId` (§6.1, step 5) | feature | 1 | B7 | ReEx accreditations present for every registration in scope; past suspensions visible in `statusHistory`; ReEx-versus-application clashes reported |
 | B8 | Dual-write on all site and number write paths, in one transaction (flag `DualWrite`) | feature | 1 | B7 | Every listed handler writes both; RA-519 targeted-update rule kept; tests for each path |
 | B9 | Approval creates an Accreditation and activates or discards proposed sites, atomically and idempotently | feature | 1 | B7 | Retried `approved` push creates nothing new; reject or withdraw discards Proposed sites |
