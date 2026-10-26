@@ -119,10 +119,11 @@ public class AccreditationReferenceCorrectionMigration(
         }
 
         var mode = apply ? "APPLY" : "DRY RUN (nothing will be written)";
-        logger.LogInformation(
-            "RA-691 accreditation reference correction starting. Mode={Mode}",
-            mode
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "RA-691 accreditation reference correction starting. Mode={Mode}",
+                mode
+            );
 
         var persistence = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
 
@@ -145,34 +146,44 @@ public class AccreditationReferenceCorrectionMigration(
             var c = plan.Correction;
             if (plan.AlreadyCorrect)
             {
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId} "
+                            + "already holds {Corrected}; skipped",
+                        mode,
+                        c.OrganisationName,
+                        c.OrgId,
+                        plan.ApplicationId,
+                        c.Corrected
+                    );
+                }
+                continue;
+            }
+
+            if (logger.IsEnabled(LogLevel.Information))
+            {
                 logger.LogInformation(
-                    "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId} "
-                        + "already holds {Corrected}; skipped",
+                    "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId}: "
+                        + "{Incorrect} -> {Corrected}",
                     mode,
                     c.OrganisationName,
                     c.OrgId,
                     plan.ApplicationId,
+                    c.Incorrect,
                     c.Corrected
                 );
-                continue;
             }
-
-            logger.LogInformation(
-                "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId}: "
-                    + "{Incorrect} -> {Corrected}",
-                mode,
-                c.OrganisationName,
-                c.OrgId,
-                plan.ApplicationId,
-                c.Incorrect,
-                c.Corrected
-            );
 
             if (apply)
                 await ApplyAsync(persistence, plan, settings.SpotCheckConfirmedBy!, cancellationToken);
         }
 
-        logger.LogInformation("RA-691 accreditation reference correction complete. Mode={Mode}", mode);
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "RA-691 accreditation reference correction complete. Mode={Mode}",
+                mode
+            );
         return apply ? RunResult.Applied : RunResult.DryRun;
     }
 
@@ -242,7 +253,7 @@ public class AccreditationReferenceCorrectionMigration(
             logger.LogError(
                 "RA-691 {OrganisationName} ({OrgId}): application {ApplicationId} holding "
                     + "{Reference} is OrgId {ActualOrgId}, Year {Year}, {MaterialType}, "
-                    + "IsExporter {IsExporter}; expected OrgId {OrgId}, Year {ExpectedYear}, "
+                    + "IsExporter {IsExporter}; expected OrgId {ExpectedOrgId}, Year {ExpectedYear}, "
                     + "Plastic, reprocessor",
                 c.OrganisationName,
                 c.OrgId,
@@ -303,15 +314,18 @@ public class AccreditationReferenceCorrectionMigration(
             return;
         }
 
-        logger.LogInformation(
-            "RA-691 APPLIED: {OrganisationName} ({OrgId}) application {ApplicationId}: "
-                + "{Incorrect} -> {Corrected}. Spot check confirmed by {ConfirmedBy}",
-            c.OrganisationName,
-            c.OrgId,
-            plan.ApplicationId,
-            c.Incorrect,
-            c.Corrected,
-            confirmedBy
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "RA-691 APPLIED: {OrganisationName} ({OrgId}) application {ApplicationId}: "
+                    + "{Incorrect} -> {Corrected}. Spot check confirmed by {ConfirmedBy}",
+                c.OrganisationName,
+                c.OrgId,
+                plan.ApplicationId,
+                c.Incorrect,
+                c.Corrected,
+                confirmedBy
+            );
+        }
     }
 }
