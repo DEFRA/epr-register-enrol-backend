@@ -67,6 +67,15 @@ sudo mongod --dbpath ~/mongodb-cdp
 In CDP environments a MongoDB instance is already set up
 and the credentials exposed as enviromment variables.
 
+#### Domain model diagnostics (test environments only)
+
+Set `DomainModelDiagnostics__Enabled=true` to make the service run, once at startup, a **transaction smoke test**
+(does this Mongo support multi-document transactions?) and a **read-only survey** of `accreditationApplications`
+for the legacy shapes the domain model migration must handle. Each logs one line, `DomainModelDiagnostics
+transactions ...` and `DomainModelDiagnostics survey ...`, with counts only and no personal data. It is off by
+default and is not meant for production, where this team cannot examine the data. See
+`docs/analysis/register-enrol-domain-model-design.md` (B0, B1).
+
 ### Inspect MongoDB
 
 To inspect the Database and Collections locally:

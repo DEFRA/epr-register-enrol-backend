@@ -10,6 +10,7 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
+using EprRegisterEnrolBackend.DomainModel.Diagnostics;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.ReEx;
@@ -168,6 +169,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<IDomainModelCollection>(sp =>
         sp.GetRequiredService<IAccreditationPersistence>()
     );
+    // B0/B1: a one-off transaction smoke test and legacy-data survey, logged once at startup. Off unless
+    // DomainModelDiagnostics:Enabled is set, which only test environments do.
+    builder.Services.Configure<DomainModelDiagnosticsConfig>(
+        builder.Configuration.GetSection(DomainModelDiagnosticsConfig.SectionName)
+    );
+    builder.Services.AddHostedService<DomainModelDiagnosticsService>();
 
     // RA-448: registration/accreditation number generation
     builder.Services.AddSingleton<
