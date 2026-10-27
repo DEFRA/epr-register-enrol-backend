@@ -31,15 +31,24 @@ services:
     networks:
       - cdp-tenant
 
+  # Single-node replica set: multi-document transactions (the versioned domain model, docs/analysis)
+  # only work on a replica set. The healthcheck initiates it on first run and is a no-op afterwards.
   mongodb:
     image: mongo:6.0.13
+    command: ['--replSet', 'rs0', '--bind_ip_all']
     networks:
       - cdp-tenant
     ports:
       - '27017:27017'
     volumes:
       - mongodb-data:/data
-      - ./compose/init-mongodb.sh:/docker-entrypoint-initdb.d/init-mongodb.sh
+    healthcheck:
+      test: >
+        mongosh --quiet --eval "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongodb:27017' }] }).ok }"
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
     restart: always
 
   ################################################################################
@@ -55,7 +64,7 @@ services:
       localstack:
         condition: service_healthy
       mongodb:
-        condition: service_started
+        condition: service_healthy
     env_file:
       - 'compose/aws.env'
     environment:

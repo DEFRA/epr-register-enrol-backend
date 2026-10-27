@@ -39,6 +39,18 @@ See above.
 docker compose up -d mongodb
 ```
 
+The compose `mongodb` service runs as a **single-node replica set** (`rs0`), because the versioned domain
+model writes with multi-document transactions, which MongoDB only supports on a replica set. A healthcheck
+initiates the set on first start. From the host, connect with `directConnection=true`, because the set
+advertises its member as `mongodb:27017`, which only resolves inside the compose network:
+
+```
+mongosh "mongodb://127.0.0.1:27017/?directConnection=true"
+```
+
+Set `Mongo__DatabaseUri` to `mongodb://127.0.0.1:27017/?directConnection=true` when running the service
+outside compose. An existing `mongodb-data` volume keeps its data; the healthcheck initiates the set on top of it.
+
 #### MongoDB locally
 
 Alternatively install MongoDB locally:
@@ -77,7 +89,7 @@ for why.
 
 | Variable | Secret? | Local default | Description |
 | --- | --- | --- | --- |
-| `Mongo__DatabaseUri` | No | `mongodb://127.0.0.1:27017` | MongoDB connection string (AWS IAM auth in deployed environments) |
+| `Mongo__DatabaseUri` | No | `mongodb://127.0.0.1:27017/?directConnection=true` | MongoDB connection string (AWS IAM auth in deployed environments) |
 | `Mongo__DatabaseName` | No | `epr` | MongoDB database name |
 | `App__BaseUrl` | No | `http://localhost:5000` | This service's own public base URL, used for CDP callback/status URLs |
 | `CdpUploader__Url` | No | `http://localhost:7337` | Base URL of the CDP Uploader service |
