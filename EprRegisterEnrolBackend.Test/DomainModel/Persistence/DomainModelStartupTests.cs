@@ -52,7 +52,7 @@ public sealed class DomainModelStartupTests : IDisposable
         {
             (await collection.GetIndexNamesAsync(Ct))
                 .Should()
-                .BeEquivalentTo(collection.ExpectedIndexNames, collection.CollectionName);
+                .BeEquivalentTo(collection.GetExpectedIndexNames(), collection.CollectionName);
         }
 
         var report = await _factory

@@ -21,7 +21,7 @@ public interface IDomainModelCollection
     string CollectionName { get; }
 
     /// <summary>Names of the indexes this collection is meant to have (excluding the implicit <c>_id_</c>).</summary>
-    IReadOnlyList<string> ExpectedIndexNames { get; }
+    IReadOnlyList<string> GetExpectedIndexNames();
 
     /// <summary>Names of the indexes the server has now. Empty when the collection does not exist yet.</summary>
     Task<IReadOnlyList<string>> GetIndexNamesAsync(CancellationToken cancellationToken);
@@ -61,7 +61,7 @@ public abstract class DomainModelPersistence<T>(
 
     public string CollectionName => Collection.CollectionNamespace.CollectionName;
 
-    public IReadOnlyList<string> ExpectedIndexNames =>
+    public IReadOnlyList<string> GetExpectedIndexNames() =>
         DefineIndexes(Builders<T>.IndexKeys).Select(m => m.Options.Name).ToList();
 
     public async Task<IReadOnlyList<string>> GetIndexNamesAsync(CancellationToken cancellationToken)

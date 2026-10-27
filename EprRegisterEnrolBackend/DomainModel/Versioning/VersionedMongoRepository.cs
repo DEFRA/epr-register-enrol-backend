@@ -3,6 +3,21 @@ using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.DomainModel.Versioning;
 
+// Element names that describe the version, not the entity: ignored when deciding whether an update changed anything.
+// Kept out of the generic repository so one array is shared by every closed type.
+internal static class VersionMetadata
+{
+    public static readonly string[] ElementNames =
+    [
+        "_id",
+        "version",
+        "validFrom",
+        "validTo",
+        "isCurrent",
+        "lastChange",
+    ];
+}
+
 /// <summary>
 /// Writes and reads versioned documents held in one collection per entity (design doc §4.2). Each
 /// change closes the current version and inserts the next in one transaction, so there is never a gap,
@@ -16,17 +31,6 @@ public class VersionedMongoRepository<T>(
 )
     where T : class, IVersionedEntity
 {
-    // Element names that describe the version, not the entity: ignored when deciding whether an update changed anything.
-    private static readonly string[] s_versionMetadata =
-    [
-        "_id",
-        "version",
-        "validFrom",
-        "validTo",
-        "isCurrent",
-        "lastChange",
-    ];
-
     public IMongoCollection<T> Collection => collection;
 
     /// <summary>Writes version 1 of a new entity, minting its <c>entityId</c> unless one is supplied.</summary>
@@ -206,7 +210,7 @@ public class VersionedMongoRepository<T>(
     private static BsonDocument Content(T entity)
     {
         var doc = entity.ToBsonDocument();
-        foreach (var name in s_versionMetadata)
+        foreach (var name in VersionMetadata.ElementNames)
         {
             doc.Remove(name);
         }

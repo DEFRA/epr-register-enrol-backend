@@ -192,11 +192,14 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         await _sites.Versions.UpdateAsync(withoutIt, 1, Change(), cancellationToken: Ct);
 
         // Version 1 still carries siteNumber 001 but is closed, so another ORS may now use it.
-        await _sites.Versions.InsertAsync(
+        var second = await _sites.Versions.InsertAsync(
             DomainModelBuilders.OverseasSite(registration, "002", "001"),
             Change(),
             cancellationToken: Ct
         );
+
+        second.IsCurrent.Should().BeTrue();
+        second.InterimSites.Should().ContainSingle(i => i.SiteNumber == "001");
     }
 
     [Fact]
@@ -222,11 +225,13 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     public async Task An_index_does_not_catch_a_repeat_inside_one_ORS_document()
     {
         // Documents why the write path needs DuplicateInterimSiteNumbers: Mongo itself accepts this.
-        await _sites.Versions.InsertAsync(
+        var stored = await _sites.Versions.InsertAsync(
             DomainModelBuilders.OverseasSite(ObjectId.GenerateNewId(), "001", "001", "001"),
             Change(),
             cancellationToken: Ct
         );
+
+        stored.DuplicateInterimSiteNumbers().Should().Equal("001");
     }
 
     [Fact]

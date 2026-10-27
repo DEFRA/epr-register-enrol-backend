@@ -21,7 +21,7 @@ public class DomainModelSchemaHealthCheck(IServiceProvider services) : IHealthCh
             foreach (var collection in services.GetServices<IDomainModelCollection>())
             {
                 var actual = await collection.GetIndexNamesAsync(cancellationToken);
-                var absent = collection.ExpectedIndexNames.Except(actual).ToList();
+                var absent = collection.GetExpectedIndexNames().Except(actual).ToList();
                 if (absent.Count > 0)
                 {
                     missing.Add($"{collection.CollectionName}: {string.Join(", ", absent)}");

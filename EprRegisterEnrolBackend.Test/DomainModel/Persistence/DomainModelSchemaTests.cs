@@ -55,11 +55,11 @@ public sealed class DomainModelSchemaTests : IDisposable
             );
         foreach (var collection in collections)
         {
-            collection.ExpectedIndexNames.Should().NotBeEmpty();
+            collection.GetExpectedIndexNames().Should().NotBeEmpty();
             var actual = await collection.GetIndexNamesAsync(Ct);
             actual
                 .Should()
-                .BeEquivalentTo(collection.ExpectedIndexNames, collection.CollectionName);
+                .BeEquivalentTo(collection.GetExpectedIndexNames(), collection.CollectionName);
         }
     }
 
@@ -91,7 +91,7 @@ public sealed class DomainModelSchemaTests : IDisposable
         {
             (await collection.GetIndexNamesAsync(Ct))
                 .Should()
-                .BeEquivalentTo(collection.ExpectedIndexNames);
+                .BeEquivalentTo(collection.GetExpectedIndexNames());
         }
     }
 
@@ -135,7 +135,7 @@ public sealed class DomainModelSchemaTests : IDisposable
     {
         var broken = Substitute.For<IDomainModelCollection>();
         broken.CollectionName.Returns("registrationVersions");
-        broken.ExpectedIndexNames.Returns(["entityId_current_u", "registrationNumber_current_u"]);
+        broken.GetExpectedIndexNames().Returns(["entityId_current_u", "registrationNumber_current_u"]);
         broken
             .GetIndexNamesAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<string>>(["entityId_current_u"]));
@@ -158,7 +158,7 @@ public sealed class DomainModelSchemaTests : IDisposable
     {
         var absent = Substitute.For<IDomainModelCollection>();
         absent.CollectionName.Returns("accreditationVersions");
-        absent.ExpectedIndexNames.Returns(["entityId_version_u"]);
+        absent.GetExpectedIndexNames().Returns(["entityId_version_u"]);
         absent
             .GetIndexNamesAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<string>>([]));

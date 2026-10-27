@@ -233,11 +233,11 @@ public static class LegacyDataSurvey
         CancellationToken cancellationToken
     )
     {
-        var result = await applications
-            .Aggregate<BsonDocument>(
-                PipelineDefinition<BsonDocument, BsonDocument>.Create(pipeline)
-            )
-            .FirstOrDefaultAsync(cancellationToken);
+        using var cursor = await applications.AggregateAsync<BsonDocument>(
+            PipelineDefinition<BsonDocument, BsonDocument>.Create(pipeline),
+            cancellationToken: cancellationToken
+        );
+        var result = await cursor.FirstOrDefaultAsync(cancellationToken);
         return result is null ? 0 : result["groups"].ToInt64();
     }
 
