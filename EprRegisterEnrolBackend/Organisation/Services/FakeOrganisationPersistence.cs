@@ -18,6 +18,7 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50003 = ObjectId.Parse("aaa000000000000000050003");
     public static readonly ObjectId Reg50005 = ObjectId.Parse("aaa000000000000000050005");
     public static readonly ObjectId Reg50006 = ObjectId.Parse("aaa000000000000000050006");
+    public static readonly ObjectId Reg50011 = ObjectId.Parse("aaa000000000000000050011");
     public static readonly ObjectId Reg50013 = ObjectId.Parse("aaa000000000000000050013");
     public static readonly ObjectId Reg50014 = ObjectId.Parse("aaa000000000000000050014");
     public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
@@ -682,6 +683,87 @@ public class FakeOrganisationPersistence
         // near-identical literals would be unreviewable. See Impl-RA-512.md.
         AddPerfTestReprocessors();
         AddPerfTestExporters();
+
+        // RA-690: the operator landing page links to these two orgs, but until now the stub had no
+        // fixture for them, so their applications showed "Stub Reprocessing Ltd" and a stub
+        // address. England reprocessors with no regulator code, so the stub's derived registration
+        // reference is unchanged. RegistrationNumber is that derived value for a 2027 application
+        // (the stub itself never reads it).
+        AddPlasticReprocessor(
+            50003,
+            Reg50003,
+            "Delta Green Ltd",
+            "R26ER0500036908PL",
+            ("Green Works", "Leeds", "LS10 1AB"),
+            "info@deltagreen.co.uk"
+        );
+        AddPlasticReprocessor(
+            50011,
+            Reg50011,
+            "APPDEV RECYCLING LIMITED",
+            "R26ER0500114575PL",
+            ("Unit 11", "Wigan", "WN1 1AB"),
+            "info@appdevrecycling.co.uk"
+        );
+    }
+
+    private void AddPlasticReprocessor(
+        int orgId,
+        ObjectId registrationId,
+        string name,
+        string registrationNumber,
+        (string Line1, string Town, string Postcode) site,
+        string email
+    )
+    {
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = orgId,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeReprocessor],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = name,
+                    TradingName = name,
+                    RegistrationNumber = registrationNumber,
+                    CompaniesHouseNumber = $"12345{orgId % 1000:D3}",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = site.Line1,
+                        Town = site.Town,
+                        Postcode = site.Postcode,
+                    },
+                },
+                ContactDetails = new ContactDetailsModel { FullName = "Site Manager", Email = email },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = registrationId,
+                        SiteId = $"REG{orgId % 1000:D3}",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeReprocessor,
+                        SiteAddress = new SiteAddressModel
+                        {
+                            Line1 = site.Line1,
+                            Town = site.Town,
+                            Postcode = site.Postcode,
+                        },
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = $"WML{orgId}" },
+                        ],
+                    },
+                ],
+            }
+        );
     }
 
     private void AddPerfTestReprocessors()

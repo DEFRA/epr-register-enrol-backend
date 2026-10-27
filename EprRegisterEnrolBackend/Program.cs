@@ -283,6 +283,11 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     {
         builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
         builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
+
+        // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
+        // test hosts run as Development too; the local compose stack sets it.
+        if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
+            builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
     }
 }
 

@@ -390,6 +390,55 @@ public class StubReExApiAdapterTests
     private static StubReExApiAdapter NewSut() =>
         new(new FakeOrganisationPersistence(), EnabledNullLogger<StubReExApiAdapter>.Instance);
 
+    // RA-690: the operator landing page's 2027 links. The parent repo's
+    // .tasks/ra-690-testing-guidelines.md quotes these references for manual testing, so update it
+    // if one changes.
+    [Theory]
+    [InlineData("50001", MaterialType.Plastic, "R26ER0500012146PL")]
+    [InlineData("50011", MaterialType.Plastic, "R26ER0500114575PL")]
+    [InlineData("50002", MaterialType.Glass, "R26ER0500024527GR")]
+    [InlineData("50003", MaterialType.Plastic, "R26ER0500036908PL")]
+    public async Task GetAccreditationAsync_LandingPageOrganisation_GivesTheDocumentedRegistrationReference(
+        string organisationId,
+        MaterialType materialType,
+        string expected
+    )
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync(
+                organisationId,
+                $"aaa0000000000000000{organisationId}",
+                materialType,
+                2026
+            );
+
+        result.Value!.RegistrationReference.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("50003", "Delta Green Ltd", "Green Works, Leeds, LS10 1AB")]
+    [InlineData("50011", "APPDEV RECYCLING LIMITED", "Unit 11, Wigan, WN1 1AB")]
+    public async Task GetAccreditationAsync_LandingPageReprocessorWithAFixture_UsesItsNameAndSite(
+        string organisationId,
+        string expectedName,
+        string expectedSite
+    )
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync(
+                organisationId,
+                $"aaa0000000000000000{organisationId}",
+                MaterialType.Plastic,
+                2026
+            );
+
+        result.Value!.OrganisationName.Should().Be(expectedName);
+        result.Value.SiteAddress.Should().Be(expectedSite);
+        result.Value.Nation.Should().Be(Nation.England);
+        result.Value.IsExporter.Should().BeFalse();
+        result.Value.PermitNumbers.Should().Equal($"WML{organisationId}");
+    }
+
     [Fact]
     public async Task GetAccreditationAsync_TestOrganisation_NamesItAfterItsIdInEngland()
     {
