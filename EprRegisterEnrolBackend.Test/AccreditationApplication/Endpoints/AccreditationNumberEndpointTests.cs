@@ -217,6 +217,89 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         _factory.FakeCounters.IsEmpty.Should().BeTrue();
     }
 
+    // RA-690: a duplicate live application for the same registration, material and year (Seed is
+    // best-effort, with no unique index) derives the same reference. It must not be issued twice.
+    [Fact]
+    public async Task A_second_application_for_the_same_registration_and_year_returns_409_naming_the_reference_and_persists_nothing()
+    {
+        Reset();
+        var first = SeedApplication();
+        var duplicate = SeedApplication();
+
+        var firstResponse = await PostWithoutBody(first);
+        var duplicateResponse = await PostWithoutBody(duplicate);
+
+        firstResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplication(firstResponse))
+            .AccreditationReference.Should()
+            .Be("A26ER0001230042PL");
+        duplicateResponse.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var message = await duplicateResponse.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken
+        );
+        message.Should().Contain("A26ER0001230042PL");
+        (await StoredApplication(duplicate)).AccreditationReference.Should().BeNull();
+
+        // The holder retrying doesn't clash with itself.
+        var retry = await PostWithoutBody(first);
+        retry.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplication(retry)).AccreditationReference.Should().Be("A26ER0001230042PL");
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Saved)]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.AwaitingDecision)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    public async Task The_derived_reference_held_by_another_application_in_any_status_returns_409(
+        ApplicationStatus holderStatus
+    )
+    {
+        Reset();
+        SeedApplication(
+            status: holderStatus,
+            configure: a => a.AccreditationReference = "A26ER0001230042PL"
+        );
+        var app = SeedApplication();
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task The_derived_reference_held_in_another_organisation_returns_409()
+    {
+        Reset();
+        SeedApplication(configure: a =>
+        {
+            a.OrganisationId = "org-other";
+            a.AccreditationReference = "A26ER0001230042PL";
+        });
+        var app = SeedApplication();
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_different_reference_held_by_another_application_is_not_a_clash()
+    {
+        Reset();
+        SeedApplication(configure: a => a.AccreditationReference = "A26ER0001230043PL");
+        var app = SeedApplication();
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230042PL");
+    }
+
     [Fact]
     public async Task No_registration_reference_returns_409_and_persists_nothing()
     {

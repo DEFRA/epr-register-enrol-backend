@@ -490,4 +490,62 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
             .Be(other.Id);
         (await LatestPreviousBefore(2027, MaterialType.Glass)).Should().BeNull();
     }
+
+    private async Task<AccreditationApplicationModel> CreateWithReference(
+        string? accreditationReference,
+        string organisationId = "org-1",
+        ApplicationStatus status = ApplicationStatus.Submitted
+    )
+    {
+        var application = BuildApplication(organisationId: organisationId, status: status);
+        application.AccreditationReference = accreditationReference;
+        await _sut.CreateAsync(application);
+        return application;
+    }
+
+    [Fact]
+    public async Task IsAccreditationReferenceHeldByAnotherApplicationAsync_AnotherApplicationHoldsIt_ReturnsTrue()
+    {
+        await CreateWithReference(
+            "A26ER0001230042ST",
+            organisationId: "org-other",
+            status: ApplicationStatus.Withdrawn
+        );
+        var applicant = await CreateWithReference(null);
+
+        var held = await _sut.IsAccreditationReferenceHeldByAnotherApplicationAsync(
+            "A26ER0001230042ST",
+            applicant.Id!.Value
+        );
+
+        held.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task IsAccreditationReferenceHeldByAnotherApplicationAsync_OnlyTheApplicationItselfHoldsIt_ReturnsFalse()
+    {
+        var holder = await CreateWithReference("A26ER0001230042ST");
+
+        var held = await _sut.IsAccreditationReferenceHeldByAnotherApplicationAsync(
+            "A26ER0001230042ST",
+            holder.Id!.Value
+        );
+
+        held.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IsAccreditationReferenceHeldByAnotherApplicationAsync_OthersHoldDifferentReferences_ReturnsFalse()
+    {
+        await CreateWithReference("A26ER0001230043ST");
+        await CreateWithReference(null);
+        var applicant = await CreateWithReference(null);
+
+        var held = await _sut.IsAccreditationReferenceHeldByAnotherApplicationAsync(
+            "A26ER0001230042ST",
+            applicant.Id!.Value
+        );
+
+        held.Should().BeFalse();
+    }
 }

@@ -45,6 +45,17 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
+    /// RA-690: whether any application other than <paramref name="applicationId"/> holds
+    /// <paramref name="accreditationReference"/>, in any organisation and any status. Guards an
+    /// approval against issuing a reference already held elsewhere. This is a read-then-write
+    /// check, not a unique index.
+    /// </summary>
+    Task<bool> IsAccreditationReferenceHeldByAnotherApplicationAsync(
+        string accreditationReference,
+        ObjectId applicationId
+    );
+
+    /// <summary>
     /// RA-516: server-side equivalent of "GetByOrganisationAsync then filter by RegistrationId
     /// then flatten every OverseasSites.Sites.OrsId" - used to scope OrsId generation across a
     /// registration's applications. Skips sites with a null OrsId.

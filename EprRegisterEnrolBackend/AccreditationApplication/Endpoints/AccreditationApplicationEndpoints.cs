@@ -441,6 +441,19 @@ public static class AccreditationApplicationEndpoints
         if (!derivation.IsValid)
             return Results.UnprocessableEntity(derivation.Error);
 
+        // Duplicate live applications for the same registration, material and year are possible
+        // (Seed is best-effort, with no unique index) and would derive the same reference. A
+        // reference is never issued twice. Read-then-write: a unique index is a follow-up to RA-691.
+        if (
+            await persistence.IsAccreditationReferenceHeldByAnotherApplicationAsync(
+                derivation.Reference!,
+                application.Id!.Value
+            )
+        )
+            return Results.Conflict(
+                $"Accreditation reference {derivation.Reference} is already held by another application; it cannot be issued again."
+            );
+
         application.AccreditationReference = derivation.Reference;
         application.DateLastEdited = DateTime.UtcNow;
 

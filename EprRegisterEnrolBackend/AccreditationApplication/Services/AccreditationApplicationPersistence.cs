@@ -117,6 +117,24 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
+    // RA-690: no index yet, so this scans the collection. It runs once per approval, not per
+    // read, so the scan is acceptable for now. The unique index on AccreditationReference that
+    // follows RA-691 (once the counter-era references are migrated) will back it and replace
+    // this check.
+    public async Task<bool> IsAccreditationReferenceHeldByAnotherApplicationAsync(
+        string accreditationReference,
+        ObjectId applicationId
+    )
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        var filter = filters.And(
+            filters.Eq(a => a.AccreditationReference, accreditationReference),
+            filters.Ne(a => a.Id, applicationId)
+        );
+
+        return await Collection.Find(filter).AnyAsync();
+    }
+
     public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId) =>
         (await GetSitesByRegistrationAsync(registrationId))
             .Select(s => s.OrsId)
