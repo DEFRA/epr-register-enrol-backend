@@ -20,6 +20,9 @@ public class FakeRegulatoryNumberSequenceCounterPersistence
     // RA-690: lets a test assert no counter at all was drawn from, not just one named pool.
     public bool IsEmpty => _store.IsEmpty;
 
+    // RA-690: lets a test assert exactly which pools were touched (registration-only).
+    public IReadOnlyCollection<string> Keys => [.. _store.Keys];
+
     public Task<int> IncrementAsync(string key, CancellationToken ct = default)
     {
         var next = _store.AddOrUpdate(key, 1, (_, current) => current + 1);

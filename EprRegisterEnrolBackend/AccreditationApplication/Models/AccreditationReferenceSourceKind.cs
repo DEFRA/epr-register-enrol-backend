@@ -1,8 +1,8 @@
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 // RA-690: which kind of existing reference an accreditation reference is derived from (see
-// AccreditationReferenceDerivation). Deliberately separate from NumberType, which only selects
-// a counter pool inside RegulatoryNumberGenerator - derivation never draws from a counter.
+// AccreditationReferenceDerivation). Derivation never draws from a sequence counter - only
+// registration numbers do (RegulatoryNumberGenerator).
 public enum AccreditationReferenceSourceKind
 {
     PreviousAccreditation,

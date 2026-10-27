@@ -113,7 +113,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         .AddCheck<RequiredConfigHealthCheck>("required-config", tags: ["ready"])
         // RA-448: keeps /health/ready unhealthy until the counter backfill completes,
         // so the platform doesn't route real traffic to the number-generation
-        // endpoints before the 16 pools are seeded (see RegulatoryNumberSequenceBackfillService).
+        // endpoint before the eight R-* pools are seeded (see RegulatoryNumberSequenceBackfillService).
         .AddCheck<RegulatoryNumberBackfillHealthCheck>(
             "regulatory-number-backfill",
             tags: ["ready"]

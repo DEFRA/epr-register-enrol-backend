@@ -19,11 +19,10 @@ public class RegulatoryNumberGenerator(IRegulatoryNumberSequenceCounterPersisten
         var processTypeLetter = ProcessTypeLetterFor(spec.IsExporter);
         var agencyType = $"{agencyLetter}{processTypeLetter}";
         var materialCode = MaterialCodeFor(spec.Material, spec.GlassRecyclingProcess);
-        var prefix = spec.Type == NumberType.Registration ? 'R' : 'A';
-        var poolKey = $"{prefix}-{agencyType}";
+        var poolKey = $"R-{agencyType}";
 
         var sequence = await counters.IncrementAsync(poolKey, ct);
 
-        return $"{prefix}{spec.Year % 100:D2}{agencyType}{spec.OrgId:D6}{sequence:D4}{materialCode}";
+        return $"R{spec.Year % 100:D2}{agencyType}{spec.OrgId:D6}{sequence:D4}{materialCode}";
     }
 }

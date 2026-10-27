@@ -353,7 +353,6 @@ public static class AccreditationApplicationEndpoints
         var newNumber = await services.Generator.GenerateAsync(
             new RegulatoryNumberSpec
             {
-                Type = NumberType.Registration,
                 Nation = nation,
                 IsExporter = application.IsExporter,
                 OrgId = orgId,
