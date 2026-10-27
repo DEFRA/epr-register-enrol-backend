@@ -321,14 +321,3 @@ public class WidgetVersion : VersionedEntityBase
 
     public string? Name { get; set; }
 }
-
-public sealed class TestClock(DateTime start) : TimeProvider
-{
-    private DateTimeOffset _now = new(start, TimeSpan.Zero);
-
-    public DateTimeOffset UtcNow => _now;
-
-    public void Advance(TimeSpan by) => _now += by;
-
-    public override DateTimeOffset GetUtcNow() => _now;
-}

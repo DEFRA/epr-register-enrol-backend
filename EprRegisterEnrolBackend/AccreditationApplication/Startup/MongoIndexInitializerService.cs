@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
@@ -54,6 +55,8 @@ public class MongoIndexInitializerService(
                             serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
                         _ = serviceProvider.GetRequiredService<IPendingUploadService>();
                         _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
+                        // Domain model (phase 1, "Expand"): creates the empty collections and indexes.
+                        _ = serviceProvider.GetServices<IDomainModelCollection>().ToList();
                     },
                     cancellationToken
                 )
