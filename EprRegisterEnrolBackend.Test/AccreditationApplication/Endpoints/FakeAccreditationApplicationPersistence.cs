@@ -103,6 +103,31 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(match is null ? null : ShallowCopy(match));
     }
 
+    // RA-690: mirrors AccreditationApplicationPersistence.GetLatestPreviousAccreditationAsync.
+    public Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        GlassRecyclingProcess? glassRecyclingProcess,
+        int beforeYear
+    )
+    {
+        var match = _store
+            .Where(a =>
+                a.OrganisationId == organisationId
+                && a.RegistrationId == registrationId
+                && a.MaterialType == materialType
+                && a.GlassRecyclingProcess == glassRecyclingProcess
+                && a.Year < beforeYear
+                && a.ApplicationStatus == ApplicationStatus.Approved
+                && !string.IsNullOrEmpty(a.AccreditationReference)
+            )
+            .OrderByDescending(a => a.Year)
+            .ThenByDescending(a => a.DateLastEdited)
+            .FirstOrDefault();
+        return Task.FromResult(match is null ? null : ShallowCopy(match));
+    }
+
     public Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(
         int orgId,
         string registrationNumber,

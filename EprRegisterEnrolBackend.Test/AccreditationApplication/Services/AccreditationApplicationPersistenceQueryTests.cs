@@ -347,4 +347,147 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
 
         result.Should().BeNull();
     }
+
+    // ── RA-690: latest previous approved accreditation ───────────────────────
+    //
+    // Against a real mongod so the filter (including the null glass process matching a non-glass
+    // document) and the year-then-edited ordering are proven to run server-side.
+
+    private async Task<AccreditationApplicationModel> CreateApproved(
+        int year,
+        string? accreditationReference,
+        Action<AccreditationApplicationModel>? configure = null
+    )
+    {
+        var application = BuildApplication(year: year, status: ApplicationStatus.Approved);
+        application.AccreditationReference = accreditationReference;
+        configure?.Invoke(application);
+        await _sut.CreateAsync(application);
+        return application;
+    }
+
+    private Task<AccreditationApplicationModel?> LatestPreviousBefore(
+        int year,
+        MaterialType materialType = MaterialType.Steel,
+        GlassRecyclingProcess? glassRecyclingProcess = null
+    ) =>
+        _sut.GetLatestPreviousAccreditationAsync(
+            "org-1",
+            "reg-1",
+            materialType,
+            glassRecyclingProcess,
+            year
+        );
+
+    [Fact]
+    public async Task GetLatestPreviousAccreditationAsync_NAndNPlus1Approved_ReturnsNPlus1()
+    {
+        await CreateApproved(2026, "A26ER0001230042ST");
+        var latest = await CreateApproved(2027, "A27ER0001230042ST");
+
+        var result = await LatestPreviousBefore(2028);
+
+        result!.Id.Should().Be(latest.Id);
+    }
+
+    [Fact]
+    public async Task GetLatestPreviousAccreditationAsync_OnlyNApproved_ReturnsNAcrossTheGap()
+    {
+        var only = await CreateApproved(2026, "A26ER0001230042ST");
+
+        var result = await LatestPreviousBefore(2028);
+
+        result!.Id.Should().Be(only.Id);
+    }
+
+    [Fact]
+    public async Task GetLatestPreviousAccreditationAsync_SameYearTie_ReturnsMostRecentlyEdited()
+    {
+        // The older one is inserted first, so a missing tie-break can't pass by returning the
+        // first-inserted document.
+        await CreateApproved(
+            2026,
+            "A26ER0001230042ST",
+            a => a.DateLastEdited = DateTime.UtcNow.AddDays(-2)
+        );
+        var newer = await CreateApproved(
+            2026,
+            "A26ER0001230077ST",
+            a => a.DateLastEdited = DateTime.UtcNow.AddDays(-1)
+        );
+
+        var result = await LatestPreviousBefore(2027);
+
+        result!.Id.Should().Be(newer.Id);
+    }
+
+    [Fact]
+    public async Task GetLatestPreviousAccreditationAsync_NewerNonMatchesPresent_ReturnsTheOlderMatch()
+    {
+        const string Reference = "A26ER0001230042ST";
+        var match = await CreateApproved(2025, "A25ER0001230042ST");
+        await CreateApproved(
+            2026,
+            Reference,
+            a => a.ApplicationStatus = ApplicationStatus.Withdrawn
+        );
+        await CreateApproved(
+            2026,
+            Reference,
+            a => a.ApplicationStatus = ApplicationStatus.Rejected
+        );
+        await CreateApproved(2026, null);
+        await CreateApproved(2026, string.Empty);
+        await CreateApproved(2026, Reference, a => a.OrganisationId = "org-other");
+        await CreateApproved(2026, Reference, a => a.RegistrationId = "reg-other");
+        await CreateApproved(
+            2026,
+            "A26ER0001230042AL",
+            a => a.MaterialType = MaterialType.Aluminium
+        );
+        // Same year as the one applied for, so not "previous".
+        await CreateApproved(2027, "A27ER0001230042ST");
+
+        var result = await LatestPreviousBefore(2027);
+
+        result!.Id.Should().Be(match.Id);
+    }
+
+    [Fact]
+    public async Task GetLatestPreviousAccreditationAsync_NothingEarlier_ReturnsNull()
+    {
+        await CreateApproved(2026, "A26ER0001230042ST");
+
+        var result = await LatestPreviousBefore(2026);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetLatestPreviousAccreditationAsync_GlassApplications_ReturnsOnlyTheSameGlassProcess()
+    {
+        void Glass(AccreditationApplicationModel a, GlassRecyclingProcess process)
+        {
+            a.MaterialType = MaterialType.Glass;
+            a.GlassRecyclingProcess = process;
+        }
+        var remelt = await CreateApproved(
+            2026,
+            "A26ER0001230042GR",
+            a => Glass(a, GlassRecyclingProcess.Remelt)
+        );
+        var other = await CreateApproved(
+            2026,
+            "A26ER0001230042GO",
+            a => Glass(a, GlassRecyclingProcess.Other)
+        );
+
+        (await LatestPreviousBefore(2027, MaterialType.Glass, GlassRecyclingProcess.Remelt))!
+            .Id.Should()
+            .Be(remelt.Id);
+        (await LatestPreviousBefore(2027, MaterialType.Glass, GlassRecyclingProcess.Other))!
+            .Id.Should()
+            .Be(other.Id);
+        (await LatestPreviousBefore(2027, MaterialType.Glass)).Should().BeNull();
+    }
 }

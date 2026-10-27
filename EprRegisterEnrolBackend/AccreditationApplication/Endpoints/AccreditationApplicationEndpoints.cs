@@ -412,14 +412,32 @@ public static class AccreditationApplicationEndpoints
         if (application.AccreditationReference is not null)
             return Results.Ok(application);
 
-        const AccreditationReferenceSourceKind sourceKind =
-            AccreditationReferenceSourceKind.Registration;
+        // A renewal keeps the latest previous accreditation reference held in this backend, so a
+        // lapsed year doesn't change it either. Without a registration id there is nothing to
+        // match previous years on, so it falls back to the registration reference.
+        var previous = string.IsNullOrEmpty(application.RegistrationId)
+            ? null
+            : await persistence.GetLatestPreviousAccreditationAsync(
+                application.OrganisationId,
+                application.RegistrationId,
+                application.MaterialType,
+                application.GlassRecyclingProcess,
+                application.Year
+            );
+        var (sourceKind, sourceReference) = previous is null
+            ? (AccreditationReferenceSourceKind.Registration, registrationReference)
+            : (
+                AccreditationReferenceSourceKind.PreviousAccreditation,
+                previous.AccreditationReference!
+            );
+
         var derivation = AccreditationReferenceDerivation.Derive(
-            registrationReference,
+            sourceReference,
             sourceKind,
             application.Year
         );
-        // A malformed source must fail visibly rather than issue a wrong reference.
+        // A malformed source must fail visibly rather than issue a wrong reference. A malformed
+        // previous reference deliberately does not fall back to the registration reference.
         if (!derivation.IsValid)
             return Results.UnprocessableEntity(derivation.Error);
 
@@ -434,21 +452,27 @@ public static class AccreditationApplicationEndpoints
             loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
             updated,
             sourceKind,
-            registrationReference
+            sourceReference,
+            previous?.ApplicationId
         );
         return Results.Ok(updated);
     }
 
     // RA-690: the source of each issued reference is logged, not stored, so support can explain
-    // any reference without a schema change.
+    // any reference without a schema change. A previous-accreditation source also names the
+    // application it came from.
     private static void LogAccreditationReferenceIssued(
         ILogger logger,
         AccreditationApplicationModel application,
         AccreditationReferenceSourceKind sourceKind,
-        string sourceReference
+        string sourceReference,
+        string? sourceApplicationId
     )
     {
-        if (logger.IsEnabled(LogLevel.Information))
+        if (!logger.IsEnabled(LogLevel.Information))
+            return;
+
+        if (sourceApplicationId is null)
         {
             logger.LogInformation(
                 "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference}",
@@ -457,7 +481,17 @@ public static class AccreditationApplicationEndpoints
                 sourceKind,
                 sourceReference
             );
+            return;
         }
+
+        logger.LogInformation(
+            "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference} sourceApplicationId={SourceApplicationId}",
+            application.AccreditationReference,
+            application.Id,
+            sourceKind,
+            sourceReference,
+            sourceApplicationId
+        );
     }
 
     // Bundles GenerateOrUpdateRegistrationNumber's DI-service/framework parameters under one

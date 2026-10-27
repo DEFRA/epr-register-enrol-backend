@@ -84,6 +84,39 @@ public class AccreditationApplicationPersistence(
         return await Collection.Find(filter).Sort(NewestFirstSort).Limit(1).FirstOrDefaultAsync();
     }
 
+    // RA-690: no dedicated index. The OrganisationId+MaterialType+Year compound index below
+    // narrows this to one organisation's applications for one material, a handful of documents,
+    // so the remaining filter and the sort run over almost nothing.
+    public async Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        GlassRecyclingProcess? glassRecyclingProcess,
+        int beforeYear
+    )
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        // Eq on a null glass process also matches a document with no such field, which is how
+        // non-glass applications are stored.
+        var filter = filters.And(
+            filters.Eq(a => a.OrganisationId, organisationId),
+            filters.Eq(a => a.RegistrationId, registrationId),
+            filters.Eq(a => a.MaterialType, materialType),
+            filters.Eq(a => a.GlassRecyclingProcess, glassRecyclingProcess),
+            filters.Lt(a => a.Year, beforeYear),
+            filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
+            filters.Ne(a => a.AccreditationReference, null),
+            filters.Ne(a => a.AccreditationReference, string.Empty)
+        );
+
+        return await Collection
+            .Find(filter)
+            .SortByDescending(a => a.Year)
+            .ThenByDescending(a => a.DateLastEdited)
+            .Limit(1)
+            .FirstOrDefaultAsync();
+    }
+
     public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId) =>
         (await GetSitesByRegistrationAsync(registrationId))
             .Select(s => s.OrsId)
