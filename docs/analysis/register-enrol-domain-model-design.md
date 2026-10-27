@@ -2,7 +2,7 @@
 
 **Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v5, with the versioning decision (option B) folded in · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26
 
-**Changes in v5 (2026-10-26): versioning and migration decisions** (D6–D9, §9.6)
+**Changes in v5 (2026-10-26): versioning and migration decisions** (D6–D10, §9.6)
 
 - **History is versioned documents in one collection per entity (option B, D6).** Options A
   (current + `_history`) and C (embedded `versions[]`) are removed. Collections are named
@@ -17,6 +17,10 @@
 - **Renames (D8).** The Accreditation's `sites[]` is the **Accreditation Overseas Site**
   (`accreditationOverseasSites[]`), and the Application's `siteSelections[]` is the **Application
   Overseas Site** (`applicationOverseasSites[]`). Both stay embedded.
+- **Migration and backfill are separate (D10).** Migration (4a) reshapes our 2027 data with no ReEx
+  calls. Backfill (4b) re-imports the 2026 data from ReEx, driven by a queue seeded from the public register
+  and drained in small batches by an in-app `BackgroundService`. Failures are short Error-level log lines
+  with no personal data.
 - **Known limit, accepted (R15):** test-environment results do not prove production data shapes.
 - **Migration sequence changed (D9).** No shadow-read phase. Dual-write is **fatal** on failure and now
   comes **before** backfill. Reads and the v2 API go live together once reconciliation is at zero, then
@@ -1032,20 +1036,58 @@ Dual-write exists for exactly that: rollback without losing data (v5, D9).
 | 1 | **Expand** | New `*Versions` collections and their (partial) indexes via `DefineIndexes` / `MongoIndexReconciler`; domain models and repositories; no callers | Legacy | Indexes present in each environment; `/health/ready` green | Empty collections; leave or drop them |
 | 2 | **Seed dual-write** (`DualWriteSeed`) | Seed also upserts Organisation, Registration and ORS from the same ReEx response, and stamps `registrationKey` on the new application with targeted `$set`. It does **not** create the prior-year Accreditation; that is backfill's job (A11) | Legacy | Failure is **fatal** (v5, D9): the seed request fails, so a defect in the model write shows up in testing instead of being hidden. Counter and log as well | Flag off. Stamped fields are ignored by legacy code (`IgnoreExtraElements`) |
 | 3 | **Full dual-write** (`DualWrite`) | Every write path also writes the entities, **in one transaction** with the legacy write: ORS add, update, promote and revert; interim add, update, withdraw and restore (each a new ORS version, v4); recycling-operations; registration-number; accreditation-number; approved, rejected and withdrawn transitions (§6.2). A failed model write **fails the whole request** and rolls back the legacy write (v5, D9). This phase comes **before** backfill, so no legacy write can slip between the two | Legacy | Per-path unit tests for every dual-write; integration tests on a replica set, including concurrent operator PATCH against a CM push (RA-519); fe-tests e2e green in each test environment | Flag off. The model is then stale until backfill (phase 4) is re-run, and legacy is untouched |
-| 4 | **Backfill and reconcile** | `DomainModelBackfillService` (the `RegulatoryNumberSequenceBackfillService` pattern plus a readiness check), with no back-dating (Q22). It also imports **ReEx accreditations** for every registration in scope (A11). Then the **reconciliation job** (B10) projects every application from the entities **through the same `ApplicationReadModel` facade that phase 5 serves**, and diffs it against the legacy document. It runs in every environment we can reach, and ships as a script that someone with production access can run and return a PII-free report ([Q34](#q34)) | Legacy | Reconciliation report: every application linked; counts per status; conflict list in `migrationConflicts`; **zero diffs for 2 days per environment** | Entities are derived data: truncate and re-run. Stamped FKs are harmless |
+| 4 | **Migrate, backfill and reconcile** | **4a, migration of our 2027 data:** `DomainModelMigrationService` reshapes the applications we hold into Registration, ORS, interim-site and Application versions, with no ReEx calls (§6.1). **4b, backfill of 2026 data:** `DomainModelBackfillService` drains a queue seeded from the public register, in small throttled batches, importing ReEx accreditations and their status history (A11, Q32). Both are in-app `BackgroundService`s (the `RegulatoryNumberSequenceBackfillService` pattern), idempotent, leased and checkpointed; failures are short Error-level log lines with no personal data. Then the **reconciliation job** (B10) projects every application from the entities **through the same `ApplicationReadModel` facade that phase 5 serves**, and diffs it against the legacy document. It runs in every environment we can reach, and can optionally be run by someone with production access, returning a PII-free report ([Q34](#q34)) | Legacy | Readiness green for 4a; queue drained for 4b (no `Pending`; every `Failed` or `NotFound` explained); reconciliation report: every application linked, counts per status, conflict list in `migrationConflicts`; **zero diffs for 2 days per environment** | Entities are derived data: truncate and re-run. Stamped FKs are harmless |
 | 5 | **Go live: switch reads and the v2 API** (`ReadFromModel`, per route group; `AccreditationApiEnabled`) | The facade (`ApplicationReadModel`) serves GET list and GET by id, then the PATCH and status responses. The four v2 read endpoints (B13) go live in the same step, reading **only** `registrationVersions`, `overseasSiteVersions` and `accreditationVersions` (v4, D3). There is **no separate shadow-read phase** (v5, D9): the reconciliation job in phase 4 is the real-data check, and the golden-JSON, per-path unit and fe-tests suites are the code check. Dual-write stays on, so legacy stays current | Facade (existing endpoints); new model (v2 API) | Phase 4 reconciliation at zero diffs; **golden-JSON contract tests** from captured responses in each status, exporter and reprocessor; fe-tests e2e green against the environment; v2 contract tests on migrated data | Flag off per route group: reads return to legacy, which is still current. v2 flag off: routes return 404, and ReEx keeps using its own accreditation status (R13) |
 | 6 | **Cut** (`LegacyWrites` off) | After a **soak of at least 4 weeks** with reconciliation still at zero: stop writing the legacy collection. The entities become the only source of truth, and the legacy collection is frozen read-only. Lifecycle actions (B15) are enabled in production only from here, because legacy cannot represent them (R13) | Facade | Soak finished with reconciliation at zero; error budgets unchanged | **Rollback loses data after this point**: writes made after the cut exist only in the model, so going back needs a model-to-legacy projection run. This is why the soak comes before the cut, and why dual-write is fatal |
 | 7 | **Archive** | Rename the frozen `accreditationApplications` to `accreditationApplications_legacyArchive` (no copy needed). Delete the legacy write paths, the GetById lazy backfills and the flags. Drop the `interimSite` mirror **only after** MF2, the frontend fallback and the T1 tests have moved. Do not drop the archive until Q33 and the owners of management-be agree | Facade | Archive document count equals the pre-rename count; contract tests green | Rename the archive back and re-enable `LegacyWrites` (after a model-to-legacy projection run for anything written since the cut) |
 
-### 6.1 Backfill algorithm (phase 4)
+### 6.1 Migration and backfill (phase 4)
 
-The run is idempotent, resumable from a checkpoint in `domainModelMigrations`, processes batches of
-50–100 applications, and is throttled. It groups applications by `(organisationId, registrationId)`.
+Phase 4 has two parts, with different data, different runners and different failure handling (v5, D10):
+
+| | **4a. Migration** | **4b. Backfill** |
+| --- | --- | --- |
+| Data | **Our 2027 data**: the applications this service holds. This service is the source of truth for it | **2026 data**: the accreditations, registrations and sites ReEx holds. This service is **not** the source of truth for it, so it is re-imported, not trusted from the seeded copies (those were mutated by operators and are no longer valid) |
+| Reshape | Applications become Registration, ORS, interim-site and Application versions | ReEx accreditations become Accreditation versions, with their ORS-A sites |
+| Calls ReEx? | **No.** Local Mongo only, so it is fast | **Yes**, in small throttled batches |
+| Runs | A `BackgroundService` over the applications, readiness-gated | A separate `BackgroundService` draining a work queue (see below), progress reported separately from readiness |
+
+(The B1 survey confirms which years the applications cover. If it finds 2026 applications, they go through 4a like the rest.)
+
+**What runs it.** Both parts run **inside the app**, because CDP gives no way to run an ad-hoc migration
+against a deployed database. They follow the `RegulatoryNumberSequenceBackfillService` pattern in this
+repo: a `BackgroundService`, not a blocking `IHostedService.StartAsync`. Startup is never blocked, which
+matters because CDP kills a container whose startup takes more than about 30 seconds. management-be's
+`WorkItemMigrationHostedService` is the same idea (named, idempotent, run on every boot until applied,
+deleted once applied everywhere), but it swallows failures, which is not acceptable here.
+
+Rules for both parts:
+
+- **Idempotent and resumable.** Every unit of work is checkpointed in `domainModelMigrations` (4a) or
+  the queue (4b), so a restart or kill at any point resumes, and a re-run is a no-op.
+- **One instance at a time.** A lease (owner plus expiry) in the checkpoint document stops two instances
+  working the same batch.
+- **Small batches with a time budget.** Each tick does a bounded amount of work and yields. It never
+  assumes it will finish before the container is replaced.
+- **Failures are loud, short and structured.**
+  - Each failure is logged at **Error** level as one line: migration, step, item key and error kind.
+    Production logs are the only way to find out what happened, so the key must be enough to retry the
+    item.
+  - The item is marked `Failed` with `attempts` and `lastErrorKind`. It shows in the readiness check (4a)
+    or the progress report (4b) and in the reconciliation report. It is never skipped silently.
+- **No personal data in logs, errors or reports (GDPR).** Log only internal ids (`ObjectId`, `entityId`)
+  and public numbers (organisation number, registration number, accreditation number), plus the error
+  kind. **Never** log names, trading names (a sole trader's trading name is personal data), addresses,
+  contact details, emails or free-text from a document or a ReEx response body.
+
+#### 4a. Migration: reshape our 2027 data
+
+The run groups applications by `(organisationId, registrationId)`, processes batches of 50–100
+applications, and is throttled.
 
 1. **Organisation and Registration.** Upsert by `reExOrganisationId` and `reExRegistrationId`.
-   - Enrich from ReEx (structured addresses, permits, contacts and the other ✚ items) when ReEx answers.
-   - Otherwise build from the application's flattened fields, mark `source.enrichmentPending = true`,
-     and let a later pass retry.
+   - Build from the application's flattened fields, and mark `source.enrichmentPending = true`. 4b
+     enriches them from ReEx later (structured addresses, permits, contacts and the other ✚ items).
    - Data is never invented. Unknown values stay null.
 2. **ORS.** For each distinct `orsId` across the registration's applications:
    - ReEx-originated sites, with no `isNewSite` and present in ORS-A, become **Active**.
@@ -1061,43 +1103,64 @@ The run is idempotent, resumable from a checkpoint in `domainModelMigrations`, p
    - For pre-RA-603 documents that only have the singular `interimSite`, normalise it the same way
      `InterimSiteSync` does.
    - `createdAt` is left null where it is unknown.
-4. **Accreditations from this service.** For every **Approved** application, create an Accreditation:
-   - `accreditationNumber = accreditationReference`, which may be null and is then flagged
-   - `accreditationOverseasSites` = the selected sites with their active interim sites, all `approved`
-   - `source: Application`
-   - Version 1's `validFrom` is the backfill time (Q22: no back-dating). The approval time
-     (`caseManagementStatusUpdatedAt`) is kept as the `approvedAt` attribute.
-   - **No status back-dating is needed here (v4, D4).** The migration to the new model goes live
-     before approvals in this service go live, so there is no approval history to back-date.
-5. **Accreditations from ReEx (A11).** For every registration in scope, import ReEx's accreditations
-   from the same organisation response:
-   - number, status, `validFrom`/`validTo` into `periodStart`/`periodEnd`, `prnIssuance`, and ORS-A sites
-     with their `validFrom`
-   - `source: ReEx`, `reExAccreditationId`
-   - status history from ReEx `statusHistory`, written as **back-dated status versions** (Q32, §4.3);
-     non-status fields carry migration-time values
-   - then point each application's `sourceAccreditationId` at the import
-   - skip any accreditation already present, matched on `reExAccreditationId`, or on (`registrationId`,
-     `year`) where an application-sourced one exists. Any clash between ReEx and this service for the same
-     registration and year goes to `migrationConflicts`
-   **v3: status, tonnage band and codes for steps 4–5:**
-   - **Status:** back-dated status versions (Q32, §4.3), for **ReEx-imported accreditations only**: one
-     version per ReEx `statusHistory` entry, and for each accredited ORS an `approved` entry at its
-     approval date (`reExValidFrom`). Accreditations approved in this service are **not** back-dated
-     (step 4, D4). Non-status
-     fields are not back-dated (Q22).
    - **Interim sites in legacy `SN-000N` format:** renumbered once into the registration's 3-digit pool,
      if the B1 survey finds any (Q30b). The old number is kept as `previousSiteNumbers[]`, and the
      version reason is `LegacySiteNumberRenumbered`.
-   - **Tonnage band (v4):** Accreditation.`tonnageBand` from `prnIssuance.tonnageBand` or
-     `prns.plannedTonnageBand`, with the int32 band converted to the ReEx string. It is carried in every
-     back-dated status version, so its history starts at the earliest back-dated date (D2a, §4.3).
-   - **Basel/OECD codes:** `baselOecdCodes` = the non-empty values of legacy `code1`, `code2` and
-     `code3`, in that order.
+4. **Application versions.** Write each application as version 1 of its `applicationVersions` entity, with
+   `entityId` = the legacy `_id` (Q33). Non-status history starts at migration time (Q22).
+5. **Accreditations from our own approved applications.** None are expected: the migration goes live
+   before approvals in this service do (D4). If the survey finds any approved application, create its
+   Accreditation (`accreditationNumber = accreditationReference`, which may be null and is then flagged;
+   `source: Application`) and keep the approval time as the `approvedAt` attribute. They are not back-dated.
 6. **Stamp the application** with a targeted `$set` of FKs only (`registrationKey`,
    `applicationOverseasSites[].overseasSiteId`, `accreditationId`). It is guarded on `version` and retried on
    conflict. It does **not** bump `version`, so a concurrent operator PATCH is never rejected because of
    the migration.
+   - **Tonnage band and codes for the above:** Accreditation.`tonnageBand` from `prns.plannedTonnageBand`,
+     with the int32 band converted to the ReEx string (D2). **Basel/OECD codes:** `baselOecdCodes` = the
+     non-empty values of legacy `code1`, `code2` and `code3`, in that order.
+
+#### 4b. Backfill: import the 2026 data from ReEx
+
+ReEx has no list endpoint we can use to discover what to import, so the **public register** supplies the
+list.
+
+- **The work list.** A keys-only extract of the public register of reprocessors and exporters (organisation
+  number, registration number, accreditation number; no names, addresses or other columns) is embedded in
+  the app and loaded into a **queue collection**, `domainModelImportQueue`, on first run. The 15 Oct 2026
+  register has 392 registrations across 295 organisations, of which 372 have an accreditation.
+- **The queue.** One document per registration: its public keys, `state` (`Pending`, `Imported`,
+  `NotFound`, `Failed`), `attempts`, `lastErrorKind`, `lastAttemptAt`, and the resolved ReEx ids once
+  known. It records what we had to import and what has been imported, and it is the progress report.
+- **Resolving ReEx ids.** The ReEx API is keyed on UUIDs, but the register has numeric numbers.
+  - Where a stored application already holds the registration's ReEx UUIDs, use them.
+  - Otherwise look the registration up by its **natural keys** (organisation number, registration number
+    and year). ReEx exposes these routes and our credentials can call them (A27). A new adapter method is
+    needed (B7a).
+  - Not found in ReEx: mark `NotFound` and report it. Never guess.
+- **The worker.** A `BackgroundService` takes a bounded batch of `Pending` (and retryable `Failed`) items per
+  tick, with a delay between ReEx calls and a per-call timeout, and stops at its time budget. It takes
+  the lease first. Roughly 400 items drain in minutes. If the container is replaced mid-run, the next
+  instance carries on. After a configured number of attempts an item stays `Failed` and is logged at
+  Error level.
+- **What an item import does:**
+  1. **Registration and Organisation.** Upsert by ReEx id and **enrich** from ReEx (structured addresses,
+     permits, contacts and the other ✚ items). Create them if no application here created them (a
+     registration on the register with no application).
+  2. **ORS from ORS-A.** Create or match each accredited overseas site, which is **Active** with its
+     existing `orsId`.
+  3. **Accreditation.** Import the 2026 accreditation: number, status, `validFrom`/`validTo` into
+     `periodStart`/`periodEnd`, `prnIssuance`, `tonnageBand` and the ORS-A sites (as
+     `accreditationOverseasSites[]` with `reExValidFrom`). `source: ReEx`, `reExAccreditationId`.
+  4. **Status history** from ReEx `statusHistory`, written as **back-dated status versions** (Q32, §4.3),
+     for ReEx-imported accreditations only: one version per entry, and for each accredited ORS an
+     `approved` entry at its approval date (`reExValidFrom`). Non-status fields carry migration-time values
+     (Q22), including the tonnage band (D2a).
+  5. **Link** each application's `sourceAccreditationId` to the import.
+  6. **Skip** an accreditation already present, matched on `reExAccreditationId`, or on (`registrationId`,
+     `year`) where an application-sourced one exists. Any clash goes to `migrationConflicts`.
+- **The register is a snapshot (R16).** Re-download it just before phase 5, diff its keys against the queue,
+  and enqueue anything new. Status changes made in ReEx after the import are caught by the later sync (B16), not by the queue.
 
 ### 6.2 Write-path rules during dual-write (phases 3–5)
 
@@ -1186,8 +1249,8 @@ none exist when it runs (v4, D4).
 | R12 | Seed idempotency is best-effort (duplicates) | Unchanged by this plan. A unique partial index is a separate follow-up, made easier once the survey shows the duplicates |
 | R13 | **Two sources of accreditation status during the transition.** ReEx has its own status; we become the truth for PRN validity (Q2). A suspension recorded only here would not stop PRNs until ReEx calls our validity API | A sequenced cutover with the ReEx team ([Q19](#q19)). Until then, either regulator suspensions continue in ReEx, or we sync ours to ReEx. Don't expose our lifecycle actions in production before that is agreed |
 | R14 | **Back-dated status versions are mistaken for recorded fact** (Q32), or reports expect non-status history from before the migration (Q22) | `validFromSource = Imported` on every back-dated version; the import is refused once an entity has recorded history (§4.3). Non-status pre-migration dates are kept as attributes (`approvedAt`, `periodStart`, `reExValidFrom`) |
-
 | R15 | **Test-environment results do not prove production data shapes (accepted, Q34).** We have no access to production data because of data-protection rules. A clean survey, backfill or reconciliation in test environments proves the code on test data only. This has caused production surprises before, and there is currently nothing we can do to remove it | Accepted, and reduced rather than removed: (1) dual-write is **fatal** (D9), so a surprising production document fails and rolls back that one write instead of silently corrupting the model; (2) phases 3 and 4 run in production with reads still on legacy, so the first production exposure costs a rolled-back write, not wrong data served; (3) the known legacy shapes are **required fixtures** in B7 and B10; (4) the reconciliation job reports any document it cannot project as a conflict and never skips it; (5) phase 5, the first point where a data-shape surprise can reach users, goes live per route group with the flag-off rollback rehearsed |
+| R16 | **The public register is a snapshot and may not list everything** (v5). The backfill work list comes from the 15 Oct 2026 register. Anything approved, added or changed after it is missing, and a registration the register omits is never imported | Re-download the register just before phase 5, diff its keys against `domainModelImportQueue` and enqueue new ones. Registrations the queue marks `NotFound` in ReEx are reported. Later ReEx changes are the job of the sync (B16) |
 
 ---
 
@@ -1214,7 +1277,7 @@ Status after the 2026-10-21 review: **✅ confirmed**, **✏️ revised**, **❌
 - **A10 ⏳** Deployed CDP Mongo supports multi-document transactions. **Unknown, and a blocker:** B0 confirms
   it before B3. R5 gives the fallback.
 - **A11 ❌** *Was:* seed stores the prior-year ReEx accreditation.
-  *Now:* ReEx accreditations are imported by **backfill** (§6.1, step 5). Seed only upserts Organisation,
+  *Now:* ReEx accreditations are imported by **backfill** (§6.1, 4b). Seed only upserts Organisation,
   Registration and ORS.
 - **A12 ✅** `caseManagementReference` is dropped, subject to the survey (B1) confirming it is absent from stored data.
 - **A13 ⏳** Data volumes are small enough for online backfill without a maintenance window. *(Not yet
@@ -1248,6 +1311,12 @@ Status after the 2026-10-21 review: **✅ confirmed**, **✏️ revised**, **❌
   band entity, and no Registration-level band is planned.
 - **A26 (v4) ✅** The v2 Accreditation API is built on the new model only and goes live after backfill
   and full dual-write (D3, phase 5).
+
+- **A27 (v5) ✅** Our ReEx credentials can call the natural-key routes (organisation number, registration
+  number, year) as well as the UUID ones. Confirmed by the team; the adapter does not call them yet (B7a).
+- **A28 (v5) ✅** A keys-only extract of the public register (numbers only, no names or addresses) is
+  embedded in the app as the backfill work list. The register is public, but the extract is kept to keys
+  so no personal data ships in the repo. Approved by the team.
 
 ---
 
@@ -1363,7 +1432,7 @@ The working default noted for each one is what the plan assumes until it is answ
 | <a id="d2"></a>D2 | **Tonnage band is part of the Accreditation**, not modelled separately. It is a stored field, each change is a new Accreditation version, and `tonnageBandHistory[]` is projected from versions | §3.2, §3.3, §4.4, §5.1, §5.3, §6.1, §6.2, A25, B23 |
 | <a id="d2a"></a>D2a | **Migration back-dates the band along with status.** Back-dated status versions carry the band, so its history starts at the earliest back-dated date. This revises A19 and Q22 for the band, for migration only | §4.3, §6.1, A19 |
 | <a id="d3"></a>D3 | **The v2 API reads only the new model.** It doesn't exist yet, so it is built on the split collections from the start, never reads the legacy document, and goes live after full dual-write and backfill (phase 5). The existing endpoints keep the phased plan | §1, §6, §6.4, A26, B13 |
-| <a id="d4"></a>D4 | **Approvals made in this service are not back-dated.** The migration goes live before approvals in this service do, so backfill step 4 dates version 1 at backfill time and only ReEx `statusHistory` is back-dated | §4.3, §6.1, Q32, B7 |
+| <a id="d4"></a>D4 | **Approvals made in this service are not back-dated.** The migration goes live before approvals in this service do, so migration step 5 (§6.1, 4a) dates version 1 at migration time and only ReEx `statusHistory` is back-dated | §4.3, §6.1, Q32, B7 |
 | <a id="d5"></a>D5 | **Accreditations are addressed by `organisationNumber`, `registrationNumber` and `year`**, as the consuming client (ReEx) asked, instead of by accreditation id or number. `year` is the year the accreditation applies to, not the year it was created or approved | §2.4, §3.2, §5.3, §6.4 |
 
 ### 9.6 Decisions from the versioning review (v5)
@@ -1373,8 +1442,8 @@ The working default noted for each one is what the plan assumes until it is answ
 | <a id="d6"></a>D6 | **Versioned documents in one collection (option B)** for Registration, ORS, Application and Accreditation, in `*Versions` collections. Application is versioned too | §1, §3.2, §3.3, §4, §6, B3, B4 |
 | <a id="d7"></a>D7 | **Organisation is not versioned.** It is held until Account Management is the source of truth, and may later keep only an id plus augmenting data | §3.2, §4, A16, B16 |
 | <a id="d8"></a>D8 | **Renames:** `sites[]` on Accreditation becomes **Accreditation Overseas Site** (`accreditationOverseasSites[]`), and `siteSelections[]` on Application becomes **Application Overseas Site** (`applicationOverseasSites[]`). Both stay embedded, not promoted to collections | §3.2, §3.3, §5, §6 |
-
 | <a id="d9"></a>D9 | **No shadow-read phase; dual-write is fatal; reads switch with the v2 API after backfill.** Dual-write exists for lossless rollback. A failed model write fails the request, so defects show up in testing. Full dual-write now precedes backfill so no legacy write is missed. A reconciliation job, runnable in test environments and handed to production-access staff, replaces shadow reads. Switching writes becomes a **cut** that follows a soak, then an archive | §1, §6, R11, B8, B10, B11, B12, B14, B17 |
+| <a id="d10"></a>D10 | **Migration and backfill are separate.** Migration (4a) reshapes our 2027 data with no ReEx calls. Backfill (4b) re-imports the 2026 data from ReEx, because the seeded copies were mutated. Both run in-app as `BackgroundService`s, so startup is never blocked (CDP kills slow starts). The backfill work list is the public register, and its progress lives in a queue collection. Failures are loud, short Error-level lines with no personal data | §6, R16, A27, A28, B7, B7a, B13 |
 
 - <a id="q33"></a>**Q33. ⏳ Open (raised by D6):** how does `applicationVersions` relate to the legacy
   `accreditationApplications` collection? Working assumption: `entityId` = the legacy `_id`, the legacy
@@ -1403,14 +1472,14 @@ Priority runs from 0 (critical) to 4 (backlog).
 | B4 | Expand: Organisation, Registration, OverseasSite and Accreditation entities, with collections and indexes (string enums). v3: ORS `baselOecdCodes[]` (list, with migration from `code1`–`code3`), Accreditation `signatories[]`, globally unique `accreditationNumber`, index `{year, accreditationNumber}`. v4: interim sites embedded in ORS `interimSites[]`, with the partial multikey unique index on (`registrationId`, `interimSites.siteNumber`) and the in-document duplicate check (§4.2); Accreditation `tonnageBand` | feature | 1 | B3 | Collections and indexes created by the reconciler; no `interimSites` or `tonnageBands` collection; no callers |
 | B5 | Additive FK fields on Application (`registrationKey`, `applicationOverseasSites[].overseasSiteId`, `accreditationId`, `reservedAccreditationNumber`) | task | 2 | B4 | Round-trip tests prove legacy reads are unaffected |
 | B6 | Seed dual-write: upsert Organisation, Registration and ORS from ReEx (flag `DualWriteSeed`). **No** Accreditation at seed (A11) | feature | 1 | B4, B5 | Seed behaviour unchanged with the flag off; entities created with it on; failure is non-fatal and counted |
-| B7 | Backfill service, checkpoint, conflict report and readiness check. Non-status history starts at migration time; accreditations approved in this service are not back-dated (D4) | feature | 1 | B1, B8 | Idempotent re-run; reconciliation report; §6.1 steps 1–4 and 6 tested on fixtures for every status; `SN-000N` renumbering if the survey finds any (Q30b); **the known legacy shapes as fixtures: int32 enums, singular `interimSite`-only documents, null `orsId`s, duplicate live applications for one key, legacy `SN-000N` interim numbers, approved applications with no `accreditationReference`, and conflicting registration numbers across one registration (R1, R15)** |
-| B7a | Backfill: import **ReEx accreditations**, with ReEx `statusHistory` written as back-dated status versions (Q32), and link `sourceAccreditationId` (§6.1, step 5) | feature | 1 | B7 | ReEx accreditations present for every registration in scope; past suspensions visible in `statusHistory`; ReEx-versus-application clashes reported |
+| B7 | Migration of our 2027 data (phase 4a): `DomainModelMigrationService` (`BackgroundService`, no ReEx calls), checkpoint, lease, conflict report and readiness check. Non-status history starts at migration time; accreditations approved in this service are not back-dated (D4). Failures are Error-level, one line, no personal data | feature | 1 | B1, B8 | Idempotent re-run; two instances never work the same batch; reconciliation report; §6.1 4a steps 1–6 tested on fixtures for every status; `SN-000N` renumbering if the survey finds any (Q30b); log assertions that no name, address or contact detail is ever written; **the known legacy shapes as fixtures: int32 enums, singular `interimSite`-only documents, null `orsId`s, duplicate live applications for one key, legacy `SN-000N` interim numbers, approved applications with no `accreditationReference`, and conflicting registration numbers across one registration (R1, R15)** |
+| B7a | Backfill of 2026 data (phase 4b): a keys-only extract of the public register embedded in the app, `domainModelImportQueue`, a leased `BackgroundService` worker with small batches and a time budget, a new ReEx adapter method for the **natural-key routes** (A27), enrichment of Organisation and Registration, import of ReEx accreditations and ORS-A sites, ReEx `statusHistory` written as back-dated status versions (Q32), and `sourceAccreditationId` linking (§6.1) | feature | 1 | B7 | Queue drains to no `Pending` across restarts and a killed container; `NotFound` and `Failed` items reported, never skipped; past suspensions visible in `statusHistory`; ReEx-versus-application clashes reported; no personal data in logs or the queue; the register extract contains keys only |
 | B8 | Dual-write on all site and number write paths, in one transaction (flag `DualWrite`). **Fatal on failure** (D9). Ships **before** backfill | feature | 1 | B6 | Every listed handler writes both; a model-write failure fails the request and rolls back the legacy write; RA-519 targeted-update rule kept; unit tests for each path and replica-set integration tests for concurrency |
 | B9 | Approval creates an Accreditation and activates or discards proposed sites, atomically and idempotently | feature | 1 | B7 | Retried `approved` push creates nothing new; reject or withdraw discards Proposed sites |
 | B10 | Reconciliation job: projects each application through the **same `ApplicationReadModel` facade** that serves reads, and diffs it against the legacy document, with metrics. Runnable as a script or command in any test environment, and handed to someone with production access, with a **PII-free report** (document ids, field paths and counts, never values) ([Q34](#q34)) | task | 2 | B7, B8, B9, B11 | Report in every test environment; zero diffs for 2 days per environment is the gate for phase 5; **the known legacy shapes as fixtures: int32 enums, singular `interimSite`-only documents, null `orsId`s, duplicate live applications for one key, legacy `SN-000N` interim numbers, approved applications with no `accreditationReference`, and conflicting registration numbers across one registration (R1, R15)**; a document the job cannot project appears in the report as a conflict and is never skipped (R15) |
 | B11 | `ApplicationReadModel` facade and golden-JSON contract tests (no shadow-read mode, D9) | feature | 2 | B4 | Golden fixtures for each status, exporter and reprocessor; unit tests for each read path |
 | B12 | Switch reads to the facade, per route group (flag `ReadFromModel`), in the same step as the v2 API go-live (phase 5) | task | 2 | B10, B11 | Reconciliation at zero for 2 days; fe-tests e2e green against the environment; rollback rehearsed |
-| B13 | Implement the v2 Accreditation API's data access (four paths; **the endpoints are being built separately by another developer, with canned data, and are not live**) on the new collections only, and take it live at phase 5 (D3) | feature | 2 | B7a, B8, B9, B10, B22, B23; the endpoint work | Responses come only from the entities, never `accreditationApplications`; `statusHistory[]` and `tonnageBandHistory[]` projected from versions (§4.4); interim sites from the ORS's embedded array; `baselOecdCodes` list (Q29); optional `asAt` on site paths (Q27); the endpoint tests pass against migrated data; go-live gated on phase 4 reconciliation at zero (v5: phase 5 is also the read switch) |
+| B13 | Implement the v2 Accreditation API's data access (four paths; **the endpoints are being built separately by another developer, with canned data, and are not live**) on the new collections only, and take it live at phase 5 (D3) | feature | 2 | B7, B7a, B8, B9, B10, B22, B23; the endpoint work | Responses come only from the entities, never `accreditationApplications`; `statusHistory[]` and `tonnageBandHistory[]` projected from versions (§4.4); interim sites from the ORS's embedded array; `baselOecdCodes` list (Q29); optional `asAt` on site paths (Q27); the endpoint tests pass against migrated data; go-live gated on phase 4 reconciliation at zero (v5: phase 5 is also the read switch) |
 | B24 | Seed from this service's own model (A22, A23): a new year's application is built from the Registration's Active ORSs and interim sites, keeping their `orsId`/`siteNumber`, with include/exclude and prefill taken from the **previous year's Accreditation**. ReEx is called only for registrations not yet held here | feature | 2 | B14; Q31 | Ids are identical across consecutive years for the same site; only operator-added sites get new numbers; suspended sites carried over flagged; no previous-year accreditation means nothing selected; no ReEx call when a prior-year accreditation exists. **A visible change for operators**, so the frontend and product should be told before release |
 | B22 | Status on Accreditation and accredited ORS: stored `status` (recorded time, Q21), transition checks against the current status (§3.4), and the API's `statusHistory[]` projected from version history (§4.4) | feature | 1 | B4 | Each status change is one version with its reason; the projection lists only status changes; illegal transitions rejected |
 | B23 | *(Repurposed in v4, D2.)* `tonnageBand` on the Accreditation (ReEx band values), with `tonnageBandHistory[]` projected from Accreditation versions, plus backfill from `prns.plannedTonnageBand` and ReEx, back-dated with status (D2a) | feature | 2 | B3, B4 | Each band change is one version with reason `TonnageBandChanged`; the projection lists only band changes; migrated history starts at the earliest back-dated version; int32 to string conversion tested |
