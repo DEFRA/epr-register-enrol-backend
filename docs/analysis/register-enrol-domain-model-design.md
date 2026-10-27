@@ -16,8 +16,8 @@
   have been started. That data stays in the Application as the operator's proposal. An Accreditation is
   created only when an application is approved here. From the next round, seeding comes from this
   service's own Accreditations (A23).
-- **New open question:** whether migrated Registrations and Organisations need enriching from ReEx
-  ([Q35](#q35)).
+- **Enrichment deferred:** migrated Registrations and Organisations are not enriched from ReEx, because
+  the v2 endpoints do not need it today ([Q35](#q35)).
 
 **Changes in v5 (2026-10-26): versioning and migration decisions** (D6–D10, §9.6)
 
@@ -1081,9 +1081,9 @@ The run groups applications by `(organisationId, registrationId)`, processes bat
 applications, and is throttled.
 
 1. **Organisation and Registration.** Upsert by `reExOrganisationId` and `reExRegistrationId`.
-   - Build from the application's flattened fields, and mark `source.enrichmentPending = true`. Whether
-     and when they are enriched from ReEx (structured addresses, permits, contacts and the other ✚ items)
-     is open ([Q35](#q35)).
+   - Build from the application's flattened fields, and mark `source.enrichmentPending = true`. Enriching
+     them from ReEx (structured addresses, permits, contacts and the other ✚ items) is deferred until the
+     v2 API needs it ([Q35](#q35)).
    - Data is never invented. Unknown values stay null.
 2. **ORS.** For each distinct `orsId` across the registration's applications:
    - ReEx-originated sites, with no `isNewSite` and present in ORS-A, become **Active**.
@@ -1425,10 +1425,11 @@ The working default noted for each one is what the plan assumes until it is answ
   someone with production access **may** run, returning a PII-free report (ids, field paths and counts, no
   values), but we are not relying on that.
 
-- <a id="q35"></a>**Q35. ⏳ Open (raised by D10):** do migrated Registrations and Organisations need enriching
-  from ReEx (structured addresses, permits, contacts and the other ✚ items), and if so when? They start with
-  only what the applications hold, flagged `source.enrichmentPending`. The v2 API needs the structured
-  fields, so this may become a small, separate ReEx sync (B16) rather than part of the migration.
+- <a id="q35"></a>**Q35. ✅ Answered (2026-10-27), deferred:** the v2 endpoints do **not** need data that only ReEx
+  enrichment can supply (structured registered addresses, permits and the other ✚ items). Migrated
+  Registrations and Organisations therefore start with only what the applications hold, flagged
+  `source.enrichmentPending`. ReEx may ask for such fields later. If so, a small separate ReEx sync (B16)
+  would fill them, not the migration.
 
 ---
 
