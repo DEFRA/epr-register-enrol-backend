@@ -111,12 +111,17 @@ and no trailing newline, then that you use the secret for this client and enviro
 
 ## Test data
 
-Records that exist in each environment and return `200`. Do not rely on them in prod.
+The same four fixed records exist in dev, test and ext-test. They are test data, owned by us,
+and are put back to this state whenever the service starts. Do not rely on them in prod.
 
-| Environment | Organisation | Registration | Year | Type |
+| Organisation | Registration | Accreditation | Year | What it is |
 | --- | --- | --- | --- | --- |
-| dev | `500515` | `R26ER5005150000GR` | 2027 | reprocessor, glass |
-| dev | `500520` | `R26EX5005200002PA` | 2027 | exporter, paper, overseas sites `100` and `101` |
+| `990001` | `R26EX9900010002PA` | `A27EX9900010002PA` | 2027 | exporter, paper, 1 overseas site (`001`) with 1 interim site |
+| `990002` | `R26EX9900020002FB` | `A27EX9900020002FB` | 2027 | exporter, fibre, 10 overseas sites (`001` to `010`) each with 2 interim sites |
+| `990003` | `R26ER9900030000PL` | `A27ER9900030000PL` | 2027 | reprocessor, plastic |
+| `990004` | `R26ER9900040000ST` | `A27ER9900040000ST` | 2027 | reprocessor, steel (the metal example) |
+
+For example: `GET /v1/organisations/990002/registrations/R26EX9900020002FB/accreditations/2027/overseas-sites`.
 
 For a `404` example, use any registration number that does not exist, for example
 `NO-SUCH-REGISTRATION`.

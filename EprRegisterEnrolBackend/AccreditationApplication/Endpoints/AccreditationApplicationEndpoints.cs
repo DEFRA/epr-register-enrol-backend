@@ -3266,6 +3266,64 @@ public static class AccreditationApplicationEndpoints
         }
     }
 
+    // Terminal-status guard: once the Registration & Accreditation service has recorded a
+    // Case Management service push as Approved, Rejected or Withdrawn, no later mapped push
+    // may move the application again — a withdrawn application re-opening as DulyMade (or an
+    // approved one flipping to Rejected) would undo the very gates the terminal statuses
+    // exist to enforce. Unmapped pushes (anything the Case Management service adds in future
+    // with no arm in the mapping switch) are exempt: they only update the ordering watermark,
+    // never ApplicationStatus.
+    //
+    // RA-527: a push for the final status the application already has (Approved → approved,
+    // Rejected → rejected) is an idempotent repeat, not a move. The Case Management service's
+    // step 2 retries with a newer OccurredAt when its own write fails or the reply is lost, so
+    // the ordering guard does not catch it; refusing it with 409 would fail every retry. It is
+    // accepted (200) with no write, like the ordering guard's duplicate path — so the watermark
+    // does not advance either. Withdrawn has no mapped push, so it can never match and stays 409.
+    //
+    // Extracted from StatusChangedFromCaseManagement to keep that method's cognitive complexity
+    // (S3776) within the limit. Returns null when the push may proceed.
+    private static IResult? GuardTerminalStatus(
+        ILogger logger,
+        AccreditationApplicationModel application,
+        ApplicationStatus? mappedStatus,
+        Guid workItemId,
+        string toStateId,
+        string? correlationId
+    )
+    {
+        if (mappedStatus is null || RejectIfTerminal(application) is null)
+            return null;
+
+        if (mappedStatus == application.ApplicationStatus)
+        {
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "StatusChangedFromCaseManagement: idempotent repeat of final status {Status} ignored for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
+                    application.ApplicationStatus,
+                    application.Id,
+                    workItemId,
+                    toStateId,
+                    correlationId ?? "(absent)"
+                );
+            }
+            return Results.Ok(application);
+        }
+
+        logger.LogWarning(
+            "StatusChangedFromCaseManagement: application status {Status} is terminal and cannot accept toStateId={ToStateId} for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
+            application.ApplicationStatus,
+            toStateId,
+            workItemId,
+            application.Id,
+            correlationId ?? "(absent)"
+        );
+        return Results.Conflict(
+            "Application is already Approved, Rejected or Withdrawn and can no longer be updated."
+        );
+    }
+
     private static async Task<IResult> StatusChangedFromCaseManagement(
         Guid workItemId,
         StatusChangedFromCaseManagementRequest request,
@@ -3328,27 +3386,19 @@ public static class AccreditationApplicationEndpoints
 
         var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
 
-        // Terminal-status guard: once the Registration & Accreditation service has recorded a
-        // Case Management service push as Approved, Rejected or Withdrawn, no later mapped push
-        // may move the application again — a withdrawn application re-opening as DulyMade (or an
-        // approved one flipping to Rejected) would undo the very gates the terminal statuses
-        // exist to enforce. Unmapped pushes (anything the Case Management service adds in future
-        // with no arm in the switch above) are exempt: they only update the ordering watermark
-        // below, never ApplicationStatus.
-        if (mappedStatus is not null && RejectIfTerminal(application) is not null)
-        {
-            logger.LogWarning(
-                "StatusChangedFromCaseManagement: application status {Status} is terminal and cannot accept toStateId={ToStateId} for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
-                application.ApplicationStatus,
-                request.ToStateId,
-                workItemId,
-                application.Id,
-                correlationId ?? "(absent)"
-            );
-            return Results.Conflict(
-                "Application is already Approved, Rejected or Withdrawn and can no longer be updated."
-            );
-        }
+        // Terminal-status guard (see GuardTerminalStatus): 409 for any mapped push that would
+        // move an Approved, Rejected or Withdrawn application; 200 with no write for a repeat of
+        // the final status it already has (RA-527).
+        var terminalResult = GuardTerminalStatus(
+            logger,
+            application,
+            mappedStatus,
+            workItemId,
+            request.ToStateId,
+            correlationId
+        );
+        if (terminalResult is not null)
+            return terminalResult;
 
         // Approve/reject legality: the old Approve/Reject endpoints carried this check but are
         // deleted (RA-368 §4.5) — nothing else in the codebase still enforces it, so it is

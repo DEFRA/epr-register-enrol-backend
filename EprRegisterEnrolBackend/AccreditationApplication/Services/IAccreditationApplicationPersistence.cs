@@ -8,6 +8,12 @@ public interface IAccreditationApplicationPersistence
 {
     Task<AccreditationApplicationModel?> CreateAsync(AccreditationApplicationModel application);
 
+    // RA-646: insert-or-replace by Id, and remove by Id. Used by the test data seeder to put the
+    // database into a known state and clear it again; not part of any request path.
+    Task UpsertAsync(AccreditationApplicationModel application);
+
+    Task<long> DeleteManyAsync(IEnumerable<ObjectId> ids);
+
     /// <summary>
     /// RA-516: sorted server-side, newest first (CreatedAt descending, then Id descending as a
     /// tiebreak) - backed by the OrganisationId+CreatedAt+Id compound index on
