@@ -202,7 +202,7 @@ public class StubCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeTrue();
+        result.Should().Be(WithdrawResult.Succeeded);
     }
 
     [Fact]

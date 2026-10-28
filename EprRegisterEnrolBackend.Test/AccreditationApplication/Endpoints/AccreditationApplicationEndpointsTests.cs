@@ -2623,7 +2623,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest
         {
@@ -2679,7 +2679,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -2752,7 +2752,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -2898,7 +2898,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(false)));
+            .Returns(Task.FromResult(WithdrawResult.Failed));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -2914,6 +2914,76 @@ public class AccreditationApplicationEndpointsTests
         );
         stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
         stored.WithdrawalReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Withdraw_WhenCaseManagementRefuses_Returns409AndApplicationRemainsUnchanged()
+    {
+        // RA-690: management-be refuses once step 1 has recorded an approval or refusal.
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.AwaitingDecision);
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(WithdrawResult.Refused));
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().Contain("A decision has already been made on this application");
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.AwaitingDecision);
+        stored.WithdrawalReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Withdraw_WhenAccreditationReferenceIssued_Returns409WithoutCallingAdapter()
+    {
+        // RA-690: only step 1 approval stores a reference, so a decision has been made.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.AwaitingDecision,
+            configure: a => a.AccreditationReference = "R26EPAC0001EX"
+        );
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().Contain("A decision has already been made on this application");
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.AwaitingDecision);
+        stored.WithdrawalReason.Should().BeNull();
+        stored.AccreditationReference.Should().Be("R26EPAC0001EX");
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     // --- AddFile ---
@@ -7125,7 +7195,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -7201,7 +7271,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(

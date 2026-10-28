@@ -65,4 +65,11 @@ public sealed record NotificationStatusResult(string? NotificationStatus, DateTi
 
 public sealed record ResumeFromQueryResult(bool IsSuccess);
 
-public sealed record WithdrawResult(bool IsSuccess);
+// Refused means ManagementBe answered 409: the application has already been decided.
+// Failed is every other problem, which the caller still reports as a service fault.
+public enum WithdrawResult
+{
+    Succeeded,
+    Refused,
+    Failed,
+}

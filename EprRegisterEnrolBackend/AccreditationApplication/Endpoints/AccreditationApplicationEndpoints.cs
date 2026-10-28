@@ -3480,6 +3480,42 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(updated);
     }
 
+    private const string DecisionAlreadyMadeWithdrawMessage =
+        "A decision has already been made on this application, so it can no longer be withdrawn.";
+
+    // Returns the response when this application can't be withdrawn now, or null when it can.
+    private static IResult? GuardWithdraw(AccreditationApplicationModel application)
+    {
+        if (application.ApplicationStatus == ApplicationStatus.Withdrawn)
+            return Results.Ok(application);
+
+        if (
+            application.ApplicationStatus
+            is not (
+                ApplicationStatus.Submitted
+                or ApplicationStatus.DulyMade
+                or ApplicationStatus.Queried
+                or ApplicationStatus.Updated
+                or ApplicationStatus.AwaitingDecision
+            )
+        )
+            return Results.Conflict("Only applications not yet decided can be withdrawn.");
+
+        // RA-690: only step 1 approval stores a reference, so a decision has already been made.
+        if (!string.IsNullOrEmpty(application.AccreditationReference))
+            return Results.Conflict(DecisionAlreadyMadeWithdrawMessage);
+
+        return null;
+    }
+
+    // RA-690: a refusal means step 1 has recorded a decision, so retrying can never work.
+    private static IResult WithdrawNotAppliedResult(WithdrawResult withdrawResult) =>
+        withdrawResult == WithdrawResult.Refused
+            ? Results.Conflict(DecisionAlreadyMadeWithdrawMessage)
+            : Results.Problem(
+                "Failed to withdraw accreditation application with the case management service."
+            );
+
     private static async Task<IResult> Withdraw(
         string organisationId,
         string applicationId,
@@ -3498,20 +3534,8 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
-        if (application.ApplicationStatus == ApplicationStatus.Withdrawn)
-            return Results.Ok(application);
-
-        if (
-            application.ApplicationStatus
-            is not (
-                ApplicationStatus.Submitted
-                or ApplicationStatus.DulyMade
-                or ApplicationStatus.Queried
-                or ApplicationStatus.Updated
-                or ApplicationStatus.AwaitingDecision
-            )
-        )
-            return Results.Conflict("Only applications not yet decided can be withdrawn.");
+        if (GuardWithdraw(application) is { } notWithdrawable)
+            return notWithdrawable;
 
         var contactDetails = new QuerySubmitterContactDetails
         {
@@ -3527,10 +3551,8 @@ public static class AccreditationApplicationEndpoints
             request.Reason,
             cancellationToken
         );
-        if (!withdrawResult.IsSuccess)
-            return Results.Problem(
-                "Failed to withdraw accreditation application with the case management service."
-            );
+        if (withdrawResult != WithdrawResult.Succeeded)
+            return WithdrawNotAppliedResult(withdrawResult);
 
         // RA-519 follow-up: re-read after the round trip, for the same reason as Resubmit above -
         // WithdrawApplicationAsync can synchronously trigger ManagementBe's push-back while this

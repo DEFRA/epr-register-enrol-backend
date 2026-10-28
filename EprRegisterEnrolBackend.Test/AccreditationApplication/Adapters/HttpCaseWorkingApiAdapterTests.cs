@@ -1901,7 +1901,7 @@ public class HttpCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeFalse();
+        result.Should().Be(WithdrawResult.Failed);
         handler.CapturedRequest.Should().BeNull();
     }
 
@@ -1919,7 +1919,7 @@ public class HttpCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeFalse();
+        result.Should().Be(WithdrawResult.Failed);
     }
 
     [Fact]
@@ -1937,7 +1937,7 @@ public class HttpCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeTrue();
+        result.Should().Be(WithdrawResult.Succeeded);
         handler
             .CapturedRequest!.RequestUri!.ToString()
             .Should()
@@ -1986,14 +1986,34 @@ public class HttpCaseWorkingApiAdapterTests
         request.Headers.GetValues("x-cdp-user-name").Should().ContainSingle("Alex Withdrawer");
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task WithdrawApplicationAsync_NonSuccessResponse_ReturnsFailed(
+        HttpStatusCode statusCode
+    )
+    {
+        var result = await WithdrawAgainstManagementBeResponding(statusCode);
+
+        result.Should().Be(WithdrawResult.Failed);
+    }
+
     [Fact]
-    public async Task WithdrawApplicationAsync_NonSuccessResponse_ReturnsFailure()
+    public async Task WithdrawApplicationAsync_ConflictResponse_ReturnsRefused()
+    {
+        // RA-690: ManagementBe answers 409 once step 1 has recorded a decision.
+        var result = await WithdrawAgainstManagementBeResponding(HttpStatusCode.Conflict);
+
+        result.Should().Be(WithdrawResult.Refused);
+    }
+
+    private static async Task<WithdrawResult> WithdrawAgainstManagementBeResponding(
+        HttpStatusCode statusCode
+    )
     {
         var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
-        var handler = new CapturingHttpMessageHandler(
-            HttpStatusCode.InternalServerError,
-            new { title = "Error" }
-        );
+        var handler = new CapturingHttpMessageHandler(statusCode, new { title = "Error" });
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
         httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
         var adapter = new HttpCaseWorkingApiAdapter(
@@ -2004,14 +2024,12 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.WithdrawApplicationAsync(
+        return await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
             "No longer required",
             cancellationToken: TestContext.Current.CancellationToken
         );
-
-        result.IsSuccess.Should().BeFalse();
     }
 
     [Fact]
@@ -2037,7 +2055,7 @@ public class HttpCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeFalse();
+        result.Should().Be(WithdrawResult.Failed);
     }
 
     // --- NotifySiteAddedAsync ---
