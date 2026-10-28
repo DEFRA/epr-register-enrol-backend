@@ -1487,7 +1487,7 @@ public static class AccreditationApplicationEndpoints
                     application.ApplicationStatus = ApplicationStatus.Started;
                 return (null, newSite);
             },
-            WriteIfAbsent: persistence.UpdateIfOrsIdAbsentAsync
+            WriteIfAbsent: (application, value) => persistence.UpdateIfOrsIdAbsentAsync(application, value)
         );
 
     // RA-603: interim site ids are unique application-wide, but a bulk PATCH body is
@@ -2310,7 +2310,7 @@ public static class AccreditationApplicationEndpoints
                 application.DateLastEdited = DateTime.UtcNow;
                 return (null, interimSite);
             },
-            WriteIfAbsent: persistence.UpdateIfInterimSiteNumberAbsentAsync
+            WriteIfAbsent: (application, value) => persistence.UpdateIfInterimSiteNumberAbsentAsync(application, value)
         );
 
     private static InterimSiteModel BuildInterimSite(

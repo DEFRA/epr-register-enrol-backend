@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.DomainModel.Diagnostics;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
@@ -21,12 +22,8 @@ public static class DomainModelServiceCollectionExtensions
     {
         var section = configuration.GetSection(DomainModelConfig.SectionName);
         var config = section.Get<DomainModelConfig>() ?? new DomainModelConfig();
-        if (config.DualWriteSeed && !config.ExpandEnabled)
-        {
-            throw new InvalidOperationException(
-                "DomainModel:DualWriteSeed needs DomainModel:ExpandEnabled: without it there are no collections to write to."
-            );
-        }
+        RequireExpand(config.DualWriteSeed, "DualWriteSeed", config);
+        RequireExpand(config.DualWrite, "DualWrite", config);
 
         services.Configure<DomainModelConfig>(section);
         services.AddHostedService<DomainModelDiagnosticsService>();
@@ -37,6 +34,7 @@ public static class DomainModelServiceCollectionExtensions
         }
 
         AddSeedDualWrite(services, config.DualWriteSeed);
+        AddDualWrite(services, config.DualWrite);
 
         return services;
     }
@@ -74,6 +72,30 @@ public static class DomainModelServiceCollectionExtensions
         services.AddSingleton<SeedModelStores>();
         services.AddSingleton<SeedDualWriteMetrics>();
         services.AddSingleton<ISeedDualWriter, SeedDualWriter>();
+    }
+
+    // Phase 3, "Full dual-write". Every write path takes an IDualWriteUnitOfWork; with the flag off it runs
+    // the legacy write alone, exactly as before.
+    private static void AddDualWrite(IServiceCollection services, bool enabled)
+    {
+        if (!enabled)
+        {
+            services.AddSingleton<IDualWriteUnitOfWork, LegacyOnlyUnitOfWork>();
+            return;
+        }
+
+        services.AddSingleton<DualWriteMetrics>();
+        services.AddSingleton<IDualWriteUnitOfWork, DualWriteUnitOfWork>();
+    }
+
+    private static void RequireExpand(bool flag, string name, DomainModelConfig config)
+    {
+        if (flag && !config.ExpandEnabled)
+        {
+            throw new InvalidOperationException(
+                $"DomainModel:{name} needs DomainModel:ExpandEnabled: without it there are no collections to write to."
+            );
+        }
     }
 
     private static void AddVersioned<TEntity, TPersistence>(IServiceCollection services)

@@ -75,7 +75,8 @@ public class AccreditationApplicationPersistence(
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        int year
+        int year,
+        IClientSessionHandle? session = null
     )
     {
         var filter = Builders<AccreditationApplicationModel>.Filter.And(
@@ -95,7 +96,7 @@ public class AccreditationApplicationPersistence(
             )
         );
 
-        return await Collection.Find(filter).Sort(NewestFirstSort).Limit(1).FirstOrDefaultAsync();
+        return await Find(filter, session).Sort(NewestFirstSort).Limit(1).FirstOrDefaultAsync();
     }
 
     // RA-690: no dedicated index. The OrganisationId+MaterialType+Year compound index below
@@ -152,8 +153,8 @@ public class AccreditationApplicationPersistence(
             .ToListAsync();
     }
 
-    public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId) =>
-        (await GetSitesByRegistrationAsync(registrationId))
+    public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId, IClientSessionHandle? session = null) =>
+        (await GetSitesByRegistrationAsync(registrationId, session))
             .Select(s => s.OrsId)
             .OfType<string>()
             .ToList();
@@ -161,9 +162,10 @@ public class AccreditationApplicationPersistence(
     // RA-603: every interim site, withdrawn ones included - their numbers stay claimed for as
     // long as the record does, which under AC05 is permanently.
     public async Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
-        string registrationId
+        string registrationId,
+        IClientSessionHandle? session = null
     ) =>
-        (await GetSitesByRegistrationAsync(registrationId))
+        (await GetSitesByRegistrationAsync(registrationId, session))
             .SelectMany(InterimSiteSync.All)
             .Select(i => i.SiteNumber)
             .OfType<string>()
@@ -172,10 +174,15 @@ public class AccreditationApplicationPersistence(
     // The overseas sites of every application under a registration - the allocation scope for
     // both ORS ids and interim site numbers. Projects to the overseas-sites section alone, since
     // this runs on every attempt of every add and the rest of the document is never read.
-    private async Task<List<OverseasSiteModel>> GetSitesByRegistrationAsync(string registrationId)
+    private async Task<List<OverseasSiteModel>> GetSitesByRegistrationAsync(
+        string registrationId,
+        IClientSessionHandle? session
+    )
     {
-        var sections = await Collection
-            .Find(a => a.RegistrationId == registrationId)
+        var sections = await Find(
+                Builders<AccreditationApplicationModel>.Filter.Eq(a => a.RegistrationId, registrationId),
+                session
+            )
             .Project(a => a.OverseasSites)
             .ToListAsync();
         return sections.SelectMany(o => o?.Sites ?? []).ToList();
@@ -234,23 +241,26 @@ public class AccreditationApplicationPersistence(
 
     public async Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
-        string applicationId
+        string applicationId,
+        IClientSessionHandle? session = null
     )
     {
         if (!ObjectId.TryParse(applicationId, out var objectId))
             return null;
 
-        return await Collection
-            .Find(a => a.OrganisationId == organisationId && a.Id == objectId)
+        return await Find(
+                Builders<AccreditationApplicationModel>.Filter.Where(a => a.OrganisationId == organisationId && a.Id == objectId),
+                session
+            )
             .FirstOrDefaultAsync();
     }
 
     public async Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
-        Guid workItemId
+        Guid workItemId,
+        IClientSessionHandle? session = null
     )
     {
-        return await Collection
-            .Find(a => a.CaseManagementWorkItemId == workItemId)
+        return await Find(Builders<AccreditationApplicationModel>.Filter.Eq(a => a.CaseManagementWorkItemId, workItemId), session)
             .FirstOrDefaultAsync();
     }
 
@@ -263,20 +273,22 @@ public class AccreditationApplicationPersistence(
             .ToListAsync(cancellationToken);
 
     public Task<AccreditationApplicationModel?> UpdateAsync(
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        IClientSessionHandle? session = null
     )
     {
         if (application.Id is null)
             return Task.FromResult<AccreditationApplicationModel?>(null);
 
         var filter = Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, application.Id);
-        return ReplaceIfMatchAsync(application, filter);
+        return ReplaceIfMatchAsync(application, filter, session);
     }
 
     public Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
-        string orsId
-    ) => UpdateIfNoSiteMatchesAsync(application, s => s.OrsId == orsId);
+        string orsId,
+        IClientSessionHandle? session = null
+    ) => UpdateIfNoSiteMatchesAsync(application, s => s.OrsId == orsId, session);
 
     // RA-603: a site number lives on an interim site nested in an overseas site. The legacy
     // singular mirror is checked as well as the list, matching the scope read above
@@ -284,20 +296,23 @@ public class AccreditationApplicationPersistence(
     // still taken.
     public Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
         AccreditationApplicationModel application,
-        string siteNumber
+        string siteNumber,
+        IClientSessionHandle? session = null
     ) =>
         UpdateIfNoSiteMatchesAsync(
             application,
             s =>
                 s.InterimSites.Any(i => i.SiteNumber == siteNumber)
-                || (s.InterimSite != null && s.InterimSite.SiteNumber == siteNumber)
+                || (s.InterimSite != null && s.InterimSite.SiteNumber == siteNumber),
+            session
         );
 
     // Shared by the two allocation guards above: persist only if no overseas site on the stored
     // document already claims the value - i.e. a concurrent writer has not taken it first.
     private Task<AccreditationApplicationModel?> UpdateIfNoSiteMatchesAsync(
         AccreditationApplicationModel application,
-        Expression<Func<OverseasSiteModel, bool>> claimsValue
+        Expression<Func<OverseasSiteModel, bool>> claimsValue,
+        IClientSessionHandle? session
     )
     {
         if (application.Id is null)
@@ -312,7 +327,7 @@ public class AccreditationApplicationPersistence(
                 )
             )
         );
-        return ReplaceIfMatchAsync(application, filter);
+        return ReplaceIfMatchAsync(application, filter, session);
     }
 
     // RA-482: shared by UpdateAsync and UpdateIfOrsIdAbsentAsync -- they differ only in the
@@ -333,7 +348,8 @@ public class AccreditationApplicationPersistence(
     // in storage, with no separate backfill/migration step required.
     private async Task<AccreditationApplicationModel?> ReplaceIfMatchAsync(
         AccreditationApplicationModel application,
-        FilterDefinition<AccreditationApplicationModel> filter
+        FilterDefinition<AccreditationApplicationModel> filter,
+        IClientSessionHandle? session
     )
     {
         var expectedVersion = application.Version;
@@ -344,7 +360,9 @@ public class AccreditationApplicationPersistence(
 
         application.UpdatedAt = DateTime.UtcNow;
         application.Version = expectedVersion + 1;
-        var result = await Collection.ReplaceOneAsync(versionedFilter, application);
+        var result = session is null
+            ? await Collection.ReplaceOneAsync(versionedFilter, application)
+            : await Collection.ReplaceOneAsync(session, versionedFilter, application);
         return result.ModifiedCount > 0 ? application : null;
     }
 
@@ -394,7 +412,8 @@ public class AccreditationApplicationPersistence(
         ObjectId id,
         FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        IClientSessionHandle? session = null
     )
     {
         var idFilter = Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, id);
@@ -407,16 +426,32 @@ public class AccreditationApplicationPersistence(
             Builders<AccreditationApplicationModel>.Update.Inc(a => a.Version, 1L)
         );
 
-        return await Collection.FindOneAndUpdateAsync(
-            filter,
-            combinedUpdate,
-            new FindOneAndUpdateOptions<AccreditationApplicationModel>
-            {
-                ReturnDocument = ReturnDocument.After,
-            },
-            cancellationToken
-        );
+        var options = new FindOneAndUpdateOptions<AccreditationApplicationModel>
+        {
+            ReturnDocument = ReturnDocument.After,
+        };
+        return session is null
+            ? await Collection.FindOneAndUpdateAsync(
+                filter,
+                combinedUpdate,
+                options,
+                cancellationToken
+            )
+            : await Collection.FindOneAndUpdateAsync(
+                session,
+                filter,
+                combinedUpdate,
+                options,
+                cancellationToken
+            );
     }
+
+    // B8: inside a dual-write transaction every read and write takes the session, so it sees the
+    // transaction's own writes and rolls back with it. Outside one the session is null and nothing changes.
+    private IFindFluent<AccreditationApplicationModel, AccreditationApplicationModel> Find(
+        FilterDefinition<AccreditationApplicationModel> filter,
+        IClientSessionHandle? session
+    ) => session is null ? Collection.Find(filter) : Collection.Find(session, filter);
 
     public async Task StampDomainModelForeignKeysAsync(
         ObjectId applicationId,

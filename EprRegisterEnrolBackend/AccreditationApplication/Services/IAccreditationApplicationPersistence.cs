@@ -30,7 +30,8 @@ public interface IAccreditationApplicationPersistence
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        int year
+        int year,
+        IClientSessionHandle? session = null
     );
 
     /// <summary>
@@ -93,7 +94,7 @@ public interface IAccreditationApplicationPersistence
         long Total
     )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit);
 
-    Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId);
+    Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId, IClientSessionHandle? session = null);
 
     /// <summary>
     /// RA-603: every interim site's SiteNumber across every application under a registration.
@@ -101,7 +102,7 @@ public interface IAccreditationApplicationPersistence
     /// their own 001-999 set, but scoped the same way, because a registration spans years and a
     /// number reissued next year would collide with one already in a submitted return.
     /// </summary>
-    Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(string registrationId);
+    Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(string registrationId, IClientSessionHandle? session = null);
 
     /// <summary>
     /// RA-603: persists only if no interim site under this application already carries
@@ -111,11 +112,12 @@ public interface IAccreditationApplicationPersistence
     /// </summary>
     Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
         AccreditationApplicationModel application,
-        string siteNumber
+        string siteNumber,
+        IClientSessionHandle? session = null
     );
 
-    Task<AccreditationApplicationModel?> GetByIdAsync(string organisationId, string applicationId);
-    Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId);
+    Task<AccreditationApplicationModel?> GetByIdAsync(string organisationId, string applicationId, IClientSessionHandle? session = null);
+    Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId, IClientSessionHandle? session = null);
 
     /// <summary>
     /// RA-691: every application currently holding <paramref name="accreditationReference"/> as
@@ -127,7 +129,7 @@ public interface IAccreditationApplicationPersistence
         string accreditationReference,
         CancellationToken cancellationToken = default
     );
-    Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application);
+    Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application, IClientSessionHandle? session = null);
 
     /// <summary>
     /// Same whole-document replace contract as <see cref="UpdateAsync"/>, but the write only
@@ -138,7 +140,8 @@ public interface IAccreditationApplicationPersistence
     /// </summary>
     Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
-        string orsId
+        string orsId,
+        IClientSessionHandle? session = null
     );
 
     /// <summary>
@@ -172,7 +175,8 @@ public interface IAccreditationApplicationPersistence
         ObjectId id,
         FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        IClientSessionHandle? session = null
     );
 
     /// <summary>

@@ -22,13 +22,6 @@ public sealed class SeedDualWriter(
     ILogger<SeedDualWriter> logger
 ) : ISeedDualWriter
 {
-    /// <summary>
-    /// Attempts at the whole transaction when it loses an insert race. A concurrent seed of the same
-    /// registration can commit the first version between our read and our insert; the retry reads it and
-    /// updates it instead.
-    /// </summary>
-    internal const int MaxAttempts = 3;
-
     public async Task WriteAsync(SeedDualWrite seed, CancellationToken cancellationToken = default)
     {
         try
@@ -49,40 +42,23 @@ public sealed class SeedDualWriter(
                 seed.Application.Id,
                 seed.ReExOrganisationId,
                 seed.ReExRegistrationId,
-                ErrorKind(ex)
+                MongoErrors.Kind(ex)
             );
         }
     }
 
-    private async Task WriteWithRetryAsync(SeedDualWrite seed, CancellationToken cancellationToken)
-    {
-        using var session = await clientFactory
-            .GetClient()
-            .StartSessionAsync(cancellationToken: cancellationToken);
-        var attempt = 0;
-        while (true)
-        {
-            attempt++;
-            try
-            {
-                // WithTransactionAsync already retries transient errors (write conflicts while the rival
-                // transaction is open); a duplicate key, once the rival has committed, is retried here.
-                await session.WithTransactionAsync(
-                    (s, token) => WriteCoreAsync(s, seed, token),
-                    cancellationToken: cancellationToken
-                );
-                return;
-            }
-            catch (MongoException ex) when (attempt < MaxAttempts && IsDuplicateKey(ex))
-            {
+    private Task WriteWithRetryAsync(SeedDualWrite seed, CancellationToken cancellationToken) =>
+        InsertRaceRetry.RunInTransactionAsync(
+            clientFactory,
+            (session, token) => WriteCoreAsync(session, seed, token),
+            attempt =>
                 logger.LogWarning(
                     "Seed dual-write lost an insert race and will retry: application {ApplicationId}, attempt {Attempt}",
                     seed.Application.Id,
                     attempt
-                );
-            }
-        }
-    }
+                ),
+            cancellationToken
+        );
 
     private async Task<bool> WriteCoreAsync(
         IClientSessionHandle session,
@@ -225,22 +201,5 @@ public sealed class SeedDualWriter(
             Reason = reason,
             ApplicationId = seed.Application.Id,
             Details = details,
-        };
-
-    private static bool IsDuplicateKey(MongoException ex) =>
-        ex switch
-        {
-            MongoWriteException write => write.WriteError?.Category
-                == ServerErrorCategory.DuplicateKey,
-            MongoCommandException command => command.Code == 11000,
-            _ => false,
-        };
-
-    private static string ErrorKind(Exception ex) =>
-        ex switch
-        {
-            MongoWriteException write => $"{ex.GetType().Name}:{write.WriteError?.Code}",
-            MongoCommandException command => $"{ex.GetType().Name}:{command.Code}",
-            _ => ex.GetType().Name,
         };
 }

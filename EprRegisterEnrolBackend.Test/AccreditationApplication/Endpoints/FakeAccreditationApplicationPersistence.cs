@@ -123,7 +123,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        int year
+        int year,
+        IClientSessionHandle? session = null
     )
     {
         var match = _store
@@ -218,7 +219,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         );
     }
 
-    public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId)
+    public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId, IClientSessionHandle? session = null)
     {
         IReadOnlyList<string> orsIds = _store
             .Where(a => a.RegistrationId == registrationId)
@@ -231,7 +232,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     }
 
     public Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
-        string registrationId
+        string registrationId,
+        IClientSessionHandle? session = null
     )
     {
         IReadOnlyList<string> numbers = _store
@@ -247,7 +249,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
-        string applicationId
+        string applicationId,
+        IClientSessionHandle? session = null
     )
     {
         if (!ObjectId.TryParse(applicationId, out var oid))
@@ -258,7 +261,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
 
-    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId)
+    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId, IClientSessionHandle? session = null)
     {
         var stored = _store.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
@@ -276,7 +279,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         );
 
     public Task<AccreditationApplicationModel?> UpdateAsync(
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        IClientSessionHandle? session = null
     )
     {
         if (FailNextUpdate)
@@ -299,7 +303,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
         AccreditationApplicationModel application,
-        string siteNumber
+        string siteNumber,
+        IClientSessionHandle? session = null
     )
     {
         if (FailNextInterimSiteNumberWrites > 0)
@@ -324,7 +329,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
-        string orsId
+        string orsId,
+        IClientSessionHandle? session = null
     )
     {
         if (FailNextOrsIdWrites > 0)
@@ -374,7 +380,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         ObjectId id,
         FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        IClientSessionHandle? session = null
     )
     {
         var idx = _store.FindIndex(a => a.Id == id);
