@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -141,6 +142,49 @@ public class AccreditationApplicationEndpointsTests
         body!.OrganisationId.Should().Be("org-123");
         body.MaterialType.Should().Be(MaterialType.Steel);
         body.ApplicationStatus.Should().Be(ApplicationStatus.Saved);
+    }
+
+    // B6: Seed hands the application it just created, and the same ReEx response, to the seed dual-writer.
+    [Fact]
+    public async Task Seed_ValidRequest_PassesTheCreatedApplicationToTheSeedDualWriter()
+    {
+        Reset();
+        var adapterResult = MinimalAdapterSuccess();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(adapterResult));
+        var writer = Substitute.For<ISeedDualWriter>();
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton(writer))
+        );
+
+        var response = await factory
+            .CreateClient()
+            .PostAsJsonAsync(
+                "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+                new SeedRequest { Year = 2026 },
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var created = (await _factory.FakePersistence.GetByOrganisationAsync("org-123")).Single();
+        await writer
+            .Received(1)
+            .WriteAsync(
+                Arg.Is<SeedDualWrite>(s =>
+                    s.ReExOrganisationId == "org-123"
+                    && s.ReExRegistrationId == "reg-1"
+                    && s.Material == MaterialType.Steel
+                    && s.ReEx == adapterResult.Value
+                    && s.Application.Id == created.Id
+                ),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]

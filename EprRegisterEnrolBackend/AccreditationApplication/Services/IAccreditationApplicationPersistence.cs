@@ -174,4 +174,19 @@ public interface IAccreditationApplicationPersistence
         UpdateDefinition<AccreditationApplicationModel> update,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// Stamps the domain model foreign keys (B5) on an application inside <paramref name="session"/>'s
+    /// transaction: <c>registrationEntityId</c>, and <c>overseasSiteEntityId</c> on each site whose
+    /// <c>orsId</c> is a key of <paramref name="overseasSiteEntityIds"/>. A targeted <c>$set</c> that leaves
+    /// <c>version</c> and <c>updatedAt</c> alone, so it never makes a concurrent operator write conflict.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No application has <paramref name="applicationId"/>.</exception>
+    Task StampDomainModelForeignKeysAsync(
+        ObjectId applicationId,
+        ObjectId registrationEntityId,
+        IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    );
 }

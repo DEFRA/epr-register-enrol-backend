@@ -13,6 +13,29 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public void Seed(AccreditationApplicationModel application) => _store.Add(application);
 
+    public Task StampDomainModelForeignKeysAsync(
+        ObjectId applicationId,
+        ObjectId registrationEntityId,
+        IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var application =
+            _store.Find(a => a.Id == applicationId)
+            ?? throw new InvalidOperationException($"Application {applicationId} not found.");
+        application.RegistrationEntityId = registrationEntityId;
+        foreach (var site in application.OverseasSites?.Sites ?? [])
+        {
+            if (site.OrsId is not null && overseasSiteEntityIds.TryGetValue(site.OrsId, out var id))
+            {
+                site.OverseasSiteEntityId = id;
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
     public void Clear()
     {
         _store.Clear();

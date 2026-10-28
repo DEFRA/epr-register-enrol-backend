@@ -102,6 +102,18 @@ public class VersionedMongoRepository<T>(
             )
             .FirstOrDefaultAsync(cancellationToken);
 
+    /// <summary>
+    /// The current version matching <paramref name="filter"/>, for lookups by business key (for example
+    /// <c>reExRegistrationId</c>) that a current-version unique index keeps to one match.
+    /// </summary>
+    public async Task<T?> FindCurrentAsync(
+        FilterDefinition<T> filter,
+        IClientSessionHandle? session = null,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Find(session, filter & Filter.Eq(x => x.IsCurrent, true))
+            .FirstOrDefaultAsync(cancellationToken);
+
     /// <summary>The version that was current at <paramref name="at"/>: <c>validFrom &lt;= at &lt; validTo</c>.</summary>
     public async Task<T?> GetAsOfAsync(
         ObjectId entityId,

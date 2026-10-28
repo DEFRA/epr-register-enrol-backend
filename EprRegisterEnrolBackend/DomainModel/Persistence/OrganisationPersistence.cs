@@ -6,8 +6,8 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolBackend.DomainModel.Persistence;
 
 /// <summary>
-/// The <c>organisations</c> collection and its indexes. Organisations are not versioned (D7). Nothing reads or
-/// writes them yet; the sync that will (Q15) adds its operations here.
+/// The <c>organisations</c> collection and its indexes. Organisations are not versioned (D7). Seed dual-write
+/// (phase 2) upserts them; the sync (Q15) will add its operations here.
 /// </summary>
 public class OrganisationPersistence(
     IMongoDbClientFactory connectionFactory,
@@ -19,6 +19,44 @@ public class OrganisationPersistence(
         loggerFactory
     )
 {
+    /// <summary>
+    /// Creates the organisation for <paramref name="reExOrganisationId"/>, or overwrites it in place (D7), with
+    /// <paramref name="apply"/> run on the stored copy so fields it does not touch are kept.
+    /// </summary>
+    /// <returns>The organisation's <c>_id</c>.</returns>
+    public async Task<ObjectId> UpsertAsync(
+        string reExOrganisationId,
+        Action<OrganisationEntity> apply,
+        DateTime now,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var filter = Builders<OrganisationEntity>.Filter.Eq(
+            x => x.ReExOrganisationId,
+            reExOrganisationId
+        );
+        var organisation =
+            await Collection.Find(session, filter).FirstOrDefaultAsync(cancellationToken)
+            ?? new OrganisationEntity
+            {
+                Id = ObjectId.GenerateNewId(),
+                ReExOrganisationId = reExOrganisationId,
+            };
+        apply(organisation);
+        organisation.Source.ImportedAt = now;
+        organisation.UpdatedAt = now;
+
+        await Collection.ReplaceOneAsync(
+            session,
+            filter,
+            organisation,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken
+        );
+        return organisation.Id;
+    }
+
     protected override List<CreateIndexModel<OrganisationEntity>> DefineIndexes(
         IndexKeysDefinitionBuilder<OrganisationEntity> builder
     ) =>
