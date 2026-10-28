@@ -254,6 +254,14 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByAccreditationReferenceAsync(
+        string accreditationReference,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Collection
+            .Find(a => a.AccreditationReference == accreditationReference)
+            .ToListAsync(cancellationToken);
+
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application
     )
