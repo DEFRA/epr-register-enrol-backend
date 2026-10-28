@@ -5,7 +5,8 @@ namespace EprRegisterEnrolBackend.DomainModel.Entities;
 
 /// <summary>
 /// A synced copy of a ReEx organisation, held in <c>organisations</c>. Not versioned (D7): a sync overwrites it
-/// in place. It may later shrink to an Account Management id plus data this service augments it with.
+/// in place. It may later shrink to an Account Management id plus data this service augments it with. Values
+/// ReEx owns, such as business and partnership types, are kept as ReEx sends them.
 /// </summary>
 public class OrganisationEntity
 {
@@ -24,7 +25,11 @@ public class OrganisationEntity
     public PostalAddress? RegisteredAddress { get; set; }
     public PostalAddress? Address { get; set; }
     public string? BusinessType { get; set; }
+    public Partnership? Partnership { get; set; }
     public ContactPerson? ContactDetails { get; set; }
+    public ContactPerson? ManagementContactDetails { get; set; }
+    public ContactPerson? SubmitterContactDetails { get; set; }
+    public List<OrganisationUser> Users { get; set; } = [];
     public List<string> WasteProcessingTypes { get; set; } = [];
     public List<string> ReprocessingNations { get; set; } = [];
     public string? SubmittedToRegulator { get; set; }

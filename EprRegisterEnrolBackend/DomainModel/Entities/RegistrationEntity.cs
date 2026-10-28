@@ -44,10 +44,3 @@ public class RegistrationEntity : VersionedEntityBase
     public DateTime? FormSubmissionTime { get; set; }
     public EntitySource Source { get; set; } = new();
 }
-
-public class RegistrationSite
-{
-    public PostalAddress? Address { get; set; }
-    public string? GridReference { get; set; }
-    public string? SiteId { get; set; }
-}

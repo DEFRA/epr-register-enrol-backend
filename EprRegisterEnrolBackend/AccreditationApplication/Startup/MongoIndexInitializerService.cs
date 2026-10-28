@@ -20,6 +20,11 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // the whole backend. The try/catch means a failure here logs and is retried on
 // the next request / redeploy instead.
 //
+// When the domain model schema is enabled it also builds those collections and
+// then records the schema check that DomainModelSchemaHealthCheck reports, so
+// a readiness probe only reads a stored result and never calls Mongo itself.
+// If building them fails, the result stays unhealthy until the next deploy.
+//
 // The resolution runs on a pool thread wrapped in WaitAsync(stoppingToken): on
 // shutdown the awaiting caller returns promptly instead of holding the host open
 // for the full server-selection timeout (the WebApplicationFactory-based tests
@@ -44,6 +49,7 @@ public class MongoIndexInitializerService(
     {
         try
         {
+            List<IDomainModelCollection> domainModel = [];
             await Task.Run(
                     () =>
                     {
@@ -55,14 +61,21 @@ public class MongoIndexInitializerService(
                             serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
                         _ = serviceProvider.GetRequiredService<IPendingUploadService>();
                         _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
-                        // Domain model (phase 1, "Expand"): creates the empty collections and indexes.
-                        _ = serviceProvider.GetServices<IDomainModelCollection>().ToList();
+                        // Domain model (phase 1, "Expand"): creates the empty collections and
+                        // indexes. None are registered unless DomainModel:ExpandEnabled is set.
+                        domainModel = serviceProvider.GetServices<IDomainModelCollection>().ToList();
                     },
                     cancellationToken
                 )
                 .WaitAsync(cancellationToken);
 
             logger.LogInformation("MongoIndexInitializerService: index initialisation complete");
+
+            if (domainModel.Count > 0)
+            {
+                var result = await DomainModelSchemaCheck.RunAsync(domainModel, cancellationToken);
+                serviceProvider.GetRequiredService<IDomainModelSchemaStatus>().Record(result);
+            }
         }
         catch (OperationCanceledException)
         {

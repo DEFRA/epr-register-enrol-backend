@@ -4,15 +4,6 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolBackend.DomainModel.Diagnostics;
 
 /// <summary>
-/// The result of <see cref="TransactionSmokeTest"/>. <see cref="ErrorKind"/> names an exception type (and server
-/// code) only, never a message, so it is safe to log.
-/// </summary>
-public record TransactionSmokeResult(bool CommitWorks, bool AbortWorks, string? ErrorKind)
-{
-    public bool Supported => CommitWorks && AbortWorks;
-}
-
-/// <summary>
 /// B0 / A10: proves the Mongo deployment supports multi-document transactions, which the versioned domain model's
 /// close-then-insert write depends on. Writes one throwaway document to a scratch collection: once inside a
 /// transaction that is aborted (it must vanish), once inside one that commits (it must appear), then removes it.

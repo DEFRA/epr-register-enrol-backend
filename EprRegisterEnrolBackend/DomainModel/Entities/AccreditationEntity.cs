@@ -1,4 +1,4 @@
-using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Entities.Sections;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
@@ -27,6 +27,10 @@ public class AccreditationEntity : VersionedEntityBase
     [BsonRepresentation(BsonType.String)]
     public AccreditationStatus Status { get; set; } = AccreditationStatus.Approved;
 
+    /// <summary>
+    /// When the regulator approved it. A business date, kept because the first version's <c>validFrom</c> is the
+    /// time the approval was recorded here, which can be later (§4.3).
+    /// </summary>
     public DateTime? ApprovedAt { get; set; }
 
     /// <summary>Business validity, not history.</summary>
@@ -37,32 +41,16 @@ public class AccreditationEntity : VersionedEntityBase
     public List<Signatory> Signatories { get; set; } = [];
 
     /// <summary>Owned here, not exposed by the v2 API.</summary>
-    public AccreditationApplicationBusinessPlan? BusinessPlan { get; set; }
+    public BusinessPlan? BusinessPlan { get; set; }
 
     /// <summary>Kept, not exposed.</summary>
-    public List<AccreditationApplicationFile> SamplingPlanFiles { get; set; } = [];
+    public List<ApplicationFile> SamplingPlanFiles { get; set; } = [];
+
+    /// <summary>Kept, not exposed (Q11). Its source is still to be confirmed, so it holds the values as given.</summary>
+    public List<string> RecyclingProcess { get; set; } = [];
 
     public List<AccreditationOverseasSiteEntry> AccreditationOverseasSites { get; set; } = [];
 
-    /// <summary>One of <see cref="TonnageBands"/>.</summary>
-    public string? TonnageBand { get; set; }
-}
-
-public class Signatory
-{
-    public required string FullName { get; set; }
-    public string? Email { get; set; }
-    public string? Phone { get; set; }
-}
-
-/// <summary>An accredited overseas site (was <c>sites[]</c>). Its interim sites are those of its ORS, with no per-accreditation membership.</summary>
-public class AccreditationOverseasSiteEntry
-{
-    public ObjectId OverseasSiteId { get; set; }
-    public string? OrsId { get; set; }
-
-    [BsonRepresentation(BsonType.String)]
-    public AccreditedSiteStatus Status { get; set; } = AccreditedSiteStatus.Approved;
-
-    public List<BesEvidenceFileModel> BesEvidence { get; set; } = [];
+    [BsonSerializer(typeof(TonnageBandSerializer))]
+    public TonnageBand? TonnageBand { get; set; }
 }

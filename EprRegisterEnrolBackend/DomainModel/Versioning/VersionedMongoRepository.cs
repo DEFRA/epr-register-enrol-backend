@@ -1,37 +1,23 @@
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.DomainModel.Versioning;
 
-// Element names that describe the version, not the entity: ignored when deciding whether an update changed anything.
-// Kept out of the generic repository so one array is shared by every closed type.
-internal static class VersionMetadata
-{
-    public static readonly string[] ElementNames =
-    [
-        "_id",
-        "version",
-        "validFrom",
-        "validTo",
-        "isCurrent",
-        "lastChange",
-    ];
-}
-
 /// <summary>
 /// Writes and reads versioned documents held in one collection per entity (design doc §4.2). Each
 /// change closes the current version and inserts the next in one transaction, so there is never a gap,
-/// an overlap or two current versions. Filters address fields by name, so the entity type must derive
-/// from <see cref="VersionedEntityBase"/> (or map the same element names).
+/// an overlap or two current versions. Writes never change the object the caller passes in: the
+/// version that was saved is returned instead.
 /// </summary>
 public class VersionedMongoRepository<T>(
     IMongoClient client,
     IMongoCollection<T> collection,
     TimeProvider clock
 )
-    where T : class, IVersionedEntity
+    where T : VersionedEntityBase
 {
-    public IMongoCollection<T> Collection => collection;
+    private static FilterDefinitionBuilder<T> Filter => Builders<T>.Filter;
 
     /// <summary>Writes version 1 of a new entity, minting its <c>entityId</c> unless one is supplied.</summary>
     public async Task<T> InsertAsync(
@@ -41,7 +27,7 @@ public class VersionedMongoRepository<T>(
         CancellationToken cancellationToken = default
     )
     {
-        Stamp(
+        var version = Stamped(
             entity,
             entity.EntityId == ObjectId.Empty ? ObjectId.GenerateNewId() : entity.EntityId,
             1,
@@ -50,22 +36,26 @@ public class VersionedMongoRepository<T>(
         );
         if (session is null)
         {
-            await collection.InsertOneAsync(entity, cancellationToken: cancellationToken);
+            await collection.InsertOneAsync(version, cancellationToken: cancellationToken);
         }
         else
         {
-            await collection.InsertOneAsync(session, entity, cancellationToken: cancellationToken);
+            await collection.InsertOneAsync(session, version, cancellationToken: cancellationToken);
         }
 
-        return entity;
+        return version;
     }
 
     /// <summary>
     /// Replaces the current version of <paramref name="entity"/>'s <c>entityId</c> with a new version, provided
-    /// the current version is <paramref name="expectedVersion"/>. Pass a <paramref name="session"/> to take part
-    /// in a larger transaction (for example approval, which touches several entities); otherwise it runs in its own.
+    /// the current version is <paramref name="expectedVersion"/>. Pass a <paramref name="session"/> with a
+    /// transaction already started to take part in a larger transaction (for example approval, which touches
+    /// several entities); otherwise it runs in its own.
     /// </summary>
     /// <exception cref="VersionConflictException">The current version is not <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="session"/> has no transaction in progress, so the close and the insert would not be atomic.
+    /// </exception>
     public async Task<VersionedWriteResult<T>> UpdateAsync(
         T entity,
         long expectedVersion,
@@ -76,6 +66,13 @@ public class VersionedMongoRepository<T>(
     {
         if (session is not null)
         {
+            if (!session.IsInTransaction)
+            {
+                throw new InvalidOperationException(
+                    "UpdateAsync needs a session with a transaction in progress: without one, closing the current version and inserting the next are not atomic."
+                );
+            }
+
             return await UpdateCoreAsync(
                 session,
                 entity,
@@ -99,7 +96,10 @@ public class VersionedMongoRepository<T>(
         IClientSessionHandle? session = null,
         CancellationToken cancellationToken = default
     ) =>
-        await Find(session, Doc(("entityId", entityId), ("isCurrent", true)))
+        await Find(
+                session,
+                Filter.Eq(x => x.EntityId, entityId) & Filter.Eq(x => x.IsCurrent, true)
+            )
             .FirstOrDefaultAsync(cancellationToken);
 
     /// <summary>The version that was current at <paramref name="at"/>: <c>validFrom &lt;= at &lt; validTo</c>.</summary>
@@ -108,16 +108,14 @@ public class VersionedMongoRepository<T>(
         DateTime at,
         IClientSessionHandle? session = null,
         CancellationToken cancellationToken = default
-    )
-    {
-        var filter = new BsonDocument
-        {
-            { "entityId", entityId },
-            { "validFrom", new BsonDocument("$lte", at) },
-            { "validTo", new BsonDocument("$gt", at) },
-        };
-        return await Find(session, filter).FirstOrDefaultAsync(cancellationToken);
-    }
+    ) =>
+        await Find(
+                session,
+                Filter.Eq(x => x.EntityId, entityId)
+                    & Filter.Lte(x => x.ValidFrom, at)
+                    & Filter.Gt(x => x.ValidTo, at)
+            )
+            .FirstOrDefaultAsync(cancellationToken);
 
     /// <summary>Every version, oldest first.</summary>
     public async Task<List<T>> GetVersionsAsync(
@@ -125,23 +123,8 @@ public class VersionedMongoRepository<T>(
         IClientSessionHandle? session = null,
         CancellationToken cancellationToken = default
     ) =>
-        await Find(session, Doc(("entityId", entityId)))
-            .Sort(Builders<T>.Sort.Ascending("version"))
-            .ToListAsync(cancellationToken);
-
-    /// <summary>Current versions that match <paramref name="filter"/>.</summary>
-    public async Task<List<T>> FindCurrentAsync(
-        FilterDefinition<T> filter,
-        IClientSessionHandle? session = null,
-        CancellationToken cancellationToken = default
-    ) =>
-        await Find(
-                session,
-                Builders<T>.Filter.And(
-                    filter,
-                    new BsonDocumentFilterDefinition<T>(Doc(("isCurrent", true)))
-                )
-            )
+        await Find(session, Filter.Eq(x => x.EntityId, entityId))
+            .Sort(Builders<T>.Sort.Ascending(x => x.Version))
             .ToListAsync(cancellationToken);
 
     private async Task<VersionedWriteResult<T>> UpdateCoreAsync(
@@ -155,11 +138,9 @@ public class VersionedMongoRepository<T>(
         var old =
             await Find(
                     session,
-                    Doc(
-                        ("entityId", entity.EntityId),
-                        ("isCurrent", true),
-                        ("version", expectedVersion)
-                    )
+                    Filter.Eq(x => x.EntityId, entity.EntityId)
+                        & Filter.Eq(x => x.IsCurrent, true)
+                        & Filter.Eq(x => x.Version, expectedVersion)
                 )
                 .FirstOrDefaultAsync(cancellationToken)
             ?? throw new VersionConflictException(entity.EntityId, expectedVersion);
@@ -180,10 +161,8 @@ public class VersionedMongoRepository<T>(
 
         var closed = await collection.UpdateOneAsync(
             session,
-            new BsonDocumentFilterDefinition<T>(Doc(("_id", old.Id), ("isCurrent", true))),
-            new BsonDocumentUpdateDefinition<T>(
-                new BsonDocument("$set", Doc(("isCurrent", false), ("validTo", now)))
-            ),
+            Filter.Eq(x => x.Id, old.Id) & Filter.Eq(x => x.IsCurrent, true),
+            Builders<T>.Update.Set(x => x.IsCurrent, false).Set(x => x.ValidTo, now),
             cancellationToken: cancellationToken
         );
         if (closed.MatchedCount == 0)
@@ -191,15 +170,9 @@ public class VersionedMongoRepository<T>(
             throw new VersionConflictException(entity.EntityId, expectedVersion);
         }
 
-        Stamp(entity, old.EntityId, expectedVersion + 1, now, change);
-        await collection.InsertOneAsync(session, entity, cancellationToken: cancellationToken);
-        return new VersionedWriteResult<T>(entity, true);
-    }
-
-    private IFindFluent<T, T> Find(IClientSessionHandle? session, BsonDocument filter)
-    {
-        var definition = new BsonDocumentFilterDefinition<T>(filter);
-        return session is null ? collection.Find(definition) : collection.Find(session, definition);
+        var next = Stamped(entity, old.EntityId, expectedVersion + 1, now, change);
+        await collection.InsertOneAsync(session, next, cancellationToken: cancellationToken);
+        return new VersionedWriteResult<T>(next, true);
     }
 
     private IFindFluent<T, T> Find(IClientSessionHandle? session, FilterDefinition<T> filter) =>
@@ -207,18 +180,35 @@ public class VersionedMongoRepository<T>(
 
     private static bool SameContent(T old, T proposed) => Content(old) == Content(proposed);
 
+    // The stored form, so values the database would round (sub-millisecond times) compare as stored.
     private static BsonDocument Content(T entity)
     {
         var doc = entity.ToBsonDocument();
-        foreach (var name in VersionMetadata.ElementNames)
-        {
-            doc.Remove(name);
-        }
-
+        RemoveExcluded(doc, BsonClassMap.LookupClassMap(entity.GetType()));
         return doc;
     }
 
-    private static void Stamp(
+    private static void RemoveExcluded(BsonDocument doc, BsonClassMap map)
+    {
+        foreach (var member in map.AllMemberMaps)
+        {
+            if (member.MemberInfo.IsDefined(typeof(ExcludedFromChangeDetectionAttribute), true))
+            {
+                doc.Remove(member.ElementName);
+            }
+            else if (
+                doc.TryGetValue(member.ElementName, out var value)
+                && value is BsonDocument nested
+                && BsonClassMap.IsClassMapRegistered(member.MemberType)
+            )
+            {
+                RemoveExcluded(nested, BsonClassMap.LookupClassMap(member.MemberType));
+            }
+        }
+    }
+
+    // A copy, so a failed commit never leaves the caller holding a version that was not saved.
+    private static T Stamped(
         T entity,
         ObjectId entityId,
         long version,
@@ -226,13 +216,15 @@ public class VersionedMongoRepository<T>(
         ChangeInfo change
     )
     {
-        entity.Id = ObjectId.GenerateNewId();
-        entity.EntityId = entityId;
-        entity.Version = version;
-        entity.ValidFrom = validFrom;
-        entity.ValidTo = VersionSentinel.ValidTo;
-        entity.IsCurrent = true;
-        entity.LastChange = change;
+        var copy = BsonSerializer.Deserialize<T>(entity.ToBsonDocument());
+        copy.Id = ObjectId.GenerateNewId();
+        copy.EntityId = entityId;
+        copy.Version = version;
+        copy.ValidFrom = validFrom;
+        copy.ValidTo = VersionSentinel.ValidTo;
+        copy.IsCurrent = true;
+        copy.LastChange = change;
+        return copy;
     }
 
     private DateTime Now()
@@ -242,16 +234,5 @@ public class VersionedMongoRepository<T>(
             utc.Ticks - (utc.Ticks % TimeSpan.TicksPerMillisecond),
             DateTimeKind.Utc
         );
-    }
-
-    private static BsonDocument Doc(params (string Name, BsonValue Value)[] elements)
-    {
-        var doc = new BsonDocument();
-        foreach (var (name, value) in elements)
-        {
-            doc.Add(name, value);
-        }
-
-        return doc;
     }
 }

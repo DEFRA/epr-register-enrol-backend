@@ -20,16 +20,17 @@ public class AccreditationApplicationModel
     // migration and by dual-write with a targeted $set that does not bump Version, and ignored by every
     // existing reader: [JsonIgnore] keeps them off the wire, so the existing endpoints return exactly the
     // JSON they did before, and IgnoreIfNull keeps them out of stored documents until they are set. They hold
-    // stable entityIds, never a version _id.
+    // stable entityIds, never a version _id, hence the *EntityId names (RegistrationId is already taken
+    // by ReEx's registration id).
     //
     // The Registration this application belongs to.
     [JsonIgnore]
-    public ObjectId? RegistrationKey { get; set; }
+    public ObjectId? RegistrationEntityId { get; set; }
 
     // The Accreditation created when this application was approved. The reserved accreditation number
     // needs no new field: AccreditationReference already holds it until approval.
     [JsonIgnore]
-    public ObjectId? AccreditationId { get; set; }
+    public ObjectId? AccreditationEntityId { get; set; }
 
     // RA-503: ReEx's numeric organisation number (e.g. 500500) - the value an operator or
     // regulator should actually see. Distinct from OrganisationId above, which is ReEx's own

@@ -67,13 +67,25 @@ sudo mongod --dbpath ~/mongodb-cdp
 In CDP environments a MongoDB instance is already set up
 and the credentials exposed as enviromment variables.
 
+#### Domain model flags
+
+The domain model (`docs/analysis/register-enrol-domain-model-design.md`) ships in phases, each behind a
+`DomainModel:*` flag that is off by default:
+
+- `DomainModel__ExpandEnabled=true` (phase 1) builds the empty versioned collections and their indexes at
+  startup and adds the `domain-model-schema` check to `/health/ready`. `compose.yml` turns it on locally.
+  Turning it off again is the rollback.
+- `DomainModel__DiagnosticsEnabled=true` (test environments only) runs the diagnostics below.
+
 #### Domain model diagnostics (test environments only)
 
-Set `DomainModelDiagnostics__Enabled=true` to make the service run, once at startup, a **transaction smoke test**
+Set `DomainModel__DiagnosticsEnabled=true` to make the service run, once at startup, a **transaction smoke test**
 (does this Mongo support multi-document transactions?) and a **read-only survey** of `accreditationApplications`
 for the legacy shapes the domain model migration must handle. Each logs one line, `DomainModelDiagnostics
 transactions ...` and `DomainModelDiagnostics survey ...`, with counts only and no personal data. It is off by
-default and is not meant for production, where this team cannot examine the data. See
+default and is not meant for production, where this team cannot examine the data. For production, the same
+survey is packaged as `tools/domain-model/legacy-data-survey.js`, which someone with production access runs with
+`mongosh "<connection string>" --quiet --file tools/domain-model/legacy-data-survey.js`; it prints counts only. See
 `docs/analysis/register-enrol-domain-model-design.md` (B0, B1).
 
 ### Inspect MongoDB

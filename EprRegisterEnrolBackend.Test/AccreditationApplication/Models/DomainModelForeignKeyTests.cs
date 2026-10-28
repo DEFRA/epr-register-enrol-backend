@@ -29,13 +29,13 @@ public class DomainModelForeignKeyTests
 
     private static readonly string[] s_newNames =
     [
-        "registrationKey",
-        "accreditationId",
-        "overseasSiteId",
+        "registrationEntityId",
+        "accreditationEntityId",
+        "overseasSiteEntityId",
     ];
 
     [Fact]
-    public void Unstamped_foreign_keys_are_not_written_to_stored_documents()
+    public void ToBsonDocument_ForeignKeysNotStamped_OmitsThem()
     {
         var application = Application();
         application.OverseasSites = new AccreditationApplicationOverseasSites
@@ -52,14 +52,14 @@ public class DomainModelForeignKeyTests
     }
 
     [Fact]
-    public void Stamped_foreign_keys_round_trip_through_storage()
+    public void Deserialize_StampedForeignKeys_RoundTrips()
     {
         var registration = ObjectId.GenerateNewId();
         var accreditation = ObjectId.GenerateNewId();
         var site = ObjectId.GenerateNewId();
         var application = Application();
-        application.RegistrationKey = registration;
-        application.AccreditationId = accreditation;
+        application.RegistrationEntityId = registration;
+        application.AccreditationEntityId = accreditation;
         application.OverseasSites = new AccreditationApplicationOverseasSites
         {
             Sites =
@@ -68,7 +68,7 @@ public class DomainModelForeignKeyTests
                 {
                     SiteId = 1,
                     SiteName = "Site",
-                    OverseasSiteId = site,
+                    OverseasSiteEntityId = site,
                 },
             ],
         };
@@ -77,13 +77,13 @@ public class DomainModelForeignKeyTests
             application.ToBsonDocument()
         );
 
-        read.RegistrationKey.Should().Be(registration);
-        read.AccreditationId.Should().Be(accreditation);
-        read.OverseasSites!.Sites.Single().OverseasSiteId.Should().Be(site);
+        read.RegistrationEntityId.Should().Be(registration);
+        read.AccreditationEntityId.Should().Be(accreditation);
+        read.OverseasSites!.Sites.Single().OverseasSiteEntityId.Should().Be(site);
     }
 
     [Fact]
-    public void A_document_stored_before_the_fields_existed_still_reads()
+    public void Deserialize_DocumentStoredBeforeTheFields_ReadsThemAsNull()
     {
         var legacy = new BsonDocument
         {
@@ -104,17 +104,17 @@ public class DomainModelForeignKeyTests
 
         var read = BsonSerializer.Deserialize<AccreditationApplicationModel>(legacy);
 
-        read.RegistrationKey.Should().BeNull();
-        read.AccreditationId.Should().BeNull();
-        read.OverseasSites!.Sites.Single().OverseasSiteId.Should().BeNull();
+        read.RegistrationEntityId.Should().BeNull();
+        read.AccreditationEntityId.Should().BeNull();
+        read.OverseasSites!.Sites.Single().OverseasSiteEntityId.Should().BeNull();
     }
 
     [Fact]
-    public void The_foreign_keys_never_appear_in_the_json_the_endpoints_return()
+    public void JsonSerialize_StampedForeignKeys_LeavesThemOut()
     {
         var application = Application();
-        application.RegistrationKey = ObjectId.GenerateNewId();
-        application.AccreditationId = ObjectId.GenerateNewId();
+        application.RegistrationEntityId = ObjectId.GenerateNewId();
+        application.AccreditationEntityId = ObjectId.GenerateNewId();
         application.OverseasSites = new AccreditationApplicationOverseasSites
         {
             Sites =
@@ -123,7 +123,7 @@ public class DomainModelForeignKeyTests
                 {
                     SiteId = 1,
                     SiteName = "Site",
-                    OverseasSiteId = ObjectId.GenerateNewId(),
+                    OverseasSiteEntityId = ObjectId.GenerateNewId(),
                 },
             ],
         };
@@ -133,7 +133,7 @@ public class DomainModelForeignKeyTests
             new JsonSerializerOptions(JsonSerializerDefaults.Web)
         );
 
-        // Compare whole property names: "sourceReExAccreditationId" legitimately contains "accreditationId".
+        // Compare whole property names, so a longer name that contains one of these cannot match.
         using var document = JsonDocument.Parse(json);
         var site = document.RootElement.GetProperty("overseasSites").GetProperty("sites")[0];
         var names = document.RootElement.EnumerateObject().Concat(site.EnumerateObject()).Select(p => p.Name);

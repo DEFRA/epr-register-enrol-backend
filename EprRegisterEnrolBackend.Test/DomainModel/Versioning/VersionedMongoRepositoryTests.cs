@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using MongoDB.Bson;
@@ -21,7 +22,7 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
         collection.Indexes.CreateOne(
             VersionedIndexes.CurrentUnique<WidgetVersion>(
                 "code_current_u",
-                Builders<WidgetVersion>.IndexKeys.Ascending("code")
+                Builders<WidgetVersion>.IndexKeys.Ascending(x => x.Code)
             )
         );
         _sut = new VersionedMongoRepository<WidgetVersion>(
@@ -38,13 +39,18 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
     private static ChangeInfo Change(ChangeReason reason = ChangeReason.Migration) =>
         new() { Reason = reason };
 
+    private static WidgetVersion Widget(string name, ObjectId? entityId = null) =>
+        new()
+        {
+            EntityId = entityId ?? ObjectId.Empty,
+            Code = "A",
+            Name = name,
+        };
+
     [Fact]
-    public async Task Insert_writes_version_one_as_the_current_version()
+    public async Task InsertAsync_NewEntity_WritesVersionOneAsCurrent()
     {
-        var created = await _sut.InsertAsync(
-            new WidgetVersion { Code = "A", Name = "first" },
-            Change(), cancellationToken: Ct
-        );
+        var created = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
 
         Assert.NotEqual(ObjectId.Empty, created.EntityId);
         Assert.NotEqual(created.Id, created.EntityId);
@@ -57,20 +63,30 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task Update_closes_the_old_version_and_inserts_the_next_in_one_step()
+    public async Task InsertAsync_AnyEntity_LeavesTheCallersObjectUnchanged()
     {
-        var v1 = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "first" }, Change(), cancellationToken: Ct);
+        var proposed = Widget("first");
+
+        var created = await _sut.InsertAsync(proposed, Change(), cancellationToken: Ct);
+
+        Assert.NotSame(proposed, created);
+        Assert.Equal(ObjectId.Empty, proposed.Id);
+        Assert.Equal(ObjectId.Empty, proposed.EntityId);
+        Assert.Equal(0, proposed.Version);
+        Assert.False(proposed.IsCurrent);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ExpectedVersionIsCurrent_ClosesItAndInsertsTheNext()
+    {
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
         _clock.Advance(TimeSpan.FromHours(1));
 
         var result = await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = v1.EntityId,
-                Code = "A",
-                Name = "second",
-            },
+            Widget("second", v1.EntityId),
             expectedVersion: 1,
-            Change(ChangeReason.Suspended), cancellationToken: Ct
+            Change(ChangeReason.Suspended),
+            cancellationToken: Ct
         );
 
         Assert.True(result.Changed);
@@ -85,41 +101,23 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task Update_with_a_stale_expected_version_is_a_conflict_and_writes_nothing()
+    public async Task UpdateAsync_StaleExpectedVersion_ThrowsConflictAndWritesNothing()
     {
-        var v1 = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "first" }, Change(), cancellationToken: Ct);
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
         _clock.Advance(TimeSpan.FromMinutes(1));
-        await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = v1.EntityId,
-                Code = "A",
-                Name = "second",
-            },
-            1,
-            Change(), cancellationToken: Ct
-        );
+        await _sut.UpdateAsync(Widget("second", v1.EntityId), 1, Change(), cancellationToken: Ct);
 
         await Assert.ThrowsAsync<VersionConflictException>(() =>
-            _sut.UpdateAsync(
-                new WidgetVersion
-                {
-                    EntityId = v1.EntityId,
-                    Code = "A",
-                    Name = "third",
-                },
-                1,
-                Change(), cancellationToken: Ct
-            )
+            _sut.UpdateAsync(Widget("third", v1.EntityId), 1, Change(), cancellationToken: Ct)
         );
 
         Assert.Equal(2, (await _sut.GetVersionsAsync(v1.EntityId, cancellationToken: Ct)).Count);
     }
 
     [Fact]
-    public async Task Two_writers_racing_from_the_same_version_produce_one_winner_and_one_conflict()
+    public async Task UpdateAsync_TwoWritersFromTheSameVersion_OneWinsAndOneConflicts()
     {
-        var v1 = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "first" }, Change(), cancellationToken: Ct);
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
         _clock.Advance(TimeSpan.FromMinutes(1));
 
         var attempts = Enumerable
@@ -130,14 +128,10 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
                     try
                     {
                         await _sut.UpdateAsync(
-                            new WidgetVersion
-                            {
-                                EntityId = v1.EntityId,
-                                Code = "A",
-                                Name = $"writer {i}",
-                            },
+                            Widget($"writer {i}", v1.EntityId),
                             1,
-                            Change(), cancellationToken: Ct
+                            Change(),
+                            cancellationToken: Ct
                         );
                         return true;
                     }
@@ -157,31 +151,13 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task Writes_in_the_same_millisecond_still_get_distinct_ordered_periods()
+    public async Task UpdateAsync_WritesInTheSameMillisecond_GetDistinctOrderedPeriods()
     {
-        var v1 = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "first" }, Change(), cancellationToken: Ct);
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
 
         // The clock does not move, so both updates land in the insert's millisecond.
-        await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = v1.EntityId,
-                Code = "A",
-                Name = "second",
-            },
-            1,
-            Change(), cancellationToken: Ct
-        );
-        await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = v1.EntityId,
-                Code = "A",
-                Name = "third",
-            },
-            2,
-            Change(), cancellationToken: Ct
-        );
+        await _sut.UpdateAsync(Widget("second", v1.EntityId), 1, Change(), cancellationToken: Ct);
+        await _sut.UpdateAsync(Widget("third", v1.EntityId), 2, Change(), cancellationToken: Ct);
 
         var versions = await _sut.GetVersionsAsync(v1.EntityId, cancellationToken: Ct);
         Assert.Equal(3, versions.Count);
@@ -192,44 +168,40 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task As_of_reads_return_the_version_that_was_current_then()
+    public async Task GetAsOfAsync_AnyInstant_ReturnsTheVersionCurrentThen()
     {
         var t0 = _clock.UtcNow.UtcDateTime;
-        var v1 = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "first" }, Change(), cancellationToken: Ct);
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
         _clock.Advance(TimeSpan.FromHours(2));
-        await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = v1.EntityId,
-                Code = "A",
-                Name = "second",
-            },
-            1,
-            Change(), cancellationToken: Ct
-        );
+        await _sut.UpdateAsync(Widget("second", v1.EntityId), 1, Change(), cancellationToken: Ct);
 
-        Assert.Equal("first", (await _sut.GetAsOfAsync(v1.EntityId, t0.AddHours(1), cancellationToken: Ct))!.Name);
-        Assert.Equal("second", (await _sut.GetAsOfAsync(v1.EntityId, t0.AddHours(3), cancellationToken: Ct))!.Name);
+        Assert.Equal(
+            "first",
+            (await _sut.GetAsOfAsync(v1.EntityId, t0.AddHours(1), cancellationToken: Ct))!.Name
+        );
+        Assert.Equal(
+            "second",
+            (await _sut.GetAsOfAsync(v1.EntityId, t0.AddHours(3), cancellationToken: Ct))!.Name
+        );
         Assert.Null(await _sut.GetAsOfAsync(v1.EntityId, t0.AddMinutes(-1), cancellationToken: Ct));
         // Periods are half-open: at the instant of the change, the new version applies.
-        Assert.Equal("second", (await _sut.GetAsOfAsync(v1.EntityId, t0.AddHours(2), cancellationToken: Ct))!.Name);
+        Assert.Equal(
+            "second",
+            (await _sut.GetAsOfAsync(v1.EntityId, t0.AddHours(2), cancellationToken: Ct))!.Name
+        );
     }
 
     [Fact]
-    public async Task An_update_that_changes_nothing_writes_no_version()
+    public async Task UpdateAsync_NothingChanged_WritesNoVersion()
     {
-        var v1 = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "first" }, Change(), cancellationToken: Ct);
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
         _clock.Advance(TimeSpan.FromMinutes(5));
 
         var result = await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = v1.EntityId,
-                Code = "A",
-                Name = "first",
-            },
+            Widget("first", v1.EntityId),
             1,
-            Change(ChangeReason.ReExRefresh), cancellationToken: Ct
+            Change(ChangeReason.ReExRefresh),
+            cancellationToken: Ct
         );
 
         Assert.False(result.Changed);
@@ -238,80 +210,133 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task A_business_key_may_repeat_across_versions_but_not_across_current_versions()
+    public async Task UpdateAsync_OnlyTheImportTimeChanged_WritesNoVersion()
     {
-        var a = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "first" }, Change(), cancellationToken: Ct);
-        _clock.Advance(TimeSpan.FromMinutes(1));
-        await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = a.EntityId,
-                Code = "A",
-                Name = "second",
-            },
+        var first = Widget("first");
+        first.Source = new EntitySource
+        {
+            System = SourceSystem.ReEx,
+            ImportedAt = new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc),
+        };
+        var v1 = await _sut.InsertAsync(
+            first,
+            Change(ChangeReason.ReExImport),
+            cancellationToken: Ct
+        );
+        _clock.Advance(TimeSpan.FromDays(1));
+
+        var refreshed = Widget("first", v1.EntityId);
+        refreshed.Source = new EntitySource
+        {
+            System = SourceSystem.ReEx,
+            ImportedAt = new DateTime(2027, 1, 2, 9, 0, 0, DateTimeKind.Utc),
+        };
+        var result = await _sut.UpdateAsync(
+            refreshed,
             1,
-            Change(), cancellationToken: Ct
+            Change(ChangeReason.ReExRefresh),
+            cancellationToken: Ct
         );
 
+        Assert.False(result.Changed);
+        Assert.Single(await _sut.GetVersionsAsync(v1.EntityId, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_OtherSourceFieldChanged_WritesAVersion()
+    {
+        var first = Widget("first");
+        first.Source = new EntitySource { System = SourceSystem.ReEx, ReExSchemaVersion = "1" };
+        var v1 = await _sut.InsertAsync(
+            first,
+            Change(ChangeReason.ReExImport),
+            cancellationToken: Ct
+        );
+        _clock.Advance(TimeSpan.FromDays(1));
+
+        var refreshed = Widget("first", v1.EntityId);
+        refreshed.Source = new EntitySource { System = SourceSystem.ReEx, ReExSchemaVersion = "2" };
+        var result = await _sut.UpdateAsync(
+            refreshed,
+            1,
+            Change(ChangeReason.ReExRefresh),
+            cancellationToken: Ct
+        );
+
+        Assert.True(result.Changed);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_TimeDiffersOnlyBelowAMillisecond_WritesNoVersion()
+    {
+        var at = new DateTime(2027, 1, 1, 9, 0, 0, 123, DateTimeKind.Utc);
+        var first = Widget("first");
+        first.SeenAt = at;
+        var v1 = await _sut.InsertAsync(first, Change(), cancellationToken: Ct);
+        _clock.Advance(TimeSpan.FromMinutes(1));
+
+        var again = Widget("first", v1.EntityId);
+        again.SeenAt = at.AddTicks(4_000); // 0.4 ms later: the same instant once stored
+        var result = await _sut.UpdateAsync(again, 1, Change(), cancellationToken: Ct);
+
+        Assert.False(result.Changed);
+    }
+
+    [Fact]
+    public async Task InsertAsync_BusinessKeyOfAClosedVersion_IsAllowedButNotOfACurrentOne()
+    {
+        var a = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
+        _clock.Advance(TimeSpan.FromMinutes(1));
+        await _sut.UpdateAsync(Widget("second", a.EntityId), 1, Change(), cancellationToken: Ct);
+
         // Two versions of one entity carry code "A" (one closed), which the partial index allows.
-        Assert.Equal(2, (await _sut.GetVersionsAsync(a.EntityId, cancellationToken: Ct)).Count(v => v.Code == "A"));
+        Assert.Equal(
+            2,
+            (await _sut.GetVersionsAsync(a.EntityId, cancellationToken: Ct)).Count(v =>
+                v.Code == "A"
+            )
+        );
 
         var ex = await Assert.ThrowsAsync<MongoWriteException>(() =>
-            _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "other entity" }, Change(), cancellationToken: Ct)
+            _sut.InsertAsync(Widget("other entity"), Change(), cancellationToken: Ct)
         );
         Assert.Equal(ServerErrorCategory.DuplicateKey, ex.WriteError.Category);
     }
 
     [Fact]
-    public async Task Participating_in_a_caller_transaction_rolls_back_with_it()
+    public async Task UpdateAsync_CallerTransactionAborted_RollsBackAndLeavesTheCallersObjectUnchanged()
     {
-        var v1 = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "first" }, Change(), cancellationToken: Ct);
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
         _clock.Advance(TimeSpan.FromMinutes(1));
+        var proposed = Widget("second", v1.EntityId);
 
         using var session = await _factory.GetClient().StartSessionAsync(cancellationToken: Ct);
         session.StartTransaction();
-        await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = v1.EntityId,
-                Code = "A",
-                Name = "second",
-            },
-            1,
-            Change(),
-            session,
-            Ct
-        );
+        await _sut.UpdateAsync(proposed, 1, Change(), session, Ct);
         await session.AbortTransactionAsync(Ct);
 
         var versions = await _sut.GetVersionsAsync(v1.EntityId, cancellationToken: Ct);
         Assert.Single(versions);
         Assert.True(versions[0].IsCurrent);
+        Assert.Equal(0, proposed.Version);
+        Assert.Equal(ObjectId.Empty, proposed.Id);
+        Assert.False(proposed.IsCurrent);
     }
 
     [Fact]
-    public async Task FindCurrent_returns_only_current_versions_matching_the_filter()
+    public async Task UpdateAsync_SessionWithoutATransaction_ThrowsAndWritesNothing()
     {
-        var a = await _sut.InsertAsync(new WidgetVersion { Code = "A", Name = "shared" }, Change(), cancellationToken: Ct);
-        await _sut.InsertAsync(new WidgetVersion { Code = "B", Name = "shared" }, Change(), cancellationToken: Ct);
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
         _clock.Advance(TimeSpan.FromMinutes(1));
-        await _sut.UpdateAsync(
-            new WidgetVersion
-            {
-                EntityId = a.EntityId,
-                Code = "A",
-                Name = "renamed",
-            },
-            1,
-            Change(), cancellationToken: Ct
+
+        using var session = await _factory.GetClient().StartSessionAsync(cancellationToken: Ct);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _sut.UpdateAsync(Widget("second", v1.EntityId), 1, Change(), session, Ct)
         );
 
-        var found = await _sut.FindCurrentAsync(
-            Builders<WidgetVersion>.Filter.Eq(w => w.Name, "shared"),
-            cancellationToken: Ct
-        );
-
-        Assert.Equal(["B"], found.Select(w => w.Code));
+        var versions = await _sut.GetVersionsAsync(v1.EntityId, cancellationToken: Ct);
+        Assert.Single(versions);
+        Assert.True(versions[0].IsCurrent);
     }
 }
 
@@ -320,4 +345,8 @@ public class WidgetVersion : VersionedEntityBase
     public string? Code { get; set; }
 
     public string? Name { get; set; }
+
+    public DateTime? SeenAt { get; set; }
+
+    public EntitySource? Source { get; set; }
 }

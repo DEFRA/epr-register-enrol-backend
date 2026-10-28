@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Entities.Sections;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel;
@@ -42,7 +43,7 @@ public static class DomainModelBuilders
             Material = MaterialType.Plastic,
             Nation = Nation.England,
             Site = new RegistrationSite { Address = Address(), SiteId = "1" },
-            Source = new EntitySource { System = "Application", EnrichmentPending = true },
+            Source = new EntitySource { System = SourceSystem.Application, EnrichmentPending = true },
         };
 
     public static OverseasSiteEntity OverseasSite(
@@ -89,6 +90,34 @@ public static class DomainModelBuilders
             Status = ApplicationStatus.Submitted,
             ApplicationReference = applicationReference ?? $"APP-{Next():D6}",
             DateLastEdited = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Prns = new PrnsSection
+            {
+                PlannedTonnageBand = TonnageBand.UpTo10000,
+                SectionStatus = SectionStatus.Submitted,
+                Versions =
+                [
+                    new PrnsSectionSnapshot
+                    {
+                        PlannedTonnageBand = TonnageBand.UpTo500,
+                        VersionedAt = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    },
+                ],
+            },
+            BusinessPlan = new BusinessPlanSection
+            {
+                NewInfrastructurePercent = 100,
+                SectionStatus = SectionStatus.Completed,
+            },
+            SamplingPlan = new SamplingPlanSection
+            {
+                Files = [File()],
+                SectionStatus = SectionStatus.Queried,
+            },
+            BesEvidence = new BesEvidenceSection { SectionStatus = SectionStatus.InProgress },
+            OverseasSitesSection = new OverseasSitesSection
+            {
+                SectionStatus = SectionStatus.NotStarted,
+            },
             ApplicationOverseasSites =
             [
                 new ApplicationOverseasSiteEntry
@@ -119,11 +148,25 @@ public static class DomainModelBuilders
             ApprovedAt = new DateTime(2027, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             PeriodStart = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             PeriodEnd = new DateTime(2027, 12, 31, 0, 0, 0, DateTimeKind.Utc),
-            TonnageBand = TonnageBands.UpTo5000,
+            TonnageBand = TonnageBand.UpTo5000,
+            SamplingPlanFiles = [File()],
             Signatories =
             [
                 new Signatory { FullName = "A Signatory", Email = "signatory@example.invalid" },
             ],
+        };
+
+    private static ApplicationFile File() =>
+        new()
+        {
+            FileId = "file-1",
+            Filename = "sampling-plan.pdf",
+            ContentType = "application/pdf",
+            UploadedAt = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            UploadedByUserId = "user-1",
+            ScanStatus = FileScanStatus.Clean,
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
+            S3Key = "sampling-plans/file-1",
         };
 
     private static PostalAddress Address() =>

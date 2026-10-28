@@ -4,38 +4,11 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolBackend.DomainModel.Diagnostics;
 
 /// <summary>
-/// Aggregate counts only: no names, addresses, contact details or free text, so a report is safe to log and to hand
-/// to someone without production data access. Each count is of documents (or groups) that have the shape.
-/// </summary>
-public record LegacyDataSurveyReport(
-    long Applications,
-    long Int32EnumDocuments,
-    long InterimSiteSingularOnlyDocuments,
-    long NullOrsIdDocuments,
-    long LegacySnInterimNumberDocuments,
-    long DuplicateLiveApplicationGroups,
-    long ConflictingRegistrationNumberGroups,
-    long ApprovedWithoutAccreditationReference,
-    long CaseManagementReferencePresent,
-    long DuplicateAccreditationReferenceGroups
-)
-{
-    public string ToLogLine() =>
-        $"applications={Applications} int32Enums={Int32EnumDocuments} "
-        + $"interimSiteSingularOnly={InterimSiteSingularOnlyDocuments} nullOrsIds={NullOrsIdDocuments} "
-        + $"legacySnInterimNumbers={LegacySnInterimNumberDocuments} "
-        + $"duplicateLiveApplicationGroups={DuplicateLiveApplicationGroups} "
-        + $"conflictingRegistrationNumberGroups={ConflictingRegistrationNumberGroups} "
-        + $"approvedWithoutAccreditationReference={ApprovedWithoutAccreditationReference} "
-        + $"caseManagementReferencePresent={CaseManagementReferencePresent} "
-        + $"duplicateAccreditationReferenceGroups={DuplicateAccreditationReferenceGroups}";
-}
-
-/// <summary>
 /// B1: a read-only survey of <c>accreditationApplications</c> for the legacy shapes the migration has to handle
 /// (design doc §7 R1, Q30b, A20). It reads raw documents, because an int32 enum cannot be deserialised into the
 /// current model, and never writes. The status filters assume statuses are strings; documents with int32 statuses
-/// are counted separately and are exactly the ones those filters cannot see.
+/// are counted separately and are exactly the ones those filters cannot see. The same queries are packaged for
+/// production as tools/domain-model/legacy-data-survey.js (mongosh); change both together.
 /// </summary>
 public static class LegacyDataSurvey
 {

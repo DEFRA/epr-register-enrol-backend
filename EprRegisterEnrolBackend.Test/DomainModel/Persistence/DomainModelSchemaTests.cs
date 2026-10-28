@@ -3,7 +3,6 @@ using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
@@ -39,7 +38,7 @@ public sealed class DomainModelSchemaTests : IDisposable
         ];
 
     [Fact]
-    public async Task Constructing_the_persistence_classes_creates_every_collection_with_all_its_indexes()
+    public async Task Constructor_EveryPersistenceClass_CreatesItsCollectionWithAllItsIndexes()
     {
         var collections = AllCollections();
 
@@ -64,7 +63,7 @@ public sealed class DomainModelSchemaTests : IDisposable
     }
 
     [Fact]
-    public async Task Every_versioned_collection_has_the_identity_indexes()
+    public async Task Constructor_VersionedCollection_CreatesTheIdentityIndexes()
     {
         foreach (
             var collection in AllCollections()
@@ -81,7 +80,7 @@ public sealed class DomainModelSchemaTests : IDisposable
     }
 
     [Fact]
-    public async Task Constructing_them_again_is_idempotent()
+    public async Task Constructor_RunTwice_IsIdempotent()
     {
         AllCollections();
 
@@ -96,7 +95,7 @@ public sealed class DomainModelSchemaTests : IDisposable
     }
 
     [Fact]
-    public async Task A_conflicting_existing_index_is_reconciled_not_fatal()
+    public async Task Constructor_ConflictingExistingIndex_ReconcilesIt()
     {
         // An older deploy created the same-named index without the partial filter.
         var registrations = _factory.GetCollection<RegistrationEntity>("registrationVersions");
@@ -118,32 +117,26 @@ public sealed class DomainModelSchemaTests : IDisposable
     }
 
     [Fact]
-    public async Task The_health_check_is_healthy_once_the_schema_exists()
+    public async Task SchemaCheck_SchemaExists_IsHealthy()
     {
-        var provider = Provider(AllCollections());
-
-        var result = await new DomainModelSchemaHealthCheck(provider).CheckHealthAsync(
-            new HealthCheckContext(),
-            Ct
-        );
+        var result = await DomainModelSchemaCheck.RunAsync(AllCollections(), Ct);
 
         result.Status.Should().Be(HealthStatus.Healthy);
     }
 
     [Fact]
-    public async Task The_health_check_names_the_collection_and_index_that_is_missing()
+    public async Task SchemaCheck_IndexMissing_NamesTheCollectionAndIndex()
     {
         var broken = Substitute.For<IDomainModelCollection>();
         broken.CollectionName.Returns("registrationVersions");
-        broken.GetExpectedIndexNames().Returns(["entityId_current_u", "registrationNumber_current_u"]);
+        broken
+            .GetExpectedIndexNames()
+            .Returns(["entityId_current_u", "registrationNumber_current_u"]);
         broken
             .GetIndexNamesAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<string>>(["entityId_current_u"]));
 
-        var result = await new DomainModelSchemaHealthCheck(Provider([broken])).CheckHealthAsync(
-            new HealthCheckContext(),
-            Ct
-        );
+        var result = await DomainModelSchemaCheck.RunAsync([broken], Ct);
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
         result
@@ -154,7 +147,7 @@ public sealed class DomainModelSchemaTests : IDisposable
     }
 
     [Fact]
-    public async Task The_health_check_is_unhealthy_when_a_collection_does_not_exist_yet()
+    public async Task SchemaCheck_CollectionDoesNotExist_IsUnhealthy()
     {
         var absent = Substitute.For<IDomainModelCollection>();
         absent.CollectionName.Returns("accreditationVersions");
@@ -163,16 +156,13 @@ public sealed class DomainModelSchemaTests : IDisposable
             .GetIndexNamesAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<string>>([]));
 
-        var result = await new DomainModelSchemaHealthCheck(Provider([absent])).CheckHealthAsync(
-            new HealthCheckContext(),
-            Ct
-        );
+        var result = await DomainModelSchemaCheck.RunAsync([absent], Ct);
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
     }
 
     [Fact]
-    public async Task The_health_check_reports_unhealthy_with_a_short_message_when_mongo_cannot_be_reached()
+    public async Task SchemaCheck_MongoUnreachable_IsUnhealthyWithAShortMessage()
     {
         var failing = Substitute.For<IDomainModelCollection>();
         failing
@@ -183,23 +173,35 @@ public sealed class DomainModelSchemaTests : IDisposable
                 )
             );
 
-        var result = await new DomainModelSchemaHealthCheck(Provider([failing])).CheckHealthAsync(
-            new HealthCheckContext(),
-            Ct
-        );
+        var result = await DomainModelSchemaCheck.RunAsync([failing], Ct);
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
         result.Description.Should().Contain("TimeoutException").And.NotContain("secret");
     }
 
-    private static IServiceProvider Provider(IEnumerable<IDomainModelCollection> collections)
+    [Fact]
+    public async Task HealthCheck_NothingRecordedYet_IsUnhealthy()
     {
-        var services = new ServiceCollection();
-        foreach (var collection in collections)
-        {
-            services.AddSingleton(collection);
-        }
+        var result = await new DomainModelSchemaHealthCheck(
+            new DomainModelSchemaStatus()
+        ).CheckHealthAsync(new HealthCheckContext(), Ct);
 
-        return services.BuildServiceProvider();
+        result.Status.Should().Be(HealthStatus.Unhealthy);
+        result.Description.Should().Contain("not been checked");
+    }
+
+    [Fact]
+    public async Task HealthCheck_ResultRecorded_ReportsIt()
+    {
+        var status = new DomainModelSchemaStatus();
+        status.Record(HealthCheckResult.Healthy("present"));
+
+        var result = await new DomainModelSchemaHealthCheck(status).CheckHealthAsync(
+            new HealthCheckContext(),
+            Ct
+        );
+
+        result.Status.Should().Be(HealthStatus.Healthy);
+        result.Description.Should().Be("present");
     }
 }

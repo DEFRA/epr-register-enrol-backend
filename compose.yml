@@ -74,6 +74,8 @@ services:
       ReExApi__BaseUrl: ""
       REEX_API_BASIC_AUTH_USERNAME: ""
       REEX_API_BASIC_AUTH_PASSWORD: ""
+      # Domain model phase 1 ("Expand"): build the empty versioned collections locally. Off by default elsewhere.
+      DomainModel__ExpandEnabled: 'true'
     networks:
       - cdp-tenant
 

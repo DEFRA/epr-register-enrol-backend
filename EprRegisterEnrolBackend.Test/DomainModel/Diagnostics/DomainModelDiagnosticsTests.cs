@@ -1,4 +1,5 @@
 using EphemeralMongo;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.Diagnostics;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
@@ -53,7 +54,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     // ---- B0
 
     [Fact]
-    public async Task The_smoke_test_passes_on_a_replica_set_and_leaves_nothing_behind()
+    public async Task SmokeTest_ReplicaSet_PassesAndLeavesNothingBehind()
     {
         var result = await TransactionSmokeTest.RunAsync(
             _factory.GetCollection<BsonDocument>("x").Database,
@@ -72,7 +73,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_smoke_test_reports_unsupported_on_a_standalone_server()
+    public async Task SmokeTest_StandaloneServer_ReportsUnsupported()
     {
         using var standalone = await MongoRunner.RunAsync(
             new MongoRunnerOptions { UseSingleNodeReplicaSet = false },
@@ -89,7 +90,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     // ---- B1: each known legacy shape is counted
 
     [Fact]
-    public async Task The_survey_of_an_empty_collection_is_all_zeros()
+    public async Task Survey_EmptyCollection_IsAllZeros()
     {
         var report = await LegacyDataSurvey.RunAsync(_applications, Ct);
 
@@ -97,7 +98,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_survey_counts_int32_enums()
+    public async Task Survey_Int32Enums_AreCounted()
     {
         await _applications.InsertManyAsync(
             [App(("applicationStatus", 4)), App(("materialType", 2)), App()],
@@ -108,7 +109,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_survey_counts_singular_interimSite_only_documents()
+    public async Task Survey_SingularInterimSiteOnly_IsCounted()
     {
         var singular = new BsonDocument
         {
@@ -139,7 +140,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_survey_counts_null_orsIds_and_legacy_SN_interim_numbers()
+    public async Task Survey_NullOrsIdsAndLegacySnInterimNumbers_AreCounted()
     {
         var nullOrs = new BsonDocument { { "siteId", 1 }, { "orsId", BsonNull.Value } };
         var missingOrs = new BsonDocument("siteId", 2);
@@ -177,7 +178,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_survey_counts_duplicate_live_applications_but_not_withdrawn_ones()
+    public async Task Survey_DuplicateLiveApplications_AreCountedButWithdrawnOnesAreNot()
     {
         await _applications.InsertManyAsync(
             [
@@ -197,7 +198,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_survey_counts_registrations_with_conflicting_registration_numbers()
+    public async Task Survey_ConflictingRegistrationNumbers_AreCounted()
     {
         await _applications.InsertManyAsync(
             [
@@ -216,7 +217,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_survey_counts_approved_applications_with_no_accreditation_reference()
+    public async Task Survey_ApprovedWithoutAccreditationReference_IsCounted()
     {
         await _applications.InsertManyAsync(
             [
@@ -234,7 +235,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_survey_counts_case_management_references_and_duplicate_accreditation_references()
+    public async Task Survey_CaseManagementAndDuplicateAccreditationReferences_AreCounted()
     {
         await _applications.InsertManyAsync(
             [
@@ -255,7 +256,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_survey_does_not_write_and_its_log_line_contains_counts_only()
+    public async Task Survey_AnyData_WritesNothingAndLogsCountsOnly()
     {
         await _applications.InsertOneAsync(
             App(("organisationName", "Secret Trading Name Ltd"), ("registrationId", "r1")),
@@ -283,12 +284,12 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     ) =>
         new(
             factory,
-            Options.Create(new DomainModelDiagnosticsConfig { Enabled = enabled }),
+            Options.Create(new DomainModelConfig { DiagnosticsEnabled = enabled }),
             logger
         );
 
     [Fact]
-    public async Task The_service_does_nothing_unless_enabled()
+    public async Task RunAsync_NotEnabled_DoesNothing()
     {
         var factory = Substitute.For<IMongoDbClientFactory>();
         var logger = new CapturingLogger<DomainModelDiagnosticsService>();
@@ -300,7 +301,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task When_enabled_the_service_logs_one_transaction_line_and_one_survey_line()
+    public async Task RunAsync_Enabled_LogsOneTransactionLineAndOneSurveyLine()
     {
         await _applications.InsertOneAsync(
             App(("organisationName", "Secret Trading Name Ltd"), ("applicationStatus", 3)),
@@ -323,7 +324,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     }
 
     [Fact]
-    public async Task A_failure_is_logged_as_a_short_error_and_does_not_throw()
+    public async Task RunAsync_Fails_LogsAShortErrorAndDoesNotThrow()
     {
         var factory = Substitute.For<IMongoDbClientFactory>();
         factory

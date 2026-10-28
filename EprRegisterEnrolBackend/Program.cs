@@ -10,8 +10,7 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
-using EprRegisterEnrolBackend.DomainModel.Diagnostics;
-using EprRegisterEnrolBackend.DomainModel.Persistence;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
@@ -25,7 +24,6 @@ using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MongoDB.Driver;
 using MongoDB.Driver.Authentication.AWS;
@@ -121,9 +119,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         .AddCheck<RegulatoryNumberBackfillHealthCheck>(
             "regulatory-number-backfill",
             tags: ["ready"]
-        )
-        // Domain model phase 1 (Expand): unhealthy until the new collections and indexes exist.
-        .AddCheck<DomainModelSchemaHealthCheck>("domain-model-schema", tags: ["ready"]);
+        );
     // Swagger/OpenAPI
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
@@ -145,36 +141,9 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         AccreditationApplicationPersistence
     >();
 
-    // Domain model (docs/analysis/register-enrol-domain-model-design.md), phase 1 "Expand":
-    // empty versioned collections and their indexes, created at startup by MongoIndexInitializerService.
-    // Nothing reads or writes them yet.
-    builder.Services.TryAddSingleton(TimeProvider.System);
-    builder.Services.AddSingleton<IOrganisationPersistence, OrganisationPersistence>();
-    builder.Services.AddSingleton<IRegistrationPersistence, RegistrationPersistence>();
-    builder.Services.AddSingleton<IOverseasSitePersistence, OverseasSitePersistence>();
-    builder.Services.AddSingleton<IApplicationVersionPersistence, ApplicationVersionPersistence>();
-    builder.Services.AddSingleton<IAccreditationPersistence, AccreditationPersistence>();
-    builder.Services.AddSingleton<IDomainModelCollection>(sp =>
-        sp.GetRequiredService<IOrganisationPersistence>()
-    );
-    builder.Services.AddSingleton<IDomainModelCollection>(sp =>
-        sp.GetRequiredService<IRegistrationPersistence>()
-    );
-    builder.Services.AddSingleton<IDomainModelCollection>(sp =>
-        sp.GetRequiredService<IOverseasSitePersistence>()
-    );
-    builder.Services.AddSingleton<IDomainModelCollection>(sp =>
-        sp.GetRequiredService<IApplicationVersionPersistence>()
-    );
-    builder.Services.AddSingleton<IDomainModelCollection>(sp =>
-        sp.GetRequiredService<IAccreditationPersistence>()
-    );
-    // B0/B1: a one-off transaction smoke test and legacy-data survey, logged once at startup. Off unless
-    // DomainModelDiagnostics:Enabled is set, which only test environments do.
-    builder.Services.Configure<DomainModelDiagnosticsConfig>(
-        builder.Configuration.GetSection(DomainModelDiagnosticsConfig.SectionName)
-    );
-    builder.Services.AddHostedService<DomainModelDiagnosticsService>();
+    // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a
+    // DomainModel:* flag, off by default; phase 1 "Expand" adds the domain-model-schema readiness check.
+    builder.Services.AddDomainModel(builder.Configuration);
 
     // RA-448: registration/accreditation number generation
     builder.Services.AddSingleton<

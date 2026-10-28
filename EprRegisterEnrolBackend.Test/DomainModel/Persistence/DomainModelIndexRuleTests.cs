@@ -1,3 +1,4 @@
+using System.Reflection;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
@@ -5,6 +6,7 @@ using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.Persistence;
@@ -19,7 +21,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
     private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
-    private readonly OrganisationPersistence _organisations;
+    private readonly IMongoCollection<OrganisationEntity> _organisations;
     private readonly RegistrationPersistence _registrations;
     private readonly OverseasSitePersistence _sites;
     private readonly ApplicationVersionPersistence _applications;
@@ -29,7 +31,8 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("indexrules");
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
-        _organisations = new OrganisationPersistence(_factory, NullLoggerFactory.Instance);
+        _ = new OrganisationPersistence(_factory, NullLoggerFactory.Instance);
+        _organisations = _factory.GetCollection<OrganisationEntity>(DomainModelCollections.Organisations);
         _registrations = new RegistrationPersistence(_factory, NullLoggerFactory.Instance, _clock);
         _sites = new OverseasSitePersistence(_factory, NullLoggerFactory.Instance, _clock);
         _applications = new ApplicationVersionPersistence(
@@ -53,31 +56,31 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task Organisation_numbers_and_ReEx_ids_are_unique_but_a_missing_number_does_not_collide()
+    public async Task OrganisationIndexes_DuplicateNumberOrReExId_AreRejectedButMissingNumbersDoNotCollide()
     {
         var first = DomainModelBuilders.Organisation(600001);
-        await _organisations.Documents.InsertOneAsync(first, cancellationToken: Ct);
+        await _organisations.InsertOneAsync(first, cancellationToken: Ct);
 
         var sameNumber = DomainModelBuilders.Organisation(600001);
         await ShouldBeRejectedAsDuplicate(() =>
-            _organisations.Documents.InsertOneAsync(sameNumber, cancellationToken: Ct)
+            _organisations.InsertOneAsync(sameNumber, cancellationToken: Ct)
         );
         var sameReExId = DomainModelBuilders.Organisation();
         sameReExId.ReExOrganisationId = first.ReExOrganisationId;
         await ShouldBeRejectedAsDuplicate(() =>
-            _organisations.Documents.InsertOneAsync(sameReExId, cancellationToken: Ct)
+            _organisations.InsertOneAsync(sameReExId, cancellationToken: Ct)
         );
 
         var noNumberA = DomainModelBuilders.Organisation();
         noNumberA.OrganisationNumber = null;
         var noNumberB = DomainModelBuilders.Organisation();
         noNumberB.OrganisationNumber = null;
-        await _organisations.Documents.InsertOneAsync(noNumberA, cancellationToken: Ct);
-        await _organisations.Documents.InsertOneAsync(noNumberB, cancellationToken: Ct);
+        await _organisations.InsertOneAsync(noNumberA, cancellationToken: Ct);
+        await _organisations.InsertOneAsync(noNumberB, cancellationToken: Ct);
     }
 
     [Fact]
-    public async Task A_registration_number_is_unique_among_current_versions_but_may_repeat_across_versions()
+    public async Task RegistrationIndexes_RegistrationNumber_IsUniqueAmongCurrentVersionsOnly()
     {
         var org = ObjectId.GenerateNewId();
         var first = await _registrations.Versions.InsertAsync(
@@ -110,7 +113,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task An_orsId_is_unique_per_registration_among_current_versions_and_reusable_by_another_registration()
+    public async Task OverseasSiteIndexes_OrsId_IsUniquePerRegistrationAmongCurrentVersions()
     {
         var registration = ObjectId.GenerateNewId();
         await _sites.Versions.InsertAsync(
@@ -142,7 +145,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task An_interim_site_number_is_unique_across_a_registrations_current_ORSs()
+    public async Task OverseasSiteIndexes_InterimSiteNumber_IsUniqueAcrossARegistrationsCurrentOrss()
     {
         var registration = ObjectId.GenerateNewId();
         await _sites.Versions.InsertAsync(
@@ -178,7 +181,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task A_closed_ORS_version_does_not_hold_on_to_its_interim_site_numbers()
+    public async Task OverseasSiteIndexes_ClosedOrsVersion_ReleasesItsInterimSiteNumbers()
     {
         var registration = ObjectId.GenerateNewId();
         var first = await _sites.Versions.InsertAsync(
@@ -203,7 +206,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public void A_repeat_inside_one_ORS_is_not_caught_by_the_index_so_the_entity_reports_it()
+    public void DuplicateInterimSiteNumbers_RepeatInsideOneOrs_ReportsIt()
     {
         var site = DomainModelBuilders.OverseasSite(
             ObjectId.GenerateNewId(),
@@ -222,7 +225,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task An_index_does_not_catch_a_repeat_inside_one_ORS_document()
+    public async Task OverseasSiteIndexes_RepeatInsideOneOrsDocument_IsNotCaught()
     {
         // Documents why the write path needs DuplicateInterimSiteNumbers: Mongo itself accepts this.
         var stored = await _sites.Versions.InsertAsync(
@@ -235,7 +238,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task An_accreditation_number_is_globally_unique_among_current_versions()
+    public async Task AccreditationIndexes_AccreditationNumber_IsGloballyUniqueAmongCurrentVersions()
     {
         await _accreditations.Versions.InsertAsync(
             DomainModelBuilders.Accreditation(
@@ -259,7 +262,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task There_is_at_most_one_current_accreditation_per_registration_and_year()
+    public async Task AccreditationIndexes_RegistrationAndYear_AllowAtMostOneCurrentAccreditation()
     {
         var registration = ObjectId.GenerateNewId();
         await _accreditations.Versions.InsertAsync(
@@ -283,7 +286,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task A_retried_approval_cannot_create_a_second_accreditation_for_the_same_application()
+    public async Task AccreditationIndexes_RetriedApproval_CannotCreateASecondAccreditation()
     {
         var application = ObjectId.GenerateNewId();
         await _accreditations.Versions.InsertAsync(
@@ -316,7 +319,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task An_application_reference_is_unique_among_current_versions_only_when_present()
+    public async Task ApplicationIndexes_ApplicationReference_IsUniqueAmongCurrentVersionsWhenPresent()
     {
         await _applications.Versions.InsertAsync(
             DomainModelBuilders.Application(applicationReference: "APP-1"),
@@ -341,7 +344,7 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     [Fact]
-    public async Task Enums_are_stored_as_strings_and_the_entities_round_trip()
+    public async Task InsertAsync_EveryEntity_StoresEnumsAsStringsAndRoundTrips()
     {
         var registration = await _registrations.Versions.InsertAsync(
             DomainModelBuilders.Registration(ObjectId.GenerateNewId()),
@@ -383,6 +386,17 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         var rawApplication = await Raw("applicationVersions", application.Id);
         rawApplication["status"].Should().Be((BsonValue)"Submitted");
         rawApplication["lastChange"]["reason"].Should().Be((BsonValue)"Migration");
+        // Enums nested in the sections are strings too, not the legacy int32s.
+        rawApplication["prns"]["plannedTonnageBand"].Should().Be((BsonValue)"up_to_10000");
+        rawApplication["prns"]["sectionStatus"].Should().Be((BsonValue)"Submitted");
+        rawApplication["prns"]["versions"][0]["plannedTonnageBand"].Should().Be((BsonValue)"up_to_500");
+        rawApplication["businessPlan"]["sectionStatus"].Should().Be((BsonValue)"Completed");
+        rawApplication["samplingPlan"]["sectionStatus"].Should().Be((BsonValue)"Queried");
+        rawApplication["samplingPlan"]["files"][0]["scanStatus"].Should().Be((BsonValue)"Clean");
+        rawApplication["samplingPlan"]["files"][0]["documentType"].Should().Be((BsonValue)"SamplingPlan");
+        rawApplication["besEvidence"]["sectionStatus"].Should().Be((BsonValue)"InProgress");
+        rawApplication["overseasSitesSection"]["sectionStatus"].Should().Be((BsonValue)"NotStarted");
+        rawAccreditation["samplingPlanFiles"][0]["scanStatus"].Should().Be((BsonValue)"Clean");
 
         var readBack = await _sites.Versions.GetCurrentAsync(site.EntityId, cancellationToken: Ct);
         readBack!.InterimSites.Should().ContainSingle().Which.SiteNumber.Should().Be("001");
@@ -392,5 +406,76 @@ public sealed class DomainModelIndexRuleTests : IDisposable
             .ContainSingle()
             .Which.InterimSites.Should()
             .ContainSingle();
+        var readApplication = await _applications.Versions.GetCurrentAsync(
+            application.EntityId,
+            cancellationToken: Ct
+        );
+        readApplication!.Prns.PlannedTonnageBand.Should().Be(TonnageBand.UpTo10000);
+        (await _accreditations.Versions.GetCurrentAsync(accreditation.EntityId, cancellationToken: Ct))!
+            .TonnageBand.Should()
+            .Be(TonnageBand.UpTo5000);
     }
+
+    // Guards the rule for fields added later: every enum anywhere in a stored entity, however deeply nested,
+    // must be stored as a string, which a [BsonRepresentation] or a [BsonSerializer] on the member gives.
+    [Fact]
+    public void EntityTypes_EveryEnumMember_IsStoredAsAString()
+    {
+        var offenders = new List<string>();
+        var visited = new HashSet<Type>();
+        foreach (
+            var type in new[]
+            {
+                typeof(OrganisationEntity),
+                typeof(RegistrationEntity),
+                typeof(OverseasSiteEntity),
+                typeof(ApplicationEntity),
+                typeof(AccreditationEntity),
+            }
+        )
+        {
+            CollectUnmappedEnums(type, type.Name, visited, offenders);
+        }
+
+        offenders.Should().BeEmpty();
+    }
+
+    private static void CollectUnmappedEnums(
+        Type type,
+        string path,
+        HashSet<Type> visited,
+        List<string> offenders
+    )
+    {
+        if (!visited.Add(type))
+        {
+            return;
+        }
+
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var propertyType = ElementType(property.PropertyType);
+            var underlying = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+            if (underlying.IsEnum)
+            {
+                if (
+                    property.GetCustomAttribute<BsonRepresentationAttribute>()?.Representation
+                        != BsonType.String
+                    && property.GetCustomAttribute<BsonSerializerAttribute>() is null
+                )
+                {
+                    offenders.Add($"{path}.{property.Name}");
+                }
+            }
+            else if (underlying.Namespace?.StartsWith("EprRegisterEnrolBackend", StringComparison.Ordinal) == true)
+            {
+                CollectUnmappedEnums(underlying, $"{path}.{property.Name}", visited, offenders);
+            }
+        }
+    }
+
+    private static Type ElementType(Type type) =>
+        type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>)
+            ? type.GetGenericArguments()[0]
+            : type;
 }

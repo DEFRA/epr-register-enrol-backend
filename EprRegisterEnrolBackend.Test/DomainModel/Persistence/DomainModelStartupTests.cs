@@ -4,40 +4,47 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using EprRegisterEnrolBackend.Test.Utils.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.Persistence;
 
-/// <summary>The migration path for the empty schema: deploying the app creates it, and readiness reports it.</summary>
-public sealed class DomainModelStartupTests : IDisposable
+/// <summary>
+/// The migration path for the empty schema: with <c>DomainModel:ExpandEnabled</c> set, deploying the app creates it
+/// and readiness reports it; without the flag, nothing changes.
+/// </summary>
+public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private readonly EphemeralMongoTestFactory _factory;
-
-    public DomainModelStartupTests(MongoIntegrationFixture fixture)
+    private static readonly Dictionary<string, string?> s_expandEnabled = new()
     {
-        _factory = new EphemeralMongoTestFactory(fixture, "domainstartup");
-    }
-
-    public void Dispose() => _factory.Dispose();
+        ["DomainModel:ExpandEnabled"] = "true",
+    };
 
     [Fact]
-    public async Task Starting_the_app_creates_the_empty_schema_and_the_schema_health_check_passes()
+    public async Task InitializeAsync_ExpandEnabled_CreatesTheSchemaAndReadinessPasses()
     {
-        _ = _factory.CreateClient();
-        var initializer = _factory
-            .Services.GetServices<Microsoft.Extensions.Hosting.IHostedService>()
+        using var factory = new EphemeralMongoTestFactory(
+            fixture,
+            "domainstartup",
+            settings: s_expandEnabled
+        );
+        _ = factory.CreateClient();
+        var initializer = factory
+            .Services.GetServices<IHostedService>()
             .OfType<MongoIndexInitializerService>()
             .Single();
+
         await initializer.InitializeAsync(Ct);
 
-        var collections = _factory.Services.GetServices<IDomainModelCollection>().ToList();
+        var collections = factory.Services.GetServices<IDomainModelCollection>().ToList();
         collections
             .Select(c => c.CollectionName)
             .Should()
@@ -55,7 +62,7 @@ public sealed class DomainModelStartupTests : IDisposable
                 .BeEquivalentTo(collection.GetExpectedIndexNames(), collection.CollectionName);
         }
 
-        var report = await _factory
+        var report = await factory
             .Services.GetRequiredService<HealthCheckService>()
             .CheckHealthAsync(r => r.Name == "domain-model-schema", Ct);
         report.Status.Should().Be(HealthStatus.Healthy);
@@ -63,35 +70,49 @@ public sealed class DomainModelStartupTests : IDisposable
     }
 
     [Fact]
-    public void The_schema_check_gates_readiness_and_not_liveness()
+    public void HealthChecks_ExpandEnabled_SchemaCheckGatesReadiness()
     {
-        var options = _factory
-            .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<HealthCheckServiceOptions>>()
-            .Value;
+        using var factory = new EphemeralMongoTestFactory(
+            fixture,
+            "domainstartup",
+            settings: s_expandEnabled
+        );
 
-        var registration = options.Registrations.Single(r => r.Name == "domain-model-schema");
+        var registration = factory
+            .Services.GetRequiredService<IOptions<HealthCheckServiceOptions>>()
+            .Value.Registrations.Single(r => r.Name == "domain-model-schema");
 
         registration.Tags.Should().Contain("ready");
     }
 
     [Fact]
-    public async Task The_initializer_resolves_every_registered_domain_model_collection()
+    public void Services_ExpandNotEnabled_RegisterNoCollectionsAndNoSchemaCheck()
+    {
+        using var factory = new EphemeralMongoTestFactory(fixture, "domainstartup");
+
+        factory.Services.GetServices<IDomainModelCollection>().Should().BeEmpty();
+        factory
+            .Services.GetRequiredService<IOptions<HealthCheckServiceOptions>>()
+            .Value.Registrations.Should()
+            .NotContain(r => r.Name == "domain-model-schema");
+    }
+
+    [Fact]
+    public async Task InitializeAsync_CollectionsRegistered_BuildsEachAndRecordsTheSchemaCheck()
     {
         var resolved = 0;
-        var services = new ServiceCollection()
-            .AddSingleton(Substitute.For<IAccreditationApplicationPersistence>())
-            .AddSingleton(Substitute.For<IRecyclingOperationsAuditPersistence>())
-            .AddSingleton(Substitute.For<IPendingUploadService>())
-            .AddSingleton(Substitute.For<ICaseManagementAuthNonceStore>())
-            .AddSingleton<IDomainModelCollection>(_ =>
+        var status = new DomainModelSchemaStatus();
+        var services = LegacyPersistences()
+            .AddSingleton<IDomainModelSchemaStatus>(status)
+            .AddSingleton(_ =>
             {
                 resolved++;
-                return Substitute.For<IDomainModelCollection>();
+                return Collection("organisations", ["reExOrganisationId_u"]);
             })
-            .AddSingleton<IDomainModelCollection>(_ =>
+            .AddSingleton(_ =>
             {
                 resolved++;
-                return Substitute.For<IDomainModelCollection>();
+                return Collection("registrationVersions", ["entityId_version_u"]);
             })
             .BuildServiceProvider();
         var logger = new CapturingLogger<MongoIndexInitializerService>();
@@ -100,5 +121,42 @@ public sealed class DomainModelStartupTests : IDisposable
 
         resolved.Should().Be(2);
         logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
+        status.Result.Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_BuildingACollectionFails_LeavesReadinessUnhealthy()
+    {
+        var status = new DomainModelSchemaStatus();
+        var services = LegacyPersistences()
+            .AddSingleton<IDomainModelSchemaStatus>(status)
+            .AddSingleton<IDomainModelCollection>(_ =>
+                throw new TimeoutException("server selection timed out")
+            )
+            .BuildServiceProvider();
+        var logger = new CapturingLogger<MongoIndexInitializerService>();
+
+        await new MongoIndexInitializerService(services, logger).InitializeAsync(Ct);
+
+        logger.Entries.Should().Contain(e => e.LogLevel == LogLevel.Error);
+        status.Result.Status.Should().Be(HealthStatus.Unhealthy);
+    }
+
+    private static IServiceCollection LegacyPersistences() =>
+        new ServiceCollection()
+            .AddSingleton(Substitute.For<IAccreditationApplicationPersistence>())
+            .AddSingleton(Substitute.For<IRecyclingOperationsAuditPersistence>())
+            .AddSingleton(Substitute.For<IPendingUploadService>())
+            .AddSingleton(Substitute.For<ICaseManagementAuthNonceStore>());
+
+    private static IDomainModelCollection Collection(string name, IReadOnlyList<string> indexes)
+    {
+        var collection = Substitute.For<IDomainModelCollection>();
+        collection.CollectionName.Returns(name);
+        collection.GetExpectedIndexNames().Returns(indexes);
+        collection
+            .GetIndexNamesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(indexes));
+        return collection;
     }
 }

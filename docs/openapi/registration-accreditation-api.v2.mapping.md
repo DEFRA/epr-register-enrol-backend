@@ -100,9 +100,8 @@ history, so the migration writes one entry each:
 
 - `statusHistory`: one entry with the ReEx status. `effectiveDate` is ReEx `validFrom` if present,
   otherwise the approval date. `recordedAt` is the migration time.
-- `tonnageBandHistory`: the band from `prnIssuance.tonnageBand` (or `prns.plannedTonnageBand`) is
-  carried on the accreditation's back-dated status versions, so its first entry has the same
-  back-dated date as the first status entry (domain model design, decision D2a).
+- `tonnageBandHistory`: one entry from `prnIssuance.tonnageBand` (or `prns.plannedTonnageBand`),
+  with `recordedAt` set to the migration time.
 - Each accredited overseas site: one `approved` status entry, with `effectiveDate` from the site's
   `validFrom`.
 
@@ -148,6 +147,5 @@ embedded in the OverseasSite's `interimSites[]`, and changes to it are versions 
 
 - **Tonnage band dating (working assumption).** Bands cannot be forward-dated or backdated, so
   history entries carry only `recordedAt`. If the business later says otherwise, add
-  `effectiveDate` as on status history. Migrated accreditations are the exception: their band
-  history is back-dated along with their status history (D2a).
+  `effectiveDate` as on status history.
 - **Authentication** is still undefined. Expected to be HMAC request signing; details to follow.

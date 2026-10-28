@@ -47,8 +47,7 @@ info:
     * ASSUMPTION: a status takes effect at the start of its `effectiveDate` (UK time), and
       "today" is evaluated when the request is served.
     * ASSUMPTION: a tonnage band cannot be forward-dated or backdated; it takes effect when it
-      is recorded. The one exception is accreditations migrated into this service, whose band
-      history starts at the same back-dated date as their status history.
+      is recorded.
 servers:
   - url: /
 tags:
