@@ -59,8 +59,10 @@ public sealed class SeedDualWriter(
         using var session = await clientFactory
             .GetClient()
             .StartSessionAsync(cancellationToken: cancellationToken);
-        for (var attempt = 1; ; attempt++)
+        var attempt = 0;
+        while (true)
         {
+            attempt++;
             try
             {
                 // WithTransactionAsync already retries transient errors (write conflicts while the rival
@@ -71,7 +73,14 @@ public sealed class SeedDualWriter(
                 );
                 return;
             }
-            catch (MongoException ex) when (attempt < MaxAttempts && IsDuplicateKey(ex)) { }
+            catch (MongoException ex) when (attempt < MaxAttempts && IsDuplicateKey(ex))
+            {
+                logger.LogWarning(
+                    "Seed dual-write lost an insert race and will retry: application {ApplicationId}, attempt {Attempt}",
+                    seed.Application.Id,
+                    attempt
+                );
+            }
         }
     }
 
@@ -111,7 +120,6 @@ public sealed class SeedDualWriter(
                 seed,
                 registration.EntityId,
                 site,
-                now,
                 cancellationToken
             );
         }
@@ -173,7 +181,6 @@ public sealed class SeedDualWriter(
         SeedDualWrite seed,
         ObjectId registrationId,
         OverseasSiteModel site,
-        DateTime now,
         CancellationToken cancellationToken
     )
     {

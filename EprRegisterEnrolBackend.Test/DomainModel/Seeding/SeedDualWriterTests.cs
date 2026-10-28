@@ -72,14 +72,15 @@ public sealed class SeedDualWriterTests : IDisposable
         _factory.GetClient().DropDatabase(_databaseName);
     }
 
-    private SeedDualWriter Writer(IAccreditationApplicationPersistence? applications = null) =>
+    // The concurrency test passes its own logger: CapturingLogger is not safe for concurrent writes.
+    private SeedDualWriter Writer(ILogger<SeedDualWriter>? logger = null) =>
         new(
             _factory,
             new SeedModelStores(_organisations, _registrations, _overseasSites),
-            applications ?? _applications,
+            _applications,
             new SeedDualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
             _clock,
-            _logger
+            logger ?? _logger
         );
 
     private static ReExAccreditationDto ReEx(string siteName = "Site One") =>
@@ -257,7 +258,11 @@ public sealed class SeedDualWriterTests : IDisposable
             await LegacyApplicationAsync(reEx),
         };
 
-        await Task.WhenAll(applications.Select(a => Writer().WriteAsync(Seed(reEx, a), Ct)));
+        await Task.WhenAll(
+            applications.Select(a =>
+                Writer(NullLogger<SeedDualWriter>.Instance).WriteAsync(Seed(reEx, a), Ct)
+            )
+        );
 
         Assert.Equal(0, Interlocked.Read(ref _failures));
         var registration = Assert.Single(await RegistrationVersionsAsync());

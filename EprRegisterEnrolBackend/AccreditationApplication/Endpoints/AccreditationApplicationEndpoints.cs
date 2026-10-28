@@ -719,17 +719,25 @@ public static class AccreditationApplicationEndpoints
         return (null, file);
     }
 
+    // Bundles Seed's DI services under one [AsParameters] argument so the handler stays under Sonar's
+    // 7-parameter limit (S107) - same reasoning, and the same positional-record shape, as
+    // RecyclingOperationsServices above.
+    private sealed record SeedServices(
+        IAccreditationApplicationPersistence Persistence,
+        IReExApiAdapter ReExAdapter,
+        IValidator<SeedRequest> Validator,
+        ISeedDualWriter SeedDualWriter
+    );
+
     private static async Task<IResult> Seed(
         string organisationId,
         string registrationId,
         string materialType,
         SeedRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IReExApiAdapter reExAdapter,
-        IValidator<SeedRequest> validator,
-        ISeedDualWriter seedDualWriter
+        [AsParameters] SeedServices services
     )
     {
+        var (persistence, reExAdapter, validator, seedDualWriter) = services;
         if (!Enum.TryParse<MaterialType>(materialType, ignoreCase: true, out var materialTypeEnum))
             return Results.BadRequest("Invalid material type.");
 
