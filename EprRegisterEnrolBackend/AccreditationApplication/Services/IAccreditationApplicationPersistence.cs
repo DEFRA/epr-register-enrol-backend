@@ -117,6 +117,25 @@ public interface IAccreditationApplicationPersistence
     );
 
     Task<AccreditationApplicationModel?> GetByIdAsync(string organisationId, string applicationId, IClientSessionHandle? session = null);
+
+    /// <summary>The application with this <c>_id</c>, whatever its organisation: for the domain model migration (B8).</summary>
+    Task<AccreditationApplicationModel?> GetByObjectIdAsync(
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Every application under one ReEx registration of one organisation (the domain model's registration group,
+    /// design doc §6.2), up to <paramref name="limit"/> of them, so a caller can tell a group that is too big.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
+        string organisationId,
+        string registrationId,
+        int limit,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    );
     Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId, IClientSessionHandle? session = null);
 
     /// <summary>
@@ -182,7 +201,8 @@ public interface IAccreditationApplicationPersistence
     /// <summary>
     /// Stamps the domain model foreign keys (B5) on an application inside <paramref name="session"/>'s
     /// transaction: <c>registrationEntityId</c>, and <c>overseasSiteEntityId</c> on each site whose
-    /// <c>orsId</c> is a key of <paramref name="overseasSiteEntityIds"/>. A targeted <c>$set</c> that leaves
+    /// <c>orsId</c> is a key of <paramref name="overseasSiteEntityIds"/>, and <c>accreditationEntityId</c> when
+    /// given. A targeted <c>$set</c> that leaves
     /// <c>version</c> and <c>updatedAt</c> alone, so it never makes a concurrent operator write conflict.
     /// </summary>
     /// <exception cref="InvalidOperationException">No application has <paramref name="applicationId"/>.</exception>
@@ -191,6 +211,7 @@ public interface IAccreditationApplicationPersistence
         ObjectId registrationEntityId,
         IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
         IClientSessionHandle session,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        ObjectId? accreditationEntityId = null
     );
 }

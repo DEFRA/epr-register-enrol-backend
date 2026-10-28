@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -35,6 +36,12 @@ public class DualWriteRegistrationTests
 
         Assert.Equal(typeof(DualWriteUnitOfWork), UnitOfWork(services));
         Assert.Contains(services, d => d.ServiceType == typeof(DualWriteMetrics));
+        Assert.Contains(
+            services,
+            d =>
+                d.ServiceType == typeof(IApplicationGroupMigrator)
+                && d.ImplementationType == typeof(ApplicationGroupMigrator)
+        );
     }
 
     [Fact]

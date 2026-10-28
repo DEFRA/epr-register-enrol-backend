@@ -53,7 +53,8 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
                 "registrationVersions",
                 "overseasSiteVersions",
                 "applicationVersions",
-                "accreditationVersions"
+                "accreditationVersions",
+                "migrationConflicts"
             );
         foreach (var collection in collections)
         {

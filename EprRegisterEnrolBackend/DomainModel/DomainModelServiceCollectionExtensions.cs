@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.DomainModel.Diagnostics;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
@@ -53,6 +54,10 @@ public static class DomainModelServiceCollectionExtensions
         AddVersioned<OverseasSiteEntity, OverseasSitePersistence>(services);
         AddVersioned<ApplicationEntity, ApplicationVersionPersistence>(services);
         AddVersioned<AccreditationEntity, AccreditationPersistence>(services);
+        services.AddSingleton<MigrationConflictPersistence>();
+        services.AddSingleton<IDomainModelCollection>(sp =>
+            sp.GetRequiredService<MigrationConflictPersistence>()
+        );
 
         services.AddSingleton<IDomainModelSchemaStatus, DomainModelSchemaStatus>();
         services
@@ -85,6 +90,8 @@ public static class DomainModelServiceCollectionExtensions
         }
 
         services.AddSingleton<DualWriteMetrics>();
+        services.AddSingleton<ApplicationGroupStores>();
+        services.AddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
         services.AddSingleton<IDualWriteUnitOfWork, DualWriteUnitOfWork>();
     }
 

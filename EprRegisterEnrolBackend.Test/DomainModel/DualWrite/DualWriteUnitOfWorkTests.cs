@@ -4,6 +4,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
@@ -15,6 +16,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.DualWrite;
 
@@ -34,13 +37,14 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     private readonly ServiceProvider _metricsProvider;
     private readonly MeterListener _listener = new();
     private readonly List<string?> _failedOperations = [];
+    private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
+    private readonly IApplicationGroupMigrator _migrator = Substitute.For<IApplicationGroupMigrator>();
 
     public DualWriteUnitOfWorkTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("dualwrite");
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
-        var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
-        _registrations = new RegistrationPersistence(_factory, NullLoggerFactory.Instance, clock);
+        _registrations = new RegistrationPersistence(_factory, NullLoggerFactory.Instance, _clock);
         _applications = new AccreditationApplicationPersistence(
             _factory,
             NullLoggerFactory.Instance
@@ -70,6 +74,9 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
             }
         );
         _listener.Start();
+        _migrator
+            .EnsureMigratedAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
+            .Returns(GroupMigrationResult.NothingToDo);
     }
 
     public void Dispose()
@@ -79,9 +86,10 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         _factory.GetClient().DropDatabase(_databaseName);
     }
 
-    private DualWriteUnitOfWork UnitOfWork() =>
+    private DualWriteUnitOfWork UnitOfWork(IApplicationGroupMigrator? migrator = null) =>
         new(
             _factory,
+            migrator ?? _migrator,
             new DualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
             _logger
         );
@@ -296,6 +304,123 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
                 )
         );
         Assert.Empty(_failedOperations);
+    }
+
+    [Fact]
+    public async Task RunAsync_EnsuresTheApplicationIsMigrated_InTheWorksSessionBeforeTheWork()
+    {
+        var applicationId = ObjectId.GenerateNewId();
+        IClientSessionHandle? migratedIn = null;
+        _migrator
+            .EnsureMigratedAsync(applicationId, Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                migratedIn = call.Arg<IClientSessionHandle>();
+                Assert.True(migratedIn.IsInTransaction);
+                return GroupMigrationResult.NothingToDo;
+            });
+
+        var result = await UnitOfWork()
+            .RunAsync(
+                Operation,
+                applicationId.ToString(),
+                (session, _) =>
+                {
+                    Assert.NotNull(migratedIn);
+                    Assert.Same(migratedIn, session);
+                    return Task.FromResult(Results.NoContent());
+                },
+                Ct
+            );
+
+        Assert.IsType<NoContent>(result);
+    }
+
+    [Fact]
+    public async Task RunAsync_ApplicationIdIsNotAnObjectId_RunsTheWorkWithoutMigrating()
+    {
+        var result = await UnitOfWork()
+            .RunAsync(Operation, "not-an-id", (_, _) => Task.FromResult(Results.NotFound()), Ct);
+
+        Assert.IsType<NotFound>(result);
+        await _migrator
+            .DidNotReceive()
+            .EnsureMigratedAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_MigrationFails_DoesNotRunTheWorkAndAnswers500()
+    {
+        _migrator
+            .EnsureMigratedAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
+            .Throws(new ApplicationGroupTooLargeException(ReExRegistrationId, ApplicationGroupMigrator.MaxGroupSize));
+        var ran = false;
+
+        var result = await UnitOfWork()
+            .RunAsync(
+                Operation,
+                ObjectId.GenerateNewId().ToString(),
+                (_, _) =>
+                {
+                    ran = true;
+                    return Task.FromResult(Results.NoContent());
+                },
+                Ct
+            );
+
+        Assert.False(ran);
+        Assert.Equal(StatusCodes.Status500InternalServerError, Assert.IsType<ProblemHttpResult>(result).StatusCode);
+        Assert.Contains(nameof(ApplicationGroupTooLargeException), Assert.Single(_logger.Entries).Message);
+        Assert.Equal([Operation], _failedOperations);
+    }
+
+    [Fact]
+    public async Task RunAsync_WorkFailsAfterAFirstTouchMigration_RollsTheMigrationBackToo()
+    {
+        var application = await SeedApplicationAsync();
+        var logs = NullLoggerFactory.Instance;
+        var migrator = new ApplicationGroupMigrator(
+            _applications,
+            new ApplicationGroupStores(
+                new OrganisationPersistence(_factory, logs),
+                _registrations,
+                new OverseasSitePersistence(_factory, logs, _clock),
+                new ApplicationVersionPersistence(_factory, logs, _clock),
+                new AccreditationPersistence(_factory, logs, _clock),
+                new MigrationConflictPersistence(_factory, logs)
+            ),
+            _clock
+        );
+
+        var result = await UnitOfWork(migrator)
+            .RunAsync(
+                Operation,
+                application.Id.ToString()!,
+                async (session, token) =>
+                {
+                    Assert.NotNull(
+                        await _registrations.Versions.FindCurrentAsync(
+                            Builders<RegistrationEntity>.Filter.Eq(r => r.ReExRegistrationId, ReExRegistrationId),
+                            session,
+                            token
+                        )
+                    );
+                    throw new InvalidOperationException("model write failed");
+                },
+                Ct
+            );
+
+        Assert.IsType<ProblemHttpResult>(result);
+        Assert.Null(await CurrentRegistrationAsync());
+        Assert.Equal(
+            0,
+            await _factory
+                .GetCollection<ApplicationEntity>(DomainModelCollections.ApplicationVersions)
+                .CountDocumentsAsync(FilterDefinition<ApplicationEntity>.Empty, cancellationToken: Ct)
+        );
+        Assert.Null(
+            (await _applications.GetByIdAsync(application.OrganisationId!, application.Id.ToString()!))!.RegistrationEntityId
+        );
     }
 
     [Fact]

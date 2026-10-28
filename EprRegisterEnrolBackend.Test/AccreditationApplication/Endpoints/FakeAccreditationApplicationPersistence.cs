@@ -18,13 +18,15 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         ObjectId registrationEntityId,
         IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
         IClientSessionHandle session,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        ObjectId? accreditationEntityId = null
     )
     {
         var application =
             _store.Find(a => a.Id == applicationId)
             ?? throw new InvalidOperationException($"Application {applicationId} not found.");
         application.RegistrationEntityId = registrationEntityId;
+        application.AccreditationEntityId = accreditationEntityId ?? application.AccreditationEntityId;
         foreach (var site in application.OverseasSites?.Sites ?? [])
         {
             if (site.OrsId is not null && overseasSiteEntityIds.TryGetValue(site.OrsId, out var id))
@@ -260,6 +262,31 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         // don't affect the stored record unless UpdateAsync is explicitly called.
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
+
+    public Task<AccreditationApplicationModel?> GetByObjectIdAsync(
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var stored = _store.FirstOrDefault(a => a.Id == applicationId);
+        return Task.FromResult(stored is null ? null : ShallowCopy(stored));
+    }
+
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
+        string organisationId,
+        string registrationId,
+        int limit,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a => a.OrganisationId == organisationId && a.RegistrationId == registrationId)
+                .Take(limit)
+                .Select(ShallowCopy)
+                .ToList()
+        );
 
     public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId, IClientSessionHandle? session = null)
     {

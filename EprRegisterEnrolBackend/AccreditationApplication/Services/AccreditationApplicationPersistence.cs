@@ -255,6 +255,33 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
+    public async Task<AccreditationApplicationModel?> GetByObjectIdAsync(
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Find(Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, applicationId), session)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    // Filters on OrganisationId as well as RegistrationId so the read uses the OrganisationId index:
+    // RegistrationId has none of its own.
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
+        string organisationId,
+        string registrationId,
+        int limit,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var filter = Builders<AccreditationApplicationModel>.Filter;
+        return await Find(
+                filter.Eq(a => a.OrganisationId, organisationId) & filter.Eq(a => a.RegistrationId, registrationId),
+                session
+            )
+            .Limit(limit)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
         Guid workItemId,
         IClientSessionHandle? session = null
@@ -458,7 +485,8 @@ public class AccreditationApplicationPersistence(
         ObjectId registrationEntityId,
         IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
         IClientSessionHandle session,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        ObjectId? accreditationEntityId = null
     )
     {
         var updates = new List<UpdateDefinition<AccreditationApplicationModel>>
@@ -468,6 +496,15 @@ public class AccreditationApplicationPersistence(
                 registrationEntityId
             ),
         };
+        if (accreditationEntityId is not null)
+        {
+            updates.Add(
+                Builders<AccreditationApplicationModel>.Update.Set(
+                    a => a.AccreditationEntityId,
+                    accreditationEntityId
+                )
+            );
+        }
         var arrayFilters = new List<ArrayFilterDefinition>();
         // One array filter per site, named s0, s1, ... because an identifier must be a lowercase-led word.
         foreach (var (orsId, entityId) in overseasSiteEntityIds)
