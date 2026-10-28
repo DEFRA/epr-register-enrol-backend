@@ -37,6 +37,20 @@ public class AccreditationApplicationPersistence(
         }
     }
 
+    public async Task UpsertAsync(AccreditationApplicationModel application) =>
+        await Collection.ReplaceOneAsync(
+            a => a.Id == application.Id,
+            application,
+            new ReplaceOptions { IsUpsert = true }
+        );
+
+    public async Task<long> DeleteManyAsync(IEnumerable<ObjectId> ids)
+    {
+        var idList = ids.ToList();
+        var result = await Collection.DeleteManyAsync(a => idList.Contains(a.Id!.Value));
+        return result.DeletedCount;
+    }
+
     // RA-516: sorted server-side (CreatedAt desc, Id desc tiebreak) so callers no longer need to
     // re-sort in memory - backed by the compound index in DefineIndexes below. An unindexed Mongo
     // sort throws once the result set exceeds the 32MB in-memory sort limit, which is why this was

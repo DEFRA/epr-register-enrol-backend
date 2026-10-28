@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApi;
+using EprRegisterEnrolBackend.TestData;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
@@ -163,6 +164,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // Build the Mongo-backed persistences' indexes at startup (off the request
     // path) rather than on whichever request first resolves the singleton.
     builder.Services.AddHostedService<MongoIndexInitializerService>();
+
+    // RA-646: fixed test accreditations for other teams to read in dev, test and ext-test.
+    // Off unless TestData:SeedOnStartup is set, which only those environments do.
+    builder.Services.Configure<TestDataConfig>(
+        builder.Configuration.GetSection(TestDataConfig.SectionName)
+    );
+    builder.Services.AddSingleton<AccreditationApiTestDataSeeder>();
+    builder.Services.AddHostedService<AccreditationApiTestDataSeedingService>();
 
     // CDP Uploader
     builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
