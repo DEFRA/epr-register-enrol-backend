@@ -6,9 +6,8 @@ using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
-// RA-691: bound from Migrations:Ra691AccreditationReferenceCorrection. Enabled defaults off, so
-// the migration is a no-op in every environment until deliberately switched on, and DryRun
-// defaults on, so switching it on never writes until DryRun is explicitly turned off.
+// RA-691: bound from Migrations:Ra691AccreditationReferenceCorrection. Every flag defaults off,
+// so the migration is a no-op in every environment until deliberately switched on.
 public sealed class AccreditationReferenceCorrectionOptions
 {
     public const string SectionName = "Migrations:Ra691AccreditationReferenceCorrection";
@@ -16,12 +15,11 @@ public sealed class AccreditationReferenceCorrectionOptions
     // Off: the migration does nothing at all (not even a read).
     public bool Enabled { get; set; }
 
-    // On (the default, with Enabled on): logs each planned "org: old -> new" change and writes
-    // nothing. Off: writes the corrections, provided SpotCheckConfirmedBy is set.
-    public bool DryRun { get; set; } = true;
+    // Off (with Enabled on): dry run - logs each planned "org: old -> new" change, writes nothing.
+    public bool Apply { get; set; }
 
-    // Who reviewed the dry-run output against the live records. Required before DryRun=false
-    // takes effect; logged with every applied change so the authorisation outlives the env var.
+    // Who reviewed the dry-run output against the live records. Required before Apply takes
+    // effect; logged with every applied change so the authorisation outlives the env var.
     public string? SpotCheckConfirmedBy { get; set; }
 }
 
@@ -109,12 +107,12 @@ public class AccreditationReferenceCorrectionMigration(
         if (!settings.Enabled)
             return RunResult.Disabled;
 
-        var apply = !settings.DryRun;
+        var apply = settings.Apply;
         if (apply && string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy))
         {
             logger.LogError(
-                "RA-691 accreditation reference correction: DryRun is false but "
-                    + "SpotCheckConfirmedBy is not set, so running as a DRY RUN. Set it to whoever reviewed the dry-run "
+                "RA-691 accreditation reference correction: Apply is set but SpotCheckConfirmedBy "
+                    + "is not, so running as a DRY RUN. Set it to whoever reviewed the dry-run "
                     + "output against the live records."
             );
             apply = false;

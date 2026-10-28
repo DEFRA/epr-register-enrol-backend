@@ -82,7 +82,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
 
     private AccreditationReferenceCorrectionMigration CreateMigration(
         bool enabled,
-        bool? dryRun = null,
+        bool apply = false,
         string? confirmedBy = "A Reviewer",
         bool registerPersistence = true
     )
@@ -90,17 +90,16 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         var services = new ServiceCollection();
         if (registerPersistence)
             services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
-        // dryRun null leaves DryRun at its declared default.
-        var options = new AccreditationReferenceCorrectionOptions
-        {
-            Enabled = enabled,
-            SpotCheckConfirmedBy = confirmedBy,
-        };
-        if (dryRun is { } value)
-            options.DryRun = value;
         return new AccreditationReferenceCorrectionMigration(
             services.BuildServiceProvider(),
-            Options.Create(options),
+            Options.Create(
+                new AccreditationReferenceCorrectionOptions
+                {
+                    Enabled = enabled,
+                    Apply = apply,
+                    SpotCheckConfirmedBy = confirmedBy,
+                }
+            ),
             _logger
         );
     }
@@ -126,7 +125,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         var before = await SnapshotAsync();
 
         // No persistence registered: resolving it would throw.
-        var result = await CreateMigration(enabled: false, dryRun: false, registerPersistence: false)
+        var result = await CreateMigration(enabled: false, apply: true, registerPersistence: false)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Disabled);
@@ -134,17 +133,13 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         _logger.Entries.Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData(true)]
-    public async Task Enabled_with_DryRun_unset_or_true_logs_exactly_the_two_changes_and_writes_nothing(
-        bool? dryRun
-    )
+    [Fact]
+    public async Task Dry_run_logs_exactly_the_two_changes_and_writes_nothing()
     {
         await SeedIncorrectStateAsync();
         var before = await SnapshotAsync();
 
-        var result = await CreateMigration(enabled: true, dryRun: dryRun)
+        var result = await CreateMigration(enabled: true, apply: false)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.DryRun);
@@ -163,17 +158,13 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         Logged(LogLevel.Error).Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData(" ")]
-    public async Task DryRun_false_without_a_spot_check_runs_as_a_dry_run_and_writes_nothing(
-        string? confirmedBy
-    )
+    [Fact]
+    public async Task Apply_without_a_spot_check_runs_as_a_dry_run_and_writes_nothing()
     {
         await SeedIncorrectStateAsync();
         var before = await SnapshotAsync();
 
-        var result = await CreateMigration(enabled: true, dryRun: false, confirmedBy: confirmedBy)
+        var result = await CreateMigration(enabled: true, apply: true, confirmedBy: " ")
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.DryRun);
@@ -182,11 +173,11 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     }
 
     [Fact]
-    public async Task DryRun_false_sets_the_corrected_references_and_keeps_the_incorrect_ones_as_previous()
+    public async Task Apply_sets_the_corrected_references_and_keeps_the_incorrect_ones_as_previous()
     {
         var (infinityId, plasgranId) = await SeedIncorrectStateAsync();
 
-        var result = await CreateMigration(enabled: true, dryRun: false)
+        var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Applied);
@@ -204,13 +195,13 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     }
 
     [Fact]
-    public async Task DryRun_false_changes_no_other_record()
+    public async Task Apply_changes_no_other_record()
     {
         var (infinityId, plasgranId) = await SeedIncorrectStateAsync();
         var targets = new[] { infinityId, plasgranId };
         var before = (await SnapshotAsync()).Where(d => !targets.Contains(d["_id"].AsObjectId)).ToList();
 
-        await CreateMigration(enabled: true, dryRun: false)
+        await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         (await SnapshotAsync())
@@ -220,14 +211,14 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     }
 
     [Fact]
-    public async Task Second_run_with_DryRun_false_changes_nothing()
+    public async Task Second_apply_changes_nothing()
     {
         await SeedIncorrectStateAsync();
-        await CreateMigration(enabled: true, dryRun: false)
+        await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
         var afterFirst = await SnapshotAsync();
 
-        var result = await CreateMigration(enabled: true, dryRun: false)
+        var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Applied);
@@ -245,7 +236,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         var infinityBefore = await _raw.Find(new BsonDocument("_id", infinity.Id!.Value))
             .FirstAsync(TestContext.Current.CancellationToken);
 
-        var result = await CreateMigration(enabled: true, dryRun: false)
+        var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Applied);
@@ -264,7 +255,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(infinity);
         await SeedAsync(Application(500105, PlasgranIncorrect));
 
-        await CreateMigration(enabled: true, dryRun: false)
+        await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         (await ReadAsync(infinity.Id!.Value))
@@ -280,7 +271,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(Application(500105, PlasgranIncorrect));
         var before = await SnapshotAsync();
 
-        var result = await CreateMigration(enabled: true, dryRun: false)
+        var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Aborted);
@@ -295,7 +286,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(Application(500105, PlasgranCorrected));
         var before = await SnapshotAsync();
 
-        var result = await CreateMigration(enabled: true, dryRun: false)
+        var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Aborted);
@@ -310,7 +301,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(Application(500527, InfinityIncorrect));
         var before = await SnapshotAsync();
 
-        var result = await CreateMigration(enabled: true, dryRun: false)
+        var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Aborted);
@@ -333,7 +324,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(Application(500105, PlasgranIncorrect));
         var before = await SnapshotAsync();
 
-        var result = await CreateMigration(enabled: true, dryRun: false)
+        var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Aborted);
