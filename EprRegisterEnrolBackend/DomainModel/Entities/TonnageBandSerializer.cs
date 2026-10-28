@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Text.Json.Serialization;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
@@ -10,13 +12,16 @@ namespace EprRegisterEnrolBackend.DomainModel.Entities;
 /// </summary>
 public sealed class TonnageBandSerializer : SerializerBase<TonnageBand?>
 {
-    private static readonly Dictionary<TonnageBand, string> s_toReEx = new()
-    {
-        [TonnageBand.UpTo500] = "up_to_500",
-        [TonnageBand.UpTo5000] = "up_to_5000",
-        [TonnageBand.UpTo10000] = "up_to_10000",
-        [TonnageBand.Over10000] = "over_10000",
-    };
+    // The names come from the enum's JSON names, so Mongo and JSON can never disagree.
+    private static readonly Dictionary<TonnageBand, string> s_toReEx = Enum.GetValues<TonnageBand>()
+        .ToDictionary(
+            band => band,
+            band =>
+                typeof(TonnageBand)
+                    .GetField(band.ToString())!
+                    .GetCustomAttribute<JsonStringEnumMemberNameAttribute>()!
+                    .Name
+        );
 
     private static readonly Dictionary<string, TonnageBand> s_fromReEx = s_toReEx.ToDictionary(
         p => p.Value,

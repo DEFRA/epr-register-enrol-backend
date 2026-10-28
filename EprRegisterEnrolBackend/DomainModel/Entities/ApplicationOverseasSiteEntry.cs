@@ -1,4 +1,4 @@
-using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Entities.Sections;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.DomainModel.Entities;
@@ -18,6 +18,6 @@ public class ApplicationOverseasSiteEntry
     public BsonDocument? ProposedChanges { get; set; }
 
     public List<BsonDocument> PreviousSites { get; set; } = [];
-    public BesEvidenceModel? BesEvidence { get; set; }
+    public BesEvidence? BesEvidence { get; set; }
     public List<ApplicationInterimSiteEntry> InterimSites { get; set; } = [];
 }

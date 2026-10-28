@@ -11,5 +11,5 @@ public class BesEvidenceSection
     public SectionStatus SectionStatus { get; set; } = SectionStatus.NotStarted;
 
     /// <summary>When the section was submitted, snapshotted on each submit and resubmit.</summary>
-    public List<BesEvidenceSnapshot> Versions { get; set; } = [];
+    public List<BesEvidenceSectionSnapshot> Versions { get; set; } = [];
 }

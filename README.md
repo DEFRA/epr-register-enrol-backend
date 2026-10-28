@@ -73,8 +73,9 @@ The domain model (`docs/analysis/register-enrol-domain-model-design.md`) ships i
 `DomainModel:*` flag that is off by default:
 
 - `DomainModel__ExpandEnabled=true` (phase 1) builds the empty versioned collections and their indexes at
-  startup and adds the `domain-model-schema` check to `/health/ready`. `compose.yml` turns it on locally.
-  Turning it off again is the rollback.
+  startup and adds the `domain-model-schema` check to `/health/ready`. If Mongo is unreachable at startup,
+  it retries in the background until the check passes, so readiness recovers on its own. `compose.yml`
+  turns it on locally. Turning it off again is the rollback.
 - `DomainModel__DiagnosticsEnabled=true` (test environments only) runs the diagnostics below.
 
 #### Domain model diagnostics (test environments only)

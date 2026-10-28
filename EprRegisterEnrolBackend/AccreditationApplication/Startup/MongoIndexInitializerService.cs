@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
@@ -23,7 +24,11 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // When the domain model schema is enabled it also builds those collections and
 // then records the schema check that DomainModelSchemaHealthCheck reports, so
 // a readiness probe only reads a stored result and never calls Mongo itself.
-// If building them fails, the result stays unhealthy until the next deploy.
+// If building them or the check fails (Mongo briefly unreachable at boot), it
+// retries in the background with backoff until the check passes, so readiness
+// recovers without a restart. A retry re-resolves the collections, which
+// re-runs their index creation: MS DI does not cache a singleton whose
+// constructor threw.
 //
 // The resolution runs on a pool thread wrapped in WaitAsync(stoppingToken): on
 // shutdown the awaiting caller returns promptly instead of holding the host open
@@ -36,20 +41,28 @@ public class MongoIndexInitializerService(
     ILogger<MongoIndexInitializerService> logger
 ) : BackgroundService
 {
+    // Backoff for the schema retry: doubles from FirstRetryDelay up to MaxRetryDelay. Settable for tests.
+    internal TimeSpan FirstRetryDelay { get; init; } = TimeSpan.FromSeconds(5);
+    internal TimeSpan MaxRetryDelay { get; init; } = TimeSpan.FromMinutes(5);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Yield so host startup is never held up by anything below.
         await Task.Yield();
-        await InitializeAsync(stoppingToken);
+        if (!await InitializeAsync(stoppingToken))
+        {
+            await RetrySchemaAsync(stoppingToken);
+        }
     }
 
     // Extracted so tests can await it deterministically — BackgroundService's
-    // StartAsync only kicks ExecuteAsync off as a background task.
-    internal async Task InitializeAsync(CancellationToken cancellationToken)
+    // StartAsync only kicks ExecuteAsync off as a background task. Returns false
+    // when the domain model schema is enabled but its check has not passed yet.
+    internal async Task<bool> InitializeAsync(CancellationToken cancellationToken)
     {
         try
         {
-            var domainModel = await Task.Run(
+            await Task.Run(
                     () =>
                     {
                         // Resolving each singleton runs its MongoService<T>
@@ -60,25 +73,17 @@ public class MongoIndexInitializerService(
                             serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
                         _ = serviceProvider.GetRequiredService<IPendingUploadService>();
                         _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
-                        // Domain model (phase 1, "Expand"): creates the empty collections and
-                        // indexes. None are registered unless DomainModel:ExpandEnabled is set.
-                        return serviceProvider.GetServices<IDomainModelCollection>().ToList();
                     },
                     cancellationToken
                 )
                 .WaitAsync(cancellationToken);
 
             logger.LogInformation("MongoIndexInitializerService: index initialisation complete");
-
-            if (domainModel.Count > 0)
-            {
-                var result = await DomainModelSchemaCheck.RunAsync(domainModel, cancellationToken);
-                serviceProvider.GetRequiredService<IDomainModelSchemaStatus>().Record(result);
-            }
         }
         catch (OperationCanceledException)
         {
             // Host is shutting down before initialisation finished — nothing to do.
+            return true;
         }
         catch (Exception ex)
         {
@@ -86,6 +91,83 @@ public class MongoIndexInitializerService(
             // The indexes will be (re)built the next time a request resolves the
             // persistence, or on the next deploy.
             logger.LogError(ex, "MongoIndexInitializerService: index initialisation failed");
+        }
+
+        try
+        {
+            return await TryBuildSchemaAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return true;
+        }
+    }
+
+    // Retries the domain model schema until its check passes or the host stops.
+    internal async Task RetrySchemaAsync(CancellationToken cancellationToken)
+    {
+        var delay = FirstRetryDelay;
+        try
+        {
+            do
+            {
+                logger.LogWarning(
+                    "MongoIndexInitializerService: domain model schema not ready, retrying in {Delay}",
+                    delay
+                );
+                await Task.Delay(delay, cancellationToken);
+                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, MaxRetryDelay.Ticks));
+            } while (!await TryBuildSchemaAsync(cancellationToken));
+
+            logger.LogInformation(
+                "MongoIndexInitializerService: domain model schema ready after retrying"
+            );
+        }
+        catch (OperationCanceledException)
+        {
+            // Host is shutting down — stop retrying.
+        }
+    }
+
+    // Domain model (phase 1, "Expand"): creates the empty collections and indexes,
+    // then records the schema check. With DomainModel:ExpandEnabled off none are
+    // registered, so there is nothing to do.
+    private async Task<bool> TryBuildSchemaAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var collections = await Task.Run(
+                    () => serviceProvider.GetServices<IDomainModelCollection>().ToList(),
+                    cancellationToken
+                )
+                .WaitAsync(cancellationToken);
+            if (collections.Count == 0)
+            {
+                return true;
+            }
+
+            var result = await DomainModelSchemaCheck.RunAsync(collections, cancellationToken);
+            serviceProvider.GetRequiredService<IDomainModelSchemaStatus>().Record(result);
+            return result.Status == HealthStatus.Healthy;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "MongoIndexInitializerService: domain model schema could not be built"
+            );
+            serviceProvider
+                .GetRequiredService<IDomainModelSchemaStatus>()
+                .Record(
+                    HealthCheckResult.Unhealthy(
+                        $"Domain model collections could not be built ({ex.GetType().Name})."
+                    )
+                );
+            return false;
         }
     }
 }

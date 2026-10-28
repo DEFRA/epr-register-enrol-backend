@@ -11,5 +11,5 @@ public class BusinessPlanSection : BusinessPlan
     public SectionStatus SectionStatus { get; set; } = SectionStatus.NotStarted;
 
     /// <summary>What was submitted, snapshotted on each submit and resubmit.</summary>
-    public List<BusinessPlanSnapshot> Versions { get; set; } = [];
+    public List<BusinessPlanSectionSnapshot> Versions { get; set; } = [];
 }

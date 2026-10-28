@@ -267,6 +267,45 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_OnlyTheImportTimeInAListItemChanged_WritesNoVersion()
+    {
+        var first = Widget("first");
+        first.Sources.Add(ReExSource("1", new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc)));
+        var v1 = await _sut.InsertAsync(first, Change(), cancellationToken: Ct);
+        _clock.Advance(TimeSpan.FromDays(1));
+
+        var refreshed = Widget("first", v1.EntityId);
+        refreshed.Sources.Add(ReExSource("1", new DateTime(2027, 1, 2, 9, 0, 0, DateTimeKind.Utc)));
+        var result = await _sut.UpdateAsync(refreshed, 1, Change(), cancellationToken: Ct);
+
+        Assert.False(result.Changed);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_OtherFieldInAListItemChanged_WritesAVersion()
+    {
+        var at = new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc);
+        var first = Widget("first");
+        first.Sources.Add(ReExSource("1", at));
+        var v1 = await _sut.InsertAsync(first, Change(), cancellationToken: Ct);
+        _clock.Advance(TimeSpan.FromDays(1));
+
+        var refreshed = Widget("first", v1.EntityId);
+        refreshed.Sources.Add(ReExSource("2", at));
+        var result = await _sut.UpdateAsync(refreshed, 1, Change(), cancellationToken: Ct);
+
+        Assert.True(result.Changed);
+    }
+
+    private static EntitySource ReExSource(string schemaVersion, DateTime importedAt) =>
+        new()
+        {
+            System = SourceSystem.ReEx,
+            ReExSchemaVersion = schemaVersion,
+            ImportedAt = importedAt,
+        };
+
+    [Fact]
     public async Task UpdateAsync_TimeDiffersOnlyBelowAMillisecond_WritesNoVersion()
     {
         var at = new DateTime(2027, 1, 1, 9, 0, 0, 123, DateTimeKind.Utc);
@@ -347,4 +386,6 @@ public class WidgetVersion : VersionedEntityBase
     public DateTime? SeenAt { get; set; }
 
     public EntitySource? Source { get; set; }
+
+    public List<EntitySource> Sources { get; set; } = [];
 }

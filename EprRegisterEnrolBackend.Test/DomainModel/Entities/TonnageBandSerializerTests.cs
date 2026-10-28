@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -28,6 +29,22 @@ public class TonnageBandSerializerTests
 
         document["band"].Should().Be((BsonValue)stored);
         BsonSerializer.Deserialize<Holder>(document).Band.Should().Be(band);
+    }
+
+    [Theory]
+    [InlineData(TonnageBand.UpTo500, "up_to_500")]
+    [InlineData(TonnageBand.UpTo5000, "up_to_5000")]
+    [InlineData(TonnageBand.UpTo10000, "up_to_10000")]
+    [InlineData(TonnageBand.Over10000, "over_10000")]
+    public void JsonSerialize_EveryBand_WritesTheSameValueMongoStores(
+        TonnageBand band,
+        string stored
+    )
+    {
+        var json = JsonSerializer.Serialize(band);
+
+        json.Should().Be($"\"{stored}\"");
+        JsonSerializer.Deserialize<TonnageBand>(json).Should().Be(band);
     }
 
     [Fact]

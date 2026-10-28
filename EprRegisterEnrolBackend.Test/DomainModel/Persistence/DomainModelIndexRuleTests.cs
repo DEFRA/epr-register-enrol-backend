@@ -416,35 +416,65 @@ public sealed class DomainModelIndexRuleTests : IDisposable
             .Be(TonnageBand.UpTo5000);
     }
 
+    private static readonly Type[] s_entityTypes =
+    [
+        typeof(OrganisationEntity),
+        typeof(RegistrationEntity),
+        typeof(OverseasSiteEntity),
+        typeof(ApplicationEntity),
+        typeof(AccreditationEntity),
+    ];
+
     // Guards the rule for fields added later: every enum anywhere in a stored entity, however deeply nested,
     // must be stored as a string, which a [BsonRepresentation] or a [BsonSerializer] on the member gives.
     [Fact]
     public void EntityTypes_EveryEnumMember_IsStoredAsAString()
     {
-        var offenders = new List<string>();
-        var visited = new HashSet<Type>();
-        foreach (
-            var type in new[]
-            {
-                typeof(OrganisationEntity),
-                typeof(RegistrationEntity),
-                typeof(OverseasSiteEntity),
-                typeof(ApplicationEntity),
-                typeof(AccreditationEntity),
-            }
-        )
-        {
-            CollectUnmappedEnums(type, type.Name, visited, offenders);
-        }
+        var offenders = StoredMembers()
+            .Where(m => m.Type.IsEnum)
+            .Where(m =>
+                m.Property.GetCustomAttribute<BsonRepresentationAttribute>()?.Representation
+                    != BsonType.String
+                && m.Property.GetCustomAttribute<BsonSerializerAttribute>() is null
+            )
+            .Select(m => m.Path);
 
         offenders.Should().BeEmpty();
     }
 
-    private static void CollectUnmappedEnums(
+    // The new collections store only the domain model's own classes, so changing a legacy class can never
+    // change what they store. Legacy enums may be shared: they are stored by name, which the test above checks.
+    [Fact]
+    public void EntityTypes_EveryNestedClass_BelongsToTheDomainModel()
+    {
+        var offenders = StoredMembers()
+            .Where(m => !m.Type.IsEnum && IsOurs(m.Type))
+            .Where(m =>
+                m.Type.Namespace?.StartsWith("EprRegisterEnrolBackend.DomainModel", StringComparison.Ordinal)
+                != true
+            )
+            .Select(m => $"{m.Path} ({m.Type.Name})");
+
+        offenders.Should().BeEmpty();
+    }
+
+    private static List<(string Path, PropertyInfo Property, Type Type)> StoredMembers()
+    {
+        var members = new List<(string, PropertyInfo, Type)>();
+        var visited = new HashSet<Type>();
+        foreach (var type in s_entityTypes)
+        {
+            CollectMembers(type, type.Name, visited, members);
+        }
+
+        return members;
+    }
+
+    private static void CollectMembers(
         Type type,
         string path,
         HashSet<Type> visited,
-        List<string> offenders
+        List<(string, PropertyInfo, Type)> members
     )
     {
         if (!visited.Add(type))
@@ -456,23 +486,16 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         {
             var propertyType = ElementType(property.PropertyType);
             var underlying = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
-            if (underlying.IsEnum)
+            members.Add(($"{path}.{property.Name}", property, underlying));
+            if (!underlying.IsEnum && IsOurs(underlying))
             {
-                if (
-                    property.GetCustomAttribute<BsonRepresentationAttribute>()?.Representation
-                        != BsonType.String
-                    && property.GetCustomAttribute<BsonSerializerAttribute>() is null
-                )
-                {
-                    offenders.Add($"{path}.{property.Name}");
-                }
-            }
-            else if (underlying.Namespace?.StartsWith("EprRegisterEnrolBackend", StringComparison.Ordinal) == true)
-            {
-                CollectUnmappedEnums(underlying, $"{path}.{property.Name}", visited, offenders);
+                CollectMembers(underlying, $"{path}.{property.Name}", visited, members);
             }
         }
     }
+
+    private static bool IsOurs(Type type) =>
+        type.Namespace?.StartsWith("EprRegisterEnrolBackend", StringComparison.Ordinal) == true;
 
     private static Type ElementType(Type type) =>
         type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>)

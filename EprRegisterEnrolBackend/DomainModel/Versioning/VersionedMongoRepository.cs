@@ -196,16 +196,35 @@ public class VersionedMongoRepository<T>(
             {
                 doc.Remove(member.ElementName);
             }
-            else if (
-                doc.TryGetValue(member.ElementName, out var value)
-                && value is BsonDocument nested
-                && BsonClassMap.IsClassMapRegistered(member.MemberType)
-            )
+            else if (doc.TryGetValue(member.ElementName, out var value))
             {
-                RemoveExcluded(nested, BsonClassMap.LookupClassMap(member.MemberType));
+                RemoveExcluded(value, member.MemberType);
             }
         }
     }
+
+    private static void RemoveExcluded(BsonValue value, Type type)
+    {
+        if (value is BsonDocument nested && BsonClassMap.IsClassMapRegistered(type))
+        {
+            RemoveExcluded(nested, BsonClassMap.LookupClassMap(type));
+        }
+        else if (value is BsonArray items && ItemType(type) is { } itemType)
+        {
+            foreach (var item in items)
+            {
+                RemoveExcluded(item, itemType);
+            }
+        }
+    }
+
+    private static Type? ItemType(Type type) =>
+        type.GetInterfaces()
+            .Prepend(type)
+            .FirstOrDefault(t =>
+                t.IsGenericType && t.GetGenericTypeDefinition() == typeof(IEnumerable<>)
+            )
+            ?.GetGenericArguments()[0];
 
     // A copy, so a failed commit never leaves the caller holding a version that was not saved.
     private static T Stamped(

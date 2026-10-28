@@ -41,11 +41,11 @@ public class ApplicationEntity : VersionedEntityBase
     public Guid? CaseManagementWorkItemId { get; set; }
 
     public DateTime? CaseManagementStatusUpdatedAt { get; set; }
-    public SubmittedByModel? SubmittedBy { get; set; }
+    public Submitter? SubmittedBy { get; set; }
     public string? WithdrawalReason { get; set; }
     public DateTime? DateSent { get; set; }
     public DateTime DateLastEdited { get; set; }
-    public AccreditationApplicationQuery? Query { get; set; }
+    public ApplicationQuery? Query { get; set; }
 
     public PrnsSection Prns { get; set; } = new();
     public BusinessPlanSection BusinessPlan { get; set; } = new();

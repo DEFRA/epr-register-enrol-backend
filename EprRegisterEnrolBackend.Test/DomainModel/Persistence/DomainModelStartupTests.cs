@@ -142,6 +142,86 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
         status.Result.Status.Should().Be(HealthStatus.Unhealthy);
     }
 
+    [Fact]
+    public async Task RetrySchemaAsync_MongoBackAfterAStartupOutage_ReadinessRecovers()
+    {
+        var attempts = 0;
+        var status = new DomainModelSchemaStatus();
+        var services = LegacyPersistences()
+            .AddSingleton<IDomainModelSchemaStatus>(status)
+            .AddSingleton(_ =>
+                ++attempts < 3
+                    ? throw new TimeoutException("server selection timed out")
+                    : Collection("organisations", ["reExOrganisationId_u"])
+            )
+            .BuildServiceProvider();
+        var initializer = new MongoIndexInitializerService(
+            services,
+            new CapturingLogger<MongoIndexInitializerService>()
+        )
+        {
+            FirstRetryDelay = TimeSpan.FromMilliseconds(1),
+        };
+
+        (await initializer.InitializeAsync(Ct)).Should().BeFalse();
+        status.Result.Status.Should().Be(HealthStatus.Unhealthy);
+
+        await initializer.RetrySchemaAsync(Ct);
+
+        attempts.Should().Be(3);
+        status.Result.Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public async Task RetrySchemaAsync_IndexesMissingThenPresent_ReadinessRecovers()
+    {
+        var checks = 0;
+        IReadOnlyList<string> expected = ["entityId_version_u"];
+        var collection = Substitute.For<IDomainModelCollection>();
+        collection.CollectionName.Returns("registrationVersions");
+        collection.GetExpectedIndexNames().Returns(expected);
+        collection
+            .GetIndexNamesAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(++checks < 2 ? [] : expected));
+        var status = new DomainModelSchemaStatus();
+        var services = LegacyPersistences()
+            .AddSingleton<IDomainModelSchemaStatus>(status)
+            .AddSingleton(collection)
+            .BuildServiceProvider();
+        var initializer = new MongoIndexInitializerService(
+            services,
+            new CapturingLogger<MongoIndexInitializerService>()
+        )
+        {
+            FirstRetryDelay = TimeSpan.FromMilliseconds(1),
+        };
+
+        (await initializer.InitializeAsync(Ct)).Should().BeFalse();
+        status.Result.Description.Should().Contain("entityId_version_u");
+
+        await initializer.RetrySchemaAsync(Ct);
+
+        status.Result.Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public async Task RetrySchemaAsync_HostStopping_EndsWithoutThrowing()
+    {
+        var services = LegacyPersistences()
+            .AddSingleton<IDomainModelSchemaStatus>(new DomainModelSchemaStatus())
+            .AddSingleton<IDomainModelCollection>(_ => throw new TimeoutException())
+            .BuildServiceProvider();
+        var initializer = new MongoIndexInitializerService(
+            services,
+            new CapturingLogger<MongoIndexInitializerService>()
+        );
+        using var stopping = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        var retry = () => initializer.RetrySchemaAsync(stopping.Token);
+
+        await retry.Should().NotThrowAsync();
+    }
+
     private static IServiceCollection LegacyPersistences() =>
         new ServiceCollection()
             .AddSingleton(Substitute.For<IAccreditationApplicationPersistence>())

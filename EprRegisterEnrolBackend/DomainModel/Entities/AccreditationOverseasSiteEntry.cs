@@ -1,4 +1,4 @@
-using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Entities.Sections;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
@@ -13,5 +13,5 @@ public class AccreditationOverseasSiteEntry
     [BsonRepresentation(BsonType.String)]
     public AccreditedSiteStatus Status { get; set; } = AccreditedSiteStatus.Approved;
 
-    public List<BesEvidenceFileModel> BesEvidence { get; set; } = [];
+    public List<BesEvidenceFile> BesEvidence { get; set; } = [];
 }

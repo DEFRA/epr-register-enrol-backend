@@ -10,7 +10,7 @@ public class PrnsSection
     [BsonSerializer(typeof(TonnageBandSerializer))]
     public TonnageBand? PlannedTonnageBand { get; set; }
 
-    public List<PrnsAuthoriser> Authorisers { get; set; } = [];
+    public List<Authoriser> Authorisers { get; set; } = [];
 
     [BsonRepresentation(BsonType.String)]
     public SectionStatus SectionStatus { get; set; } = SectionStatus.NotStarted;

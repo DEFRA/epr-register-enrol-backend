@@ -7,15 +7,18 @@
 - **Phase 1 is behind a flag.** `DomainModel:ExpandEnabled` (off by default) builds the empty collections and
   adds the `domain-model-schema` readiness check. The B0/B1 diagnostics flag moved under the same section,
   as `DomainModel:DiagnosticsEnabled` (§6).
-- **The readiness check reads a stored result.** The schema is checked once at startup, after the collections
-  are built; a probe never calls Mongo.
+- **The readiness check reads a stored result.** The schema is checked at startup, after the collections
+  are built; a probe never calls Mongo. If Mongo is briefly unreachable then, the service retries in the
+  background with backoff (5 seconds, doubling to at most 5 minutes) until the check passes, so readiness
+  recovers without a restart.
 - **B1 has a production script:** `tools/domain-model/legacy-data-survey.js`, run with `mongosh` (§6, phase 0).
 - **B5's legacy fields are named `registrationEntityId`, `accreditationEntityId` and
   `overseasSites.sites[].overseasSiteEntityId`**, because `registrationId` already holds ReEx's id. No
   `reservedAccreditationNumber` was added: `accreditationReference` already holds it until approval (M2).
-- **Nested enums are strings too.** The Application's sections have their own types in the domain model,
-  so enums inside them are no longer stored as the legacy int32s (§3.1).
-- **No-op suppression ignores `source.importedAt`** and compares times as stored (§4.2).
+- **Nested enums are strings too.** Every class the new collections store, however deeply nested, is the
+  domain model's own, not a legacy model class, so changing a legacy class cannot change what they store.
+  A test guards this. Legacy enums are still shared, because they are stored by name (§3.1).
+- **No-op suppression ignores `source.importedAt`**, wherever it is nested, and compares times as stored (§4.2).
 - **Small additions, kept on purpose:** `Accreditation.approvedAt` (the business approval date, which can be
   earlier than the first version's `validFrom`); `Application.reExOrganisationId` and `reExRegistrationId`
   (what the migration uses to find or create the Organisation and Registration before `registrationId` is
@@ -356,7 +359,8 @@ From read-only sweeps of the sibling repos. Each item affects facade fidelity or
   so seeding is idempotent and the existing route segments still resolve.
 - **Enums are stored as strings** in all new collections. This drops the int32 transform PR #210 had to document.
   It includes enums nested in the Application's sections, so the domain model has its own section types
-  rather than reusing the legacy ones. `tonnageBand` is stored as ReEx's value, such as `up_to_5000` (D2).
+  rather than reusing the legacy ones. `tonnageBand` is stored as ReEx's value, such as `up_to_5000` (D2),
+  and serialised to JSON as the same value.
 - **An Application is a proposal.** It references the registration and records the operator's proposed
   selection and changes. It never owns registration-level truth.
 - **Accreditation reaches Organisation only through Registration** (fixed decision 3). It has no
@@ -730,7 +734,8 @@ UpdateAsync(entity, expectedVersion, change):
 - **No-op suppression:** an update whose versioned fields are unchanged (for example a ReEx refresh that
   finds no difference) does not create a version. The comparison is of the stored form, so times compare at
   the millisecond precision Mongo keeps. It ignores the version fields and anything marked as describing the
-  import rather than the entity, which today is `source.importedAt`.
+  import rather than the entity, which today is `source.importedAt`, wherever it is nested, including in
+  list items.
 - Writes spanning entities run in **one transaction**, for example approval, which touches the Application,
   a new Accreditation and several ORSs. A session is passed through all of them.
 
@@ -850,7 +855,7 @@ Legend:
 | `orgId` | Organisation.`organisationNumber` | derived | Remove the GetById lazy backfill (`:853-865`) after the switch |
 | `organisationName` | Organisation.`name` | derived | |
 | `year` | Application.`year`; Accreditation.`year` at approval | stored | |
-| `registrationId` | Registration.`reExRegistrationId` | derived | Application gains FK `registrationKey` (the Registration `_id`). The legacy field is kept until the contract phase |
+| `registrationId` | Registration.`reExRegistrationId` | derived | Application gains FK `registrationEntityId` (the Registration `entityId`). The legacy field is kept until the contract phase |
 | `isExporter` | Registration.`wasteProcessingType == exporter` | derived | |
 | `nation` | Registration.`nation` | derived | Remove the GetById lazy backfill (`:874-886`) |
 | `siteAddress` (formatted string) | Registration.`site.address` (structured) | derived (formatted) | ✚ Only the formatted string is stored today. Re-fetch the structure from ReEx during backfill |
@@ -1062,7 +1067,7 @@ Dual-write exists for exactly that: rollback without losing data (v5, D9).
 | --- | --- | --- | --- | --- | --- |
 | 0 | **Prepare** | (a) a read-only data survey per environment (§7 R1), packaged as a script that someone with production access can run and return aggregate, PII-free counts ([Q34](#q34)) (built: `tools/domain-model/legacy-data-survey.js`, for `mongosh`; test environments also run it at startup); (b) compose single-node replica set; (c) `VersionedMongoRepository<T>` and tests | Legacy, unchanged | Survey report reviewed; transaction tests green on EphemeralMongo | No runtime effect |
 | 1 | **Expand** | New `*Versions` collections and their (partial) indexes via `DefineIndexes` / `MongoIndexReconciler`; domain models and repositories; no callers | Legacy | Indexes present in each environment; `/health/ready` green | Turn `DomainModel:ExpandEnabled` off and redeploy, which also removes the readiness check. Leave or drop the empty collections |
-| 2 | **Seed dual-write** (`DualWriteSeed`) | Seed also upserts Organisation, Registration and ORS from the same ReEx response, and stamps `registrationKey` on the new application with targeted `$set`. It creates no Accreditation: none exists before an approval here (A11 refuted) | Legacy | Failure is **fatal** (v5, D9): the seed request fails, so a defect in the model write shows up in testing instead of being hidden. Counter and log as well | Flag off. Stamped fields are ignored by legacy code (`IgnoreExtraElements`) |
+| 2 | **Seed dual-write** (`DualWriteSeed`) | Seed also upserts Organisation, Registration and ORS from the same ReEx response, and stamps `registrationEntityId` on the new application with targeted `$set`. It creates no Accreditation: none exists before an approval here (A11 refuted) | Legacy | Failure is **fatal** (v5, D9): the seed request fails, so a defect in the model write shows up in testing instead of being hidden. Counter and log as well | Flag off. Stamped fields are ignored by legacy code (`IgnoreExtraElements`) |
 | 3 | **Full dual-write** (`DualWrite`) | Every write path also writes the entities, **in one transaction** with the legacy write: ORS add, update, promote and revert; interim add, update, withdraw and restore (each a new ORS version, v4); recycling-operations; registration-number; accreditation-number; approved, rejected and withdrawn transitions (§6.2). A failed model write **fails the whole request** and rolls back the legacy write (v5, D9). This phase comes **before** the migration, so no legacy write can slip between the two. A write to an application the migration has not reached yet first **ensures it is migrated** in the same transaction (§6.2) | Legacy | Per-path unit tests for every dual-write; integration tests on a replica set, including concurrent operator PATCH against a CM push (RA-519); fe-tests e2e green in each test environment | Flag off. The model is then stale until the migration (phase 4) is re-run, and legacy is untouched |
 | 4 | **Migrate and reconcile** | **The migration of our 2027 data:** `DomainModelMigrationService` reshapes the applications we hold into Registration, ORS, interim-site and Application versions, with no ReEx calls (§6.1). It is an in-app `BackgroundService` (the `RegulatoryNumberSequenceBackfillService` pattern), idempotent, leased and checkpointed; failures are short Error-level log lines with no personal data. Then the **reconciliation job** (B10) projects every application from the entities **through the same `ApplicationReadModel` facade that phase 5 serves**, and diffs it against the legacy document. It runs in every environment we can reach, and can optionally be run by someone with production access, returning a PII-free report ([Q34](#q34)) | Legacy | Readiness green; reconciliation report: every application linked, counts per status, conflict list in `migrationConflicts`; **zero diffs for 2 days per environment** | Entities are derived data: truncate and re-run. Stamped FKs are harmless |
 | 5 | **Go live: switch reads and the v2 API** (`ReadFromModel`, per route group; `AccreditationApiEnabled`) | The facade (`ApplicationReadModel`) serves GET list and GET by id, then the PATCH and status responses. The four v2 read endpoints (B13) go live in the same step, reading **only** `registrationVersions`, `overseasSiteVersions` and `accreditationVersions` (v4, D3). There is **no separate shadow-read phase** (v5, D9): the reconciliation job in phase 4 is the real-data check, and the golden-JSON, per-path unit and fe-tests suites are the code check. Dual-write stays on, so legacy stays current | Facade (existing endpoints); new model (v2 API) | Phase 4 reconciliation at zero diffs; **golden-JSON contract tests** from captured responses in each status, exporter and reprocessor; fe-tests e2e green against the environment; v2 contract tests on migrated data | Flag off per route group: reads return to legacy, which is still current. v2 flag off: routes return 404, and ReEx keeps using its own accreditation status (R13) |
@@ -1133,8 +1138,8 @@ applications, and is throttled.
    before approvals in this service do (D4). If the survey finds any approved application, create its
    Accreditation (`accreditationNumber = accreditationReference`, which may be null and is then flagged)
    and keep the approval time as the `approvedAt` attribute. They are not back-dated.
-6. **Stamp the application** with a targeted `$set` of FKs only (`registrationKey`,
-   `applicationOverseasSites[].overseasSiteId`, `accreditationId`). It is guarded on `version` and retried on
+6. **Stamp the application** with a targeted `$set` of FKs only (`registrationEntityId`,
+   `overseasSites.sites[].overseasSiteEntityId`, `accreditationEntityId`). It is guarded on `version` and retried on
    conflict. It does **not** bump `version`, so a concurrent operator PATCH is never rejected because of
    the migration.
    - **Tonnage band and codes for the above:** Accreditation.`tonnageBand` from `prns.plannedTonnageBand`,

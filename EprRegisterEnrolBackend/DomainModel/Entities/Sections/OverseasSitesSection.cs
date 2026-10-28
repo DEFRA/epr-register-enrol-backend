@@ -14,6 +14,6 @@ public class OverseasSitesSection
     [BsonRepresentation(BsonType.String)]
     public SectionStatus SectionStatus { get; set; } = SectionStatus.NotStarted;
 
-    /// <summary>What was submitted, snapshotted on each submit and resubmit, in the legacy site shape.</summary>
-    public List<OverseasSitesSnapshot> Versions { get; set; } = [];
+    /// <summary>What was submitted, snapshotted on each submit and resubmit.</summary>
+    public List<OverseasSitesSectionSnapshot> Versions { get; set; } = [];
 }

@@ -3,9 +3,9 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 namespace EprRegisterEnrolBackend.DomainModel.Persistence;
 
 /// <summary>
-/// Checks that every domain model collection has all of its indexes (phase 1, "Expand"). Run once, at startup,
-/// after the collections are built, because MongoIndexInitializerService logs and carries on if index creation
-/// fails. The description names collections and indexes only: no data, no PII.
+/// Checks that every domain model collection has all of its indexes (phase 1, "Expand"). Run by
+/// MongoIndexInitializerService at startup, after the collections are built, and again with backoff until it
+/// passes. The description names collections and indexes only: no data, no PII.
 /// </summary>
 public static class DomainModelSchemaCheck
 {
