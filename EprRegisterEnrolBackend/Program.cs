@@ -280,15 +280,19 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
 
     if (builder.Environment.IsDevelopment())
-    {
-        builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
-        builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
+        ConfigureDevelopmentServices(builder);
+}
 
-        // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
-        // test hosts run as Development too; the local compose stack sets it.
-        if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
-            builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
-    }
+[ExcludeFromCodeCoverage]
+static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
+{
+    builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
+    builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
+
+    // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
+    // test hosts run as Development too; the local compose stack sets it.
+    if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
+        builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
 }
 
 [ExcludeFromCodeCoverage]

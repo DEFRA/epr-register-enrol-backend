@@ -384,8 +384,8 @@ public static class AccreditationApplicationEndpoints
     //
     // Deliberately takes no request body. The nation, OrgId, year and regenerate an older
     // management-be still sends are ignored: the application's stored Year is authoritative, and
-    // an issued reference is never regenerated. So the backend and management-be can be deployed
-    // in either order.
+    // an issued reference is never regenerated. So this backend accepts an older management-be,
+    // but an older backend rejects the new body-less request (400): deploy this backend first.
     private static async Task<IResult> GenerateOrUpdateAccreditationNumber(
         string organisationId,
         string applicationId,
@@ -407,7 +407,8 @@ public static class AccreditationApplicationEndpoints
             );
 
         // Idempotent retry: an issued reference may already be quoted externally, so it is
-        // returned unchanged and never re-derived.
+        // returned unchanged and never re-derived. This holds while the application is open
+        // (between approval steps 1 and 2); once Approved, RejectIfTerminal above returns 409.
         if (application.AccreditationReference is not null)
             return Results.Ok(application);
 

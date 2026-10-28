@@ -20,8 +20,54 @@ public class DevAccreditationHistorySeedServiceTests
     ) => new(persistence, NullLogger<DevAccreditationHistorySeedService>.Instance);
 
     private static async Task<List<AccreditationApplicationModel>> DeltaGreenApplications(
-        IAccreditationApplicationPersistence persistence
+        FakeAccreditationApplicationPersistence persistence
     ) => (await persistence.GetByOrganisationAsync(DeltaGreen)).ToList();
+
+    [Fact]
+    public async Task StartAsync_SeedsInTheBackground()
+    {
+        var persistence = new FakeAccreditationApplicationPersistence();
+        var sut = CreateSut(persistence);
+
+        await sut.StartAsync(CancellationToken.None);
+        await sut.ExecuteTask!;
+        await sut.StopAsync(CancellationToken.None);
+
+        (await DeltaGreenApplications(persistence)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SeedAsync_CreateReturnsNull_DoesNotThrow()
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        persistence
+            .GetByIdAsync(Arg.Any<string>(), Arg.Any<string>())
+            .Returns((AccreditationApplicationModel?)null);
+        persistence
+            .CreateAsync(Arg.Any<AccreditationApplicationModel>())
+            .Returns((AccreditationApplicationModel?)null);
+
+        var act = () => CreateSut(persistence).SeedAsync(CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+        await persistence.Received(1).CreateAsync(Arg.Any<AccreditationApplicationModel>());
+    }
+
+    [Fact]
+    public async Task SeedAsync_Cancelled_DoesNotSeedOrThrow()
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        persistence
+            .GetByIdAsync(Arg.Any<string>(), Arg.Any<string>())
+            .Returns(new TaskCompletionSource<AccreditationApplicationModel?>().Task);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var act = () => CreateSut(persistence).SeedAsync(cts.Token);
+
+        await act.Should().NotThrowAsync();
+        await persistence.DidNotReceive().CreateAsync(Arg.Any<AccreditationApplicationModel>());
+    }
 
     [Fact]
     public async Task SeedAsync_AddsAnApprovedDeltaGreen2026PlasticAccreditation()
