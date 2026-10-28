@@ -141,15 +141,18 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(match is null ? null : ShallowCopy(match));
     }
 
-    // RA-690: mirrors AccreditationApplicationPersistence.IsAccreditationReferenceHeldByAnotherApplicationAsync.
-    public Task<bool> IsAccreditationReferenceHeldByAnotherApplicationAsync(
+    // RA-690: mirrors AccreditationApplicationPersistence.GetOtherAccreditationReferenceHoldersAsync.
+    public Task<IReadOnlyList<AccreditationReferenceHolder>> GetOtherAccreditationReferenceHoldersAsync(
         string accreditationReference,
         ObjectId applicationId
     ) =>
-        Task.FromResult(
-            _store.Exists(a =>
-                a.AccreditationReference == accreditationReference && a.Id != applicationId
-            )
+        Task.FromResult<IReadOnlyList<AccreditationReferenceHolder>>(
+            _store
+                .Where(a =>
+                    a.AccreditationReference == accreditationReference && a.Id != applicationId
+                )
+                .Select(a => new AccreditationReferenceHolder(a.Id!.Value, a.ApplicationStatus))
+                .ToList()
         );
 
     public Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(

@@ -135,7 +135,7 @@ public class AccreditationApplicationPersistence(
     // read, so the scan is acceptable for now. The unique index on AccreditationReference that
     // follows RA-691 (once the counter-era references are migrated) will back it and replace
     // this check.
-    public async Task<bool> IsAccreditationReferenceHeldByAnotherApplicationAsync(
+    public async Task<IReadOnlyList<AccreditationReferenceHolder>> GetOtherAccreditationReferenceHoldersAsync(
         string accreditationReference,
         ObjectId applicationId
     )
@@ -146,7 +146,10 @@ public class AccreditationApplicationPersistence(
             filters.Ne(a => a.Id, applicationId)
         );
 
-        return await Collection.Find(filter).AnyAsync();
+        return await Collection
+            .Find(filter)
+            .Project(a => new AccreditationReferenceHolder(a.Id!.Value, a.ApplicationStatus))
+            .ToListAsync();
     }
 
     public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId) =>

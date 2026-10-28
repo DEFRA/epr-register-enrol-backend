@@ -252,14 +252,60 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
     [InlineData(ApplicationStatus.AwaitingDecision)]
     [InlineData(ApplicationStatus.Approved)]
     [InlineData(ApplicationStatus.Rejected)]
-    [InlineData(ApplicationStatus.Withdrawn)]
-    public async Task The_derived_reference_held_by_another_application_in_any_status_returns_409(
+    public async Task The_derived_reference_held_by_another_application_in_any_status_but_withdrawn_returns_409(
         ApplicationStatus holderStatus
     )
     {
         Reset();
         SeedApplication(
             status: holderStatus,
+            configure: a => a.AccreditationReference = "A26ER0001230042PL"
+        );
+        var app = SeedApplication();
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
+    }
+
+    // RA-690: an operator who withdrew and started again derives the same reference. The withdrawn
+    // record may already hold it (a withdraw racing step 1, a failed step 1 write, or the stub
+    // adapter), and must not block the restart. The withdrawn record keeps its value for audit.
+    [Fact]
+    public async Task The_derived_reference_held_only_by_a_withdrawn_application_is_issued_and_the_withdrawn_record_keeps_it()
+    {
+        Reset();
+        var withdrawn = SeedApplication(
+            status: ApplicationStatus.Withdrawn,
+            configure: a => a.AccreditationReference = "A26ER0001230042PL"
+        );
+        var restart = SeedApplication();
+
+        var response = await PostWithoutBody(restart);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230042PL");
+        (await StoredApplication(restart)).AccreditationReference.Should().Be("A26ER0001230042PL");
+        var withdrawnRecord = await StoredApplication(withdrawn);
+        withdrawnRecord.AccreditationReference.Should().Be("A26ER0001230042PL");
+        withdrawnRecord.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.Approved)]
+    public async Task A_live_or_approved_holder_alongside_a_withdrawn_one_still_returns_409(
+        ApplicationStatus liveStatus
+    )
+    {
+        Reset();
+        SeedApplication(
+            status: ApplicationStatus.Withdrawn,
+            configure: a => a.AccreditationReference = "A26ER0001230042PL"
+        );
+        SeedApplication(
+            status: liveStatus,
             configure: a => a.AccreditationReference = "A26ER0001230042PL"
         );
         var app = SeedApplication();
@@ -383,15 +429,7 @@ public class AccreditationNumberEndpointLoggingTests
     {
         _factory.FakePersistence.Clear();
         _factory.LogCapture.Clear();
-        var app = new AccreditationApplicationModel
-        {
-            Id = ObjectId.GenerateNewId(),
-            OrganisationId = "org-123",
-            Year = 2026,
-            MaterialType = MaterialType.Plastic,
-            ApplicationStatus = ApplicationStatus.Submitted,
-            RegistrationReference = "R25ER0001230042PL",
-        };
+        var app = BuildApplication(ApplicationStatus.Submitted);
         _factory.FakePersistence.Seed(app);
 
         var response = await _client.PostAsync(
@@ -415,5 +453,52 @@ public class AccreditationNumberEndpointLoggingTests
         entry.Message.Should().Contain($"applicationId={app.Id}");
         entry.Message.Should().Contain("sourceKind=Registration");
         entry.Message.Should().Contain("sourceReference=R25ER0001230042PL");
+        entry.Message.Should().NotContain("withdrawnHolderIds");
     }
+
+    // RA-690: support can see why two records share a reference from the issue log line.
+    [Fact]
+    public async Task Names_the_withdrawn_applications_that_already_hold_the_issued_reference()
+    {
+        _factory.FakePersistence.Clear();
+        _factory.LogCapture.Clear();
+        var withdrawn = BuildApplication(ApplicationStatus.Withdrawn);
+        withdrawn.AccreditationReference = "A26ER0001230042PL";
+        var app = BuildApplication(ApplicationStatus.Submitted);
+        _factory.FakePersistence.Seed(withdrawn);
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var entry = _factory
+            .LogCapture.Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Information
+                && e.Message.StartsWith(
+                    "GenerateOrUpdateAccreditationNumber: issued",
+                    StringComparison.Ordinal
+                )
+            )
+            .Subject;
+        entry.Message.Should().Contain("accreditationReference=A26ER0001230042PL");
+        entry.Message.Should().Contain($"applicationId={app.Id}");
+        entry.Message.Should().Contain("sourceKind=Registration");
+        entry.Message.Should().Contain($"withdrawnHolderIds={withdrawn.Id}");
+    }
+
+    private static AccreditationApplicationModel BuildApplication(ApplicationStatus status) =>
+        new()
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = "org-123",
+            Year = 2026,
+            MaterialType = MaterialType.Plastic,
+            ApplicationStatus = status,
+            RegistrationReference = "R25ER0001230042PL",
+        };
 }

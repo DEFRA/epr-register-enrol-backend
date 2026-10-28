@@ -12,6 +12,7 @@ using EprRegisterEnrolBackend.Utils.Logging;
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
@@ -444,12 +445,13 @@ public static class AccreditationApplicationEndpoints
         // Duplicate live applications for the same registration, material and year are possible
         // (Seed is best-effort, with no unique index) and would derive the same reference. A
         // reference is never issued twice. Read-then-write: a unique index is a follow-up to RA-691.
-        if (
-            await persistence.IsAccreditationReferenceHeldByAnotherApplicationAsync(
-                derivation.Reference!,
-                application.Id!.Value
-            )
-        )
+        // A withdrawn holder doesn't block: an operator who withdrew and started again derives
+        // the same reference, and the withdrawn record keeps its value for audit.
+        var holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
+            derivation.Reference!,
+            application.Id!.Value
+        );
+        if (holders.Any(h => h.BlocksIssuing))
             return Results.Conflict(
                 $"Accreditation reference {derivation.Reference} is already held by another application; it cannot be issued again."
             );
@@ -466,45 +468,72 @@ public static class AccreditationApplicationEndpoints
             updated,
             sourceKind,
             sourceReference,
-            previous?.ApplicationId
+            previous?.ApplicationId,
+            holders.Where(h => !h.BlocksIssuing).Select(h => h.Id).ToList()
         );
         return Results.Ok(updated);
     }
 
     // RA-690: the source of each issued reference is logged, not stored, so support can explain
     // any reference without a schema change. A previous-accreditation source also names the
-    // application it came from.
+    // application it came from, and any withdrawn applications already holding the reference are
+    // named so support can see why two records share it.
+    private const string IssuedTemplate =
+        "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference}";
+    private const string SourceApplicationTemplate = " sourceApplicationId={SourceApplicationId}";
+    private const string WithdrawnHoldersTemplate = " withdrawnHolderIds={WithdrawnHolderIds}";
+
     private static void LogAccreditationReferenceIssued(
         ILogger logger,
         AccreditationApplicationModel application,
         AccreditationReferenceSourceKind sourceKind,
         string sourceReference,
-        string? sourceApplicationId
+        string? sourceApplicationId,
+        IReadOnlyList<ObjectId> withdrawnHolderIds
     )
     {
         if (!logger.IsEnabled(LogLevel.Information))
             return;
 
-        if (sourceApplicationId is null)
+        var (reference, id) = (application.AccreditationReference, application.Id);
+        var withdrawnIds = string.Join(",", withdrawnHolderIds);
+        switch (sourceApplicationId, withdrawnHolderIds.Count)
         {
-            logger.LogInformation(
-                "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference}",
-                application.AccreditationReference,
-                application.Id,
-                sourceKind,
-                sourceReference
-            );
-            return;
+            case (null, 0):
+                logger.LogInformation(IssuedTemplate, reference, id, sourceKind, sourceReference);
+                break;
+            case (null, _):
+                logger.LogInformation(
+                    IssuedTemplate + WithdrawnHoldersTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    withdrawnIds
+                );
+                break;
+            case (_, 0):
+                logger.LogInformation(
+                    IssuedTemplate + SourceApplicationTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    sourceApplicationId
+                );
+                break;
+            default:
+                logger.LogInformation(
+                    IssuedTemplate + SourceApplicationTemplate + WithdrawnHoldersTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    sourceApplicationId,
+                    withdrawnIds
+                );
+                break;
         }
-
-        logger.LogInformation(
-            "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference} sourceApplicationId={SourceApplicationId}",
-            application.AccreditationReference,
-            application.Id,
-            sourceKind,
-            sourceReference,
-            sourceApplicationId
-        );
     }
 
     // Bundles GenerateOrUpdateRegistrationNumber's DI-service/framework parameters under one

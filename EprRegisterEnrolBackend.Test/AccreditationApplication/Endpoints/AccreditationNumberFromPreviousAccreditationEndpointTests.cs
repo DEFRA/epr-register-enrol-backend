@@ -362,5 +362,61 @@ public class AccreditationNumberFromPreviousAccreditationLoggingTests
         entry.Message.Should().Contain("sourceKind=PreviousAccreditation");
         entry.Message.Should().Contain("sourceReference=A26ER0001230042PL");
         entry.Message.Should().Contain($"sourceApplicationId={previous.Id}");
+        entry.Message.Should().NotContain("withdrawnHolderIds");
+    }
+
+    // RA-690: a renewal that was withdrawn and restarted derives the same reference again. The
+    // log line names both the previous accreditation and the withdrawn holder.
+    [Fact]
+    public async Task A_restarted_renewal_logs_the_source_application_and_the_withdrawn_holder()
+    {
+        _factory.FakePersistence.Clear();
+        _factory.LogCapture.Clear();
+        var previous = SeedRenewal(2026, ApplicationStatus.Approved, "A26ER0001230042PL");
+        var withdrawn = SeedRenewal(2027, ApplicationStatus.Withdrawn, "A27ER0001230042PL");
+        var app = SeedRenewal(2027, ApplicationStatus.Submitted, accreditationReference: null);
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var entry = _factory
+            .LogCapture.Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Information
+                && e.Message.StartsWith(
+                    "GenerateOrUpdateAccreditationNumber: issued",
+                    StringComparison.Ordinal
+                )
+            )
+            .Subject;
+        entry.Message.Should().Contain("accreditationReference=A27ER0001230042PL");
+        entry.Message.Should().Contain("sourceKind=PreviousAccreditation");
+        entry.Message.Should().Contain($"sourceApplicationId={previous.Id}");
+        entry.Message.Should().Contain($"withdrawnHolderIds={withdrawn.Id}");
+    }
+
+    private AccreditationApplicationModel SeedRenewal(
+        int year,
+        ApplicationStatus status,
+        string? accreditationReference
+    )
+    {
+        var app = new AccreditationApplicationModel
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = "org-123",
+            RegistrationId = "reg-1",
+            Year = year,
+            MaterialType = MaterialType.Plastic,
+            ApplicationStatus = status,
+            RegistrationReference = "R25ER0001230042PL",
+            AccreditationReference = accreditationReference,
+        };
+        _factory.FakePersistence.Seed(app);
+        return app;
     }
 }

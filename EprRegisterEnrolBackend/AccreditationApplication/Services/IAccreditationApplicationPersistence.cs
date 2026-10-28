@@ -51,12 +51,13 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
-    /// RA-690: whether any application other than <paramref name="applicationId"/> holds
-    /// <paramref name="accreditationReference"/>, in any organisation and any status. Guards an
-    /// approval against issuing a reference already held elsewhere. This is a read-then-write
-    /// check, not a unique index.
+    /// RA-690: every application other than <paramref name="applicationId"/> that holds
+    /// <paramref name="accreditationReference"/>, in any organisation and any status, Withdrawn
+    /// included. Guards an approval against issuing a reference already held elsewhere (see
+    /// <see cref="AccreditationReferenceHolder.BlocksIssuing"/>). This is a read-then-write check,
+    /// not a unique index.
     /// </summary>
-    Task<bool> IsAccreditationReferenceHeldByAnotherApplicationAsync(
+    Task<IReadOnlyList<AccreditationReferenceHolder>> GetOtherAccreditationReferenceHoldersAsync(
         string accreditationReference,
         ObjectId applicationId
     );

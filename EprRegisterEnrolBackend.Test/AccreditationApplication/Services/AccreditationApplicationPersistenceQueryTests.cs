@@ -503,49 +503,85 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
         return application;
     }
 
+    private Task<IReadOnlyList<AccreditationReferenceHolder>> OtherHolders(
+        AccreditationApplicationModel applicant,
+        string accreditationReference = "A26ER0001230042ST"
+    ) =>
+        _sut.GetOtherAccreditationReferenceHoldersAsync(
+            accreditationReference,
+            applicant.Id!.Value
+        );
+
+    // RA-690: a withdrawn holder keeps its reference for audit, so it is still returned (and
+    // logged), but it never blocks a restart from being issued the same reference.
     [Fact]
-    public async Task IsAccreditationReferenceHeldByAnotherApplicationAsync_AnotherApplicationHoldsIt_ReturnsTrue()
+    public async Task GetOtherAccreditationReferenceHoldersAsync_WithdrawnHolder_IsReturnedButDoesNotBlock()
     {
-        await CreateWithReference(
+        var withdrawn = await CreateWithReference(
             "A26ER0001230042ST",
             organisationId: "org-other",
             status: ApplicationStatus.Withdrawn
         );
         var applicant = await CreateWithReference(null);
 
-        var held = await _sut.IsAccreditationReferenceHeldByAnotherApplicationAsync(
-            "A26ER0001230042ST",
-            applicant.Id!.Value
-        );
+        var holders = await OtherHolders(applicant);
 
-        held.Should().BeTrue();
+        var holder = holders.Should().ContainSingle().Subject;
+        holder.Id.Should().Be(withdrawn.Id!.Value);
+        holder.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        holder.BlocksIssuing.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.AwaitingDecision)]
+    public async Task GetOtherAccreditationReferenceHoldersAsync_ApprovedOrOpenHolder_Blocks(
+        ApplicationStatus holderStatus
+    )
+    {
+        var live = await CreateWithReference("A26ER0001230042ST", status: holderStatus);
+        var applicant = await CreateWithReference(null);
+
+        var holders = await OtherHolders(applicant);
+
+        var holder = holders.Should().ContainSingle().Subject;
+        holder.Id.Should().Be(live.Id!.Value);
+        holder.ApplicationStatus.Should().Be(holderStatus);
+        holder.BlocksIssuing.Should().BeTrue();
     }
 
     [Fact]
-    public async Task IsAccreditationReferenceHeldByAnotherApplicationAsync_OnlyTheApplicationItselfHoldsIt_ReturnsFalse()
+    public async Task GetOtherAccreditationReferenceHoldersAsync_OnlyTheApplicationItselfHoldsIt_ReturnsNone()
     {
         var holder = await CreateWithReference("A26ER0001230042ST");
 
-        var held = await _sut.IsAccreditationReferenceHeldByAnotherApplicationAsync(
-            "A26ER0001230042ST",
-            holder.Id!.Value
-        );
-
-        held.Should().BeFalse();
+        (await OtherHolders(holder)).Should().BeEmpty();
     }
 
     [Fact]
-    public async Task IsAccreditationReferenceHeldByAnotherApplicationAsync_OthersHoldDifferentReferences_ReturnsFalse()
+    public async Task GetOtherAccreditationReferenceHoldersAsync_TheApplicationAndAWithdrawnOneHoldIt_ReturnsOnlyTheOther()
+    {
+        var withdrawn = await CreateWithReference(
+            "A26ER0001230042ST",
+            status: ApplicationStatus.Withdrawn
+        );
+        var holder = await CreateWithReference("A26ER0001230042ST");
+
+        (await OtherHolders(holder))
+            .Should()
+            .ContainSingle()
+            .Which.Id.Should()
+            .Be(withdrawn.Id!.Value);
+    }
+
+    [Fact]
+    public async Task GetOtherAccreditationReferenceHoldersAsync_OthersHoldDifferentReferences_ReturnsNone()
     {
         await CreateWithReference("A26ER0001230043ST");
         await CreateWithReference(null);
         var applicant = await CreateWithReference(null);
 
-        var held = await _sut.IsAccreditationReferenceHeldByAnotherApplicationAsync(
-            "A26ER0001230042ST",
-            applicant.Id!.Value
-        );
-
-        held.Should().BeFalse();
+        (await OtherHolders(applicant)).Should().BeEmpty();
     }
 }
