@@ -39,6 +39,18 @@ See above.
 docker compose up -d mongodb
 ```
 
+The compose `mongodb` service runs as a **single-node replica set** (`rs0`), because the versioned domain
+model writes with multi-document transactions, which MongoDB only supports on a replica set. A healthcheck
+initiates the set on first start. From the host, connect with `directConnection=true`, because the set
+advertises its member as `mongodb:27017`, which only resolves inside the compose network:
+
+```
+mongosh "mongodb://127.0.0.1:27017/?directConnection=true"
+```
+
+Set `Mongo__DatabaseUri` to `mongodb://127.0.0.1:27017/?directConnection=true` when running the service
+outside compose. An existing `mongodb-data` volume keeps its data; the healthcheck initiates the set on top of it.
+
 #### MongoDB locally
 
 Alternatively install MongoDB locally:
@@ -54,6 +66,28 @@ sudo mongod --dbpath ~/mongodb-cdp
 
 In CDP environments a MongoDB instance is already set up
 and the credentials exposed as enviromment variables.
+
+#### Domain model flags
+
+The domain model (`docs/analysis/register-enrol-domain-model-design.md`) ships in phases, each behind a
+`DomainModel:*` flag that is off by default:
+
+- `DomainModel__ExpandEnabled=true` (phase 1) builds the empty versioned collections and their indexes at
+  startup and adds the `domain-model-schema` check to `/health/ready`. If Mongo is unreachable at startup,
+  it retries in the background until the check passes, so readiness recovers on its own. `compose.yml`
+  turns it on locally. Turning it off again is the rollback.
+- `DomainModel__DiagnosticsEnabled=true` (test environments only) runs the diagnostics below.
+
+#### Domain model diagnostics (test environments only)
+
+Set `DomainModel__DiagnosticsEnabled=true` to make the service run, once at startup, a **transaction smoke test**
+(does this Mongo support multi-document transactions?) and a **read-only survey** of `accreditationApplications`
+for the legacy shapes the domain model migration must handle. Each logs one line, `DomainModelDiagnostics
+transactions ...` and `DomainModelDiagnostics survey ...`, with counts only and no personal data. It is off by
+default and is not meant for production, where this team cannot examine the data. For production, the same
+survey is packaged as `tools/domain-model/legacy-data-survey.js`, which someone with production access runs with
+`mongosh "<connection string>" --quiet --file tools/domain-model/legacy-data-survey.js`; it prints counts only. See
+`docs/analysis/register-enrol-domain-model-design.md` (B0, B1).
 
 ### Inspect MongoDB
 
@@ -77,7 +111,7 @@ for why.
 
 | Variable | Secret? | Local default | Description |
 | --- | --- | --- | --- |
-| `Mongo__DatabaseUri` | No | `mongodb://127.0.0.1:27017` | MongoDB connection string (AWS IAM auth in deployed environments) |
+| `Mongo__DatabaseUri` | No | `mongodb://127.0.0.1:27017/?directConnection=true` | MongoDB connection string (AWS IAM auth in deployed environments) |
 | `Mongo__DatabaseName` | No | `epr` | MongoDB database name |
 | `App__BaseUrl` | No | `http://localhost:5000` | This service's own public base URL, used for CDP callback/status URLs |
 | `CdpUploader__Url` | No | `http://localhost:7337` | Base URL of the CDP Uploader service |

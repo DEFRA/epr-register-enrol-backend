@@ -401,11 +401,20 @@ public class AccreditationApiTestDataSeedingServiceTests
     public async Task WhenTheHostStopsMidSeed_TheServiceEndsWithoutThrowing()
     {
         var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        // Signal once the seed is genuinely in flight and then never complete it. Stopping before this point
+        // is a different case: the host cancels before seeding starts, and a BackgroundService stopped that
+        // early ends Canceled rather than RanToCompletion, which made this test pass or fail on timing alone.
+        var seeding = new TaskCompletionSource();
         persistence
             .UpsertAsync(Arg.Any<AccreditationApplicationModel>())
-            .Returns(new TaskCompletionSource().Task);
+            .Returns(_ =>
+            {
+                seeding.TrySetResult();
+                return new TaskCompletionSource().Task;
+            });
         using var service = Service(persistence, seedOnStartup: true);
         await service.StartAsync(TestContext.Current.CancellationToken);
+        await seeding.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var ex = await Record.ExceptionAsync(() => service.StopAsync(CancellationToken.None));
         ex.Should().BeNull(ex?.ToString());

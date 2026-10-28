@@ -20,11 +20,13 @@ info:
       `status` is a projection: the latest entry whose `effectiveDate` is on or before today.
     * **Accredited overseas sites have their own status history** on the same rules, because an
       individual site can be suspended without suspending the whole accreditation.
-    * **Tonnage band** is held as its own entity with its own history. Changes take effect when
-      they are recorded (no forward-dating or backdating). The current band is returned on every
+    * **Tonnage band** is held on the accreditation, and its history is the accreditation's own
+      history of band changes. Changes take effect when they are recorded (no forward-dating or
+      backdating). The current band is returned on every
       accreditation, including in search results, because it is on the public register. The band
       history is returned only when getting one accreditation.
-    * **Interim sites are returned inside their overseas site**, not from separate endpoints.
+    * **Interim sites are returned inside their overseas site**, not from separate endpoints. They
+      are part of the overseas site, not separate entities.
     * **PRN signatories** are returned when getting one accreditation, never in search results.
       They are personal data, and this is an internal API.
     * **The business plan is not available through this API.** The accreditation owns the plan
