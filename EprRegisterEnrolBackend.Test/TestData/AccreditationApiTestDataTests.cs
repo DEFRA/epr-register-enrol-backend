@@ -401,11 +401,19 @@ public class AccreditationApiTestDataSeedingServiceTests
     public async Task WhenTheHostStopsMidSeed_TheServiceEndsWithoutThrowing()
     {
         var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        var seedingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         persistence
             .UpsertAsync(Arg.Any<AccreditationApplicationModel>())
-            .Returns(new TaskCompletionSource().Task);
+            .Returns(_ =>
+            {
+                seedingStarted.TrySetResult();
+                return new TaskCompletionSource().Task;
+            });
         using var service = Service(persistence, seedOnStartup: true);
         await service.StartAsync(TestContext.Current.CancellationToken);
+        // Stop only once seeding is under way. ExecuteAsync runs on the thread pool, so stopping
+        // straight after StartAsync can cancel it before it starts (Canceled, not a clean end).
+        await seedingStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var ex = await Record.ExceptionAsync(() => service.StopAsync(CancellationToken.None));
         ex.Should().BeNull(ex?.ToString());
