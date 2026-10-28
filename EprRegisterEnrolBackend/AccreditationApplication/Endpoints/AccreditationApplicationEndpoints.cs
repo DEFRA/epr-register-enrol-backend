@@ -12,6 +12,7 @@ using EprRegisterEnrolBackend.Utils.Logging;
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
@@ -353,7 +354,6 @@ public static class AccreditationApplicationEndpoints
         var newNumber = await services.Generator.GenerateAsync(
             new RegulatoryNumberSpec
             {
-                Type = NumberType.Registration,
                 Nation = nation,
                 IsExporter = application.IsExporter,
                 OrgId = orgId,
@@ -378,100 +378,166 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(updated);
     }
 
-    // RA-448 AC1/AC5/AC6/AC7/AC9. Regenerate here is NOT the same mechanism as
-    // registration's: "reapply for accreditation" increments only the existing
-    // number's YY segment in place - it never draws from the atomic counter and
-    // never mutates regulatoryNumberSequences. A first-ever generate still goes
-    // through the normal counter-backed generator, same as registration.
+    // RA-690 (replaces RA-448's counter draw and "reapply" YY increment): the accreditation
+    // reference is DERIVED from the application's registration reference - leading R becomes A,
+    // YY becomes the application's own Year - and never drawn from a sequence counter. See
+    // AccreditationReferenceDerivation for the rule itself.
+    //
+    // Deliberately takes no request body. The nation, OrgId, year and regenerate an older
+    // management-be still sends are ignored: the application's stored Year is authoritative, and
+    // an issued reference is never regenerated. So this backend accepts an older management-be,
+    // but an older backend rejects the new body-less request (400): deploy this backend first.
     private static async Task<IResult> GenerateOrUpdateAccreditationNumber(
         string organisationId,
         string applicationId,
-        GenerateOrUpdateRegulatoryNumberRequest request,
-        [AsParameters] RegulatoryNumberServices services
+        IAccreditationApplicationPersistence persistence,
+        ILoggerFactory loggerFactory
     )
     {
-        var validation = await services.Validator.ValidateAsync(
-            request,
-            services.CancellationToken
-        );
-        if (!validation.IsValid)
-            return Results.BadRequest(validation.Errors);
-
-        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
             return conflict;
 
-        // AC9: registration precedes and is independent of accreditation - an
+        // RA-448 AC9: registration precedes and is independent of accreditation - an
         // accreditation number is never issued with nothing to accredit against.
-        if (application.RegistrationReference is null)
+        if (application.RegistrationReference is not { } registrationReference)
             return Results.Conflict(
                 "Application has no registration number yet; an accreditation number cannot be issued."
             );
 
-        // AC5: idempotent - an existing number is returned unchanged unless the
-        // caller explicitly asks to regenerate.
-        if (application.AccreditationReference is not null && !request.Regenerate)
+        // Idempotent retry: an issued reference may already be quoted externally, so it is
+        // returned unchanged and never re-derived. This holds while the application is open
+        // (between approval steps 1 and 2); once Approved, RejectIfTerminal above returns 409.
+        if (application.AccreditationReference is not null)
             return Results.Ok(application);
 
-        string newNumber;
-        if (application.AccreditationReference is { } numberToReapply && request.Regenerate)
-        {
-            // "Reapply for accreditation": pure string transform, no counter draw.
-            newNumber = IncrementYear(numberToReapply);
-        }
-        else
-        {
-            var orgIdResolution = await ResolveOrgIdAsync(
-                organisationId,
-                request,
-                services.ReExAdapter,
-                services.CancellationToken
+        // A renewal keeps the latest previous accreditation reference held in this backend, so a
+        // lapsed year doesn't change it either. Without a registration id there is nothing to
+        // match previous years on, so it falls back to the registration reference.
+        var previous = string.IsNullOrEmpty(application.RegistrationId)
+            ? null
+            : await persistence.GetLatestPreviousAccreditationAsync(
+                application.OrganisationId,
+                application.RegistrationId,
+                application.MaterialType,
+                application.GlassRecyclingProcess,
+                application.Year
+            );
+        var (sourceKind, sourceReference) = previous is null
+            ? (AccreditationReferenceSourceKind.Registration, registrationReference)
+            : (
+                AccreditationReferenceSourceKind.PreviousAccreditation,
+                previous.AccreditationReference!
             );
 
-            if (
-                request.Nation is not { } nationValue
-                || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
-                || orgIdResolution is not { } orgId
-                || request.Year is not { } year
-            )
-                return Results.BadRequest(
-                    "Nation, OrgId and Year are required to generate an accreditation number."
-                );
+        var derivation = AccreditationReferenceDerivation.Derive(
+            sourceReference,
+            sourceKind,
+            application.Year
+        );
+        // A malformed source must fail visibly rather than issue a wrong reference. A malformed
+        // previous reference deliberately does not fall back to the registration reference.
+        if (!derivation.IsValid)
+            return Results.UnprocessableEntity(derivation.Error);
 
-            newNumber = await services.Generator.GenerateAsync(
-                new RegulatoryNumberSpec
-                {
-                    Type = NumberType.Accreditation,
-                    Nation = nation,
-                    IsExporter = application.IsExporter,
-                    OrgId = orgId,
-                    Material = application.MaterialType,
-                    GlassRecyclingProcess = application.GlassRecyclingProcess,
-                    Year = year,
-                },
-                services.CancellationToken
+        // Duplicate live applications for the same registration, material and year are possible
+        // (Seed is best-effort, with no unique index) and would derive the same reference. A
+        // reference is never issued twice. Read-then-write: a unique index is a follow-up to RA-691.
+        // A withdrawn holder doesn't block: an operator who withdrew and started again derives
+        // the same reference, and the withdrawn record keeps its value for audit.
+        var holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
+            derivation.Reference!,
+            application.Id!.Value
+        );
+        if (holders.Any(h => h.BlocksIssuing))
+            return Results.Conflict(
+                $"Accreditation reference {derivation.Reference} is already held by another application; it cannot be issued again."
             );
-        }
 
-        // Regenerate (either mechanism): keep the prior number in the audit trail,
-        // never reuse/reissue it (AC5). A first-ever generate has no prior number.
-        if (application.AccreditationReference is { } previousNumber)
-            application.PreviousAccreditationNumbers.Add(previousNumber);
-
-        application.AccreditationReference = newNumber;
+        application.AccreditationReference = derivation.Reference;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await services.Persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to update accreditation number.")
-            : Results.Ok(updated);
+        var updated = await persistence.UpdateAsync(application);
+        if (updated is null)
+            return Results.Problem("Failed to update accreditation number.");
+
+        LogAccreditationReferenceIssued(
+            loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+            updated,
+            sourceKind,
+            sourceReference,
+            previous?.ApplicationId,
+            holders.Where(h => !h.BlocksIssuing).Select(h => h.Id).ToList()
+        );
+        return Results.Ok(updated);
     }
 
-    // Bundles GenerateOrUpdateRegistrationNumber/GenerateOrUpdateAccreditationNumber's
-    // DI-service/framework parameters under one [AsParameters] argument so each handler
-    // stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // RA-690: the source of each issued reference is logged, not stored, so support can explain
+    // any reference without a schema change. A previous-accreditation source also names the
+    // application it came from, and any withdrawn applications already holding the reference are
+    // named so support can see why two records share it.
+    private const string IssuedTemplate =
+        "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference}";
+    private const string SourceApplicationTemplate = " sourceApplicationId={SourceApplicationId}";
+    private const string WithdrawnHoldersTemplate = " withdrawnHolderIds={WithdrawnHolderIds}";
+
+    private static void LogAccreditationReferenceIssued(
+        ILogger logger,
+        AccreditationApplicationModel application,
+        AccreditationReferenceSourceKind sourceKind,
+        string sourceReference,
+        string? sourceApplicationId,
+        IReadOnlyList<ObjectId> withdrawnHolderIds
+    )
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+            return;
+
+        var (reference, id) = (application.AccreditationReference, application.Id);
+        var withdrawnIds = string.Join(",", withdrawnHolderIds);
+        switch (sourceApplicationId, withdrawnHolderIds.Count)
+        {
+            case (null, 0):
+                logger.LogInformation(IssuedTemplate, reference, id, sourceKind, sourceReference);
+                break;
+            case (null, _):
+                logger.LogInformation(
+                    IssuedTemplate + WithdrawnHoldersTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    withdrawnIds
+                );
+                break;
+            case (_, 0):
+                logger.LogInformation(
+                    IssuedTemplate + SourceApplicationTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    sourceApplicationId
+                );
+                break;
+            default:
+                logger.LogInformation(
+                    IssuedTemplate + SourceApplicationTemplate + WithdrawnHoldersTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    sourceApplicationId,
+                    withdrawnIds
+                );
+                break;
+        }
+    }
+
+    // Bundles GenerateOrUpdateRegistrationNumber's DI-service/framework parameters under one
+    // [AsParameters] argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
     // RecyclingOperationsServices above. A positional record, not bare `{ get; init; }`
     // auto-properties, for the same S3459/S1144 reason given there.
     private sealed record RegulatoryNumberServices(
@@ -610,21 +676,6 @@ public static class AccreditationApplicationEndpoints
         HttpContext HttpContext,
         CancellationToken CancellationToken
     );
-
-    // "Reapply for accreditation" (AC5, RA-448): increments only the YY segment
-    // (index 1-2 of the fixed {R|A}{YY}{AgencyType}{OrgID}{Sequence}{Material}
-    // format) against whatever YY the number currently holds - not the calendar
-    // year at reapply time - leaving every other segment byte-identical.
-    private static string IncrementYear(string existingNumber)
-    {
-        var currentYear = int.Parse(existingNumber.Substring(1, 2));
-        var nextYear = (currentYear + 1) % 100;
-        return string.Concat(
-            existingNumber.AsSpan(0, 1),
-            nextYear.ToString("D2"),
-            existingNumber.AsSpan(3)
-        );
-    }
 
     private static readonly System.Text.RegularExpressions.Regex FilenameIsSafe = new(
         @"^[^\x00-\x1f<>:""/\\|?*]+$",
@@ -3458,6 +3509,42 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(updated);
     }
 
+    private const string DecisionAlreadyMadeWithdrawMessage =
+        "A decision has already been made on this application, so it can no longer be withdrawn.";
+
+    // Returns the response when this application can't be withdrawn now, or null when it can.
+    private static IResult? GuardWithdraw(AccreditationApplicationModel application)
+    {
+        if (application.ApplicationStatus == ApplicationStatus.Withdrawn)
+            return Results.Ok(application);
+
+        if (
+            application.ApplicationStatus
+            is not (
+                ApplicationStatus.Submitted
+                or ApplicationStatus.DulyMade
+                or ApplicationStatus.Queried
+                or ApplicationStatus.Updated
+                or ApplicationStatus.AwaitingDecision
+            )
+        )
+            return Results.Conflict("Only applications not yet decided can be withdrawn.");
+
+        // RA-690: only step 1 approval stores a reference, so a decision has already been made.
+        if (!string.IsNullOrEmpty(application.AccreditationReference))
+            return Results.Conflict(DecisionAlreadyMadeWithdrawMessage);
+
+        return null;
+    }
+
+    // RA-690: a refusal means step 1 has recorded a decision, so retrying can never work.
+    private static IResult WithdrawNotAppliedResult(WithdrawResult withdrawResult) =>
+        withdrawResult == WithdrawResult.Refused
+            ? Results.Conflict(DecisionAlreadyMadeWithdrawMessage)
+            : Results.Problem(
+                "Failed to withdraw accreditation application with the case management service."
+            );
+
     private static async Task<IResult> Withdraw(
         string organisationId,
         string applicationId,
@@ -3476,20 +3563,8 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
-        if (application.ApplicationStatus == ApplicationStatus.Withdrawn)
-            return Results.Ok(application);
-
-        if (
-            application.ApplicationStatus
-            is not (
-                ApplicationStatus.Submitted
-                or ApplicationStatus.DulyMade
-                or ApplicationStatus.Queried
-                or ApplicationStatus.Updated
-                or ApplicationStatus.AwaitingDecision
-            )
-        )
-            return Results.Conflict("Only applications not yet decided can be withdrawn.");
+        if (GuardWithdraw(application) is { } notWithdrawable)
+            return notWithdrawable;
 
         var contactDetails = new QuerySubmitterContactDetails
         {
@@ -3505,10 +3580,8 @@ public static class AccreditationApplicationEndpoints
             request.Reason,
             cancellationToken
         );
-        if (!withdrawResult.IsSuccess)
-            return Results.Problem(
-                "Failed to withdraw accreditation application with the case management service."
-            );
+        if (withdrawResult != WithdrawResult.Succeeded)
+            return WithdrawNotAppliedResult(withdrawResult);
 
         // RA-519 follow-up: re-read after the round trip, for the same reason as Resubmit above -
         // WithdrawApplicationAsync can synchronously trigger ManagementBe's push-back while this

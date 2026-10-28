@@ -29,7 +29,7 @@ public class StubCaseWorkingApiAdapterTests
             OrganisationName = "Acme Recycling Ltd",
             Year = year,
             RegistrationId = "reg-001",
-            RegistrationReference = "EPR-100023",
+            RegistrationReference = "R25ER1000230001PL",
             MaterialType = materialType,
             ApplicationStatus = ApplicationStatus.Started,
             SiteAddress = siteAddress,
@@ -202,7 +202,7 @@ public class StubCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeTrue();
+        result.Should().Be(WithdrawResult.Succeeded);
     }
 
     [Fact]
