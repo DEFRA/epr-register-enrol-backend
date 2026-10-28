@@ -49,8 +49,7 @@ public class MongoIndexInitializerService(
     {
         try
         {
-            List<IDomainModelCollection> domainModel = [];
-            await Task.Run(
+            var domainModel = await Task.Run(
                     () =>
                     {
                         // Resolving each singleton runs its MongoService<T>
@@ -63,7 +62,7 @@ public class MongoIndexInitializerService(
                         _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
                         // Domain model (phase 1, "Expand"): creates the empty collections and
                         // indexes. None are registered unless DomainModel:ExpandEnabled is set.
-                        domainModel = serviceProvider.GetServices<IDomainModelCollection>().ToList();
+                        return serviceProvider.GetServices<IDomainModelCollection>().ToList();
                     },
                     cancellationToken
                 )

@@ -15,122 +15,118 @@
 // DomainModel:DiagnosticsEnabled). The queries mirror
 // EprRegisterEnrolBackend/DomainModel/Diagnostics/LegacyDataSurvey.cs; change both together.
 
-const surveyLegacyData = async (applications) => {
-    const numeric = ["int", "long"];
-    const count = (filter) => applications.countDocuments(filter);
+const numeric = ["int", "long"];
+const legacySiteNumber = { $regex: "^SN-" };
 
-    const groupsWithMoreThanOne = async (match, groupKey) => {
-        const rows = await applications
-            .aggregate([
-                { $match: match },
-                { $group: { _id: groupKey, n: { $sum: 1 } } },
-                { $match: { n: { $gt: 1 } } },
-                { $count: "groups" },
-            ])
-            .toArray();
-        return rows.length === 0 ? 0 : rows[0].groups;
-    };
-
-    // Groups whose documents carry more than one distinct non-empty value of `field`.
-    const conflictingValues = async (groupBy, field) => {
-        const rows = await applications
-            .aggregate([
-                {
-                    $match: {
-                        [groupBy]: { $nin: [null] },
-                        [field]: { $nin: [null, ""] },
-                    },
-                },
-                {
-                    $group: {
-                        _id: "$" + groupBy,
-                        values: { $addToSet: "$" + field },
-                    },
-                },
-                { $match: { $expr: { $gt: [{ $size: "$values" }, 1] } } },
-                { $count: "groups" },
-            ])
-            .toArray();
-        return rows.length === 0 ? 0 : rows[0].groups;
-    };
-
-    return {
-        applications: await count({}),
-        int32Enums: await count({
-            $or: [
-                { applicationStatus: { $type: numeric } },
-                { materialType: { $type: numeric } },
-                { nation: { $type: numeric } },
-            ],
-        }),
-        // The singular interimSite with no interimSites list: pre-RA-603 documents.
-        interimSiteSingularOnly: await count({
-            "overseasSites.sites": {
-                $elemMatch: {
-                    interimSite: { $type: "object" },
-                    $or: [
-                        { interimSites: { $exists: false } },
-                        { interimSites: { $size: 0 } },
-                    ],
-                },
-            },
-        }),
-        nullOrsIds: await count({
-            "overseasSites.sites": { $elemMatch: { orsId: null } },
-        }),
-        legacySnInterimNumbers: await count({
-            $or: [
-                {
-                    "overseasSites.sites": {
-                        $elemMatch: {
-                            interimSites: {
-                                $elemMatch: { siteNumber: { $regex: "^SN-" } },
-                            },
-                        },
-                    },
-                },
-                {
-                    "overseasSites.sites": {
-                        $elemMatch: {
-                            "interimSite.siteNumber": { $regex: "^SN-" },
-                        },
-                    },
-                },
-            ],
-        }),
-        // The status filters assume statuses are strings; int32Enums counts the documents they cannot see.
-        duplicateLiveApplicationGroups: await groupsWithMoreThanOne(
-            {
-                applicationStatus: { $nin: ["Withdrawn", "Rejected"] },
-                registrationId: { $nin: [null] },
-            },
-            {
-                registrationId: "$registrationId",
-                year: "$year",
-                materialType: "$materialType",
-            },
-        ),
-        conflictingRegistrationNumberGroups: await conflictingValues(
-            "registrationId",
-            "registrationReference",
-        ),
-        approvedWithoutAccreditationReference: await count({
-            applicationStatus: "Approved",
-            $or: [
-                { accreditationReference: null },
-                { accreditationReference: "" },
-            ],
-        }),
-        caseManagementReferencePresent: await count({
-            caseManagementReference: { $nin: [null, ""] },
-        }),
-        duplicateAccreditationReferenceGroups: await groupsWithMoreThanOne(
-            { accreditationReference: { $nin: [null, ""] } },
-            { ref: "$accreditationReference" },
-        ),
-    };
+const singleCount = async (applications, pipeline) => {
+    const rows = await applications
+        .aggregate([...pipeline, { $count: "groups" }])
+        .toArray();
+    return rows.length === 0 ? 0 : rows[0].groups;
 };
 
-surveyLegacyData(db.getCollection("accreditationApplications")).then((report) =>
-    printjson(report),
+const groupsWithMoreThanOne = (applications, match, groupKey) =>
+    singleCount(applications, [
+        { $match: match },
+        { $group: { _id: groupKey, n: { $sum: 1 } } },
+        { $match: { n: { $gt: 1 } } },
+    ]);
+
+// Groups whose documents carry more than one distinct non-empty value of `field`.
+const conflictingValues = (applications, groupBy, field) =>
+    singleCount(applications, [
+        {
+            $match: {
+                [groupBy]: { $nin: [null] },
+                [field]: { $nin: [null, ""] },
+            },
+        },
+        { $group: { _id: "$" + groupBy, values: { $addToSet: "$" + field } } },
+        { $match: { $expr: { $gt: [{ $size: "$values" }, 1] } } },
+    ]);
+
+const siteShapeCounts = async (applications) => ({
+    // The singular interimSite with no interimSites list: pre-RA-603 documents.
+    interimSiteSingularOnly: await applications.countDocuments({
+        "overseasSites.sites": {
+            $elemMatch: {
+                interimSite: { $type: "object" },
+                $or: [
+                    { interimSites: { $exists: false } },
+                    { interimSites: { $size: 0 } },
+                ],
+            },
+        },
+    }),
+    nullOrsIds: await applications.countDocuments({
+        "overseasSites.sites": { $elemMatch: { orsId: null } },
+    }),
+    legacySnInterimNumbers: await applications.countDocuments({
+        $or: [
+            {
+                "overseasSites.sites": {
+                    $elemMatch: {
+                        interimSites: {
+                            $elemMatch: { siteNumber: legacySiteNumber },
+                        },
+                    },
+                },
+            },
+            {
+                "overseasSites.sites": {
+                    $elemMatch: { "interimSite.siteNumber": legacySiteNumber },
+                },
+            },
+        ],
+    }),
+});
+
+// The status filters assume statuses are strings; int32Enums counts the documents they cannot see.
+const referenceCounts = async (applications) => ({
+    duplicateLiveApplicationGroups: await groupsWithMoreThanOne(
+        applications,
+        {
+            applicationStatus: { $nin: ["Withdrawn", "Rejected"] },
+            registrationId: { $nin: [null] },
+        },
+        {
+            registrationId: "$registrationId",
+            year: "$year",
+            materialType: "$materialType",
+        },
+    ),
+    conflictingRegistrationNumberGroups: await conflictingValues(
+        applications,
+        "registrationId",
+        "registrationReference",
+    ),
+    approvedWithoutAccreditationReference: await applications.countDocuments({
+        applicationStatus: "Approved",
+        $or: [{ accreditationReference: null }, { accreditationReference: "" }],
+    }),
+    caseManagementReferencePresent: await applications.countDocuments({
+        caseManagementReference: { $nin: [null, ""] },
+    }),
+    duplicateAccreditationReferenceGroups: await groupsWithMoreThanOne(
+        applications,
+        { accreditationReference: { $nin: [null, ""] } },
+        { ref: "$accreditationReference" },
+    ),
+});
+
+const surveyLegacyData = async (applications) => ({
+    applications: await applications.countDocuments({}),
+    int32Enums: await applications.countDocuments({
+        $or: [
+            { applicationStatus: { $type: numeric } },
+            { materialType: { $type: numeric } },
+            { nation: { $type: numeric } },
+        ],
+    }),
+    ...(await siteShapeCounts(applications)),
+    ...(await referenceCounts(applications)),
+});
+
+printjson(
+    await surveyLegacyData(db.getCollection("accreditationApplications")),
 );

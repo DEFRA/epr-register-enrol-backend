@@ -316,8 +316,7 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
         await session.AbortTransactionAsync(Ct);
 
         var versions = await _sut.GetVersionsAsync(v1.EntityId, cancellationToken: Ct);
-        Assert.Single(versions);
-        Assert.True(versions[0].IsCurrent);
+        Assert.True(Assert.Single(versions).IsCurrent);
         Assert.Equal(0, proposed.Version);
         Assert.Equal(ObjectId.Empty, proposed.Id);
         Assert.False(proposed.IsCurrent);
@@ -335,8 +334,7 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
         );
 
         var versions = await _sut.GetVersionsAsync(v1.EntityId, cancellationToken: Ct);
-        Assert.Single(versions);
-        Assert.True(versions[0].IsCurrent);
+        Assert.True(Assert.Single(versions).IsCurrent);
     }
 }
 
