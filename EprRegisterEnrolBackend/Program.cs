@@ -10,6 +10,7 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
@@ -139,6 +140,10 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IAccreditationApplicationPersistence,
         AccreditationApplicationPersistence
     >();
+
+    // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a
+    // DomainModel:* flag, off by default; phase 1 "Expand" adds the domain-model-schema readiness check.
+    builder.Services.AddDomainModel(builder.Configuration);
 
     // RA-448: registration/accreditation number generation
     builder.Services.AddSingleton<

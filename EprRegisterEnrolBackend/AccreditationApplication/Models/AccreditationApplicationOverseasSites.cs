@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
@@ -23,6 +24,12 @@ public class OverseasSiteModel
 {
     public required int SiteId { get; set; }
     public string? OrsId { get; set; }
+
+    // Domain model FK (B5): the OverseasSite entityId this selection points at. Stamped by the migration and
+    // dual-write, never sent to the FE, and absent from stored documents until set.
+    [JsonIgnore]
+    public ObjectId? OverseasSiteEntityId { get; set; }
+
     public required string SiteName { get; set; }
     public string? SiteAddress { get; set; }
     public string? AddressLine1 { get; set; }
