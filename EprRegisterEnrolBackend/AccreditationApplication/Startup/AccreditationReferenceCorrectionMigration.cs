@@ -23,24 +23,25 @@ public sealed class AccreditationReferenceCorrectionOptions
     public string? SpotCheckConfirmedBy { get; set; }
 }
 
-// RA-691: corrects the accreditation references of two approved 2027 renewals that were issued a
-// fresh counter sequence instead of keeping the sequence from their 2026 reference (root cause
-// RA-690). One-off and scoped to exactly these two records - there is deliberately no query that
-// could widen it.
+// RA-691: corrects the accreditation references of three approved 2027 renewals that were issued
+// a fresh counter sequence instead of keeping the sequence from their 2026 reference (root cause
+// RA-690). One-off and scoped to exactly the records listed in Corrections - there is deliberately
+// no query that could widen it.
 //
 // Matching rule: each target is located by the reference it currently holds - incorrect or
-// corrected - and only then checked against its stable identity (OrgId, Year 2027, Plastic,
-// reprocessor). The reference is the only key that singles out one accreditation: an
-// organisation can hold several 2027 plastic reprocessor accreditations (one per site), so the
-// identity fields alone cannot be asserted unique. For each target:
+// corrected - and only then checked against its stable identity (OrgId, Year 2027, the
+// correction's material, reprocessor). The reference is the only key that singles out one
+// accreditation: an organisation can hold several 2027 reprocessor accreditations for the same
+// material (one per site), so the identity fields alone cannot be asserted unique. For each
+// target:
 //   - incorrect held by exactly one matching record, corrected by none      -> fix
 //   - corrected held by exactly one matching record, incorrect by none      -> skip (already done)
 //   - neither value held by any record                                     -> abort
 //   - corrected value held while the incorrect one still is (another record) -> abort
 //   - either value held by more than one record, or by a record whose
 //     identity does not match                                              -> abort
-// Every target is planned before anything is written, so an abort on either one means no writes
-// at all.
+// Every target is planned before anything is written, so an abort on any one means no writes at
+// all.
 //
 // Each fix is a single targeted update guarded on the record still holding the incorrect value,
 // so a concurrent write cannot be clobbered, and the incorrect value goes onto
@@ -61,6 +62,7 @@ public class AccreditationReferenceCorrectionMigration(
     internal sealed record Correction(
         string OrganisationName,
         int OrgId,
+        MaterialType Material,
         string Incorrect,
         string Corrected
     );
@@ -69,8 +71,27 @@ public class AccreditationReferenceCorrectionMigration(
 
     internal static readonly IReadOnlyList<Correction> Corrections =
     [
-        new("Infinity Plastic Solutions Ltd", 500527, "A27ER5005270322PL", "A27ER5005270246PL"),
-        new("PLASGRAN LIMITED", 500105, "A27ER5001050321PL", "A27ER5001050197PL"),
+        new(
+            "Infinity Plastic Solutions Ltd",
+            500527,
+            MaterialType.Plastic,
+            "A27ER5005270322PL",
+            "A27ER5005270246PL"
+        ),
+        new(
+            "PLASGRAN LIMITED",
+            500105,
+            MaterialType.Plastic,
+            "A27ER5001050321PL",
+            "A27ER5001050197PL"
+        ),
+        new(
+            "Kronospan Limited",
+            500108,
+            MaterialType.Wood,
+            "A27WR5001080075WO",
+            "A27WR5001080008WO"
+        ),
     ];
 
     internal enum RunResult
@@ -271,7 +292,7 @@ public class AccreditationReferenceCorrectionMigration(
                 "RA-691 {OrganisationName} ({OrgId}): application {ApplicationId} holding "
                     + "{Reference} is OrgId {ActualOrgId}, Year {Year}, {MaterialType}, "
                     + "IsExporter {IsExporter}; expected OrgId {ExpectedOrgId}, Year {ExpectedYear}, "
-                    + "Plastic, reprocessor",
+                    + "{ExpectedMaterialType}, reprocessor",
                 c.OrganisationName,
                 c.OrgId,
                 target.Id,
@@ -281,7 +302,8 @@ public class AccreditationReferenceCorrectionMigration(
                 target.MaterialType,
                 target.IsExporter,
                 c.OrgId,
-                AccreditationYear
+                AccreditationYear,
+                c.Material
             );
             return null;
         }
@@ -289,12 +311,13 @@ public class AccreditationReferenceCorrectionMigration(
         return new Plan(c, applicationId, alreadyCorrect);
     }
 
-    // The ER...PL references are England, reprocessor, plastic - the nation is not checked
-    // because Nation is nullable on applications seeded before RA-526.
+    // Every reference here is a reprocessor one (ER...PL is England plastic, WR...WO is Wales
+    // wood). The nation is not checked because Nation is nullable on applications seeded before
+    // RA-526.
     private static bool IsTargetAccreditation(AccreditationApplicationModel application, Correction c) =>
         application.OrgId == c.OrgId
         && application.Year == AccreditationYear
-        && application.MaterialType == MaterialType.Plastic
+        && application.MaterialType == c.Material
         && !application.IsExporter;
 
     private async Task ApplyAsync(

@@ -22,6 +22,8 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     private const string InfinityCorrected = "A27ER5005270246PL";
     private const string PlasgranIncorrect = "A27ER5001050321PL";
     private const string PlasgranCorrected = "A27ER5001050197PL";
+    private const string KronospanIncorrect = "A27WR5001080075WO";
+    private const string KronospanCorrected = "A27WR5001080008WO";
 
     private readonly string _databaseName;
     private readonly TestMongoDbClientFactory _factory;
@@ -68,16 +70,23 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         return app;
     }
 
-    // The two incorrect records plus unrelated ones that must never change: another plastic
-    // accreditation for the same org (a second site), a 2026 record, and another org entirely.
-    private async Task<(ObjectId Infinity, ObjectId Plasgran)> SeedIncorrectStateAsync()
+    private static AccreditationApplicationModel Kronospan(string reference, int year = 2027) =>
+        Application(500108, reference, year, MaterialType.Wood);
+
+    // The three incorrect records plus unrelated ones that must never change: another
+    // accreditation of the same material for the same org (a second site) and a 2026 record, for
+    // both a plastic and the wood target, and another org entirely.
+    private async Task<(ObjectId Infinity, ObjectId Plasgran, ObjectId Kronospan)> SeedIncorrectStateAsync()
     {
         var infinity = await SeedAsync(Application(500527, InfinityIncorrect));
         var plasgran = await SeedAsync(Application(500105, PlasgranIncorrect));
+        var kronospan = await SeedAsync(Kronospan(KronospanIncorrect));
         await SeedAsync(Application(500527, "A27ER5005270400PL"));
         await SeedAsync(Application(500527, "A26ER5005270246PL", year: 2026));
+        await SeedAsync(Kronospan("A27WR5001080100WO"));
+        await SeedAsync(Kronospan("A26WR5001080008WO", year: 2026));
         await SeedAsync(Application(500999, "A27EX5009990123GL", material: MaterialType.Glass, isExporter: true));
-        return (infinity.Id!.Value, plasgran.Id!.Value);
+        return (infinity.Id!.Value, plasgran.Id!.Value, kronospan.Id!.Value);
     }
 
     private AccreditationReferenceCorrectionMigration CreateMigration(
@@ -134,7 +143,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     }
 
     [Fact]
-    public async Task Dry_run_logs_exactly_the_two_changes_and_writes_nothing()
+    public async Task Dry_run_logs_exactly_the_three_changes_and_writes_nothing()
     {
         await SeedIncorrectStateAsync();
         var before = await SnapshotAsync();
@@ -145,7 +154,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         result.Should().Be(RunResult.DryRun);
         (await SnapshotAsync()).Should().Equal(before);
         var changes = Logged(LogLevel.Information).Where(m => m.Contains(" -> ")).ToList();
-        changes.Should().HaveCount(2);
+        changes.Should().HaveCount(3);
         changes.Should().ContainSingle(m =>
             m.Contains("Infinity Plastic Solutions Ltd (500527)")
             && m.Contains($"{InfinityIncorrect} -> {InfinityCorrected}")
@@ -153,6 +162,10 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         changes.Should().ContainSingle(m =>
             m.Contains("PLASGRAN LIMITED (500105)")
             && m.Contains($"{PlasgranIncorrect} -> {PlasgranCorrected}")
+        );
+        changes.Should().ContainSingle(m =>
+            m.Contains("Kronospan Limited (500108)")
+            && m.Contains($"{KronospanIncorrect} -> {KronospanCorrected}")
         );
         changes.Should().OnlyContain(m => m.Contains("DRY RUN"));
         Logged(LogLevel.Error).Should().BeEmpty();
@@ -175,7 +188,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     [Fact]
     public async Task Apply_sets_the_corrected_references_and_keeps_the_incorrect_ones_as_previous()
     {
-        var (infinityId, plasgranId) = await SeedIncorrectStateAsync();
+        var (infinityId, plasgranId, kronospanId) = await SeedIncorrectStateAsync();
 
         var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
@@ -187,18 +200,21 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         var plasgran = await ReadAsync(plasgranId);
         plasgran.AccreditationReference.Should().Be(PlasgranCorrected);
         plasgran.PreviousAccreditationNumbers.Should().Equal(PlasgranIncorrect);
+        var kronospan = await ReadAsync(kronospanId);
+        kronospan.AccreditationReference.Should().Be(KronospanCorrected);
+        kronospan.PreviousAccreditationNumbers.Should().Equal(KronospanIncorrect);
         Logged(LogLevel.Information)
             .Where(m => m.StartsWith("RA-691 APPLIED"))
             .Should()
-            .HaveCount(2)
+            .HaveCount(3)
             .And.OnlyContain(m => m.Contains("A Reviewer"));
     }
 
     [Fact]
     public async Task Apply_changes_no_other_record()
     {
-        var (infinityId, plasgranId) = await SeedIncorrectStateAsync();
-        var targets = new[] { infinityId, plasgranId };
+        var (infinityId, plasgranId, kronospanId) = await SeedIncorrectStateAsync();
+        var targets = new[] { infinityId, plasgranId, kronospanId };
         var before = (await SnapshotAsync()).Where(d => !targets.Contains(d["_id"].AsObjectId)).ToList();
 
         await CreateMigration(enabled: true, apply: true)
@@ -223,16 +239,17 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
 
         result.Should().Be(RunResult.Applied);
         (await SnapshotAsync()).Should().Equal(afterFirst);
-        Logged(LogLevel.Information).Count(m => m.Contains("skipped")).Should().Be(2);
+        Logged(LogLevel.Information).Count(m => m.Contains("skipped")).Should().Be(3);
     }
 
     [Fact]
-    public async Task Already_corrected_record_is_skipped_while_the_other_is_fixed()
+    public async Task Already_corrected_record_is_skipped_while_the_others_are_fixed()
     {
         var infinity = Application(500527, InfinityCorrected);
         infinity.PreviousAccreditationNumbers.Add(InfinityIncorrect);
         await SeedAsync(infinity);
         var plasgran = await SeedAsync(Application(500105, PlasgranIncorrect));
+        var kronospan = await SeedAsync(Kronospan(KronospanIncorrect));
         var infinityBefore = await _raw.Find(new BsonDocument("_id", infinity.Id!.Value))
             .FirstAsync(TestContext.Current.CancellationToken);
 
@@ -245,6 +262,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
             .Should()
             .Equal(infinityBefore);
         (await ReadAsync(plasgran.Id!.Value)).AccreditationReference.Should().Be(PlasgranCorrected);
+        (await ReadAsync(kronospan.Id!.Value)).AccreditationReference.Should().Be(KronospanCorrected);
     }
 
     [Fact]
@@ -254,6 +272,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         infinity.PreviousAccreditationNumbers.Add(InfinityIncorrect);
         await SeedAsync(infinity);
         await SeedAsync(Application(500105, PlasgranIncorrect));
+        await SeedAsync(Kronospan(KronospanIncorrect));
 
         await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
@@ -266,9 +285,10 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     [Fact]
     public async Task Record_holding_neither_value_aborts_the_whole_run_without_writes()
     {
-        // PLASGRAN is fine, but Infinity's record holds some third value.
+        // PLASGRAN and Kronospan are fine, but Infinity's record holds some other value.
         await SeedAsync(Application(500527, "A27ER5005270999PL"));
         await SeedAsync(Application(500105, PlasgranIncorrect));
+        await SeedAsync(Kronospan(KronospanIncorrect));
         var before = await SnapshotAsync();
 
         var result = await CreateMigration(enabled: true, apply: true)
@@ -322,6 +342,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     {
         await SeedAsync(Application(orgId, InfinityIncorrect, year, material, isExporter));
         await SeedAsync(Application(500105, PlasgranIncorrect));
+        await SeedAsync(Kronospan(KronospanIncorrect));
         var before = await SnapshotAsync();
 
         var result = await CreateMigration(enabled: true, apply: true)
@@ -329,5 +350,29 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
 
         result.Should().Be(RunResult.Aborted);
         (await SnapshotAsync()).Should().Equal(before);
+    }
+
+    // The expected material is per correction: Kronospan's reference is a wood one, so a plastic
+    // record holding it is not the target even though the two plastic corrections accept plastic.
+    [Fact]
+    public async Task Kronospan_reference_held_by_a_plastic_record_aborts_without_writes()
+    {
+        await SeedAsync(Application(500527, InfinityIncorrect));
+        await SeedAsync(Application(500105, PlasgranIncorrect));
+        await SeedAsync(Application(500108, KronospanIncorrect, material: MaterialType.Plastic));
+        var before = await SnapshotAsync();
+
+        var result = await CreateMigration(enabled: true, apply: true)
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        result.Should().Be(RunResult.Aborted);
+        (await SnapshotAsync()).Should().Equal(before);
+        Logged(LogLevel.Error)
+            .Should()
+            .Contain(m =>
+                m.Contains("Kronospan Limited (500108)")
+                && m.Contains("Plastic")
+                && m.Contains("expected OrgId 500108, Year 2027, Wood, reprocessor")
+            );
     }
 }

@@ -89,7 +89,7 @@ for why.
 | `REEX_API_BASIC_AUTH_PASSWORD` | **Yes** | _(blank)_ | Basic Auth password for the ReEx API above |
 | `ReExApi__UseStub` | No | `false` | When `true` outside Development, every ReEx lookup is answered by the stub adapter (e.g. perf-test) |
 | `TestOrganisations__Enabled` | No | `false` | Turns on E2E test organisations and the mgmt-tests caller (see below). The service refuses to start with it `true` when `ENVIRONMENT` is `prod` |
-| `Migrations__Ra691AccreditationReferenceCorrection__Enabled` | No | `false` | RA-691 one-off: corrects the two incorrectly generated 2027 accreditation references at startup. On its own it is a dry run that logs each `org: old -> new` change and writes nothing |
+| `Migrations__Ra691AccreditationReferenceCorrection__Enabled` | No | `false` | RA-691 one-off: corrects the three incorrectly generated 2027 accreditation references (Infinity Plastic Solutions Ltd 500527, PLASGRAN LIMITED 500105, Kronospan Limited 500108) at startup. On its own it is a dry run that logs each `org: old -> new` change and writes nothing |
 | `Migrations__Ra691AccreditationReferenceCorrection__Apply` | No | `false` | RA-691: with `Enabled`, writes the corrections. Has no effect (the run stays a dry run, with an error log) until `SpotCheckConfirmedBy` is also set |
 | `Migrations__Ra691AccreditationReferenceCorrection__SpotCheckConfirmedBy` | No | _(blank)_ | RA-691: name of whoever reviewed the dry-run output against the live records. Required for `Apply`; logged with each applied change |
 | `CaseWorking__Url` | No | `http://localhost:8085` | Base URL of `epr-register-enrol-management-be` |

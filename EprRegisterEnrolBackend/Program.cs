@@ -165,7 +165,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // path) rather than on whichever request first resolves the singleton.
     builder.Services.AddHostedService<MongoIndexInitializerService>();
 
-    // RA-691: one-off correction of two incorrectly generated accreditation references.
+    // RA-691: one-off correction of three incorrectly generated accreditation references.
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
     builder.Services.Configure<AccreditationReferenceCorrectionOptions>(
         builder.Configuration.GetSection(AccreditationReferenceCorrectionOptions.SectionName)
