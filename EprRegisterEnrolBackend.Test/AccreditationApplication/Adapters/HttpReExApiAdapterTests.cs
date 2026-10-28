@@ -60,7 +60,7 @@ public class HttpReExApiAdapterTests
         );
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.RegistrationReference.Should().Be("R25SR500000912AL");
+        result.Value!.RegistrationReference.Should().Be("R25ER5000000912AL");
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class HttpReExApiAdapterTests
         );
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.RegistrationReference.Should().Be("E25SR500020912AL");
+        result.Value!.RegistrationReference.Should().Be("R25EX5000000913AL");
     }
 
     [Fact]
@@ -1186,7 +1186,7 @@ public class HttpReExApiAdapterTests
         var entry = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Which;
         entry.Message.Should().Contain("6a2fcd74e16883c137d01188");
         entry.Message.Should().Contain("reg-reprocessor-1");
-        entry.Message.Should().Contain("R25SR500000912AL");
+        entry.Message.Should().Contain("R25ER5000000912AL");
     }
 
     // RA-526: registeredAddress must be preferred over address when both are present and
@@ -1600,7 +1600,7 @@ public class HttpReExApiAdapterTests
                 { "type": "waste_exemption" }
               ],
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -1620,7 +1620,7 @@ public class HttpReExApiAdapterTests
               "exportPorts": ["Southampton", "Portsmouth"],
               "wasteProcessingType": "exporter",
               "accreditationId": "acc-exporter-1",
-              "registrationNumber": "E25SR500020912AL",
+              "registrationNumber": "R25EX5000000913AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "status": "approved",
@@ -1643,7 +1643,7 @@ public class HttpReExApiAdapterTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             },
@@ -1662,7 +1662,7 @@ public class HttpReExApiAdapterTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "E-ACC12245AL",
+              "accreditationNumber": "A26EX5000000913AL",
               "status": "approved"
             }
           ]
@@ -1708,7 +1708,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -1728,7 +1728,7 @@ public class HttpReExApiAdapterTests
               "exportPorts": ["Southampton", "Portsmouth"],
               "wasteProcessingType": "exporter",
               "accreditationId": "acc-exporter-1",
-              "registrationNumber": "E25SR500020912AL",
+              "registrationNumber": "R25EX5000000913AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "status": "approved",
@@ -1751,7 +1751,7 @@ public class HttpReExApiAdapterTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             },
@@ -1770,7 +1770,7 @@ public class HttpReExApiAdapterTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "E-ACC12245AL",
+              "accreditationNumber": "A26EX5000000913AL",
               "status": "approved"
             }
           ]
@@ -1818,7 +1818,7 @@ public class HttpReExApiAdapterTests
                   "material": "glass",
                   "wasteProcessingType": "reprocessor",
                   "accreditationId": "acc-reprocessor-1",
-                  "registrationNumber": "R25SR500000912GL",
+                  "registrationNumber": "R25ER5000000912GR",
                   "validFrom": "2026-01-01",
                   "validTo": "2027-01-01",
                   "reprocessingType": "input",
@@ -1843,7 +1843,7 @@ public class HttpReExApiAdapterTests
                   },
                   "validFrom": "2026-01-01",
                   "validTo": "2027-01-01",
-                  "accreditationNumber": "R-ACC12045GL",
+                  "accreditationNumber": "A26ER5000000912GR",
                   "reprocessingType": "input",
                   "status": "approved"
                 }
@@ -1874,7 +1874,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -1892,7 +1892,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -1930,7 +1930,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -1948,7 +1948,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -1980,7 +1980,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -1998,7 +1998,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2030,7 +2030,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2048,7 +2048,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2079,7 +2079,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2097,7 +2097,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2126,7 +2126,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2144,7 +2144,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2177,7 +2177,7 @@ public class HttpReExApiAdapterTests
               "exportPorts": ["Southampton"],
               "wasteProcessingType": "exporter",
               "accreditationId": "acc-exporter-1",
-              "registrationNumber": "E25SR500020912AL",
+              "registrationNumber": "R25EX5000000913AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "status": "approved",
@@ -2194,7 +2194,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "up_to_5000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "E-ACC12245AL",
+              "accreditationNumber": "A26EX5000000913AL",
               "status": "approved"
             }
           ]
@@ -2225,7 +2225,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2243,7 +2243,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2273,7 +2273,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2307,7 +2307,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2325,7 +2325,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             },
@@ -2338,7 +2338,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12046AL",
+              "accreditationNumber": "A26ER5000000914AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2368,7 +2368,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2386,7 +2386,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "over_10000", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "not-a-date",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2416,7 +2416,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2446,7 +2446,7 @@ public class HttpReExApiAdapterTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2476,7 +2476,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2500,7 +2500,7 @@ public class HttpReExApiAdapterTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2530,7 +2530,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2555,7 +2555,7 @@ public class HttpReExApiAdapterTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2585,7 +2585,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2602,7 +2602,7 @@ public class HttpReExApiAdapterTests
               "orgName": "Test Recycling Solutions Ltd",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }
@@ -2632,7 +2632,7 @@ public class HttpReExApiAdapterTests
               "material": "aluminium",
               "wasteProcessingType": "reprocessor",
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -2650,7 +2650,7 @@ public class HttpReExApiAdapterTests
               "prnIssuance": { "tonnageBand": "up_to_a_million", "signatories": [], "incomeBusinessPlan": [] },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             }

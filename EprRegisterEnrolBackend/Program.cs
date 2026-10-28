@@ -115,7 +115,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         .AddCheck<RequiredConfigHealthCheck>("required-config", tags: ["ready"])
         // RA-448: keeps /health/ready unhealthy until the counter backfill completes,
         // so the platform doesn't route real traffic to the number-generation
-        // endpoints before the 16 pools are seeded (see RegulatoryNumberSequenceBackfillService).
+        // endpoint before the eight R-* pools are seeded (see RegulatoryNumberSequenceBackfillService).
         .AddCheck<RegulatoryNumberBackfillHealthCheck>(
             "regulatory-number-backfill",
             tags: ["ready"]
@@ -301,10 +301,19 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
 
     if (builder.Environment.IsDevelopment())
-    {
-        builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
-        builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
-    }
+        ConfigureDevelopmentServices(builder);
+}
+
+[ExcludeFromCodeCoverage]
+static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
+{
+    builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
+    builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
+
+    // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
+    // test hosts run as Development too; the local compose stack sets it.
+    if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
+        builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
 }
 
 [ExcludeFromCodeCoverage]

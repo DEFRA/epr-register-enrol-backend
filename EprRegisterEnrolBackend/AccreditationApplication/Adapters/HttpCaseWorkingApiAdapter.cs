@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -351,7 +352,7 @@ public class HttpCaseWorkingApiAdapter(
                 "Cannot withdraw: applicationId={ApplicationId} has no CaseManagementWorkItemId.",
                 application.ApplicationId
             );
-            return new WithdrawResult(false);
+            return WithdrawResult.Failed;
         }
 
         var url = _config.Url;
@@ -361,7 +362,7 @@ public class HttpCaseWorkingApiAdapter(
                 "CaseWorking API URL is not configured. Cannot withdraw workItemId={WorkItemId}.",
                 workItemId
             );
-            return new WithdrawResult(false);
+            return WithdrawResult.Failed;
         }
 
         var body = new WithdrawWorkItemRequest { Reason = reason };
@@ -378,22 +379,25 @@ public class HttpCaseWorkingApiAdapter(
             var response = await client.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
+                // RA-690: 409 means ManagementBe has no withdraw transition because a decision
+                // is already recorded. That's an expected refusal, not a fault.
+                var refused = response.StatusCode == HttpStatusCode.Conflict;
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 LogManagementBeError(
-                    LogLevel.Error,
+                    refused ? LogLevel.Warning : LogLevel.Error,
                     (int)response.StatusCode,
                     endpoint,
                     responseBody
                 );
-                return new WithdrawResult(false);
+                return refused ? WithdrawResult.Refused : WithdrawResult.Failed;
             }
 
-            return new WithdrawResult(true);
+            return WithdrawResult.Succeeded;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
-            return new WithdrawResult(false);
+            return WithdrawResult.Failed;
         }
     }
 

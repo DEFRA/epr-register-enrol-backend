@@ -483,8 +483,8 @@ public class AccreditationApiEndpointTests : IDisposable
             }
         );
         await Seed(
-            accreditation: "A27RE5000280012GL",
-            registration: "R27RE5000280012GL",
+            accreditation: "A27ER5000280012GR",
+            registration: "R27ER5000280012GR",
             orgId: 500028,
             configure: a =>
             {
@@ -506,9 +506,9 @@ public class AccreditationApiEndpointTests : IDisposable
         items
             .Select(i => i.GetProperty("accreditationNumber").GetString())
             .Should()
-            .Equal("A27EX5000270012AL", "A27RE5000280012GL");
+            .Equal("A27ER5000280012GR", "A27EX5000270012AL");
 
-        var exporter = items[0];
+        var exporter = items[1];
         exporter.GetProperty("organisationNumber").GetInt32().Should().Be(Org);
         exporter.GetProperty("registrationNumber").GetString().Should().Be(Registration);
         exporter.GetProperty("accreditationYear").GetInt32().Should().Be(2027);
@@ -518,7 +518,7 @@ public class AccreditationApiEndpointTests : IDisposable
         exporter.GetProperty("tonnageBand").GetString().Should().Be("up_to_5000");
         exporter.TryGetProperty("glassRecyclingProcess", out _).Should().BeFalse();
 
-        var glass = items[1];
+        var glass = items[0];
         glass.GetProperty("organisationNumber").GetInt32().Should().Be(500028);
         glass.GetProperty("glassRecyclingProcess").GetString().Should().Be("glass_re_melt");
         glass.GetProperty("wasteProcessingType").GetString().Should().Be("reprocessor");

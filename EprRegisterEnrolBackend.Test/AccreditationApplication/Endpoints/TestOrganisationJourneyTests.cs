@@ -117,6 +117,50 @@ public class TestOrganisationJourneyTests(MongoIntegrationFixture fixture)
         read.GetProperty("orgId").GetInt32().Should().BeInRange(900_000, 999_999);
     }
 
+    // RA-690: approval derives the accreditation reference from the seeded registration
+    // reference, so a test organisation's must be valid, and unique per registration so repeated
+    // E2E runs never clash on the derived reference.
+    [Fact]
+    public async Task Seed_ForATestOrganisation_StoresAValidRegistrationReferenceUniquePerRegistration()
+    {
+        await using var factory = new EphemeralMongoTestFactory(
+            fixture,
+            "test_org_reg_ref",
+            Environments.Development
+        );
+        using var client = factory.CreateClient();
+        var ct = TestContext.Current.CancellationToken;
+        var hex = Guid.NewGuid().ToString("N")[..12];
+        var org = $"e2e-{hex}";
+        var baseUrl = "/api/v1/accreditation-applications";
+
+        async Task<string?> SeededRegistrationReference(string registrationId)
+        {
+            var seed = await client.PostAsJsonAsync(
+                $"{baseUrl}/{org}/{registrationId}/Plastic/seed",
+                new { year = 2026 },
+                ct
+            );
+            seed.StatusCode.Should()
+                .Be(HttpStatusCode.Created, await seed.Content.ReadAsStringAsync(ct));
+            var appId = (await ReadJson(seed)).GetProperty("applicationId").GetString();
+            var read = await ReadJson(await client.GetAsync($"{baseUrl}/{org}/{appId}", ct));
+            return read.GetProperty("registrationReference").GetString();
+        }
+
+        var first = await SeededRegistrationReference($"e2e-reg-a-{hex}");
+        var second = await SeededRegistrationReference($"e2e-reg-b-{hex}");
+
+        foreach (var reference in new[] { first, second })
+        {
+            // R + 25 (the prior year asked of ReEx) + E (England) + R (reprocessor) + the test
+            // organisation's 900000-999999 number + 4-digit sequence + PL.
+            reference.Should().MatchRegex("^R25ER9[0-9]{5}[0-9]{4}PL$");
+        }
+        first![..11].Should().Be(second![..11], because: "both belong to the same organisation");
+        first.Should().NotBe(second);
+    }
+
     private static async Task Patch(HttpClient client, string url, object body)
     {
         var ct = TestContext.Current.CancellationToken;

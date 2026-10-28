@@ -126,7 +126,13 @@ public class StubReExApiAdapterTests
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         result.Value!.OrganisationName.Should().Be("Stub Reprocessing Ltd");
-        result.Value!.RegistrationReference.Should().Be("STUB-REG-001");
+        result
+            .Value!.RegistrationReference.Should()
+            .MatchRegex(RegistrationReferenceFormat)
+            .And.StartWith(
+                "R27ER999999",
+                because: "an English reprocessor still gets a reference built from its org number"
+            );
         result
             .Value!.CompanyRegisteredAddress.Should()
             .Be("1 Stub Registered Office, Stubton, ST1 1AB");
@@ -384,6 +390,55 @@ public class StubReExApiAdapterTests
     private static StubReExApiAdapter NewSut() =>
         new(new FakeOrganisationPersistence(), EnabledNullLogger<StubReExApiAdapter>.Instance);
 
+    // RA-690: the operator landing page's 2027 links. The parent repo's
+    // .tasks/ra-690-testing-guidelines.md quotes these references for manual testing, so update it
+    // if one changes.
+    [Theory]
+    [InlineData("50001", MaterialType.Plastic, "R26ER0500012146PL")]
+    [InlineData("50011", MaterialType.Plastic, "R26ER0500114575PL")]
+    [InlineData("50002", MaterialType.Glass, "R26ER0500024527GR")]
+    [InlineData("50003", MaterialType.Plastic, "R26ER0500036908PL")]
+    public async Task GetAccreditationAsync_LandingPageOrganisation_GivesTheDocumentedRegistrationReference(
+        string organisationId,
+        MaterialType materialType,
+        string expected
+    )
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync(
+                organisationId,
+                $"aaa0000000000000000{organisationId}",
+                materialType,
+                2026
+            );
+
+        result.Value!.RegistrationReference.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("50003", "Delta Green Ltd", "Green Works, Leeds, LS10 1AB")]
+    [InlineData("50011", "APPDEV RECYCLING LIMITED", "Unit 11, Wigan, WN1 1AB")]
+    public async Task GetAccreditationAsync_LandingPageReprocessorWithAFixture_UsesItsNameAndSite(
+        string organisationId,
+        string expectedName,
+        string expectedSite
+    )
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync(
+                organisationId,
+                $"aaa0000000000000000{organisationId}",
+                MaterialType.Plastic,
+                2026
+            );
+
+        result.Value!.OrganisationName.Should().Be(expectedName);
+        result.Value.SiteAddress.Should().Be(expectedSite);
+        result.Value.Nation.Should().Be(Nation.England);
+        result.Value.IsExporter.Should().BeFalse();
+        result.Value.PermitNumbers.Should().Equal($"WML{organisationId}");
+    }
+
     [Fact]
     public async Task GetAccreditationAsync_TestOrganisation_NamesItAfterItsIdInEngland()
     {
@@ -449,6 +504,181 @@ public class StubReExApiAdapterTests
         first.IsSuccess.Should().BeTrue(because: first.Error?.Message);
         first.Value.Should().BeInRange(900_000, 999_999);
         again.Value.Should().Be(first.Value);
+    }
+
+    // ---------------- RA-690: derived registration reference ----------------
+
+    // R + YY + agency {E|S|W|N} + {R|X} + 6-digit OrgId + 4-digit sequence + material code.
+    private const string RegistrationReferenceFormat =
+        "^R[0-9]{2}[ESWN][RX][0-9]{6}[0-9]{4}(ST|WO|AL|FB|PA|PL|GR|GO)$";
+
+    [Fact]
+    public async Task GetAccreditationAsync_TestOrganisation_ReturnsAValidRegistrationReference()
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Plastic, 2025);
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.RegistrationReference.Should().MatchRegex(RegistrationReferenceFormat);
+        result
+            .Value.RegistrationReference.Should()
+            .StartWith(
+                "R25ER",
+                because: "YY is the year requested from ReEx, and a test organisation is an English reprocessor"
+            )
+            .And.EndWith("PL");
+    }
+
+    // Pinned literal, computed independently of the adapter (FNV-1a of the org and registration
+    // ids): proves the reference is stable across processes and restarts, not just within one
+    // run, so re-seeding the same registration always gives the same reference.
+    [Fact]
+    public async Task GetAccreditationAsync_TestOrganisation_RegistrationReferenceIsStable()
+    {
+        var first = await NewSut()
+            .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Plastic, 2025);
+        var again = await NewSut()
+            .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Plastic, 2025);
+
+        first.Value!.RegistrationReference.Should().Be("R25ER9730739108PL");
+        again.Value!.RegistrationReference.Should().Be(first.Value.RegistrationReference);
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_DifferentRegistrationIds_GiveDifferentRegistrationReferences()
+    {
+        var sut = NewSut();
+
+        var a = await sut.GetAccreditationAsync(
+            "e2e-c0ffee",
+            "e2e-reg-a",
+            MaterialType.Plastic,
+            2025
+        );
+        var b = await sut.GetAccreditationAsync(
+            "e2e-c0ffee",
+            "e2e-reg-b",
+            MaterialType.Plastic,
+            2025
+        );
+
+        a.Value!.RegistrationReference.Should().MatchRegex(RegistrationReferenceFormat);
+        b.Value!.RegistrationReference.Should().NotBe(a.Value.RegistrationReference);
+    }
+
+    [Theory]
+    [InlineData("60001", "R26ER060001")] // ea
+    [InlineData("60002", "R26SR060002")] // sepa
+    [InlineData("60003", "R26WR060003")] // nrw
+    [InlineData("60004", "R26NR060004")] // niea
+    [InlineData("50005", "R26EX050005")] // exporter, no regulator code -> England
+    public async Task GetAccreditationAsync_NumericFakeOrganisation_ReferenceUsesItsNationProcessTypeAndOrgNumber(
+        string organisationId,
+        string expectedPrefix
+    )
+    {
+        var org = await new FakeOrganisationPersistence().GetByOrgIdAsync(
+            int.Parse(organisationId, System.Globalization.CultureInfo.InvariantCulture)
+        );
+
+        var result = await NewSut()
+            .GetAccreditationAsync(
+                organisationId,
+                org!.Registrations![0].Id.ToString(),
+                MaterialType.Plastic,
+                2026
+            );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result
+            .Value!.RegistrationReference.Should()
+            .MatchRegex(RegistrationReferenceFormat)
+            .And.StartWith(expectedPrefix);
+    }
+
+    [Theory]
+    [InlineData(MaterialType.Steel, "ST")]
+    [InlineData(MaterialType.Wood, "WO")]
+    [InlineData(MaterialType.Aluminium, "AL")]
+    [InlineData(MaterialType.Fibre, "FB")]
+    [InlineData(MaterialType.Paper, "PA")]
+    [InlineData(MaterialType.Plastic, "PL")]
+    public async Task GetAccreditationAsync_RegistrationReferenceEndsWithTheMaterialCode(
+        MaterialType materialType,
+        string expectedCode
+    )
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", materialType, 2025);
+
+        result
+            .Value!.RegistrationReference.Should()
+            .MatchRegex(RegistrationReferenceFormat)
+            .And.EndWith(expectedCode);
+    }
+
+    [Theory]
+    [InlineData("glass_re_melt", "GR")]
+    [InlineData("glass_other", "GO")]
+    [InlineData("glass_pulverise", "GO")] // unrecognised: no process, so "other"
+    public async Task GetAccreditationAsync_Glass_RegistrationReferenceReflectsTheRecyclingProcess(
+        string glassRecyclingProcess,
+        string expectedCode
+    )
+    {
+        var fakeOrgs = new FakeOrganisationPersistence();
+        var registrationId = ObjectId.GenerateNewId();
+        await fakeOrgs.CreateAsync(
+            new OrganisationModel
+            {
+                OrgId = 70003,
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = registrationId,
+                        Status = "created",
+                        Material = "glass",
+                        GlassRecyclingProcess = glassRecyclingProcess,
+                        WasteProcessingType = "reprocessor",
+                    },
+                ],
+            }
+        );
+        var sut = new StubReExApiAdapter(fakeOrgs, EnabledNullLogger<StubReExApiAdapter>.Instance);
+
+        var result = await sut.GetAccreditationAsync(
+            "70003",
+            registrationId.ToString(),
+            MaterialType.Glass,
+            2026
+        );
+
+        result
+            .Value!.RegistrationReference.Should()
+            .MatchRegex(RegistrationReferenceFormat)
+            .And.StartWith("R26ER070003")
+            .And.EndWith(expectedCode);
+    }
+
+    // An id with no usable 6-digit org number - a UUID (what a real ReEx organisation id is),
+    // a number too long for the OrgId segment, or a signed one - is hashed instead.
+    [Theory]
+    [InlineData("c14854d9-e20a-41b3-87d5-a1fd4bbe2153", "R26ER024451")]
+    [InlineData("1234567", "R26ER378663")]
+    [InlineData("-5", "R26ER092279")]
+    public async Task GetAccreditationAsync_NoUsableOrgNumber_ReferenceUsesAStableHashOfTheId(
+        string organisationId,
+        string expectedPrefix
+    )
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync(organisationId, "reg-1", MaterialType.Plastic, 2026);
+
+        result
+            .Value!.RegistrationReference.Should()
+            .MatchRegex(RegistrationReferenceFormat)
+            .And.StartWith(expectedPrefix);
     }
 
     [Fact]

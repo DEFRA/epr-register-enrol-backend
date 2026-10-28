@@ -121,7 +121,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
             );
         }
 
-        return Task.FromResult(new WithdrawResult(true));
+        return Task.FromResult(WithdrawResult.Succeeded);
     }
 
     public Task NotifySiteAddedAsync(

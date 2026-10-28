@@ -74,7 +74,7 @@ public class ReExOrganisationFixtureTests
 
         reprocessor.Id.Should().Be("reg-reprocessor-1");
         reprocessor.AccreditationId.Should().Be("acc-reprocessor-1");
-        reprocessor.RegistrationNumber.Should().Be("R25SR500000912AL");
+        reprocessor.RegistrationNumber.Should().Be("R25ER5000000912AL");
         reprocessor.SubmittedToRegulator.Should().Be("ea");
         reprocessor.Site!.Address!.Line1.Should().Be("Reprocessor Site Road");
         reprocessor.Site.GridReference.Should().Be("TQ 132 546");
@@ -112,7 +112,7 @@ public class ReExOrganisationFixtureTests
             .Subject;
 
         exporter.AccreditationId.Should().Be("acc-exporter-1");
-        exporter.RegistrationNumber.Should().Be("E25SR500020912AL");
+        exporter.RegistrationNumber.Should().Be("R25EX5000000913AL");
         exporter.NoticeAddress!.FullAddress.Should().Be("1 Example Parade, Example Town");
         exporter.ExportPorts.Should().BeEquivalentTo(["Southampton", "Portsmouth"]);
         exporter.OrsFileUploads.Should().ContainSingle();
@@ -246,7 +246,7 @@ public class ReExOrganisationFixtureTests
                 }
               ],
               "accreditationId": "acc-reprocessor-1",
-              "registrationNumber": "R25SR500000912AL",
+              "registrationNumber": "R25ER5000000912AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "reprocessingType": "input",
@@ -275,7 +275,7 @@ public class ReExOrganisationFixtureTests
                 }
               ],
               "accreditationId": "acc-exporter-1",
-              "registrationNumber": "E25SR500020912AL",
+              "registrationNumber": "R25EX5000000913AL",
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
               "overseasSites": {
@@ -310,7 +310,7 @@ public class ReExOrganisationFixtureTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "R-ACC12045AL",
+              "accreditationNumber": "A26ER5000000912AL",
               "reprocessingType": "input",
               "status": "approved"
             },
@@ -335,7 +335,7 @@ public class ReExOrganisationFixtureTests
               },
               "validFrom": "2026-01-01",
               "validTo": "2027-01-01",
-              "accreditationNumber": "E-ACC12245AL",
+              "accreditationNumber": "A26EX5000000913AL",
               "status": "approved"
             }
           ]

@@ -2,11 +2,17 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
-// RA-448 / AC4 (launch blocker): seeds all 16 regulatoryNumberSequences counter
-// keys to at least the real-world maximum observed per pool, so this endpoint's
-// first-ever generated number never collides with one already issued outside
-// this system. Runs once at startup; SeedIfHigherAsync never lowers an existing
-// higher value, so re-running on every deploy is safe (idempotent).
+// RA-448 / AC4 (launch blocker): seeds the eight registration (R-*)
+// regulatoryNumberSequences counter keys to at least the real-world maximum
+// observed per pool, so this endpoint's first-ever generated number never
+// collides with one already issued outside this system. Runs once at startup;
+// SeedIfHigherAsync never lowers an existing higher value, so re-running on
+// every deploy is safe (idempotent).
+//
+// RA-690: accreditation references are derived from the registration reference
+// (AccreditationReferenceDerivation), never drawn from a counter, so the A-*
+// pools are no longer seeded. Any A-* documents already in Mongo are left in
+// place deliberately - no migration, nothing here touches them.
 //
 // A BackgroundService (not a blocking IHostedService.StartAsync), matching
 // DevScanAutoCompleteService's pattern: the generic host awaits StartAsync
@@ -27,7 +33,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // from the live production data / most recent register export before this goes
 // to production, since more numbers will have been issued since the snapshot
 // was taken (see the RA-448 design doc's "Starting values for the 16 counters"
-// section for the full derivation).
+// section for the full derivation - only its registration half still applies).
 public class RegulatoryNumberSequenceBackfillService(
     IRegulatoryNumberSequenceCounterPersistence counters,
     IRegulatoryNumberBackfillStatus status,
@@ -47,14 +53,6 @@ public class RegulatoryNumberSequenceBackfillService(
         ["R-SX"] = 69,
         ["R-WR"] = 74,
         ["R-WX"] = 73,
-        ["A-ER"] = 320,
-        ["A-EX"] = 318,
-        ["A-NR"] = 90,
-        ["A-NX"] = 91,
-        ["A-SR"] = 71,
-        ["A-SX"] = 69,
-        ["A-WR"] = 74,
-        ["A-WX"] = 73,
     };
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

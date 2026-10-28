@@ -148,9 +148,30 @@ public class FakeOrganisationPersistenceTests
     {
         var sut = new FakeOrganisationPersistence();
 
-        var result = (await sut.SearchByValueAsync("99999999")).ToList();
+        var result = (await sut.SearchByValueAsync("R26SR0000020001PL")).ToList();
 
         result.Should().ContainSingle(o => o.OrgId == 2);
+    }
+
+    // RA-690: approval derives the accreditation reference from a registration reference, so the
+    // seeded data must only ever hold valid, distinct 17-character registration references.
+    [Fact]
+    public async Task SeededOrganisations_AllHoldValidDistinctRegistrationReferences()
+    {
+        var sut = new FakeOrganisationPersistence();
+        var registrationNumbers = new List<string?>();
+        foreach (var summary in await sut.GetAllAsync())
+        {
+            var org = await sut.GetByOrgIdAsync(summary.OrgId);
+            registrationNumbers.Add(org!.CompanyDetails?.RegistrationNumber);
+        }
+
+        const string registrationReferenceFormat =
+            "^R[0-9]{2}[ESWN][RX][0-9]{6}[0-9]{4}(ST|WO|AL|FB|PA|PL|GR|GO)$";
+        registrationNumbers
+            .Should()
+            .AllSatisfy(n => n.Should().MatchRegex(registrationReferenceFormat))
+            .And.OnlyHaveUniqueItems();
     }
 
     [Fact]
