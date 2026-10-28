@@ -26,9 +26,11 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // a readiness probe only reads a stored result and never calls Mongo itself.
 // If building them or the check fails (Mongo briefly unreachable at boot), it
 // retries in the background with backoff until the check passes, so readiness
-// recovers without a restart. A retry re-resolves the collections, which
-// re-runs their index creation: MS DI does not cache a singleton whose
-// constructor threw.
+// recovers without a restart. A retry re-resolves the collections; for one
+// whose constructor threw (MS DI does not cache it) that re-runs its index
+// creation. A collection that was built but had an index skipped by the
+// reconciler (it logs and carries on) is only re-checked, so readiness stays
+// unhealthy, naming the missing index, until the next deploy.
 //
 // The resolution runs on a pool thread wrapped in WaitAsync(stoppingToken): on
 // shutdown the awaiting caller returns promptly instead of holding the host open
@@ -67,10 +69,8 @@ public class MongoIndexInitializerService(
                     {
                         // Resolving each singleton runs its MongoService<T>
                         // constructor, which is where EnsureIndexes lives.
-                        _ =
-                            serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
-                        _ =
-                            serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
+                        _ = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
+                        _ = serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
                         _ = serviceProvider.GetRequiredService<IPendingUploadService>();
                         _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
                     },

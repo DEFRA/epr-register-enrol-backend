@@ -32,7 +32,9 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         _databaseName = MongoIntegrationFixture.NewDatabaseName("indexrules");
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _ = new OrganisationPersistence(_factory, NullLoggerFactory.Instance);
-        _organisations = _factory.GetCollection<OrganisationEntity>(DomainModelCollections.Organisations);
+        _organisations = _factory.GetCollection<OrganisationEntity>(
+            DomainModelCollections.Organisations
+        );
         _registrations = new RegistrationPersistence(_factory, NullLoggerFactory.Instance, _clock);
         _sites = new OverseasSitePersistence(_factory, NullLoggerFactory.Instance, _clock);
         _applications = new ApplicationVersionPersistence(
@@ -389,13 +391,22 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         // Enums nested in the sections are strings too, not the legacy int32s.
         rawApplication["prns"]["plannedTonnageBand"].Should().Be((BsonValue)"up_to_10000");
         rawApplication["prns"]["sectionStatus"].Should().Be((BsonValue)"Submitted");
-        rawApplication["prns"]["versions"][0]["plannedTonnageBand"].Should().Be((BsonValue)"up_to_500");
+        rawApplication["prns"]
+            ["versions"][0]["plannedTonnageBand"]
+            .Should()
+            .Be((BsonValue)"up_to_500");
         rawApplication["businessPlan"]["sectionStatus"].Should().Be((BsonValue)"Completed");
         rawApplication["samplingPlan"]["sectionStatus"].Should().Be((BsonValue)"Queried");
         rawApplication["samplingPlan"]["files"][0]["scanStatus"].Should().Be((BsonValue)"Clean");
-        rawApplication["samplingPlan"]["files"][0]["documentType"].Should().Be((BsonValue)"SamplingPlan");
+        rawApplication["samplingPlan"]
+            ["files"][0]["documentType"]
+            .Should()
+            .Be((BsonValue)"SamplingPlan");
         rawApplication["besEvidence"]["sectionStatus"].Should().Be((BsonValue)"InProgress");
-        rawApplication["overseasSitesSection"]["sectionStatus"].Should().Be((BsonValue)"NotStarted");
+        rawApplication["overseasSitesSection"]
+            ["sectionStatus"]
+            .Should()
+            .Be((BsonValue)"NotStarted");
         rawAccreditation["samplingPlanFiles"][0]["scanStatus"].Should().Be((BsonValue)"Clean");
 
         var readBack = await _sites.Versions.GetCurrentAsync(site.EntityId, cancellationToken: Ct);
@@ -411,7 +422,12 @@ public sealed class DomainModelIndexRuleTests : IDisposable
             cancellationToken: Ct
         );
         readApplication!.Prns.PlannedTonnageBand.Should().Be(TonnageBand.UpTo10000);
-        (await _accreditations.Versions.GetCurrentAsync(accreditation.EntityId, cancellationToken: Ct))!
+        (
+            await _accreditations.Versions.GetCurrentAsync(
+                accreditation.EntityId,
+                cancellationToken: Ct
+            )
+        )!
             .TonnageBand.Should()
             .Be(TonnageBand.UpTo5000);
     }
@@ -447,16 +463,38 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     [Fact]
     public void EntityTypes_EveryNestedClass_BelongsToTheDomainModel()
     {
-        var offenders = StoredMembers()
-            .Where(m => !m.Type.IsEnum && IsOurs(m.Type))
-            .Where(m =>
-                m.Type.Namespace?.StartsWith("EprRegisterEnrolBackend.DomainModel", StringComparison.Ordinal)
-                != true
-            )
-            .Select(m => $"{m.Path} ({m.Type.Name})");
+        var storedClasses = StoredMembers()
+            .Select(m => m.Type)
+            .Concat(s_entityTypes)
+            .Where(t => !t.IsEnum && IsOurs(t))
+            .Distinct()
+            .ToList();
+        var offenders = storedClasses
+            .Where(t => !IsDomainModel(t))
+            .Select(t => t.FullName)
+            // A domain class could also take legacy members by inheriting from a legacy class.
+            .Concat(
+                storedClasses.SelectMany(t =>
+                    BaseTypes(t)
+                        .Where(b => IsOurs(b) && !IsDomainModel(b))
+                        .Select(b => $"{t.Name} : {b.FullName}")
+                )
+            );
 
         offenders.Should().BeEmpty();
     }
+
+    private static IEnumerable<Type> BaseTypes(Type type)
+    {
+        for (var b = type.BaseType; b is not null; b = b.BaseType)
+        {
+            yield return b;
+        }
+    }
+
+    private static bool IsDomainModel(Type type) =>
+        type.Namespace?.StartsWith("EprRegisterEnrolBackend.DomainModel", StringComparison.Ordinal)
+        == true;
 
     private static List<(string Path, PropertyInfo Property, Type Type)> StoredMembers()
     {
