@@ -118,6 +118,18 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         params OverseasSiteModel[] sites
     ) => (await _applications.CreateAsync(NewApplication(status, updatedAt, sites)))!;
 
+    private async Task<AccreditationApplicationModel> ApplicationForYearAsync(
+        int year,
+        ApplicationStatus status,
+        DateTime updatedAt,
+        params OverseasSiteModel[] sites
+    )
+    {
+        var application = NewApplication(status, updatedAt, sites);
+        application.Year = year;
+        return (await _applications.CreateAsync(application))!;
+    }
+
     private Task<GroupMigrationResult> MigrateAsync(AccreditationApplicationModel application) =>
         MigrateAsync(application.Id!.Value);
 
@@ -263,8 +275,9 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     [Fact]
     public async Task NewApplicationInAMigratedGroup_IsMigratedOntoTheExistingSites()
     {
+        // A withdrawn application is not live, so the operator can start again for the same year.
         var first = await ApplicationAsync(
-            ApplicationStatus.Saved,
+            ApplicationStatus.Withdrawn,
             Day1,
             Site(1, "001", "Site One")
         );
@@ -300,7 +313,8 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     [Fact]
     public async Task ConflictingSiteDetails_TheNewestApprovedApplicationWins()
     {
-        var approved = await ApplicationAsync(
+        var approved = await ApplicationForYearAsync(
+            2026,
             ApplicationStatus.Approved,
             Day1,
             Site(1, "001", "Approved Name")
@@ -469,8 +483,11 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         );
     }
 
+    // One live application per organisation, registration and year is the rule, but Seed only enforces it
+    // best-effort (a read-then-create), so legacy data can break it. Such data is linked, never merged, and
+    // listed as a defect (§6.3).
     [Fact]
-    public async Task DuplicateLiveApplications_AreBothLinkedAndListed()
+    public async Task DuplicateLiveApplications_AreBothLinkedAndListedAsADefect()
     {
         var first = await ApplicationAsync(
             ApplicationStatus.Saved,
@@ -566,7 +583,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     {
         var applications = Enumerable
             .Range(0, ApplicationGroupMigrator.MaxGroupSize + 1)
-            .Select(_ => NewApplication(ApplicationStatus.Saved, Day1))
+            .Select(_ => NewApplication(ApplicationStatus.Withdrawn, Day1))
             .ToList();
         await _factory
             .GetCollection<AccreditationApplicationModel>("accreditationApplications")
@@ -587,7 +604,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     public async Task TwoConcurrentFirstTouches_ProduceOneModel()
     {
         var first = await ApplicationAsync(
-            ApplicationStatus.Saved,
+            ApplicationStatus.Withdrawn,
             Day1,
             Site(1, "001", "Site One"),
             Site(2, "002", "New Site", isNew: true, Interim(3, "001"))
