@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApi;
+using EprRegisterEnrolBackend.TestData;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
@@ -170,6 +171,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Configuration.GetSection(AccreditationReferenceCorrectionOptions.SectionName)
     );
     builder.Services.AddHostedService<AccreditationReferenceCorrectionMigration>();
+
+    // RA-646: fixed test accreditations for other teams to read in dev, test and ext-test.
+    // Off unless TestData:SeedOnStartup is set, which only those environments do.
+    builder.Services.Configure<TestDataConfig>(
+        builder.Configuration.GetSection(TestDataConfig.SectionName)
+    );
+    builder.Services.AddSingleton<AccreditationApiTestDataSeeder>();
+    builder.Services.AddHostedService<AccreditationApiTestDataSeedingService>();
 
     // CDP Uploader
     builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
