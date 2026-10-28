@@ -17,6 +17,7 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
     <PackageReference Include="EphemeralMongo" Version="3.2.0" />
     <PackageReference Include="FluentAssertions" Version="8.10.0" />
+    <PackageReference Include="Jint" Version="4.17.0" />
     <PackageReference Include="NSubstitute" Version="6.2.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0">
       <PrivateAssets>all</PrivateAssets>
@@ -34,6 +35,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\EprRegisterEnrolBackend\EprRegisterEnrolBackend.csproj" />
+  </ItemGroup>
+
+  <!-- The production survey script, run by LegacyDataSurveyScriptParityTests under Jint. -->
+  <ItemGroup>
+    <None Include="..\tools\domain-model\legacy-data-survey.js" Link="DomainModel\Diagnostics\legacy-data-survey.js" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

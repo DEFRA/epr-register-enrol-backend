@@ -9,6 +9,7 @@ namespace EprRegisterEnrolBackend.DomainModel.Diagnostics;
 /// current model, and never writes. The status filters assume statuses are strings; documents with int32 statuses
 /// are counted separately and are exactly the ones those filters cannot see. The same queries are packaged for
 /// production as tools/domain-model/legacy-data-survey.js (mongosh); change both together.
+/// LegacyDataSurveyScriptParityTests runs the script against the same data and fails if their counts differ.
 /// </summary>
 public static class LegacyDataSurvey
 {

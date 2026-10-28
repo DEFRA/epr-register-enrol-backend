@@ -14,6 +14,9 @@
 // The same survey runs in test environments at startup (DomainModelDiagnosticsService, behind
 // DomainModel:DiagnosticsEnabled). The queries mirror
 // EprRegisterEnrolBackend/DomainModel/Diagnostics/LegacyDataSurvey.cs; change both together.
+// LegacyDataSurveyScriptParityTests (in the test project) runs this script under Jint against the same data and
+// fails if any count differs. It stands in for mongosh with db.getCollection(...).countDocuments,
+// .aggregate(...).toArray() and printjson only, so use only those here.
 
 const numeric = ["int", "long"];
 const legacySiteNumber = { $regex: "^SN-" };
