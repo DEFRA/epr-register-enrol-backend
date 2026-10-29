@@ -745,31 +745,27 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
-
-        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        if (site is null)
-            return Results.NotFound();
-
-        if (
-            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
-            { } codesError
-        )
-            return codesError;
-
-        // Snapshotted before mutation, as an independent list - not aliased with the request's
-        // own OperationCodes below (RecyclingOperationsAuditPersistence's tests require the
-        // before/after lists to remain independent).
-        var beforeCodes = site.OperationCodes.ToList();
-        site.OperationCodes = request.OperationCodes;
-
-        var updated = await services.Persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to update recycling operations.");
+        // RA-644 B8g: the change runs in the dual-write unit of work; the audit record is written
+        // only once it has committed. A box, not a local, so the analyser sees the callback set it
+        // (S2583).
+        var beforeCodes = new StrongBox<List<string>?>();
+        var result = await services.UnitOfWork.RunAsync(
+            nameof(PatchRecyclingOperations),
+            applicationId,
+            async (session, _) =>
+            {
+                (var changed, beforeCodes.Value) = await ChangeRecyclingOperationsAsync(
+                    services.Persistence,
+                    new SiteRoute(organisationId, applicationId, siteId),
+                    request,
+                    session
+                );
+                return changed;
+            },
+            services.CancellationToken
+        );
+        if (beforeCodes.Value is null || !Committed(result))
+            return result;
 
         await services.AuditPersistence.RecordAsync(
             new RecyclingOperationsAuditRecord
@@ -781,18 +777,61 @@ public static class AccreditationApplicationEndpoints
                 OrganisationId = organisationId,
                 ApplicationId = applicationId,
                 SiteId = siteId,
-                BeforeCodes = beforeCodes,
+                BeforeCodes = beforeCodes.Value,
                 AfterCodes = request.OperationCodes,
             },
             services.CancellationToken
         );
+        return result;
+    }
+
+    private sealed record SiteRoute(string OrganisationId, string ApplicationId, int SiteId);
+
+    // RA-644 B8g: PatchRecyclingOperations' read and write, with the session. Returns the codes
+    // the site had before, for the audit record, or null when nothing was written.
+    private static async Task<(
+        IResult Result,
+        List<string>? BeforeCodes
+    )> ChangeRecyclingOperationsAsync(
+        IAccreditationApplicationPersistence persistence,
+        SiteRoute route,
+        PatchRecyclingOperationsRequest request,
+        IClientSessionHandle? session
+    )
+    {
+        var (organisationId, applicationId, siteId) = route;
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
+        if (application is null)
+            return (Results.NotFound(), null);
+        if (RejectIfTerminal(application) is { } conflict)
+            return (conflict, null);
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return (Results.NotFound(), null);
+
+        if (
+            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
+            { } codesError
+        )
+            return (codesError, null);
+
+        // Snapshotted before mutation, as an independent list - not aliased with the request's
+        // own OperationCodes below (RecyclingOperationsAuditPersistence's tests require the
+        // before/after lists to remain independent).
+        var beforeCodes = site.OperationCodes.ToList();
+        site.OperationCodes = request.OperationCodes;
+
+        var updated = await persistence.UpdateAsync(application, session);
+        if (updated is null)
+            return (Results.Problem("Failed to update recycling operations."), null);
 
         // `site` is the same object already mutated above (and, on the real Mongo-backed
         // persistence, `updated` is that same `application` reference echoed back on success -
         // see AccreditationApplicationPersistence.UpdateAsync) - returning it directly avoids
         // re-deriving it from `updated` with a null-forgiving lookup, matching AddInterimSite's
         // own pattern of returning the local object it already holds.
-        return Results.Ok(site);
+        return (Results.Ok(site), beforeCodes);
     }
 
     // Bundles PatchRecyclingOperations' DI-service/framework parameters under one
@@ -809,6 +848,7 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence Persistence,
         IValidator<PatchRecyclingOperationsRequest> Validator,
         IRecyclingOperationsAuditPersistence AuditPersistence,
+        IDualWriteUnitOfWork UnitOfWork,
         HttpContext HttpContext,
         CancellationToken CancellationToken
     );
@@ -3747,6 +3787,7 @@ public static class AccreditationApplicationEndpoints
         QueryFromCaseManagementRequest request,
         IAccreditationApplicationPersistence persistence,
         IValidator<QueryFromCaseManagementRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
         HttpContext httpContext,
         ILoggerFactory loggerFactory
     )
@@ -3783,8 +3824,10 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
-        if (application is null)
+        // RA-644 B8g: read once outside the transaction for the application id the unit of work
+        // migrates and syncs; the work reads it again in the session.
+        var known = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        if (known is null)
         {
             logger.LogWarning(
                 "QueryFromCaseManagement: no application found for workItemId={WorkItemId} correlationId={CorrelationId}",
@@ -3793,6 +3836,47 @@ public static class AccreditationApplicationEndpoints
             );
             return Results.NotFound();
         }
+
+        var push = new CaseManagementQueryPush(workItemId, request, correlationId);
+        var result = await unitOfWork.RunAsync(
+            nameof(QueryFromCaseManagement),
+            known.Id.ToString()!,
+            (session, _) => RecordQueryAsync(persistence, logger, push, session),
+            httpContext.RequestAborted
+        );
+
+        // Only the recorded query answers 2xx.
+        if (Committed(result) && logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "QueryFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
+                known.Id,
+                workItemId,
+                correlationId ?? "(absent)"
+            );
+        }
+        return result;
+    }
+
+    private sealed record CaseManagementQueryPush(
+        Guid WorkItemId,
+        QueryFromCaseManagementRequest Request,
+        string? CorrelationId
+    );
+
+    // RA-644 B8g: QueryFromCaseManagement's checks and write, run in the unit of work with the
+    // session on every read and write.
+    private static async Task<IResult> RecordQueryAsync(
+        IAccreditationApplicationPersistence persistence,
+        ILogger logger,
+        CaseManagementQueryPush push,
+        IClientSessionHandle? session
+    )
+    {
+        var (workItemId, request, correlationId) = push;
+        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId, session);
+        if (application is null)
+            return Results.NotFound();
 
         // A second query while one is already open is rejected rather than merged into the
         // existing QueriedSectionKeys (RA-311 §3) — the operator must resubmit the open query
@@ -3881,7 +3965,7 @@ public static class AccreditationApplicationEndpoints
         // write, query or not.
         application.CaseManagementStatusUpdatedAt = queriedAt;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         if (updated is null)
         {
             logger.LogError(
@@ -3893,15 +3977,6 @@ public static class AccreditationApplicationEndpoints
             return Results.Problem("Failed to record query from case management.");
         }
 
-        if (logger.IsEnabled(LogLevel.Information))
-        {
-            logger.LogInformation(
-                "QueryFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
-                updated.Id,
-                workItemId,
-                correlationId ?? "(absent)"
-            );
-        }
         return Results.Ok(updated);
     }
 

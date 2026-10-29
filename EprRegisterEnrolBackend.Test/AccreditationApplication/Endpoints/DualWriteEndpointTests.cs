@@ -997,6 +997,116 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         await AssertWrittenAsVersion2Async(application);
     }
 
+    private static IApplicationModelSync FailingSync()
+    {
+        var sync = Substitute.For<IApplicationModelSync>();
+        sync.SyncAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Throws(new InvalidOperationException("model write failed"));
+        return sync;
+    }
+
+    private Task<HttpResponseMessage> PatchRecyclingOperationsAsync(
+        AccreditationApplicationModel application
+    ) =>
+        _client.PatchAsJsonAsync(
+            AppUrl(application, "overseas-sites/1/recycling-operations"),
+            new { operationCodes = new[] { "R4", "R12" } },
+            Ct
+        );
+
+    [Fact]
+    public async Task PatchRecyclingOperations_WritesAnApplicationVersionAndAuditsAfterTheCommit()
+    {
+        var audit = Substitute.For<IRecyclingOperationsAuditPersistence>();
+        Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(audit)));
+        var application = await ApplicationAsync(null, ReExSite());
+
+        var response = await PatchRecyclingOperationsAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var entity = (await CurrentApplicationAsync(application))!;
+        Assert.Equal(2, entity.Version);
+        Assert.Equal(
+            ["R4", "R12"],
+            Entry(entity).ProposedChanges!["operationCodes"].AsBsonArray.Select(c => c.AsString)
+        );
+        await audit
+            .Received(1)
+            .RecordAsync(Arg.Any<RecyclingOperationsAuditRecord>(), Arg.Any<CancellationToken>());
+    }
+
+    private static ApplicationOverseasSiteEntry Entry(ApplicationEntity entity) =>
+        Assert.Single(entity.ApplicationOverseasSites);
+
+    [Fact]
+    public async Task PatchRecyclingOperations_ModelWriteFails_RollsBackAndWritesNoAudit()
+    {
+        var audit = Substitute.For<IRecyclingOperationsAuditPersistence>();
+        var sync = FailingSync();
+        Restart(
+            s_dualWriteOn,
+            services =>
+            {
+                services.Replace(ServiceDescriptor.Singleton(audit));
+                services.Replace(ServiceDescriptor.Singleton(sync));
+            }
+        );
+        var application = await ApplicationAsync(null, ReExSite());
+
+        var response = await PatchRecyclingOperationsAsync(application);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(
+            ["R4"],
+            (await LegacyAsync(application))!.OverseasSites!.Sites[0].OperationCodes
+        );
+        await audit
+            .DidNotReceive()
+            .RecordAsync(Arg.Any<RecyclingOperationsAuditRecord>(), Arg.Any<CancellationToken>());
+    }
+
+    private Task<HttpResponseMessage> QueryPushAsync(AccreditationApplicationModel application) =>
+        _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{application.CaseManagementWorkItemId}/query",
+            new
+            {
+                queryNote = "Please check the business plan.",
+                sectionKeys = new[] { "business-plan" },
+            },
+            Ct
+        );
+
+    [Fact]
+    public async Task QueryPush_WritesAnApplicationVersion()
+    {
+        var (application, _) = await SubmittedWithProposedSiteAsync();
+
+        var response = await QueryPushAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var entity = (await CurrentApplicationAsync(application))!;
+        Assert.Equal(ApplicationStatus.Queried, entity.Status);
+        Assert.Equal(ChangeReason.ApplicationEdited, entity.LastChange.Reason);
+    }
+
+    [Fact]
+    public async Task QueryPush_ModelWriteFails_RollsBackTheLegacyWrite()
+    {
+        FailModelWrites();
+        var (application, _) = await SubmittedWithProposedSiteAsync();
+
+        var response = await QueryPushAsync(application);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal(ApplicationStatus.Submitted, legacy.ApplicationStatus);
+        Assert.Null(legacy.Query);
+    }
+
     [Fact]
     public async Task AddOverseasSite_DualWriteOff_WritesNoModel()
     {
