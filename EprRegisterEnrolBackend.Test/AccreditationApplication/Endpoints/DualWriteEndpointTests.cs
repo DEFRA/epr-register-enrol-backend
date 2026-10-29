@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.CdpUploader.Models;
+using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
@@ -873,6 +875,126 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
             Interlocked.Increment(ref _calls) == 1
                 ? throw new InvalidOperationException("model write failed")
                 : inner.SyncAsync(applicationId, session, cancellationToken);
+    }
+
+    // --- B8g: an Application version on every remaining write path --------------------------------------------
+
+    private static string AppUrl(AccreditationApplicationModel application, string path) =>
+        $"/api/v1/accreditation-applications/{OrganisationId}/{application.Id}/{path}";
+
+    // First touch migrates the application (version 1); the write itself is version 2.
+    private async Task AssertWrittenAsVersion2Async(AccreditationApplicationModel application)
+    {
+        var entity = await CurrentApplicationAsync(application);
+        Assert.NotNull(entity);
+        Assert.Equal(2, entity.Version);
+        Assert.Equal(ChangeReason.ApplicationEdited, entity.LastChange.Reason);
+        Assert.Equal(
+            (await LegacyAsync(application))!.DateLastEdited,
+            entity.DateLastEdited,
+            TimeSpan.FromMilliseconds(1)
+        );
+    }
+
+    [Theory]
+    [InlineData("prns", """{"plannedTonnageBand":"UpTo500"}""")]
+    [InlineData("tonnage", """{"plannedTonnageBand":"UpTo500"}""")]
+    [InlineData(
+        "business-plan",
+        """{"newInfrastructurePercent":10,"newInfrastructureDetail":"A new baler"}"""
+    )]
+    [InlineData("sampling-plan", """{"files":[]}""")]
+    [InlineData("overseas-sites/1/bes-evidence", """{"doYouWantToUploadMoreEvidence":true}""")]
+    public async Task SectionPatch_WritesAnApplicationVersion(string path, string body)
+    {
+        var application = await ApplicationAsync(null, ReExSite());
+
+        var response = await _client.PatchAsync(
+            AppUrl(application, path),
+            new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await AssertWrittenAsVersion2Async(application);
+    }
+
+    [Fact]
+    public async Task SectionPatch_ModelWriteFails_RollsBackTheLegacyWrite()
+    {
+        FailModelWrites();
+        var application = await ApplicationAsync(null, ReExSite());
+
+        var response = await _client.PatchAsJsonAsync(
+            AppUrl(application, "business-plan"),
+            new { newInfrastructurePercent = 10, newInfrastructureDetail = "A new baler" },
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Null((await LegacyAsync(application))!.BusinessPlan.NewInfrastructurePercent);
+    }
+
+    [Fact]
+    public async Task DeleteFile_WritesAnApplicationVersion()
+    {
+        var application = await ApplicationAsync(null, ReExSite());
+        application.SamplingPlan.Files =
+        [
+            new AccreditationApplicationFile
+            {
+                FileId = "file-1",
+                Filename = "plan.pdf",
+                ContentType = "application/pdf",
+                UploadedByUserId = "user-1",
+                S3Key = "plans/plan.pdf",
+            },
+        ];
+        application = (await Applications.UpdateAsync(application))!;
+
+        var response = await _client.DeleteAsync(AppUrl(application, "files/file-1"), Ct);
+
+        Assert.True(response.IsSuccessStatusCode, response.StatusCode.ToString());
+        Assert.Empty((await LegacyAsync(application))!.SamplingPlan.Files);
+        await AssertWrittenAsVersion2Async(application);
+    }
+
+    [Fact]
+    public async Task AddFile_WritesAnApplicationVersion()
+    {
+        var uploads = Substitute.For<IPendingUploadService>();
+        uploads
+            .GetStatusAsync("upload-1", Arg.Any<CancellationToken>())
+            .Returns(
+                new CdpStatusResponse
+                {
+                    UploadStatus = "ready",
+                    ProcessingStatus = "validated",
+                    Form = new CdpCallbackForm
+                    {
+                        File = new CdpCallbackFile
+                        {
+                            FileId = "file-1",
+                            Filename = "plan.pdf",
+                            S3Key = "plans/plan.pdf",
+                            S3Bucket = "bucket",
+                            ContentType = "application/pdf",
+                        },
+                    },
+                }
+            );
+        Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(uploads)));
+        var application = await ApplicationAsync(null, ReExSite());
+
+        var response = await _client.PostAsJsonAsync(
+            AppUrl(application, "files"),
+            new { fileUploadId = "upload-1" },
+            Ct
+        );
+
+        Assert.True(response.IsSuccessStatusCode, response.StatusCode.ToString());
+        Assert.Single((await LegacyAsync(application))!.SamplingPlan.Files);
+        await AssertWrittenAsVersion2Async(application);
     }
 
     [Fact]

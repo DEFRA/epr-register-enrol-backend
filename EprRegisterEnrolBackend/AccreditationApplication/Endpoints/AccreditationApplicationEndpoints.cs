@@ -353,7 +353,12 @@ public static class AccreditationApplicationEndpoints
             (session, _) =>
                 IssueRegistrationNumberAsync(
                     services,
-                    new RegistrationNumberRequest(organisationId, applicationId, request, orgIdResolution),
+                    new RegistrationNumberRequest(
+                        organisationId,
+                        applicationId,
+                        request,
+                        orgIdResolution
+                    ),
                     session
                 ),
             services.CancellationToken
@@ -1119,19 +1124,45 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(application);
     }
 
-    private static async Task<IResult> PatchPrns(
+    private static Task<IResult> PatchPrns(
         string organisationId,
         string applicationId,
         PatchPrnsRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchPrnsRequest> validator
+        IValidator<PatchPrnsRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(PatchPrns),
+            applicationId,
+            (session, _) =>
+                PatchPrnsAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    validator,
+                    session
+                ),
+            cancellationToken
+        );
+
+    // RA-644 B8g: the body of PatchPrns, run in the dual-write unit of work with its session.
+    private static async Task<IResult> PatchPrnsAsync(
+        string organisationId,
+        string applicationId,
+        PatchPrnsRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchPrnsRequest> validator,
+        IClientSessionHandle? session
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1174,25 +1205,51 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update PRNs section.")
             : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchTonnage(
+    private static Task<IResult> PatchTonnage(
         string organisationId,
         string applicationId,
         PatchTonnageRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchTonnageRequest> validator
+        IValidator<PatchTonnageRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(PatchTonnage),
+            applicationId,
+            (session, _) =>
+                PatchTonnageAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    validator,
+                    session
+                ),
+            cancellationToken
+        );
+
+    // RA-644 B8g: the body of PatchTonnage, run in the dual-write unit of work with its session.
+    private static async Task<IResult> PatchTonnageAsync(
+        string organisationId,
+        string applicationId,
+        PatchTonnageRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchTonnageRequest> validator,
+        IClientSessionHandle? session
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1235,23 +1292,49 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null ? Results.Problem("Failed to update tonnage.") : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchBusinessPlan(
+    private static Task<IResult> PatchBusinessPlan(
         string organisationId,
         string applicationId,
         PatchBusinessPlanRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchBusinessPlanRequest> validator
+        IValidator<PatchBusinessPlanRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(PatchBusinessPlan),
+            applicationId,
+            (session, _) =>
+                PatchBusinessPlanAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    validator,
+                    session
+                ),
+            cancellationToken
+        );
+
+    // RA-644 B8g: the body of PatchBusinessPlan, run in the dual-write unit of work with its session.
+    private static async Task<IResult> PatchBusinessPlanAsync(
+        string organisationId,
+        string applicationId,
+        PatchBusinessPlanRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchBusinessPlanRequest> validator,
+        IClientSessionHandle? session
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.UnprocessableEntity(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1314,20 +1397,44 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update business plan section.")
             : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchSamplingPlan(
+    private static Task<IResult> PatchSamplingPlan(
         string organisationId,
         string applicationId,
         PatchSamplingPlanRequest request,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(PatchSamplingPlan),
+            applicationId,
+            (session, _) =>
+                PatchSamplingPlanAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+
+    // RA-644 B8g: the body of PatchSamplingPlan, run in the dual-write unit of work with its session.
+    private static async Task<IResult> PatchSamplingPlanAsync(
+        string organisationId,
+        string applicationId,
+        PatchSamplingPlanRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1362,7 +1469,7 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update sampling plan section.")
             : Results.Ok(updated);
@@ -1615,7 +1722,11 @@ public static class AccreditationApplicationEndpoints
         string IdName,
         Func<AccreditationApplicationModel, Task<IEnumerable<string?>>> Scope,
         Func<AccreditationApplicationModel, string, (IResult? Error, T? Created)> Attach,
-        Func<AccreditationApplicationModel, string, Task<AccreditationApplicationModel?>> WriteIfAbsent
+        Func<
+            AccreditationApplicationModel,
+            string,
+            Task<AccreditationApplicationModel?>
+        > WriteIfAbsent
     )
         where T : class;
 
@@ -1657,7 +1768,11 @@ public static class AccreditationApplicationEndpoints
 
             var (attachError, created) = allocation.Attach(application, generated.OrsId!);
             if (attachError is not null || created is null)
-                return (attachError ?? Results.Problem("Failed to attach the new site."), null, null);
+                return (
+                    attachError ?? Results.Problem("Failed to attach the new site."),
+                    null,
+                    null
+                );
 
             var updated = await allocation.WriteIfAbsent(application, generated.OrsId!);
             if (updated is not null)
@@ -2286,7 +2401,13 @@ public static class AccreditationApplicationEndpoints
             nameof(RevertOverseasSite),
             applicationId,
             (session, _) =>
-                RevertOverseasSiteAsync(organisationId, applicationId, siteId, persistence, session),
+                RevertOverseasSiteAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    persistence,
+                    session
+                ),
             cancellationToken
         );
 
@@ -2474,9 +2595,7 @@ public static class AccreditationApplicationEndpoints
         application!.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application, session);
-        return updated is null
-            ? LostInterimSiteRace(interimSiteId)
-            : Results.Ok(interimSite);
+        return updated is null ? LostInterimSiteRace(interimSiteId) : Results.Ok(interimSite);
     }
 
     /// <summary>
@@ -2532,9 +2651,7 @@ public static class AccreditationApplicationEndpoints
         application!.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application, session);
-        return updated is null
-            ? LostInterimSiteRace(interimSiteId)
-            : Results.NoContent();
+        return updated is null ? LostInterimSiteRace(interimSiteId) : Results.NoContent();
     }
 
     /// <summary>
@@ -2594,9 +2711,7 @@ public static class AccreditationApplicationEndpoints
         application!.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application, session);
-        return updated is null
-            ? LostInterimSiteRace(interimSiteId)
-            : Results.Ok(interimSite);
+        return updated is null ? LostInterimSiteRace(interimSiteId) : Results.Ok(interimSite);
     }
 
     // RA-603: UpdateAsync is version-guarded, so null from it on these routes means another write
@@ -2630,8 +2745,15 @@ public static class AccreditationApplicationEndpoints
         [AsParameters] AddInterimSiteServices services
     )
     {
-        var (persistence, validator, _, unitOfWork, modelNumbers, loggerFactory, cancellationToken) =
-            services;
+        var (
+            persistence,
+            validator,
+            _,
+            unitOfWork,
+            modelNumbers,
+            loggerFactory,
+            cancellationToken
+        ) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
@@ -2686,7 +2808,13 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
         if (Committed(result) && interimSite is not null && updated is not null)
-            await NotifyInterimSiteAddedAsync(services, applicationId, siteId, updated, interimSite);
+            await NotifyInterimSiteAddedAsync(
+                services,
+                applicationId,
+                siteId,
+                updated,
+                interimSite
+            );
 
         return result;
     }
@@ -2749,9 +2877,7 @@ public static class AccreditationApplicationEndpoints
             Scope: application => InterimSiteNumberScope(persistence, application, sources),
             Attach: (application, siteNumber) =>
             {
-                var site = application.OverseasSites?.Sites.FirstOrDefault(s =>
-                    s.SiteId == siteId
-                );
+                var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
                 if (site is null)
                     return (Results.NotFound(), null);
 
@@ -2770,7 +2896,11 @@ public static class AccreditationApplicationEndpoints
                 return (null, interimSite);
             },
             WriteIfAbsent: (application, value) =>
-                persistence.UpdateIfInterimSiteNumberAbsentAsync(application, value, sources.Session)
+                persistence.UpdateIfInterimSiteNumberAbsentAsync(
+                    application,
+                    value,
+                    sources.Session
+                )
         );
 
     private static InterimSiteModel BuildInterimSite(
@@ -2816,15 +2946,40 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence Persistence,
         IValidator<AddBesEvidenceFileRequest> Validator,
         IPendingUploadService PendingUploadService,
+        IDualWriteUnitOfWork UnitOfWork,
         CancellationToken CancellationToken
     );
 
-    private static async Task<IResult> AddBesEvidenceFile(
+    private static Task<IResult> AddBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         AddBesEvidenceFileRequest request,
         [AsParameters] AddBesEvidenceFileServices services
+    ) =>
+        services.UnitOfWork.RunAsync(
+            nameof(AddBesEvidenceFile),
+            applicationId,
+            (session, _) =>
+                AddBesEvidenceFileAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    request,
+                    services,
+                    session
+                ),
+            services.CancellationToken
+        );
+
+    // RA-644 B8g: the body of AddBesEvidenceFile, run in the dual-write unit of work with its session.
+    private static async Task<IResult> AddBesEvidenceFileAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        AddBesEvidenceFileRequest request,
+        AddBesEvidenceFileServices services,
+        IClientSessionHandle? session
     )
     {
         var validation = await services.Validator.ValidateAsync(
@@ -2843,7 +2998,11 @@ public static class AccreditationApplicationEndpoints
             return uploadError;
         var scannedFile = resolvedFile!;
 
-        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(
+            organisationId,
+            applicationId,
+            session
+        );
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -2888,21 +3047,47 @@ public static class AccreditationApplicationEndpoints
         );
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await services.Persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to add BES evidence file.")
             : Results.Created(string.Empty, site.BesEvidence);
     }
 
-    private static async Task<IResult> PatchBesEvidence(
+    private static Task<IResult> PatchBesEvidence(
         string organisationId,
         string applicationId,
         int siteId,
         PatchBesEvidenceRequest request,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(PatchBesEvidence),
+            applicationId,
+            (session, _) =>
+                PatchBesEvidenceAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    request,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+
+    // RA-644 B8g: the body of PatchBesEvidence, run in the dual-write unit of work with its session.
+    private static async Task<IResult> PatchBesEvidenceAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PatchBesEvidenceRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -2929,7 +3114,7 @@ public static class AccreditationApplicationEndpoints
                 .Value;
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update BES evidence.")
             : Results.Ok(updated);
@@ -2946,10 +3131,11 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         string organisationId,
         string applicationId,
-        int siteId
+        int siteId,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return (null, null, Results.NotFound());
         if (RejectIfTerminal(application) is { } conflict)
@@ -2973,19 +3159,46 @@ public static class AccreditationApplicationEndpoints
         return site is null ? (null, null, Results.NotFound()) : (application, site, null);
     }
 
-    private static async Task<IResult> DeleteBesEvidenceFile(
+    private static Task<IResult> DeleteBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         string fileId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(DeleteBesEvidenceFile),
+            applicationId,
+            (session, _) =>
+                DeleteBesEvidenceFileAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    fileId,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+
+    // RA-644 B8g: the body of DeleteBesEvidenceFile, run in the dual-write unit of work with its session.
+    private static async Task<IResult> DeleteBesEvidenceFileAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        string fileId,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
         var (application, site, failure) = await ResolveEditableBesEvidenceSite(
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -3010,22 +3223,57 @@ public static class AccreditationApplicationEndpoints
         site.BesEvidence.BesEvidenceUploads.RemoveAll(f => f.FileId == fileId);
 
         application!.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to delete BES evidence file.")
             : Results.Ok();
     }
 
-    private static async Task<IResult> PatchBesEvidenceFile(
+    // RA-644 B8g: bundles PatchBesEvidenceFile's services under one [AsParameters] argument so the handler
+    // stays under Sonar's 7-parameter limit (S107) once it takes the unit of work.
+    private sealed record PatchBesEvidenceFileServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<PatchBesEvidenceFileRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
+        CancellationToken CancellationToken
+    );
+
+    private static Task<IResult> PatchBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         string fileId,
         PatchBesEvidenceFileRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<PatchBesEvidenceFileRequest> validator
+        [AsParameters] PatchBesEvidenceFileServices services
+    ) =>
+        services.UnitOfWork.RunAsync(
+            nameof(PatchBesEvidenceFile),
+            applicationId,
+            (session, _) =>
+                PatchBesEvidenceFileAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    fileId,
+                    request,
+                    services,
+                    session
+                ),
+            services.CancellationToken
+        );
+
+    // RA-644 B8g: the body of PatchBesEvidenceFile, run in the dual-write unit of work with its session.
+    private static async Task<IResult> PatchBesEvidenceFileAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        string fileId,
+        PatchBesEvidenceFileRequest request,
+        PatchBesEvidenceFileServices services,
+        IClientSessionHandle? session
     )
     {
+        var (persistence, validator, _, _) = services;
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
@@ -3034,7 +3282,8 @@ public static class AccreditationApplicationEndpoints
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -3053,25 +3302,51 @@ public static class AccreditationApplicationEndpoints
             file.BesEvidenceExpiryDate = request.BesEvidenceExpiryDate;
 
         application!.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update BES evidence file.")
             : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchBesEvidenceSection(
+    private static Task<IResult> PatchBesEvidenceSection(
         string organisationId,
         string applicationId,
         PatchBesEvidenceSectionRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchBesEvidenceSectionRequest> validator
+        IValidator<PatchBesEvidenceSectionRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(PatchBesEvidenceSection),
+            applicationId,
+            (session, _) =>
+                PatchBesEvidenceSectionAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    validator,
+                    session
+                ),
+            cancellationToken
+        );
+
+    // RA-644 B8g: the body of PatchBesEvidenceSection, run in the dual-write unit of work with its session.
+    private static async Task<IResult> PatchBesEvidenceSectionAsync(
+        string organisationId,
+        string applicationId,
+        PatchBesEvidenceSectionRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchBesEvidenceSectionRequest> validator,
+        IClientSessionHandle? session
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -3104,7 +3379,7 @@ public static class AccreditationApplicationEndpoints
         }
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update BES evidence section.")
             : Results.Ok(updated);
@@ -3630,16 +3905,38 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(updated);
     }
 
-    private static async Task<IResult> AddFile(
+    // RA-644 B8g: same for AddFile.
+    private sealed record AddFileServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<FileUploadRequest> Validator,
+        IPendingUploadService PendingUploadService,
+        IDualWriteUnitOfWork UnitOfWork,
+        CancellationToken CancellationToken
+    );
+
+    private static Task<IResult> AddFile(
         string organisationId,
         string applicationId,
         FileUploadRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<FileUploadRequest> validator,
-        IPendingUploadService pendingUploadService,
-        CancellationToken cancellationToken
+        [AsParameters] AddFileServices services
+    ) =>
+        services.UnitOfWork.RunAsync(
+            nameof(AddFile),
+            applicationId,
+            (session, _) => AddFileAsync(organisationId, applicationId, request, services, session),
+            services.CancellationToken
+        );
+
+    // RA-644 B8g: the body of AddFile, run in the dual-write unit of work with its session.
+    private static async Task<IResult> AddFileAsync(
+        string organisationId,
+        string applicationId,
+        FileUploadRequest request,
+        AddFileServices services,
+        IClientSessionHandle? session
     )
     {
+        var (persistence, validator, pendingUploadService, _, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
@@ -3660,7 +3957,7 @@ public static class AccreditationApplicationEndpoints
         )
             return Results.UnprocessableEntity("Content type is not permitted.");
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -3711,20 +4008,38 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to add file.")
             : Results.Created(string.Empty, file);
     }
 
-    private static async Task<IResult> DeleteFile(
+    private static Task<IResult> DeleteFile(
         string organisationId,
         string applicationId,
         string fileId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(DeleteFile),
+            applicationId,
+            (session, _) =>
+                DeleteFileAsync(organisationId, applicationId, fileId, persistence, session),
+            cancellationToken
+        );
+
+    // RA-644 B8g: the body of DeleteFile, run in the dual-write unit of work with its session.
+    private static async Task<IResult> DeleteFileAsync(
+        string organisationId,
+        string applicationId,
+        string fileId,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -3753,7 +4068,7 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null ? Results.Problem("Failed to delete file.") : Results.Ok();
     }
 
@@ -4103,8 +4418,14 @@ public static class AccreditationApplicationEndpoints
         [AsParameters] WithdrawServices services
     )
     {
-        var (persistence, caseWorkingAdapter, validator, unitOfWork, loggerFactory, cancellationToken) =
-            services;
+        var (
+            persistence,
+            caseWorkingAdapter,
+            validator,
+            unitOfWork,
+            loggerFactory,
+            cancellationToken
+        ) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
@@ -4163,7 +4484,9 @@ public static class AccreditationApplicationEndpoints
         // RA-644 B8f: the Case Management service has withdrawn the case but this write rolled back.
         // Its withdraw is idempotent (an already-withdrawn work item replays as success), so the
         // operator's retry records the withdrawal; this line makes the gap visible until then.
-        if (result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status500InternalServerError })
+        if (
+            result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status500InternalServerError }
+        )
         {
             loggerFactory
                 .CreateLogger("AccreditationApplicationEndpoints")
