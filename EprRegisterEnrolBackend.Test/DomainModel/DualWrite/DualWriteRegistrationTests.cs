@@ -31,6 +31,12 @@ public class DualWriteRegistrationTests
                 d.ServiceType == typeof(IModelInterimSiteNumbers)
                 && d.ImplementationType == typeof(NoModelInterimSiteNumbers)
         );
+        Assert.Contains(
+            services,
+            d =>
+                d.ServiceType == typeof(IRegistrationNumberRules)
+                && d.ImplementationType == typeof(LegacyRegistrationNumberRules)
+        );
     }
 
     [Fact]
@@ -59,6 +65,12 @@ public class DualWriteRegistrationTests
             d =>
                 d.ServiceType == typeof(IModelInterimSiteNumbers)
                 && d.ImplementationType == typeof(ModelInterimSiteNumbers)
+        );
+        Assert.Contains(
+            services,
+            d =>
+                d.ServiceType == typeof(IRegistrationNumberRules)
+                && d.ImplementationType == typeof(RegistrationNumberRules)
         );
     }
 

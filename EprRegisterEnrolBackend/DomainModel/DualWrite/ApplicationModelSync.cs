@@ -66,6 +66,52 @@ public sealed class ApplicationModelSync(
             session,
             cancellationToken
         );
+        await IssueRegistrationNumberAsync(
+            current.RegistrationId,
+            legacy.RegistrationReference,
+            applicationId,
+            session,
+            cancellationToken
+        );
+    }
+
+    // B8e: a Registration takes the application's number only while it has none. An issued number is never
+    // changed by a write path, so an application holding a different (older) number cannot roll it back.
+    private async Task IssueRegistrationNumberAsync(
+        ObjectId? registrationId,
+        string? number,
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
+    )
+    {
+        if (registrationId is not { } id || string.IsNullOrWhiteSpace(number))
+        {
+            return;
+        }
+
+        var registration = await stores.Registrations.Versions.FindCurrentAsync(
+            Builders<RegistrationEntity>.Filter.Eq(r => r.EntityId, id),
+            session,
+            cancellationToken
+        );
+        if (registration is null || !string.IsNullOrWhiteSpace(registration.RegistrationNumber))
+        {
+            return;
+        }
+
+        registration.RegistrationNumber = number;
+        await stores.Registrations.Versions.UpdateAsync(
+            registration,
+            registration.Version,
+            new ChangeInfo
+            {
+                Reason = ChangeReason.RegistrationNumberIssued,
+                ApplicationId = applicationId,
+            },
+            session,
+            cancellationToken
+        );
     }
 
     /// <summary>One sync of one application. Never shared between calls.</summary>

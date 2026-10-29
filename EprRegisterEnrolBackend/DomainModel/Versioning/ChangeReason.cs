@@ -40,6 +40,11 @@ public enum ChangeReason
     /// <summary>The application that proposed an interim site dropped it before a decision (B8d).</summary>
     ProposedInterimSiteDiscarded,
 
+    /// <summary>
+    /// A Registration with no number was given one (B8e). An issued number is never changed by a write path.
+    /// </summary>
+    RegistrationNumberIssued,
+
     /// <summary>A write path changed the legacy application; its Application version follows it.</summary>
     ApplicationEdited,
 }

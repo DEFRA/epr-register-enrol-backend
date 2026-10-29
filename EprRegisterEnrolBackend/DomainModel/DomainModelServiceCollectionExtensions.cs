@@ -87,6 +87,7 @@ public static class DomainModelServiceCollectionExtensions
         {
             services.AddSingleton<IDualWriteUnitOfWork, LegacyOnlyUnitOfWork>();
             services.AddSingleton<IModelInterimSiteNumbers, NoModelInterimSiteNumbers>();
+            services.AddSingleton<IRegistrationNumberRules, LegacyRegistrationNumberRules>();
             return;
         }
 
@@ -95,6 +96,7 @@ public static class DomainModelServiceCollectionExtensions
         services.AddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
         services.AddSingleton<IApplicationModelSync, ApplicationModelSync>();
         services.AddSingleton<IModelInterimSiteNumbers, ModelInterimSiteNumbers>();
+        services.AddSingleton<IRegistrationNumberRules, RegistrationNumberRules>();
         services.AddSingleton<IDualWriteUnitOfWork, DualWriteUnitOfWork>();
     }
 

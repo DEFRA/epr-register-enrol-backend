@@ -625,6 +625,59 @@ public sealed class ApplicationModelSyncTests : IDisposable
         Assert.Equal(1, (await CurrentSiteAsync("001")).Version);
     }
 
+    // --- B8e: registration numbers --------------------------------------------------------------------------------
+
+    private async Task<RegistrationEntity> CurrentRegistrationAsync(
+        ApplicationEntity application
+    ) =>
+        Assert.Single(
+            await AllAsync(
+                DomainModelCollections.RegistrationVersions,
+                Builders<RegistrationEntity>.Filter.Eq(x => x.IsCurrent, true)
+                    & Builders<RegistrationEntity>.Filter.Eq(
+                        x => x.EntityId,
+                        application.RegistrationId!.Value
+                    )
+            )
+        );
+
+    [Fact]
+    public async Task RegistrationWithoutANumber_IsIssuedTheApplicationsNumber()
+    {
+        var application = await MigratedApplicationAsync(ApplicationStatus.Started);
+        var before = await CurrentRegistrationAsync(await CurrentApplicationAsync(application));
+        Assert.Null(before.RegistrationNumber);
+
+        await EditAsync(application, a => a.RegistrationReference = "R27ER5000270001PL");
+        await SyncAsync(application);
+
+        var registration = await CurrentRegistrationAsync(
+            await CurrentApplicationAsync(application)
+        );
+        Assert.Equal(before.Version + 1, registration.Version);
+        Assert.Equal("R27ER5000270001PL", registration.RegistrationNumber);
+        Assert.Equal(ChangeReason.RegistrationNumberIssued, registration.LastChange.Reason);
+        Assert.Equal(application.Id, registration.LastChange.ApplicationId);
+    }
+
+    [Fact]
+    public async Task RegistrationWithANumber_KeepsItWhateverTheApplicationHolds()
+    {
+        var application = await MigratedApplicationAsync(ApplicationStatus.Started);
+        await EditAsync(application, a => a.RegistrationReference = "R27ER5000270001PL");
+        await SyncAsync(application);
+        var issued = await CurrentRegistrationAsync(await CurrentApplicationAsync(application));
+
+        await EditAsync(application, a => a.RegistrationReference = "R27ER5000270002PL");
+        await SyncAsync(application);
+
+        var registration = await CurrentRegistrationAsync(
+            await CurrentApplicationAsync(application)
+        );
+        Assert.Equal(issued.Version, registration.Version);
+        Assert.Equal("R27ER5000270001PL", registration.RegistrationNumber);
+    }
+
     [Fact]
     public async Task ApplicationNotFoundOrNotMigrated_DoesNothing()
     {
