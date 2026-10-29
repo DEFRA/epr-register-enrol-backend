@@ -39,6 +39,7 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     private readonly List<string?> _failedOperations = [];
     private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
     private readonly IApplicationGroupMigrator _migrator = Substitute.For<IApplicationGroupMigrator>();
+    private readonly IApplicationModelSync _sync = Substitute.For<IApplicationModelSync>();
 
     public DualWriteUnitOfWorkTests(MongoIntegrationFixture fixture)
     {
@@ -90,6 +91,7 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         new(
             _factory,
             migrator ?? _migrator,
+            _sync,
             new DualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
             _logger
         );
@@ -346,6 +348,68 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         await _migrator
             .DidNotReceive()
             .EnsureMigratedAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>());
+        await _sync
+            .DidNotReceive()
+            .SyncAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_SyncsTheModel_InTheWorksSessionAfterTheWork()
+    {
+        var applicationId = ObjectId.GenerateNewId();
+        IClientSessionHandle? workedIn = null;
+        _sync
+            .SyncAsync(applicationId, Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                Assert.NotNull(workedIn);
+                Assert.Same(workedIn, call.Arg<IClientSessionHandle>());
+                Assert.True(workedIn.IsInTransaction);
+                return Task.CompletedTask;
+            });
+
+        var result = await UnitOfWork()
+            .RunAsync(
+                Operation,
+                applicationId.ToString(),
+                (session, _) =>
+                {
+                    workedIn = session;
+                    return Task.FromResult(Results.NoContent());
+                },
+                Ct
+            );
+
+        Assert.IsType<NoContent>(result);
+        await _sync
+            .Received(1)
+            .SyncAsync(applicationId, Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_SyncFails_RollsBackTheWorkAndAnswers500()
+    {
+        var application = await SeedApplicationAsync();
+        _sync
+            .SyncAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
+            .Throws(new InvalidOperationException("model write failed"));
+
+        var result = await UnitOfWork()
+            .RunAsync(
+                Operation,
+                application.Id.ToString()!,
+                async (session, token) =>
+                {
+                    await WriteBothAsync(application, session, token);
+                    return Results.NoContent();
+                },
+                Ct
+            );
+
+        Assert.Equal(StatusCodes.Status500InternalServerError, Assert.IsType<ProblemHttpResult>(result).StatusCode);
+        Assert.Equal(ApplicationStatus.Saved, await StoredStatusAsync(application));
+        Assert.Null(await CurrentRegistrationAsync());
+        Assert.Equal([Operation], _failedOperations);
     }
 
     [Fact]

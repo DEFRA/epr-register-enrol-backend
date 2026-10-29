@@ -625,33 +625,12 @@ public sealed class ApplicationGroupMigrator(
         )
         {
             var plan = PlanFor(application, site);
-            return new ApplicationOverseasSiteEntry
-            {
-                SiteId = site.SiteId,
-                OverseasSiteId = plan?.EntityId,
-                Selected = site.Selected,
-                IsNewSite = site.IsNewSite,
-                RegisteredNowAccredited = site.RegisteredNowAccredited,
-                ProposedChanges = _proposals.GetValueOrDefault(
-                    (application.Id!.Value, site.SiteId)
-                ),
-                PreviousSites = site
-                    .PreviousSites.Select(p =>
-                        LegacyApplicationMapper.ToSubmitted(p).ToBsonDocument()
-                    )
-                    .ToList(),
-                BesEvidence = LegacyApplicationMapper.ToBesEvidence(site.BesEvidence),
-                InterimSites = InterimSiteSync
-                    .All(site)
-                    .Select(i => new ApplicationInterimSiteEntry
-                    {
-                        LegacySiteId = i.SiteId,
-                        SiteNumber =
-                            plan?.InterimNumbers.GetValueOrDefault(i.SiteNumber) ?? i.SiteNumber,
-                        IsNewSite = i.IsNewSite,
-                    })
-                    .ToList(),
-            };
+            return LegacyApplicationMapper.ToSiteEntry(
+                site,
+                plan?.EntityId,
+                _proposals.GetValueOrDefault((application.Id!.Value, site.SiteId)),
+                number => plan?.InterimNumbers.GetValueOrDefault(number) ?? number
+            );
         }
 
         // --- step 5: Accreditations from approved applications -------------------------------------------------------
@@ -768,7 +747,8 @@ public sealed class ApplicationGroupMigrator(
 
         // --- conflicts that span applications -----------------------------------------------------------------------
 
-        // Possible, per the Seed comment: both are linked to the same Registration and listed, never merged (§6.3).
+        // A defect (one live application per key), which the Seed check is only best-effort against: both are linked
+        // to the same Registration and listed, never merged (§6.3).
         private void RecordDuplicateLiveApplications()
         {
             var duplicates = ranked

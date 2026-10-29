@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Entities.Sections;
 using MongoDB.Bson;
@@ -72,6 +73,39 @@ public static class LegacyApplicationMapper
                         })
                         .ToList(),
                 },
+        };
+
+    /// <summary>
+    /// One site's entry on the Application. The caller knows the ORS it maps to, the overlay it carries, and the
+    /// model number each legacy interim site number has.
+    /// </summary>
+    public static ApplicationOverseasSiteEntry ToSiteEntry(
+        OverseasSiteModel site,
+        ObjectId? overseasSiteId,
+        BsonDocument? proposedChanges,
+        Func<string, string> interimSiteNumber
+    ) =>
+        new()
+        {
+            SiteId = site.SiteId,
+            OverseasSiteId = overseasSiteId,
+            Selected = site.Selected,
+            IsNewSite = site.IsNewSite,
+            RegisteredNowAccredited = site.RegisteredNowAccredited,
+            ProposedChanges = proposedChanges,
+            PreviousSites = site
+                .PreviousSites.Select(p => ToSubmitted(p).ToBsonDocument())
+                .ToList(),
+            BesEvidence = ToBesEvidence(site.BesEvidence),
+            InterimSites = InterimSiteSync
+                .All(site)
+                .Select(i => new ApplicationInterimSiteEntry
+                {
+                    LegacySiteId = i.SiteId,
+                    SiteNumber = interimSiteNumber(i.SiteNumber),
+                    IsNewSite = i.IsNewSite,
+                })
+                .ToList(),
         };
 
     /// <summary>A site's BES evidence, or null when it has none.</summary>

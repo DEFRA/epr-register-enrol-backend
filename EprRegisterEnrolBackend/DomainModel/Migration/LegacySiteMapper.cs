@@ -26,6 +26,25 @@ public static class LegacySiteMapper
         return entity;
     }
 
+    /// <summary>
+    /// The ORS with its details replaced by the site's, keeping what the model owns: identity, status, origin, the
+    /// proposing application and the interim sites.
+    /// </summary>
+    public static OverseasSiteEntity WithDetailsOf(
+        OverseasSiteEntity current,
+        OverseasSiteModel site
+    )
+    {
+        var next = NewOverseasSite(current.RegistrationId, site);
+        next.EntityId = current.EntityId;
+        next.Status = current.Status;
+        next.Origin = current.Origin;
+        next.ProposedByApplicationId = current.ProposedByApplicationId;
+        next.InterimSites = current.InterimSites;
+        next.Coordinates ??= current.Coordinates;
+        return next;
+    }
+
     /// <summary>An interim site entry under <paramref name="siteNumber"/>, with no status set.</summary>
     public static InterimSiteEntry ToInterimSite(InterimSiteModel site, string siteNumber) =>
         new()

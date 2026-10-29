@@ -92,6 +92,7 @@ public static class DomainModelServiceCollectionExtensions
         services.AddSingleton<DualWriteMetrics>();
         services.AddSingleton<ApplicationGroupStores>();
         services.AddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
+        services.AddSingleton<IApplicationModelSync, ApplicationModelSync>();
         services.AddSingleton<IDualWriteUnitOfWork, DualWriteUnitOfWork>();
     }
 

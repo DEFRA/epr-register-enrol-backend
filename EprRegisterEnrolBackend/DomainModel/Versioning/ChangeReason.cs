@@ -27,4 +27,16 @@ public enum ChangeReason
     NumberRegenerated,
     LegacySiteNumberRenumbered,
     Migration,
+
+    /// <summary>An operator added a site in an application: the new ORS is Proposed (B8c, option B).</summary>
+    SiteProposed,
+
+    /// <summary>The application that proposed a site edited it before a decision: written through to the ORS.</summary>
+    ProposedSiteEdited,
+
+    /// <summary>The application that proposed a site removed it before a decision.</summary>
+    ProposedSiteDiscarded,
+
+    /// <summary>A write path changed the legacy application; its Application version follows it.</summary>
+    ApplicationEdited,
 }

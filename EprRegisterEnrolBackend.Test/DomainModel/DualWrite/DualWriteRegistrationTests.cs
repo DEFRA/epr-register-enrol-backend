@@ -42,6 +42,12 @@ public class DualWriteRegistrationTests
                 d.ServiceType == typeof(IApplicationGroupMigrator)
                 && d.ImplementationType == typeof(ApplicationGroupMigrator)
         );
+        Assert.Contains(
+            services,
+            d =>
+                d.ServiceType == typeof(IApplicationModelSync)
+                && d.ImplementationType == typeof(ApplicationModelSync)
+        );
     }
 
     [Fact]
