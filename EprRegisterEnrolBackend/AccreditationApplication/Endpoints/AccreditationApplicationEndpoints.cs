@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -3909,7 +3910,8 @@ public static class AccreditationApplicationEndpoints
         }
 
         var push = new CaseManagementStatusPush(workItemId, request, correlationId);
-        var applied = false;
+        // A box, not a local, so the analyser sees the callback set it (S2583).
+        var applied = new StrongBox<bool>();
         var result = await unitOfWork.RunAsync(
             nameof(StatusChangedFromCaseManagement),
             known.Id.ToString()!,
@@ -3921,13 +3923,13 @@ public static class AccreditationApplicationEndpoints
                     push,
                     session
                 );
-                applied = wrote;
+                applied.Value = wrote;
                 return pushResult;
             },
             cancellationToken
         );
 
-        if (applied && Committed(result) && logger.IsEnabled(LogLevel.Information))
+        if (applied.Value && Committed(result) && logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
                 "StatusChangedFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
