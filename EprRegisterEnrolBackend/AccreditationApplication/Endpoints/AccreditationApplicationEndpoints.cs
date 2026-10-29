@@ -1391,6 +1391,37 @@ public static class AccreditationApplicationEndpoints
             );
 
         var bp = application.BusinessPlan;
+        ApplyBusinessPlanFields(bp, request);
+
+        if (bp.SectionStatus != SectionStatus.Queried)
+        {
+            var (status, error) = SectionStatusService.ResolveRequestedStatus(
+                request.SectionStatus,
+                () => SectionStatusService.ComputeBusinessPlan(bp),
+                "Business plan"
+            );
+            if (error is not null)
+                return Results.UnprocessableEntity(error);
+            bp.SectionStatus = status!.Value;
+        }
+        application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
+
+        var updated = await persistence.UpdateAsync(application, session);
+        return updated is null
+            ? Results.Problem("Failed to update business plan section.")
+            : Results.Ok(updated);
+    }
+
+    // Copies each field the request carries onto the business plan; an absent field is left as it is.
+    // Extracted from PatchBusinessPlanAsync to keep its cognitive complexity within the limit (S3776).
+    private static void ApplyBusinessPlanFields(
+        AccreditationApplicationBusinessPlan bp,
+        PatchBusinessPlanRequest request
+    )
+    {
         if (request.NewInfrastructurePercent.HasValue)
             bp.NewInfrastructurePercent = request.NewInfrastructurePercent;
         if (request.PriceSupportPercent.HasValue)
@@ -1420,27 +1451,6 @@ public static class AccreditationApplicationEndpoints
             bp.NewUsesDetail = request.NewUsesDetail;
         if (request.OtherDetail != null)
             bp.OtherDetail = request.OtherDetail;
-
-        if (bp.SectionStatus != SectionStatus.Queried)
-        {
-            var (status, error) = SectionStatusService.ResolveRequestedStatus(
-                request.SectionStatus,
-                () => SectionStatusService.ComputeBusinessPlan(bp),
-                "Business plan"
-            );
-            if (error is not null)
-                return Results.UnprocessableEntity(error);
-            bp.SectionStatus = status!.Value;
-        }
-        application.DateLastEdited = DateTime.UtcNow;
-
-        if (application.ApplicationStatus == ApplicationStatus.Saved)
-            application.ApplicationStatus = ApplicationStatus.Started;
-
-        var updated = await persistence.UpdateAsync(application, session);
-        return updated is null
-            ? Results.Problem("Failed to update business plan section.")
-            : Results.Ok(updated);
     }
 
     private static Task<IResult> PatchSamplingPlan(
@@ -3313,8 +3323,8 @@ public static class AccreditationApplicationEndpoints
         IClientSessionHandle? session
     )
     {
-        var (persistence, validator, _, _) = services;
-        var validation = await validator.ValidateAsync(request);
+        var (persistence, validator, _, cancellationToken) = services;
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
