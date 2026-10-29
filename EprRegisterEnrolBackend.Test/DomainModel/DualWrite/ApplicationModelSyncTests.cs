@@ -73,6 +73,47 @@ public sealed class ApplicationModelSyncTests : IDisposable
             IsNewSite = isNew,
         };
 
+    private static InterimSiteModel Interim(
+        int siteId,
+        string siteNumber,
+        string name,
+        bool isNew = true
+    ) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = siteNumber,
+            Country = "Belgium",
+            SiteName = name,
+            AddressLine1 = "1 Quay",
+            TownOrCity = "Antwerp",
+            ContactName = "Ann",
+            ContactEmail = "ann@example.com",
+            ContactPhone = "0123",
+            OperationCodes = ["R12"],
+            IsNewSite = isNew,
+            CreatedAt = Day1,
+        };
+
+    private static OverseasSiteModel WithInterims(
+        OverseasSiteModel site,
+        params InterimSiteModel[] interims
+    )
+    {
+        site.InterimSites = [.. interims];
+        InterimSiteSync.SyncMirror(site);
+        return site;
+    }
+
+    private static InterimSiteEntry InterimEntry(OverseasSiteEntity ors, string siteNumber) =>
+        Assert.Single(ors.InterimSites, i => i.SiteNumber == siteNumber);
+
+    private static ApplicationInterimSiteEntry InterimEntry(
+        ApplicationEntity application,
+        int siteId,
+        string siteNumber
+    ) => Assert.Single(Entry(application, siteId).InterimSites, i => i.SiteNumber == siteNumber);
+
     // Migrated first, as the unit of work's ensure-migrated step leaves it before the handler runs.
     private async Task<AccreditationApplicationModel> MigratedApplicationAsync(
         ApplicationStatus status,
@@ -346,6 +387,242 @@ public sealed class ApplicationModelSyncTests : IDisposable
         Assert.Equal(1, (await CurrentApplicationAsync(application)).Version);
         Assert.Equal(1, (await CurrentSiteAsync("001")).Version);
         Assert.Equal(1, (await CurrentSiteAsync("002")).Version);
+    }
+
+    // --- B8d: interim sites ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task InterimSiteAdded_AddsAProposedEntryOwnedByTheApplicationToTheOrs()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            Site(1, "001", "ReEx Site")
+        );
+        var before = await CurrentSiteAsync("001");
+
+        await EditAsync(
+            application,
+            a => WithInterims(a.OverseasSites!.Sites[0], Interim(2, "001", "Quay"))
+        );
+        await SyncAsync(application);
+
+        var ors = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version + 1, ors.Version);
+        Assert.Equal(OverseasSiteStatus.Active, ors.Status);
+        var interim = InterimEntry(ors, "001");
+        Assert.Equal(InterimSiteStatus.Proposed, interim.Status);
+        Assert.Equal(application.Id, interim.ProposedByApplicationId);
+        Assert.Equal("Quay", interim.SiteName);
+        Assert.Equal(Day1, interim.CreatedAt);
+        Assert.Equal(ChangeReason.InterimSiteAdded, ors.LastChange.Reason);
+        Assert.Equal("001", ors.LastChange.Details!["siteNumber"]);
+
+        var entry = InterimEntry(await CurrentApplicationAsync(application), 1, "001");
+        Assert.Equal(2, entry.LegacySiteId);
+        Assert.Null(entry.ProposedChanges);
+    }
+
+    [Fact]
+    public async Task OwnProposedInterimSiteEdited_WritesThroughToTheOrs()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay"))
+        );
+        Assert.Equal(
+            InterimSiteStatus.Proposed,
+            InterimEntry(await CurrentSiteAsync("001"), "001").Status
+        );
+
+        await EditAsync(
+            application,
+            a =>
+            {
+                a.OverseasSites!.Sites[0].InterimSites[0].SiteName = "Dock";
+                InterimSiteSync.SyncMirror(a.OverseasSites.Sites[0]);
+            }
+        );
+        await SyncAsync(application);
+
+        var ors = await CurrentSiteAsync("001");
+        var interim = InterimEntry(ors, "001");
+        Assert.Equal("Dock", interim.SiteName);
+        Assert.Equal(InterimSiteStatus.Proposed, interim.Status);
+        Assert.Equal(ChangeReason.InterimSiteUpdated, ors.LastChange.Reason);
+        Assert.Null(
+            InterimEntry(await CurrentApplicationAsync(application), 1, "001").ProposedChanges
+        );
+    }
+
+    [Fact]
+    public async Task OwnProposedInterimSiteWithdrawnThenRestored_IsWithdrawnThenProposedAgain()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay"))
+        );
+        var removedAt = new DateTime(2026, 11, 2, 9, 0, 0, DateTimeKind.Utc);
+
+        await EditAsync(
+            application,
+            a => a.OverseasSites!.Sites[0].InterimSites[0].RemovedAt = removedAt
+        );
+        await SyncAsync(application);
+
+        var withdrawn = await CurrentSiteAsync("001");
+        Assert.Equal(InterimSiteStatus.Withdrawn, InterimEntry(withdrawn, "001").Status);
+        Assert.Equal(removedAt, InterimEntry(withdrawn, "001").RemovedAt);
+        Assert.Equal(ChangeReason.InterimSiteRemoved, withdrawn.LastChange.Reason);
+
+        await EditAsync(
+            application,
+            a => a.OverseasSites!.Sites[0].InterimSites[0].RemovedAt = null
+        );
+        await SyncAsync(application);
+
+        var restored = await CurrentSiteAsync("001");
+        Assert.Equal(InterimSiteStatus.Proposed, InterimEntry(restored, "001").Status);
+        Assert.Null(InterimEntry(restored, "001").RemovedAt);
+        Assert.Equal(application.Id, InterimEntry(restored, "001").ProposedByApplicationId);
+        Assert.Equal(ChangeReason.InterimSiteReadded, restored.LastChange.Reason);
+    }
+
+    [Fact]
+    public async Task ActiveInterimSiteEdited_GoesToTheInterimEntrysProposedChanges()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay", isNew: false))
+        );
+        var before = await CurrentSiteAsync("001");
+        Assert.Equal(InterimSiteStatus.Active, InterimEntry(before, "001").Status);
+
+        await EditAsync(
+            application,
+            a => a.OverseasSites!.Sites[0].InterimSites[0].SiteName = "Dock"
+        );
+        await SyncAsync(application);
+
+        var ors = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, ors.Version);
+        Assert.Equal("Quay", InterimEntry(ors, "001").SiteName);
+        var changes = InterimEntry(
+            await CurrentApplicationAsync(application),
+            1,
+            "001"
+        ).ProposedChanges;
+        Assert.NotNull(changes);
+        Assert.Equal("Dock", changes["siteName"].AsString);
+        Assert.False(changes.Contains("removedAt"));
+    }
+
+    [Fact]
+    public async Task ActiveInterimSiteWithdrawnThenRestored_IsAnOverlayThatRestoringClears()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay", isNew: false))
+        );
+        var before = await CurrentSiteAsync("001");
+
+        await EditAsync(
+            application,
+            a =>
+                a.OverseasSites!.Sites[0].InterimSites[0].RemovedAt = new DateTime(
+                    2026,
+                    11,
+                    2,
+                    9,
+                    0,
+                    0,
+                    DateTimeKind.Utc
+                )
+        );
+        await SyncAsync(application);
+
+        var ors = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, ors.Version);
+        Assert.Equal(InterimSiteStatus.Active, InterimEntry(ors, "001").Status);
+        var changes = InterimEntry(
+            await CurrentApplicationAsync(application),
+            1,
+            "001"
+        ).ProposedChanges;
+        Assert.NotNull(changes);
+        Assert.True(changes.Contains("removedAt"));
+
+        await EditAsync(
+            application,
+            a => a.OverseasSites!.Sites[0].InterimSites[0].RemovedAt = null
+        );
+        await SyncAsync(application);
+
+        Assert.Null(
+            InterimEntry(await CurrentApplicationAsync(application), 1, "001").ProposedChanges
+        );
+    }
+
+    [Fact]
+    public async Task OwnProposedInterimSiteDropped_IsDiscarded()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay"))
+        );
+
+        await EditAsync(application, a => WithInterims(a.OverseasSites!.Sites[0]));
+        await SyncAsync(application);
+
+        var ors = await CurrentSiteAsync("001");
+        Assert.Equal(InterimSiteStatus.Discarded, InterimEntry(ors, "001").Status);
+        Assert.Equal(ChangeReason.ProposedInterimSiteDiscarded, ors.LastChange.Reason);
+        Assert.Empty(Entry(await CurrentApplicationAsync(application), 1).InterimSites);
+    }
+
+    [Fact]
+    public async Task InterimSiteRenumberedByMigration_IsMatchedByItsOldNumberNotAddedAgain()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "SN-0001", "Quay", isNew: false))
+        );
+        var before = await CurrentSiteAsync("001");
+        var renumbered = Assert.Single(before.InterimSites);
+        Assert.Contains("SN-0001", renumbered.PreviousSiteNumbers);
+
+        await EditAsync(
+            application,
+            a => a.OverseasSites!.Sites[0].InterimSites[0].SiteName = "Dock"
+        );
+        await SyncAsync(application);
+
+        var ors = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, ors.Version);
+        Assert.Single(ors.InterimSites);
+        var entry = InterimEntry(
+            await CurrentApplicationAsync(application),
+            1,
+            renumbered.SiteNumber
+        );
+        Assert.Equal("Dock", entry.ProposedChanges!["siteName"].AsString);
+    }
+
+    [Fact]
+    public async Task InterimSitesUnchanged_WriteNoNewVersions()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            WithInterims(
+                Site(1, "001", "ReEx Site"),
+                Interim(2, "001", "Quay"),
+                Interim(3, "002", "Pier", isNew: false)
+            )
+        );
+
+        await SyncAsync(application);
+
+        Assert.Equal(1, (await CurrentApplicationAsync(application)).Version);
+        Assert.Equal(1, (await CurrentSiteAsync("001")).Version);
     }
 
     [Fact]

@@ -81,6 +81,7 @@ public sealed class ApplicationModelSync(
         private readonly ObjectId _applicationId = current.EntityId;
         private readonly Dictionary<string, OverseasSiteEntity> _byOrsId = [];
         private readonly Dictionary<ObjectId, OverseasSiteEntity> _byEntityId = [];
+        private readonly HashSet<(ObjectId OrsId, string SiteNumber)> _heldInterims = [];
 
         private List<OverseasSiteModel> Sites => legacy.OverseasSites?.Sites ?? [];
 
@@ -123,6 +124,11 @@ public sealed class ApplicationModelSync(
                     changes = LegacySiteMapper.ProposedChanges(ors, site);
                 }
 
+                if (ors is not null)
+                {
+                    ors = await SyncInterimSitesAsync(ors, site);
+                }
+
                 entries.Add(Entry(site, ors, changes));
                 if (
                     site.OrsId is not null
@@ -134,6 +140,7 @@ public sealed class ApplicationModelSync(
                 }
             }
 
+            await DiscardDroppedInterimProposalsAsync(entries);
             await DiscardRemovedProposalsAsync(entries);
             if (stamps.Count > 0)
             {
@@ -184,6 +191,7 @@ public sealed class ApplicationModelSync(
             ors.Origin = site.IsNewSite ? SiteOrigin.Operator : SiteOrigin.ReEx;
             ors.Status = site.IsNewSite ? OverseasSiteStatus.Proposed : OverseasSiteStatus.Active;
             ors.ProposedByApplicationId = site.IsNewSite ? _applicationId : null;
+            ReconcileInterimSites(ors, site);
             var created = await stores.OverseasSites.Versions.InsertAsync(
                 ors,
                 Change(
@@ -240,30 +248,218 @@ public sealed class ApplicationModelSync(
             }
         }
 
-        private static ApplicationOverseasSiteEntry Entry(
+        // Interim sites follow option B inside their ORS: one the ORS lacks is added (Proposed and owned by this
+        // application when it is new), and an edit to one this application proposed is written through. Edits to
+        // any other interim site are left to the entry's overlay (see Entry). Every change is one ORS version.
+        private async Task<OverseasSiteEntity> SyncInterimSitesAsync(
+            OverseasSiteEntity ors,
+            OverseasSiteModel site
+        )
+        {
+            var change = ReconcileInterimSites(ors, site);
+            if (change is not { } interimChange)
+            {
+                return ors;
+            }
+
+            var written = (
+                await stores.OverseasSites.Versions.UpdateAsync(
+                    ors,
+                    ors.Version,
+                    Change(interimChange.Reason, ors.OrsId, interimChange.SiteNumber),
+                    session,
+                    cancellationToken
+                )
+            ).Entity;
+            Track(written);
+            return written;
+        }
+
+        // Changes the ORS's interim sites in place and returns the first change made, for the version's reason.
+        private (ChangeReason Reason, string SiteNumber)? ReconcileInterimSites(
+            OverseasSiteEntity ors,
+            OverseasSiteModel site
+        )
+        {
+            (ChangeReason Reason, string SiteNumber)? first = null;
+            foreach (var legacy in InterimSiteSync.All(site))
+            {
+                var stored = FindInterim(ors, legacy.SiteNumber);
+                ChangeReason? reason = null;
+                if (stored is null)
+                {
+                    stored = NewInterimSite(legacy);
+                    ors.InterimSites.Add(stored);
+                    reason = ChangeReason.InterimSiteAdded;
+                }
+                else if (IsOwnInterimProposal(stored))
+                {
+                    reason = WriteInterimThrough(stored, legacy);
+                }
+
+                _heldInterims.Add((ors.EntityId, stored.SiteNumber));
+                if (reason is { } changed)
+                {
+                    first ??= (changed, stored.SiteNumber);
+                }
+            }
+
+            if (ors.DuplicateInterimSiteNumbers() is [var duplicate, ..])
+            {
+                throw new InvalidOperationException(
+                    $"Interim site number {duplicate} appears more than once on ORS {ors.EntityId}."
+                );
+            }
+
+            return first;
+        }
+
+        private InterimSiteEntry NewInterimSite(InterimSiteModel legacy)
+        {
+            var entry = LegacySiteMapper.ToInterimSite(legacy, legacy.SiteNumber);
+            entry.Status = InterimStatus(legacy);
+            entry.ProposedByApplicationId = legacy.IsNewSite ? _applicationId : null;
+            return entry;
+        }
+
+        // A withdrawn interim site is Withdrawn whoever added it; otherwise one this application added is Proposed,
+        // and one it already held is Active, as the migration would have made it.
+        private static InterimSiteStatus InterimStatus(InterimSiteModel legacy)
+        {
+            if (legacy.RemovedAt is not null)
+                return InterimSiteStatus.Withdrawn;
+            return legacy.IsNewSite ? InterimSiteStatus.Proposed : InterimSiteStatus.Active;
+        }
+
+        // Copies the application's details over its own proposal; null when nothing differed.
+        private static ChangeReason? WriteInterimThrough(
+            InterimSiteEntry stored,
+            InterimSiteModel legacy
+        )
+        {
+            if (LegacySiteMapper.InterimProposedChanges(stored, legacy) is null)
+                return null;
+
+            var reason = WithdrawalChange(stored.RemovedAt, legacy.RemovedAt);
+            var details = LegacySiteMapper.ToInterimSite(legacy, stored.SiteNumber);
+            stored.SiteName = details.SiteName;
+            stored.Address = details.Address;
+            stored.Contact = details.Contact;
+            stored.OperationCodes = details.OperationCodes;
+            stored.RemovedAt = details.RemovedAt;
+            stored.CreatedAt ??= details.CreatedAt;
+            stored.Status = stored.RemovedAt is null
+                ? InterimSiteStatus.Proposed
+                : InterimSiteStatus.Withdrawn;
+            return reason;
+        }
+
+        private static ChangeReason WithdrawalChange(DateTime? before, DateTime? after)
+        {
+            if (before is null && after is not null)
+                return ChangeReason.InterimSiteRemoved;
+            if (before is not null && after is null)
+                return ChangeReason.InterimSiteReadded;
+            return ChangeReason.InterimSiteUpdated;
+        }
+
+        // An interim proposal of this application that it no longer holds on an ORS it still holds is Discarded.
+        // An ORS the application dropped altogether keeps its interim sites as they are; they go with the ORS.
+        private async Task DiscardDroppedInterimProposalsAsync(
+            List<ApplicationOverseasSiteEntry> entries
+        )
+        {
+            var heldSites = entries.Select(e => e.OverseasSiteId).OfType<ObjectId>().ToHashSet();
+            foreach (
+                var ors in _byEntityId.Values.Where(s => heldSites.Contains(s.EntityId)).ToList()
+            )
+            {
+                var dropped = ors
+                    .InterimSites.Where(IsOwnInterimProposal)
+                    .Where(i => !_heldInterims.Contains((ors.EntityId, i.SiteNumber)))
+                    .ToList();
+                if (dropped.Count == 0)
+                {
+                    continue;
+                }
+
+                dropped.ForEach(i => i.Status = InterimSiteStatus.Discarded);
+                Track(
+                    (
+                        await stores.OverseasSites.Versions.UpdateAsync(
+                            ors,
+                            ors.Version,
+                            Change(
+                                ChangeReason.ProposedInterimSiteDiscarded,
+                                ors.OrsId,
+                                dropped[0].SiteNumber
+                            ),
+                            session,
+                            cancellationToken
+                        )
+                    ).Entity
+                );
+            }
+        }
+
+        // A legacy number the migration renumbered is found through the ORS's record of the old number.
+        private static InterimSiteEntry? FindInterim(OverseasSiteEntity? ors, string siteNumber) =>
+            ors?.InterimSites.Find(i =>
+                i.SiteNumber == siteNumber || i.PreviousSiteNumbers.Contains(siteNumber)
+            );
+
+        // Withdrawn counts: a proposal this application withdrew is still its own to restore.
+        private bool IsOwnInterimProposal(InterimSiteEntry interim) =>
+            interim.ProposedByApplicationId == _applicationId
+            && interim.Status is InterimSiteStatus.Proposed or InterimSiteStatus.Withdrawn;
+
+        private ApplicationOverseasSiteEntry Entry(
             OverseasSiteModel site,
             OverseasSiteEntity? ors,
             BsonDocument? changes
-        ) =>
-            LegacyApplicationMapper.ToSiteEntry(
+        )
+        {
+            var entry = LegacyApplicationMapper.ToSiteEntry(
                 site,
                 ors?.EntityId,
                 changes,
-                number =>
-                    ors?.InterimSites.Find(i =>
-                        i.SiteNumber == number || i.PreviousSiteNumbers.Contains(number)
-                    )?.SiteNumber
-                    ?? number
+                number => FindInterim(ors, number)?.SiteNumber ?? number
             );
+            foreach (var interim in entry.InterimSites)
+            {
+                interim.ProposedChanges = InterimOverlay(site, ors, interim.LegacySiteId);
+            }
 
-        private ChangeInfo Change(ChangeReason reason, string? orsId) =>
-            new()
+            return entry;
+        }
+
+        // Option B for interim sites: the overlay holds this application's edits to an interim site it does not own.
+        private BsonDocument? InterimOverlay(
+            OverseasSiteModel site,
+            OverseasSiteEntity? ors,
+            int legacySiteId
+        )
+        {
+            var legacy = InterimSiteSync.All(site).FirstOrDefault(i => i.SiteId == legacySiteId);
+            var stored = legacy is null ? null : FindInterim(ors, legacy.SiteNumber);
+            return stored is null || IsOwnInterimProposal(stored)
+                ? null
+                : LegacySiteMapper.InterimProposedChanges(stored, legacy!);
+        }
+
+        private ChangeInfo Change(ChangeReason reason, string? orsId, string? siteNumber = null)
+        {
+            var details = new Dictionary<string, string>();
+            if (orsId is not null)
+                details["orsId"] = orsId;
+            if (siteNumber is not null)
+                details["siteNumber"] = siteNumber;
+            return new ChangeInfo
             {
                 Reason = reason,
                 ApplicationId = _applicationId,
-                Details = orsId is null
-                    ? null
-                    : new Dictionary<string, string> { ["orsId"] = orsId },
+                Details = details.Count > 0 ? details : null,
             };
+        }
     }
 }

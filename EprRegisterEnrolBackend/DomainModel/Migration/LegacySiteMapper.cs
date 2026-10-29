@@ -78,6 +78,21 @@ public static class LegacySiteMapper
         return changes.ElementCount > 0 ? changes : null;
     }
 
+    /// <summary>
+    /// The interim site fields this application's copy differs on, withdrawal included, as the overlay its
+    /// <see cref="ApplicationInterimSiteEntry.ProposedChanges"/> holds; null when it matches.
+    /// </summary>
+    public static BsonDocument? InterimProposedChanges(
+        InterimSiteEntry current,
+        InterimSiteModel site
+    )
+    {
+        var proposed = InterimDetails(ToInterimSite(site, current.SiteNumber));
+        var stored = InterimDetails(current);
+        var changes = new BsonDocument(proposed.Where(e => !e.Value.Equals(stored[e.Name])));
+        return changes.ElementCount > 0 ? changes : null;
+    }
+
     /// <summary>Whether <paramref name="siteNumber"/> is in the current format: exactly three digits, such as <c>001</c>.</summary>
     public static bool IsThreeDigitNumber(string? siteNumber) =>
         siteNumber is { Length: 3 } && siteNumber.All(char.IsAsciiDigit);
@@ -99,6 +114,19 @@ public static class LegacySiteMapper
             {
                 "conditionsOfExport",
                 site.ConditionsOfExport is { } conditions ? (BsonValue)conditions : BsonNull.Value
+            },
+        };
+
+    private static BsonDocument InterimDetails(InterimSiteEntry site) =>
+        new()
+        {
+            { "siteName", Value(site.SiteName) },
+            { "address", site.Address?.ToBsonDocument() ?? (BsonValue)BsonNull.Value },
+            { "contact", site.Contact?.ToBsonDocument() ?? (BsonValue)BsonNull.Value },
+            { "operationCodes", new BsonArray(site.OperationCodes) },
+            {
+                "removedAt",
+                site.RemovedAt is { } removedAt ? new BsonDateTime(removedAt) : BsonNull.Value
             },
         };
 

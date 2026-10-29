@@ -37,6 +37,9 @@ public enum ChangeReason
     /// <summary>The application that proposed a site removed it before a decision.</summary>
     ProposedSiteDiscarded,
 
+    /// <summary>The application that proposed an interim site dropped it before a decision (B8d).</summary>
+    ProposedInterimSiteDiscarded,
+
     /// <summary>A write path changed the legacy application; its Application version follows it.</summary>
     ApplicationEdited,
 }

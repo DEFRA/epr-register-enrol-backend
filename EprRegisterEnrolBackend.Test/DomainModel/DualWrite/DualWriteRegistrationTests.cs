@@ -25,6 +25,12 @@ public class DualWriteRegistrationTests
 
         Assert.Equal(typeof(LegacyOnlyUnitOfWork), UnitOfWork(services));
         Assert.DoesNotContain(services, d => d.ServiceType == typeof(DualWriteMetrics));
+        Assert.Contains(
+            services,
+            d =>
+                d.ServiceType == typeof(IModelInterimSiteNumbers)
+                && d.ImplementationType == typeof(NoModelInterimSiteNumbers)
+        );
     }
 
     [Fact]
@@ -47,6 +53,12 @@ public class DualWriteRegistrationTests
             d =>
                 d.ServiceType == typeof(IApplicationModelSync)
                 && d.ImplementationType == typeof(ApplicationModelSync)
+        );
+        Assert.Contains(
+            services,
+            d =>
+                d.ServiceType == typeof(IModelInterimSiteNumbers)
+                && d.ImplementationType == typeof(ModelInterimSiteNumbers)
         );
     }
 
