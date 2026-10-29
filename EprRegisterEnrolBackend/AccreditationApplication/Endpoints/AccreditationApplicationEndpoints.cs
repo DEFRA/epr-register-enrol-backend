@@ -7,6 +7,7 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Logging;
@@ -1238,15 +1239,43 @@ public static class AccreditationApplicationEndpoints
             : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchOverseasSites(
+    // RA-644 B8c: every overseas site write runs in the dual-write unit of work, which with
+    // DomainModel:DualWrite on makes it one transaction with the model sync. The work can re-run,
+    // so it re-reads the application inside the callback and passes the session to every call.
+    private static Task<IResult> PatchOverseasSites(
         string organisationId,
         string applicationId,
         PatchOverseasSitesRequest request,
         IAccreditationApplicationPersistence persistence,
-        ILoggerFactory loggerFactory
+        IDualWriteUnitOfWork unitOfWork,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(PatchOverseasSites),
+            applicationId,
+            (session, _) =>
+                PatchOverseasSitesAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    loggerFactory,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> PatchOverseasSitesAsync(
+        string organisationId,
+        string applicationId,
+        PatchOverseasSitesRequest request,
+        IAccreditationApplicationPersistence persistence,
+        ILoggerFactory loggerFactory,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1296,23 +1325,39 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update overseas sites.")
             : Results.Ok(updated);
     }
 
+    // Bundles AddOverseasSite's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // RecyclingOperationsServices above.
+    private sealed record AddOverseasSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddOverseasSiteRequest> Validator,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> AddOverseasSite(
         string organisationId,
         string applicationId,
         AddOverseasSiteRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<AddOverseasSiteRequest> validator,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken
+        [AsParameters] AddOverseasSiteServices services
     )
     {
+        var (
+            persistence,
+            validator,
+            caseWorkingAdapter,
+            unitOfWork,
+            loggerFactory,
+            cancellationToken
+        ) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
@@ -1325,39 +1370,62 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
-
-        if (
-            !AccreditationApplicationSections.IsSectionEditable(
-                application.ApplicationStatus,
-                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
-            )
-        )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
-
-        application.OverseasSites ??= new AccreditationApplicationOverseasSites();
-
-        const int maxSitesPerApplication = 500;
-        if (application.OverseasSites.Sites.Count >= maxSitesPerApplication)
-            return Results.UnprocessableEntity(
-                $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
-            );
-
-        var (errorResult, newSite, updated) = await AllocateGeneratedIdAsync(
-            persistence,
-            organisationId,
+        // The work can re-run, so it reports what it added through these, reset on every run, and
+        // the notification below goes out only once the write has committed.
+        OverseasSiteModel? newSite = null;
+        AccreditationApplicationModel? updated = null;
+        var result = await unitOfWork.RunAsync(
+            nameof(AddOverseasSite),
             applicationId,
-            application,
-            OrsIdAllocation(persistence, request)
+            async (session, _) =>
+            {
+                (newSite, updated) = (null, null);
+                var application = await persistence.GetByIdAsync(
+                    organisationId,
+                    applicationId,
+                    session
+                );
+                if (application is null)
+                    return Results.NotFound();
+                if (RejectIfTerminal(application) is { } conflict)
+                    return conflict;
+
+                if (
+                    !AccreditationApplicationSections.IsSectionEditable(
+                        application.ApplicationStatus,
+                        application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+                    )
+                )
+                    return Results.Conflict(
+                        "Overseas sites section is not editable in the application's current status."
+                    );
+
+                application.OverseasSites ??= new AccreditationApplicationOverseasSites();
+
+                const int maxSitesPerApplication = 500;
+                if (application.OverseasSites.Sites.Count >= maxSitesPerApplication)
+                    return Results.UnprocessableEntity(
+                        $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
+                    );
+
+                var (errorResult, created, persisted) = await AllocateGeneratedIdAsync(
+                    persistence,
+                    organisationId,
+                    applicationId,
+                    application,
+                    OrsIdAllocation(persistence, request, session),
+                    session
+                );
+                if (errorResult is not null || created is null || persisted is null)
+                    return errorResult ?? Results.Problem("Failed to add overseas site.");
+
+                (newSite, updated) = (created, persisted);
+                return Results.Created(string.Empty, created);
+            },
+            cancellationToken
         );
-        if (errorResult is not null || newSite is null || updated is null)
-            return errorResult ?? Results.Problem("Failed to add overseas site.");
+        if (!Committed(result) || newSite is null || updated is null)
+            return result;
 
         // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
         // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s): skip the round-trip
@@ -1388,8 +1456,13 @@ public static class AccreditationApplicationEndpoints
             }
         }
 
-        return Results.Created(string.Empty, newSite);
+        return result;
     }
+
+    // RA-644 B8c: whether a unit-of-work result means the write committed, so a side effect that
+    // must not run for a rolled-back write (a notification, an audit record) may now go out.
+    private static bool Committed(IResult result) =>
+        result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 };
 
     /// <summary>
     /// What <see cref="AllocateGeneratedIdAsync{T}"/> needs to know about one kind of generated
@@ -1423,7 +1496,8 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         AccreditationApplicationModel application,
-        GeneratedIdAllocation<T> allocation
+        GeneratedIdAllocation<T> allocation,
+        IClientSessionHandle? session = null
     )
         where T : class
     {
@@ -1449,7 +1523,7 @@ public static class AccreditationApplicationEndpoints
             if (updated is not null)
                 return (null, created, updated);
 
-            var refetched = await persistence.GetByIdAsync(organisationId, applicationId);
+            var refetched = await persistence.GetByIdAsync(organisationId, applicationId, session);
             if (refetched is null)
                 return (Results.NotFound(), null, null);
             if (RejectIfOverseasSitesNotEditable(refetched) is { } notEditable)
@@ -1470,12 +1544,13 @@ public static class AccreditationApplicationEndpoints
     // application under the registration, never taken from the client.
     private static GeneratedIdAllocation<OverseasSiteModel> OrsIdAllocation(
         IAccreditationApplicationPersistence persistence,
-        AddOverseasSiteRequest request
+        AddOverseasSiteRequest request,
+        IClientSessionHandle? session = null
     ) =>
         new(
             CapacityNoun: "overseas sites",
             IdName: "ORS id",
-            Scope: application => OrsIdScope(persistence, application),
+            Scope: application => OrsIdScope(persistence, application, session),
             Attach: (application, orsId) =>
             {
                 application.OverseasSites ??= new AccreditationApplicationOverseasSites();
@@ -1487,7 +1562,8 @@ public static class AccreditationApplicationEndpoints
                     application.ApplicationStatus = ApplicationStatus.Started;
                 return (null, newSite);
             },
-            WriteIfAbsent: (application, value) => persistence.UpdateIfOrsIdAbsentAsync(application, value)
+            WriteIfAbsent: (application, value) =>
+                persistence.UpdateIfOrsIdAbsentAsync(application, value, session)
         );
 
     // RA-603: interim site ids are unique application-wide, but a bulk PATCH body is
@@ -1552,13 +1628,14 @@ public static class AccreditationApplicationEndpoints
     // scope against, so this falls back to just the current application's own sites.
     private static async Task<IEnumerable<string?>> OrsIdScope(
         IAccreditationApplicationPersistence persistence,
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        IClientSessionHandle? session = null
     )
     {
         if (application.RegistrationId is null)
             return (application.OverseasSites?.Sites ?? []).Select(s => s.OrsId);
 
-        return await persistence.GetOrsIdsByRegistrationAsync(application.RegistrationId);
+        return await persistence.GetOrsIdsByRegistrationAsync(application.RegistrationId, session);
     }
 
     // RA-603: the interim site NUMBER allocation scope - not to be confused with NextSiteId
@@ -1751,6 +1828,7 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence Persistence,
         IValidator<PromoteOverseasSiteRequest> Validator,
         IRecyclingOperationsAuditPersistence AuditPersistence,
+        IDualWriteUnitOfWork UnitOfWork,
         ILoggerFactory LoggerFactory,
         HttpContext HttpContext,
         CancellationToken CancellationToken
@@ -1791,68 +1869,33 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
+        // The work can re-run, so it reports the codes it replaced through this, reset on every run,
+        // and the audit record below is written only once the edit has committed.
+        List<string>? beforeCodes = null;
+        var result = await services.UnitOfWork.RunAsync(
+            nameof(UpdateOverseasSite),
+            applicationId,
+            async (session, _) =>
+            {
+                beforeCodes = null;
+                var (failure, site, replaced) = await UpdateOverseasSiteAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    request,
+                    services.Persistence,
+                    session
+                );
+                if (failure is not null)
+                    return failure;
 
-        if (
-            !AccreditationApplicationSections.IsSectionEditable(
-                application.ApplicationStatus,
-                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
-            )
-        )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
-
-        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        if (site is null)
-            return Results.NotFound();
-
-        // Gap 2: the same application/material-type-aware check PatchRecyclingOperations enforces -
-        // PromoteOverseasSiteRequestValidator alone doesn't cover it. RA-486 removed the old AC11
-        // R12/R13-needs-interim-site sub-check (and its Gap 1 inverse, "an interim site needs
-        // R12/R13 kept selected on the ORS") entirely - the ORS and any attached interim site are
-        // independent now, so dropping/keeping R12/R13 here never depends on, or is constrained
-        // by, site.InterimSite.
-        if (
-            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
-            { } codesError
-        )
-            return codesError;
-
-        // Gap 5: BES evidence is tied to Country/ConditionsOfExport - either changing makes any
-        // previously uploaded evidence and a Completed section status stale.
-        var besEvidenceInvalidated =
-            site.Country != request.Country
-            || site.ConditionsOfExport != request.ConditionsOfExport;
-
-        // Snapshot current fields (undo target) before overwriting - same as PromoteOverseasSite.
-        site.PreviousSites.Add(SnapshotSiteFields(site));
-
-        // Snapshotted before mutation, as an independent list - not aliased with the request's own
-        // OperationCodes below (matches PatchRecyclingOperations' own before/after handling).
-        var beforeCodes = site.OperationCodes.ToList();
-
-        ApplyPromotedFields(site, request);
-        // Deliberately NOT setting Selected/RegisteredNowAccredited here, unlike Promote - this is
-        // an in-place edit of an already-selected/accredited site, not a promotion.
-
-        if (besEvidenceInvalidated)
-        {
-            site.BesEvidence?.BesEvidenceUploads.Clear();
-            if (application.BesEvidence?.SectionStatus == SectionStatus.Completed)
-                application.BesEvidence.SectionStatus = SectionStatus.InProgress;
-        }
-
-        RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
-        application.DateLastEdited = DateTime.UtcNow;
-
-        var updated = await services.Persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to update overseas site.");
+                beforeCodes = replaced;
+                return Results.Ok(site);
+            },
+            services.CancellationToken
+        );
+        if (!Committed(result) || beforeCodes is null)
+            return result;
 
         // Gap 3: audit operator-driven operation-code changes the same way PatchRecyclingOperations
         // audits regulator-driven ones. Only written when the codes actually changed - unlike
@@ -1894,20 +1937,114 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
-        return Results.Ok(site);
+        return result;
     }
+
+    // UpdateOverseasSite's read-check-write, inside the unit of work's callback. Reports a failure,
+    // or the edited site with the operation codes it had before, for the audit record.
+    private static async Task<(
+        IResult? Failure,
+        OverseasSiteModel? Site,
+        List<string>? BeforeCodes
+    )> UpdateOverseasSiteAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PromoteOverseasSiteRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
+        if (application is null)
+            return (Results.NotFound(), null, null);
+        if (RejectIfTerminal(application) is { } conflict)
+            return (conflict, null, null);
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return (
+                Results.Conflict(
+                    "Overseas sites section is not editable in the application's current status."
+                ),
+                null,
+                null
+            );
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return (Results.NotFound(), null, null);
+
+        // Gap 2: the same application/material-type-aware check PatchRecyclingOperations enforces -
+        // PromoteOverseasSiteRequestValidator alone doesn't cover it. RA-486 removed the old AC11
+        // R12/R13-needs-interim-site sub-check (and its Gap 1 inverse, "an interim site needs
+        // R12/R13 kept selected on the ORS") entirely - the ORS and any attached interim site are
+        // independent now, so dropping/keeping R12/R13 here never depends on, or is constrained
+        // by, site.InterimSite.
+        if (
+            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
+            { } codesError
+        )
+            return (codesError, null, null);
+
+        // Gap 5: BES evidence is tied to Country/ConditionsOfExport - either changing makes any
+        // previously uploaded evidence and a Completed section status stale.
+        var besEvidenceInvalidated =
+            site.Country != request.Country
+            || site.ConditionsOfExport != request.ConditionsOfExport;
+
+        // Snapshot current fields (undo target) before overwriting - same as PromoteOverseasSite.
+        site.PreviousSites.Add(SnapshotSiteFields(site));
+
+        // Snapshotted before mutation, as an independent list - not aliased with the request's own
+        // OperationCodes below (matches PatchRecyclingOperations' own before/after handling).
+        var beforeCodes = site.OperationCodes.ToList();
+
+        ApplyPromotedFields(site, request);
+        // Deliberately NOT setting Selected/RegisteredNowAccredited here, unlike Promote - this is
+        // an in-place edit of an already-selected/accredited site, not a promotion.
+
+        if (besEvidenceInvalidated)
+        {
+            site.BesEvidence?.BesEvidenceUploads.Clear();
+            if (application.BesEvidence?.SectionStatus == SectionStatus.Completed)
+                application.BesEvidence.SectionStatus = SectionStatus.InProgress;
+        }
+
+        RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application, session);
+        if (updated is null)
+            return (Results.Problem("Failed to update overseas site."), null, null);
+
+        return (null, site, beforeCodes);
+    }
+
+    // Bundles PromoteOverseasSite's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107).
+    private sealed record PromoteOverseasSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<PromoteOverseasSiteRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
 
     private static async Task<IResult> PromoteOverseasSite(
         string organisationId,
         string applicationId,
         int siteId,
         PromoteOverseasSiteRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<PromoteOverseasSiteRequest> validator,
-        ILoggerFactory loggerFactory
+        [AsParameters] PromoteOverseasSiteServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var (persistence, validator, unitOfWork, loggerFactory, cancellationToken) = services;
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
@@ -1919,7 +2056,32 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        return await unitOfWork.RunAsync(
+            nameof(PromoteOverseasSite),
+            applicationId,
+            (session, _) =>
+                PromoteOverseasSiteAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    request,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+    }
+
+    private static async Task<IResult> PromoteOverseasSiteAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PromoteOverseasSiteRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1953,20 +2115,37 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to promote overseas site.")
             : Results.Ok(site);
     }
 
-    private static async Task<IResult> RevertOverseasSite(
+    private static Task<IResult> RevertOverseasSite(
         string organisationId,
         string applicationId,
         int siteId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(RevertOverseasSite),
+            applicationId,
+            (session, _) =>
+                RevertOverseasSiteAsync(organisationId, applicationId, siteId, persistence, session),
+            cancellationToken
+        );
+
+    private static async Task<IResult> RevertOverseasSiteAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -2001,7 +2180,7 @@ public static class AccreditationApplicationEndpoints
         RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to revert overseas site.")
             : Results.Ok(site);
