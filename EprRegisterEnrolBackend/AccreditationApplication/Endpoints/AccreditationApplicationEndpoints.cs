@@ -1659,19 +1659,32 @@ public static class AccreditationApplicationEndpoints
     // interim sites are included - their numbers stay claimed for as long as the record does,
     // which under AC05 is permanently. Legacy SN-000N values come through untouched and simply
     // do not parse, which is what makes them harmless here.
+    //
+    // RA-644 B8d: with DualWrite on, the numbers the domain model holds count too. The migration
+    // can renumber a legacy SN-000N into the 3-digit pool, and legacy alone would hand that number
+    // out again.
     private static async Task<IEnumerable<string?>> InterimSiteNumberScope(
         IAccreditationApplicationPersistence persistence,
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        InterimNumberSources sources
     )
     {
+        var model = await sources.ModelNumbers.GetAsync(
+            application.RegistrationEntityId,
+            sources.Session
+        );
         if (application.RegistrationId is null)
             return (application.OverseasSites?.Sites ?? [])
                 .SelectMany(InterimSiteSync.All)
-                .Select(i => i.SiteNumber);
+                .Select(i => i.SiteNumber)
+                .Concat(model);
 
-        return await persistence.GetInterimSiteNumbersByRegistrationAsync(
-            application.RegistrationId
-        );
+        return (
+            await persistence.GetInterimSiteNumbersByRegistrationAsync(
+                application.RegistrationId,
+                sources.Session
+            )
+        ).Concat(model);
     }
 
     // Site numbers must be unique application-wide across both ORS sites and their nested
@@ -2215,10 +2228,11 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         string organisationId,
         string applicationId,
-        int siteId
+        int siteId,
+        IClientSessionHandle? session = null
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return (Results.NotFound(), null, null);
 
@@ -2250,7 +2264,7 @@ public static class AccreditationApplicationEndpoints
         [AsParameters] UpdateInterimSiteServices services
     )
     {
-        var (persistence, validator, loggerFactory, cancellationToken) = services;
+        var (persistence, validator, unitOfWork, loggerFactory, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
@@ -2263,11 +2277,43 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
+        return await unitOfWork.RunAsync(
+            nameof(UpdateInterimSite),
+            applicationId,
+            (session, _) =>
+                UpdateInterimSiteAsync(
+                    persistence,
+                    new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
+                    request,
+                    session
+                ),
+            cancellationToken
+        );
+    }
+
+    // RA-644 B8d: the route values every per-interim-site handler addresses, kept together so the
+    // handlers' unit-of-work bodies stay under Sonar's parameter limit (S107).
+    private sealed record InterimSiteRoute(
+        string OrganisationId,
+        string ApplicationId,
+        int SiteId,
+        int InterimSiteId
+    );
+
+    private static async Task<IResult> UpdateInterimSiteAsync(
+        IAccreditationApplicationPersistence persistence,
+        InterimSiteRoute route,
+        AddInterimSiteRequest request,
+        IClientSessionHandle? session
+    )
+    {
+        var (organisationId, applicationId, siteId, interimSiteId) = route;
         var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -2298,7 +2344,7 @@ public static class AccreditationApplicationEndpoints
         InterimSiteSync.SyncMirror(site);
         application!.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? LostInterimSiteRace(interimSiteId)
             : Results.Ok(interimSite);
@@ -2309,19 +2355,40 @@ public static class AccreditationApplicationEndpoints
     /// it remains available for reporting, and only stops appearing wherever active sites are
     /// listed. Idempotent, and it never overwrites an earlier withdrawal date.
     /// </summary>
-    private static async Task<IResult> WithdrawInterimSite(
+    private static Task<IResult> WithdrawInterimSite(
         string organisationId,
         string applicationId,
         int siteId,
         int interimSiteId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(WithdrawInterimSite),
+            applicationId,
+            (session, _) =>
+                WithdrawInterimSiteAsync(
+                    persistence,
+                    new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> WithdrawInterimSiteAsync(
+        IAccreditationApplicationPersistence persistence,
+        InterimSiteRoute route,
+        IClientSessionHandle? session
     )
     {
+        var (organisationId, applicationId, siteId, interimSiteId) = route;
         var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -2335,7 +2402,7 @@ public static class AccreditationApplicationEndpoints
         InterimSiteSync.SyncMirror(site);
         application!.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? LostInterimSiteRace(interimSiteId)
             : Results.NoContent();
@@ -2350,19 +2417,40 @@ public static class AccreditationApplicationEndpoints
     /// Called restore rather than revert: the ORS already has a /revert route, which un-promotes a
     /// registered site and is a different thing entirely.
     /// </summary>
-    private static async Task<IResult> RestoreInterimSite(
+    private static Task<IResult> RestoreInterimSite(
         string organisationId,
         string applicationId,
         int siteId,
         int interimSiteId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.RunAsync(
+            nameof(RestoreInterimSite),
+            applicationId,
+            (session, _) =>
+                RestoreInterimSiteAsync(
+                    persistence,
+                    new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> RestoreInterimSiteAsync(
+        IAccreditationApplicationPersistence persistence,
+        InterimSiteRoute route,
+        IClientSessionHandle? session
     )
     {
+        var (organisationId, applicationId, siteId, interimSiteId) = route;
         var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -2376,7 +2464,7 @@ public static class AccreditationApplicationEndpoints
         InterimSiteSync.SyncMirror(site);
         application!.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? LostInterimSiteRace(interimSiteId)
             : Results.Ok(interimSite);
@@ -2392,18 +2480,29 @@ public static class AccreditationApplicationEndpoints
             $"The application changed while interim site '{interimSiteId}' was being saved; please reload and try again."
         );
 
+    // Bundles AddInterimSite's DI-service/framework parameters under one [AsParameters] argument
+    // so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // AddOverseasSiteServices above.
+    private sealed record AddInterimSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddInterimSiteRequest> Validator,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        IModelInterimSiteNumbers ModelNumbers,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> AddInterimSite(
         string organisationId,
         string applicationId,
         int siteId,
         AddInterimSiteRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<AddInterimSiteRequest> validator,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken
+        [AsParameters] AddInterimSiteServices services
     )
     {
+        var (persistence, validator, _, unitOfWork, modelNumbers, loggerFactory, cancellationToken) =
+            services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
@@ -2416,68 +2515,109 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var (failure, application, _) = await ResolveEditableOverseasSiteAsync(
-            persistence,
-            organisationId,
+        // The work can re-run, so it reports what it added through these, reset on every run, and
+        // the notification below goes out only once the write has committed.
+        InterimSiteModel? interimSite = null;
+        AccreditationApplicationModel? updated = null;
+        var result = await unitOfWork.RunAsync(
+            nameof(AddInterimSite),
             applicationId,
-            siteId
-        );
-        if (failure is not null)
-            return failure;
-
-        var (allocationError, interimSite, updated) = await AllocateGeneratedIdAsync(
-            persistence,
-            organisationId,
-            applicationId,
-            application!,
-            InterimSiteNumberAllocation(persistence, siteId, request)
-        );
-        if (allocationError is not null)
-            return allocationError;
-
-        // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
-        // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s).
-        if (updated!.CaseManagementWorkItemId is not null)
-        {
-            try
+            async (session, _) =>
             {
-                await caseWorkingAdapter.NotifySiteAddedAsync(
-                    updated,
-                    siteType: "interim",
-                    orsId: updated
-                        .OverseasSites!.Sites.First(s => s.SiteId == siteId)
-                        .OrsId ?? string.Empty,
-                    siteNumber: interimSite!.SiteNumber,
-                    isNewSite: interimSite.IsNewSite,
-                    cancellationToken: cancellationToken
+                (interimSite, updated) = (null, null);
+                var (failure, application, _) = await ResolveEditableOverseasSiteAsync(
+                    persistence,
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    session
                 );
-            }
-            catch (Exception ex)
-            {
-                loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
-                    .LogWarning(
-                        ex,
-                        "Failed to notify ManagementBe of new interim site for applicationId={ApplicationId}",
-                        applicationId
-                    );
-            }
-        }
+                if (failure is not null)
+                    return failure;
 
-        return Results.Created(string.Empty, interimSite);
+                var (allocationError, created, persisted) = await AllocateGeneratedIdAsync(
+                    persistence,
+                    organisationId,
+                    applicationId,
+                    application!,
+                    InterimSiteNumberAllocation(
+                        persistence,
+                        siteId,
+                        request,
+                        new InterimNumberSources(modelNumbers, session)
+                    ),
+                    session
+                );
+                if (allocationError is not null || created is null || persisted is null)
+                    return allocationError ?? Results.Problem("Failed to add interim site.");
+
+                (interimSite, updated) = (created, persisted);
+                return Results.Created(string.Empty, created);
+            },
+            cancellationToken
+        );
+        if (Committed(result) && interimSite is not null && updated is not null)
+            await NotifyInterimSiteAddedAsync(services, applicationId, siteId, updated, interimSite);
+
+        return result;
     }
+
+    // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
+    // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s).
+    private static async Task NotifyInterimSiteAddedAsync(
+        AddInterimSiteServices services,
+        string applicationId,
+        int siteId,
+        AccreditationApplicationModel updated,
+        InterimSiteModel interimSite
+    )
+    {
+        if (updated.CaseManagementWorkItemId is null)
+            return;
+
+        try
+        {
+            await services.CaseWorkingAdapter.NotifySiteAddedAsync(
+                updated,
+                siteType: "interim",
+                orsId: updated.OverseasSites!.Sites.First(s => s.SiteId == siteId).OrsId
+                    ?? string.Empty,
+                siteNumber: interimSite.SiteNumber,
+                isNewSite: interimSite.IsNewSite,
+                cancellationToken: services.CancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            services
+                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LogWarning(
+                    ex,
+                    "Failed to notify ManagementBe of new interim site for applicationId={ApplicationId}",
+                    applicationId
+                );
+        }
+    }
+
+    // RA-644 B8d: where interim numbers already taken come from besides legacy, and the session
+    // they are read in. With DualWrite off the model contributes none.
+    private sealed record InterimNumberSources(
+        IModelInterimSiteNumbers ModelNumbers,
+        IClientSessionHandle? Session
+    );
 
     // RA-603: an interim site's regulator-visible number comes from its own registration-wide
     // sequence; its SiteId stays on the shared ORS+interim sequence, which is what routes address.
     private static GeneratedIdAllocation<InterimSiteModel> InterimSiteNumberAllocation(
         IAccreditationApplicationPersistence persistence,
         int siteId,
-        AddInterimSiteRequest request
+        AddInterimSiteRequest request,
+        InterimNumberSources sources
     ) =>
         new(
             CapacityNoun: "interim sites",
             IdName: "interim site number",
-            Scope: application => InterimSiteNumberScope(persistence, application),
+            Scope: application => InterimSiteNumberScope(persistence, application, sources),
             Attach: (application, siteNumber) =>
             {
                 var site = application.OverseasSites?.Sites.FirstOrDefault(s =>
@@ -2500,7 +2640,8 @@ public static class AccreditationApplicationEndpoints
                 application.DateLastEdited = DateTime.UtcNow;
                 return (null, interimSite);
             },
-            WriteIfAbsent: (application, value) => persistence.UpdateIfInterimSiteNumberAbsentAsync(application, value)
+            WriteIfAbsent: (application, value) =>
+                persistence.UpdateIfInterimSiteNumberAbsentAsync(application, value, sources.Session)
         );
 
     private static InterimSiteModel BuildInterimSite(
@@ -2534,6 +2675,7 @@ public static class AccreditationApplicationEndpoints
     private sealed record UpdateInterimSiteServices(
         IAccreditationApplicationPersistence Persistence,
         IValidator<AddInterimSiteRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
         ILoggerFactory LoggerFactory,
         CancellationToken CancellationToken
     );

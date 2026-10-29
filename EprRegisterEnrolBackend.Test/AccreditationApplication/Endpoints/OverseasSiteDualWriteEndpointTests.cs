@@ -341,6 +341,167 @@ public sealed class OverseasSiteDualWriteEndpointTests : IAsyncDisposable
             Arg.Any<CancellationToken>()
         );
 
+    // --- B8d: interim sites ---------------------------------------------------------------------------------------
+
+    private static AddInterimSiteRequest InterimRequest(string name = "Quay") =>
+        new()
+        {
+            Country = "Belgium",
+            SiteName = name,
+            AddressLine1 = "1 Quay",
+            TownOrCity = "Antwerp",
+            ContactName = "Ann",
+            ContactEmail = "ann@example.com",
+            ContactPhone = "0123 456 789",
+            OperationCodes = ["R12"],
+        };
+
+    private static string InterimUrl(AccreditationApplicationModel application, string path = "") =>
+        Url(application, $"/1/interim-sites{path}");
+
+    private async Task<InterimSiteModel> AddInterimSiteAsync(
+        AccreditationApplicationModel application,
+        string name = "Quay"
+    )
+    {
+        var response = await _client.PostAsJsonAsync(
+            InterimUrl(application),
+            InterimRequest(name),
+            Ct
+        );
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return (await response.Content.ReadFromJsonAsync<InterimSiteModel>(Ct))!;
+    }
+
+    private async Task<InterimSiteEntry> ModelInterimAsync(string siteNumber) =>
+        Assert.Single(
+            Assert.Single(await CurrentSitesAsync(), s => s.OrsId == "001").InterimSites,
+            i => i.SiteNumber == siteNumber
+        );
+
+    [Fact]
+    public async Task AddInterimSite_AddsAProposedInterimSiteToTheOrs()
+    {
+        var application = await ApplicationAsync(null, ReExSite());
+
+        var added = await AddInterimSiteAsync(application);
+
+        var interim = await ModelInterimAsync(added.SiteNumber);
+        Assert.Equal(InterimSiteStatus.Proposed, interim.Status);
+        Assert.Equal(application.Id, interim.ProposedByApplicationId);
+        Assert.Equal("Quay", interim.SiteName);
+        var entry = Assert.Single(
+            (await CurrentApplicationAsync(application))!.ApplicationOverseasSites
+        );
+        Assert.Equal(added.SiteNumber, Assert.Single(entry.InterimSites).SiteNumber);
+    }
+
+    [Fact]
+    public async Task AddInterimSite_SkipsANumberOnlyTheModelUses()
+    {
+        // The migration renumbers SN-0001 into the 3-digit pool, a number legacy has never seen.
+        var site = ReExSite();
+        site.InterimSites =
+        [
+            new InterimSiteModel
+            {
+                SiteId = 2,
+                SiteNumber = "SN-0001",
+                Country = "Belgium",
+                SiteName = "Old",
+                AddressLine1 = "2 Quay",
+                TownOrCity = "Antwerp",
+                ContactName = "Ann",
+                ContactEmail = "ann@example.com",
+                ContactPhone = "0123 456 789",
+                OperationCodes = ["R12"],
+            },
+        ];
+        var application = await ApplicationAsync(null, site);
+
+        var added = await AddInterimSiteAsync(application);
+
+        var numbers = Assert
+            .Single(await CurrentSitesAsync())
+            .InterimSites.Select(i => i.SiteNumber);
+        Assert.Equal(2, numbers.Distinct().Count());
+        Assert.Contains(added.SiteNumber, numbers);
+    }
+
+    [Fact]
+    public async Task UpdateInterimSite_OwnProposal_WritesThroughToTheOrs()
+    {
+        var application = await ApplicationAsync(null, ReExSite());
+        var added = await AddInterimSiteAsync(application);
+
+        var response = await _client.PatchAsJsonAsync(
+            InterimUrl(application, $"/{added.SiteId}"),
+            InterimRequest("Dock"),
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var interim = await ModelInterimAsync(added.SiteNumber);
+        Assert.Equal("Dock", interim.SiteName);
+        Assert.Equal(InterimSiteStatus.Proposed, interim.Status);
+    }
+
+    [Fact]
+    public async Task WithdrawThenRestoreInterimSite_OwnProposal_IsWithdrawnThenProposedAgain()
+    {
+        var application = await ApplicationAsync(null, ReExSite());
+        var added = await AddInterimSiteAsync(application);
+
+        var withdrawn = await _client.DeleteAsync(InterimUrl(application, $"/{added.SiteId}"), Ct);
+
+        Assert.Equal(HttpStatusCode.NoContent, withdrawn.StatusCode);
+        Assert.Equal(
+            InterimSiteStatus.Withdrawn,
+            (await ModelInterimAsync(added.SiteNumber)).Status
+        );
+
+        var restored = await _client.PostAsync(
+            InterimUrl(application, $"/{added.SiteId}/restore"),
+            null,
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+        var interim = await ModelInterimAsync(added.SiteNumber);
+        Assert.Equal(InterimSiteStatus.Proposed, interim.Status);
+        Assert.Null(interim.RemovedAt);
+    }
+
+    [Fact]
+    public async Task AddInterimSite_ModelWriteFails_RollsBackTheLegacyWriteAndSendsNoNotification()
+    {
+        var sync = Substitute.For<IApplicationModelSync>();
+        sync.SyncAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Throws(new InvalidOperationException("model write failed"));
+        Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(sync)));
+        var application = await ApplicationAsync(Guid.NewGuid(), ReExSite());
+
+        var response = await _client.PostAsJsonAsync(InterimUrl(application), InterimRequest(), Ct);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Empty((await LegacyAsync(application))!.OverseasSites!.Sites[0].InterimSites);
+        await NotifySiteAdded(_caseWorking.DidNotReceive());
+    }
+
+    [Fact]
+    public async Task AddInterimSite_Committed_NotifiesCaseManagementOnce()
+    {
+        var application = await ApplicationAsync(Guid.NewGuid(), ReExSite());
+
+        await AddInterimSiteAsync(application);
+
+        await NotifySiteAdded(_caseWorking.Received(1));
+    }
+
     [Fact]
     public async Task AddOverseasSite_DualWriteOff_WritesNoModel()
     {
