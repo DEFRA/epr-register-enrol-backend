@@ -4092,6 +4092,7 @@ public static class AccreditationApplicationEndpoints
         ICaseWorkingApiAdapter CaseWorkingAdapter,
         IValidator<WithdrawRequest> Validator,
         IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
         CancellationToken CancellationToken
     );
 
@@ -4102,7 +4103,8 @@ public static class AccreditationApplicationEndpoints
         [AsParameters] WithdrawServices services
     )
     {
-        var (persistence, caseWorkingAdapter, validator, unitOfWork, cancellationToken) = services;
+        var (persistence, caseWorkingAdapter, validator, unitOfWork, loggerFactory, cancellationToken) =
+            services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
@@ -4134,7 +4136,7 @@ public static class AccreditationApplicationEndpoints
             return WithdrawNotAppliedResult(withdrawResult);
 
         var wasQueried = application.ApplicationStatus == ApplicationStatus.Queried;
-        return await unitOfWork.RunAsync(
+        var result = await unitOfWork.RunAsync(
             nameof(Withdraw),
             applicationId,
             async (session, token) =>
@@ -4157,6 +4159,21 @@ public static class AccreditationApplicationEndpoints
             },
             cancellationToken
         );
+
+        // RA-644 B8f: the Case Management service has withdrawn the case but this write rolled back.
+        // Its withdraw is idempotent (an already-withdrawn work item replays as success), so the
+        // operator's retry records the withdrawal; this line makes the gap visible until then.
+        if (result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status500InternalServerError })
+        {
+            loggerFactory
+                .CreateLogger("AccreditationApplicationEndpoints")
+                .LogWarning(
+                    "Withdraw: applicationId={ApplicationId} is withdrawn in the case management service but the withdrawal was not recorded here; a retry completes it",
+                    applicationId
+                );
+        }
+
+        return result;
     }
 
     private static async Task<IResult> RecordWithdrawalAsync(

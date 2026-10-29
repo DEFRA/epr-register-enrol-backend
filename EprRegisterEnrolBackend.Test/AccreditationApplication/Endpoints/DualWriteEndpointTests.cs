@@ -820,6 +820,62 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Withdraw_ModelWriteFailsThenRetried_CompletesTheWithdrawal()
+    {
+        // Case Management withdraws on the first call and replays the withdrawal on the second, so the retry
+        // records what the failed request rolled back.
+        Restart(
+            s_dualWriteOn,
+            services =>
+                services.Replace(
+                    ServiceDescriptor.Singleton<IApplicationModelSync>(sp => new FailsOnceSync(
+                        ActivatorUtilities.CreateInstance<ApplicationModelSync>(sp)
+                    ))
+                )
+        );
+        var (application, orsId) = await SubmittedWithProposedSiteAsync();
+
+        var failed = await WithdrawAsync(application);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.Equal(
+            ApplicationStatus.Submitted,
+            (await LegacyAsync(application))!.ApplicationStatus
+        );
+
+        var retried = await WithdrawAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        Assert.Equal(
+            ApplicationStatus.Withdrawn,
+            (await LegacyAsync(application))!.ApplicationStatus
+        );
+        Assert.Equal(OverseasSiteStatus.Discarded, (await CurrentSiteAsync(orsId)).Status);
+        await _caseWorking
+            .Received(2)
+            .WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    private sealed class FailsOnceSync(IApplicationModelSync inner) : IApplicationModelSync
+    {
+        private int _calls;
+
+        public Task SyncAsync(
+            ObjectId applicationId,
+            IClientSessionHandle session,
+            CancellationToken cancellationToken = default
+        ) =>
+            Interlocked.Increment(ref _calls) == 1
+                ? throw new InvalidOperationException("model write failed")
+                : inner.SyncAsync(applicationId, session, cancellationToken);
+    }
+
+    [Fact]
     public async Task AddOverseasSite_DualWriteOff_WritesNoModel()
     {
         Restart(new() { ["DomainModel:ExpandEnabled"] = "true" });
