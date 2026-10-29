@@ -3867,8 +3867,10 @@ public static class AccreditationApplicationEndpoints
         Guid workItemId,
         StatusChangedFromCaseManagementRequest request,
         IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
         HttpContext httpContext,
-        ILoggerFactory loggerFactory
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
     )
     {
         var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
@@ -3893,8 +3895,10 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
-        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
-        if (application is null)
+        // RA-644 B8f: read once outside the transaction for the application id the unit of work
+        // migrates and syncs; the work reads it again in the session.
+        var known = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        if (known is null)
         {
             logger.LogWarning(
                 "StatusChangedFromCaseManagement: no application found for workItemId={WorkItemId} correlationId={CorrelationId}",
@@ -3903,6 +3907,58 @@ public static class AccreditationApplicationEndpoints
             );
             return Results.NotFound();
         }
+
+        var push = new CaseManagementStatusPush(workItemId, request, correlationId);
+        var applied = false;
+        var result = await unitOfWork.RunAsync(
+            nameof(StatusChangedFromCaseManagement),
+            known.Id.ToString()!,
+            async (session, _) =>
+            {
+                var (pushResult, wrote) = await ApplyStatusPushAsync(
+                    persistence,
+                    logger,
+                    push,
+                    session
+                );
+                applied = wrote;
+                return pushResult;
+            },
+            cancellationToken
+        );
+
+        if (applied && Committed(result) && logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StatusChangedFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
+                known.Id,
+                workItemId,
+                request.ToStateId,
+                correlationId ?? "(absent)"
+            );
+        }
+        return result;
+    }
+
+    private sealed record CaseManagementStatusPush(
+        Guid WorkItemId,
+        StatusChangedFromCaseManagementRequest Request,
+        string? CorrelationId
+    );
+
+    // Extracted from StatusChangedFromCaseManagement (RA-644 B8f) so it runs in the unit of work
+    // with the session on every read and write. Returns whether it wrote, for the success log.
+    private static async Task<(IResult Result, bool Wrote)> ApplyStatusPushAsync(
+        IAccreditationApplicationPersistence persistence,
+        ILogger logger,
+        CaseManagementStatusPush push,
+        IClientSessionHandle? session
+    )
+    {
+        var (workItemId, request, correlationId) = push;
+        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId, session);
+        if (application is null)
+            return (Results.NotFound(), false);
 
         // Ordering guard, not a status-precedence table (RA-368 §4.3): a push whose OccurredAt is
         // not strictly after the last applied push is a duplicate or an out-of-order retry, so it
@@ -3920,7 +3976,7 @@ public static class AccreditationApplicationEndpoints
                 lastUpdated,
                 correlationId
             );
-            return Results.Ok(application);
+            return (Results.Ok(application), false);
         }
 
         var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
@@ -3937,7 +3993,7 @@ public static class AccreditationApplicationEndpoints
             correlationId
         );
         if (terminalResult is not null)
-            return terminalResult;
+            return (terminalResult, false);
 
         // Approve/reject legality: the old Approve/Reject endpoints carried this check but are
         // deleted (RA-368 §4.5) — nothing else in the codebase still enforces it, so it is
@@ -3961,8 +4017,11 @@ public static class AccreditationApplicationEndpoints
                 application.Id,
                 correlationId ?? "(absent)"
             );
-            return Results.Conflict(
-                "Application must be in 'Submitted', 'Updated', 'DulyMade' or 'AwaitingDecision' status to approve or reject."
+            return (
+                Results.Conflict(
+                    "Application must be in 'Submitted', 'Updated', 'DulyMade' or 'AwaitingDecision' status to approve or reject."
+                ),
+                false
             );
         }
 
@@ -3972,7 +4031,7 @@ public static class AccreditationApplicationEndpoints
         application.CaseManagementStatusUpdatedAt = request.OccurredAt;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         if (updated is null)
         {
             logger.LogError(
@@ -3981,20 +4040,10 @@ public static class AccreditationApplicationEndpoints
                 workItemId,
                 correlationId ?? "(absent)"
             );
-            return Results.Problem("Failed to record status change from case management.");
+            return (Results.Problem("Failed to record status change from case management."), false);
         }
 
-        if (logger.IsEnabled(LogLevel.Information))
-        {
-            logger.LogInformation(
-                "StatusChangedFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
-                updated.Id,
-                workItemId,
-                request.ToStateId,
-                correlationId ?? "(absent)"
-            );
-        }
-        return Results.Ok(updated);
+        return (Results.Ok(updated), true);
     }
 
     private const string DecisionAlreadyMadeWithdrawMessage =
@@ -4033,16 +4082,25 @@ public static class AccreditationApplicationEndpoints
                 "Failed to withdraw accreditation application with the case management service."
             );
 
+    // Bundles Withdraw's DI-service/framework parameters under one [AsParameters] argument so the
+    // handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // AddOverseasSiteServices above.
+    private sealed record WithdrawServices(
+        IAccreditationApplicationPersistence Persistence,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IValidator<WithdrawRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> Withdraw(
         string organisationId,
         string applicationId,
         WithdrawRequest request,
-        IAccreditationApplicationPersistence persistence,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        IValidator<WithdrawRequest> validator,
-        CancellationToken cancellationToken
+        [AsParameters] WithdrawServices services
     )
     {
+        var (persistence, caseWorkingAdapter, validator, unitOfWork, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
@@ -4062,6 +4120,8 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
+        // RA-644 B8f: it stays outside the unit of work, so a transaction never waits on the Case
+        // Management service.
         var withdrawResult = await caseWorkingAdapter.WithdrawApplicationAsync(
             application,
             contactDetails,
@@ -4071,13 +4131,41 @@ public static class AccreditationApplicationEndpoints
         if (withdrawResult != WithdrawResult.Succeeded)
             return WithdrawNotAppliedResult(withdrawResult);
 
-        // RA-519 follow-up: re-read after the round trip, for the same reason as Resubmit above -
-        // WithdrawApplicationAsync can synchronously trigger ManagementBe's push-back while this
-        // call is in flight, and a queried section stays editable throughout it, so the status
-        // values below must reflect this fresh read rather than the pre-round-trip copy.
-        var freshApplication =
-            await persistence.GetByIdAsync(organisationId, applicationId) ?? application;
+        var wasQueried = application.ApplicationStatus == ApplicationStatus.Queried;
+        return await unitOfWork.RunAsync(
+            nameof(Withdraw),
+            applicationId,
+            async (session, token) =>
+            {
+                // RA-519 follow-up: re-read after the round trip, for the same reason as Resubmit above -
+                // WithdrawApplicationAsync can synchronously trigger ManagementBe's push-back while this
+                // call is in flight, and a queried section stays editable throughout it, so the status
+                // values below must reflect this fresh read rather than the pre-round-trip copy.
+                var freshApplication =
+                    await persistence.GetByIdAsync(organisationId, applicationId, session)
+                    ?? application;
+                return await RecordWithdrawalAsync(
+                    persistence,
+                    freshApplication,
+                    wasQueried,
+                    request.Reason,
+                    session,
+                    token
+                );
+            },
+            cancellationToken
+        );
+    }
 
+    private static async Task<IResult> RecordWithdrawalAsync(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel freshApplication,
+        bool wasQueried,
+        string reason,
+        IClientSessionHandle? session,
+        CancellationToken cancellationToken
+    )
+    {
         // RA-519: same targeted-update migration as Resubmit above, and for the same reason -
         // WithdrawApplicationAsync above can synchronously trigger ManagementBe's push-back into
         // StatusChangedFromCaseManagement while this call is still in flight, racing this
@@ -4085,7 +4173,6 @@ public static class AccreditationApplicationEndpoints
         // ManagementBe happens not to push withdrawn transitions back synchronously - an
         // implementation detail of another repo, not something to rely on (see RA-519).
         var sectionUpdates = new List<UpdateDefinition<AccreditationApplicationModel>>();
-        var wasQueried = application.ApplicationStatus == ApplicationStatus.Queried;
         if (wasQueried)
         {
             var queriedSections = (freshApplication.Query?.QueriedSectionKeys ?? [])
@@ -4133,7 +4220,7 @@ public static class AccreditationApplicationEndpoints
                 .Append(
                     Builders<AccreditationApplicationModel>.Update.Set(
                         a => a.WithdrawalReason,
-                        request.Reason
+                        reason
                     )
                 )
                 .Append(
@@ -4161,7 +4248,8 @@ public static class AccreditationApplicationEndpoints
             freshApplication.Id!.Value,
             notAlreadyWithdrawnGuard,
             combinedUpdate,
-            cancellationToken
+            cancellationToken,
+            session
         );
         // A null result here means notAlreadyWithdrawnGuard rejected the write - a genuine rival
         // Withdraw already completed and moved ApplicationStatus to Withdrawn first - the same

@@ -673,6 +673,152 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         Assert.Equal(ChangeReason.ApplicationEdited, entity.LastChange.Reason);
     }
 
+    // --- B8f: rejected and withdrawn ------------------------------------------------------------------------------
+
+    // Submitted with a site it added, and not migrated yet: the write under test is its first touch, so the
+    // migration makes the added site a Proposed ORS before the handler runs.
+    private async Task<(
+        AccreditationApplicationModel Application,
+        string OrsId
+    )> SubmittedWithProposedSiteAsync()
+    {
+        var added = ReExSite(2, "002");
+        added.SiteName = "Added Site";
+        added.IsNewSite = true;
+        var application = await ApplicationAsync(Guid.NewGuid(), ReExSite(), added);
+        application.ApplicationStatus = ApplicationStatus.Submitted;
+        return ((await Applications.UpdateAsync(application))!, "002");
+    }
+
+    private Task<HttpResponseMessage> StatusPushAsync(
+        AccreditationApplicationModel application,
+        string toStateId
+    ) =>
+        _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{application.CaseManagementWorkItemId}/status",
+            new
+            {
+                toStateId,
+                actionId = toStateId,
+                occurredAt = DateTime.UtcNow,
+            },
+            Ct
+        );
+
+    private Task<HttpResponseMessage> WithdrawAsync(AccreditationApplicationModel application) =>
+        _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/{OrganisationId}/{application.Id}/withdraw",
+            new { reason = "No longer needed" },
+            Ct
+        );
+
+    private async Task<OverseasSiteEntity> CurrentSiteAsync(string orsId) =>
+        Assert.Single(await CurrentSitesAsync(), s => s.OrsId == orsId);
+
+    private void FailModelWrites()
+    {
+        var sync = Substitute.For<IApplicationModelSync>();
+        sync.SyncAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Throws(new InvalidOperationException("model write failed"));
+        Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(sync)));
+    }
+
+    [Fact]
+    public async Task StatusPush_Rejected_DiscardsTheApplicationsProposedSite()
+    {
+        var (application, orsId) = await SubmittedWithProposedSiteAsync();
+
+        var response = await StatusPushAsync(application, "rejected");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var ors = await CurrentSiteAsync(orsId);
+        Assert.Equal(OverseasSiteStatus.Discarded, ors.Status);
+        Assert.Equal(ChangeReason.ProposedSiteDiscarded, ors.LastChange.Reason);
+        Assert.Equal(OverseasSiteStatus.Active, (await CurrentSiteAsync("001")).Status);
+        Assert.Equal(
+            ApplicationStatus.Rejected,
+            (await CurrentApplicationAsync(application))!.Status
+        );
+    }
+
+    [Fact]
+    public async Task StatusPush_NotClosing_VersionsTheApplicationAndKeepsTheSiteProposed()
+    {
+        var (application, orsId) = await SubmittedWithProposedSiteAsync();
+
+        var response = await StatusPushAsync(application, "duly-made");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(OverseasSiteStatus.Proposed, (await CurrentSiteAsync(orsId)).Status);
+        Assert.Equal(
+            ApplicationStatus.DulyMade,
+            (await CurrentApplicationAsync(application))!.Status
+        );
+    }
+
+    [Fact]
+    public async Task StatusPush_ModelWriteFails_RollsBackTheLegacyWrite()
+    {
+        FailModelWrites();
+        var (application, _) = await SubmittedWithProposedSiteAsync();
+
+        var response = await StatusPushAsync(application, "rejected");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal(ApplicationStatus.Submitted, legacy.ApplicationStatus);
+        Assert.Null(legacy.CaseManagementStatusUpdatedAt);
+    }
+
+    [Fact]
+    public async Task StatusPush_UnknownWorkItem_IsNotFound()
+    {
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{Guid.NewGuid()}/status",
+            new
+            {
+                toStateId = "rejected",
+                actionId = "rejected",
+                occurredAt = DateTime.UtcNow,
+            },
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Withdraw_DiscardsTheApplicationsProposedSite()
+    {
+        var (application, orsId) = await SubmittedWithProposedSiteAsync();
+
+        var response = await WithdrawAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(OverseasSiteStatus.Discarded, (await CurrentSiteAsync(orsId)).Status);
+        var entity = (await CurrentApplicationAsync(application))!;
+        Assert.Equal(ApplicationStatus.Withdrawn, entity.Status);
+        Assert.Equal("No longer needed", entity.WithdrawalReason);
+    }
+
+    [Fact]
+    public async Task Withdraw_ModelWriteFails_RollsBackTheLegacyWrite()
+    {
+        FailModelWrites();
+        var (application, _) = await SubmittedWithProposedSiteAsync();
+
+        var response = await WithdrawAsync(application);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal(ApplicationStatus.Submitted, legacy.ApplicationStatus);
+        Assert.Null(legacy.WithdrawalReason);
+    }
+
     [Fact]
     public async Task AddOverseasSite_DualWriteOff_WritesNoModel()
     {

@@ -173,6 +173,15 @@ public sealed class ApplicationModelSync(
 
             await DiscardDroppedInterimProposalsAsync(entries);
             await DiscardRemovedProposalsAsync(entries);
+            if (
+                legacy.ApplicationStatus
+                is ApplicationStatus.Rejected
+                    or ApplicationStatus.Withdrawn
+            )
+            {
+                await DiscardClosedApplicationsProposalsAsync(registrationId);
+            }
+
             if (stamps.Count > 0)
             {
                 await applications.StampDomainModelForeignKeysAsync(
@@ -462,6 +471,93 @@ public sealed class ApplicationModelSync(
                     ).Entity
                 );
             }
+        }
+
+        // B8f: a rejected or withdrawn application's Proposed sites and interim sites are Discarded, one ORS version
+        // each, unless another application in flight holds them; then they stay Proposed, as the migration decides
+        // (§6.1 step 2). A withdrawn interim site stays Withdrawn, as the migration leaves it.
+        private async Task DiscardClosedApplicationsProposalsAsync(ObjectId registrationId)
+        {
+            var (heldSites, heldInterims) = await HeldInFlightElsewhereAsync(registrationId);
+            foreach (var ors in _byEntityId.Values.ToList())
+            {
+                var discardSite = IsOwnProposal(ors) && !heldSites.Contains(ors.EntityId);
+                var interims = ors
+                    .InterimSites.Where(i =>
+                        i.ProposedByApplicationId == _applicationId
+                        && i.Status == InterimSiteStatus.Proposed
+                        && !heldInterims.Contains((ors.EntityId, i.SiteNumber))
+                    )
+                    .ToList();
+                if (!discardSite && interims.Count == 0)
+                {
+                    continue;
+                }
+
+                if (discardSite)
+                {
+                    OverseasSiteTransitions.Registered.EnsureCanTransition(
+                        ors.Status,
+                        OverseasSiteStatus.Discarded
+                    );
+                    ors.Status = OverseasSiteStatus.Discarded;
+                }
+
+                interims.ForEach(i => i.Status = InterimSiteStatus.Discarded);
+                var change = discardSite
+                    ? Change(ChangeReason.ProposedSiteDiscarded, ors.OrsId)
+                    : Change(
+                        ChangeReason.ProposedInterimSiteDiscarded,
+                        ors.OrsId,
+                        interims[0].SiteNumber
+                    );
+                Track(
+                    (
+                        await stores.OverseasSites.Versions.UpdateAsync(
+                            ors,
+                            ors.Version,
+                            change,
+                            session,
+                            cancellationToken
+                        )
+                    ).Entity
+                );
+            }
+        }
+
+        // The ORSs, and the interim sites on them, that the registration's other in-flight applications hold. This
+        // application is left out by id: its current version still has the status it had before this write.
+        private async Task<(
+            HashSet<ObjectId> Sites,
+            HashSet<(ObjectId OrsId, string SiteNumber)> Interims
+        )> HeldInFlightElsewhereAsync(ObjectId registrationId)
+        {
+            var filter = Builders<ApplicationEntity>.Filter;
+            var others = await stores.Applications.Versions.FindAllCurrentAsync(
+                filter.Eq(a => a.RegistrationId, registrationId)
+                    & filter.Ne(a => a.EntityId, _applicationId)
+                    & filter.Nin(
+                        a => a.Status,
+                        [
+                            ApplicationStatus.Approved,
+                            ApplicationStatus.Rejected,
+                            ApplicationStatus.Withdrawn,
+                        ]
+                    ),
+                session,
+                cancellationToken
+            );
+            var held = others
+                .SelectMany(a => a.ApplicationOverseasSites)
+                .Where(e => e.OverseasSiteId is not null)
+                .ToList();
+            return (
+                held.Select(e => e.OverseasSiteId!.Value).ToHashSet(),
+                held.SelectMany(e =>
+                        e.InterimSites.Select(i => (e.OverseasSiteId!.Value, i.SiteNumber))
+                    )
+                    .ToHashSet()
+            );
         }
 
         // A legacy number the migration renumbered is found through the ORS's record of the old number.

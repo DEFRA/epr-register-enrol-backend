@@ -115,8 +115,14 @@ public sealed class ApplicationModelSyncTests : IDisposable
     ) => Assert.Single(Entry(application, siteId).InterimSites, i => i.SiteNumber == siteNumber);
 
     // Migrated first, as the unit of work's ensure-migrated step leaves it before the handler runs.
+    private Task<AccreditationApplicationModel> MigratedApplicationAsync(
+        ApplicationStatus status,
+        params OverseasSiteModel[] sites
+    ) => MigratedApplicationAsync(status, 2027, sites);
+
     private async Task<AccreditationApplicationModel> MigratedApplicationAsync(
         ApplicationStatus status,
+        int year,
         params OverseasSiteModel[] sites
     )
     {
@@ -131,7 +137,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
                     IsExporter = true,
                     Nation = Nation.England,
                     MaterialType = MaterialType.Plastic,
-                    Year = 2027,
+                    Year = year,
                     ApplicationStatus = status,
                     CreatedAt = Day1,
                     UpdatedAt = Day1,
@@ -623,6 +629,111 @@ public sealed class ApplicationModelSyncTests : IDisposable
 
         Assert.Equal(1, (await CurrentApplicationAsync(application)).Version);
         Assert.Equal(1, (await CurrentSiteAsync("001")).Version);
+    }
+
+    // --- B8f: rejected and withdrawn ------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(ApplicationStatus.Rejected)]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    public async Task ApplicationClosed_DiscardsItsProposedSitesAndInterimSites(
+        ApplicationStatus closed
+    )
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay")),
+            Site(3, "002", "Added", isNew: true)
+        );
+
+        await EditAsync(application, a => a.ApplicationStatus = closed);
+        await SyncAsync(application);
+
+        var proposed = await CurrentSiteAsync("002");
+        Assert.Equal(OverseasSiteStatus.Discarded, proposed.Status);
+        Assert.Equal(ChangeReason.ProposedSiteDiscarded, proposed.LastChange.Reason);
+        var active = await CurrentSiteAsync("001");
+        Assert.Equal(OverseasSiteStatus.Active, active.Status);
+        Assert.Equal(InterimSiteStatus.Discarded, InterimEntry(active, "001").Status);
+        Assert.Equal(ChangeReason.ProposedInterimSiteDiscarded, active.LastChange.Reason);
+
+        // The application still records what it proposed.
+        var entity = await CurrentApplicationAsync(application);
+        Assert.Equal(closed, entity.Status);
+        Assert.Equal(proposed.EntityId, Entry(entity, 3).OverseasSiteId);
+        Assert.Equal("001", InterimEntry(entity, 1, "001").SiteNumber);
+    }
+
+    [Fact]
+    public async Task ApplicationClosed_KeepsItsWithdrawnInterimSiteWithdrawn()
+    {
+        // As the migration does: a removed interim site is Withdrawn whatever its application's status.
+        var withdrawn = Interim(2, "001", "Quay");
+        withdrawn.RemovedAt = Day1;
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            WithInterims(Site(1, "001", "ReEx Site"), withdrawn)
+        );
+        var before = await CurrentSiteAsync("001");
+        Assert.Equal(InterimSiteStatus.Withdrawn, InterimEntry(before, "001").Status);
+
+        await EditAsync(application, a => a.ApplicationStatus = ApplicationStatus.Rejected);
+        await SyncAsync(application);
+
+        var ors = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, ors.Version);
+        Assert.Equal(InterimSiteStatus.Withdrawn, InterimEntry(ors, "001").Status);
+    }
+
+    [Fact]
+    public async Task ApplicationClosed_ProposalAnotherInFlightApplicationHolds_StaysProposed()
+    {
+        // As the migration does: a site is Discarded only once no application in flight holds it.
+        var closing = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay")),
+            Site(3, "002", "Added", isNew: true)
+        );
+        await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            2028,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay")),
+            Site(3, "002", "Added", isNew: true)
+        );
+        var proposedBefore = await CurrentSiteAsync("002");
+        var activeBefore = await CurrentSiteAsync("001");
+
+        await EditAsync(closing, a => a.ApplicationStatus = ApplicationStatus.Rejected);
+        await SyncAsync(closing);
+
+        var proposed = await CurrentSiteAsync("002");
+        Assert.Equal(proposedBefore.Version, proposed.Version);
+        Assert.Equal(OverseasSiteStatus.Proposed, proposed.Status);
+        var active = await CurrentSiteAsync("001");
+        Assert.Equal(activeBefore.Version, active.Version);
+        Assert.Equal(InterimSiteStatus.Proposed, InterimEntry(active, "001").Status);
+    }
+
+    [Fact]
+    public async Task ApplicationClosed_SyncedAgain_WritesNoNewVersions()
+    {
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay")),
+            Site(3, "002", "Added", isNew: true)
+        );
+        await EditAsync(application, a => a.ApplicationStatus = ApplicationStatus.Rejected);
+        await SyncAsync(application);
+        var entity = await CurrentApplicationAsync(application);
+        var active = await CurrentSiteAsync("001");
+        var proposed = await CurrentSiteAsync("002");
+
+        await SyncAsync(application);
+
+        Assert.Equal(entity.Version, (await CurrentApplicationAsync(application)).Version);
+        Assert.Null(Entry(await CurrentApplicationAsync(application), 3).ProposedChanges);
+        Assert.Equal(active.Version, (await CurrentSiteAsync("001")).Version);
+        Assert.Equal(proposed.Version, (await CurrentSiteAsync("002")).Version);
     }
 
     // --- B8e: registration numbers --------------------------------------------------------------------------------
