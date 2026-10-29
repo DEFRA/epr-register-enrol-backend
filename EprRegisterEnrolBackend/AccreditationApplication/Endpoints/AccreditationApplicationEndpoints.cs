@@ -1350,14 +1350,7 @@ public static class AccreditationApplicationEndpoints
         [AsParameters] AddOverseasSiteServices services
     )
     {
-        var (
-            persistence,
-            validator,
-            caseWorkingAdapter,
-            unitOfWork,
-            loggerFactory,
-            cancellationToken
-        ) = services;
+        var (persistence, validator, _, unitOfWork, loggerFactory, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
@@ -1390,23 +1383,8 @@ public static class AccreditationApplicationEndpoints
                 if (RejectIfTerminal(application) is { } conflict)
                     return conflict;
 
-                if (
-                    !AccreditationApplicationSections.IsSectionEditable(
-                        application.ApplicationStatus,
-                        application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
-                    )
-                )
-                    return Results.Conflict(
-                        "Overseas sites section is not editable in the application's current status."
-                    );
-
-                application.OverseasSites ??= new AccreditationApplicationOverseasSites();
-
-                const int maxSitesPerApplication = 500;
-                if (application.OverseasSites.Sites.Count >= maxSitesPerApplication)
-                    return Results.UnprocessableEntity(
-                        $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
-                    );
+                if (RejectIfCannotAddSite(application) is { } rejected)
+                    return rejected;
 
                 var (errorResult, created, persisted) = await AllocateGeneratedIdAsync(
                     persistence,
@@ -1424,39 +1402,72 @@ public static class AccreditationApplicationEndpoints
             },
             cancellationToken
         );
-        if (!Committed(result) || newSite is null || updated is null)
-            return result;
-
-        // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
-        // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s): skip the round-trip
-        // entirely when there is nothing to notify, and defend in depth around the call even
-        // though NotifySiteAddedAsync itself already guarantees it never throws.
-        if (updated.CaseManagementWorkItemId is not null)
-        {
-            try
-            {
-                await caseWorkingAdapter.NotifySiteAddedAsync(
-                    updated,
-                    siteType: "ors",
-                    orsId: newSite.OrsId ?? string.Empty,
-                    siteNumber: null,
-                    isNewSite: newSite.IsNewSite,
-                    cancellationToken: cancellationToken
-                );
-            }
-            catch (Exception ex)
-            {
-                loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
-                    .LogWarning(
-                        ex,
-                        "Failed to notify ManagementBe of new overseas site for applicationId={ApplicationId}",
-                        applicationId
-                    );
-            }
-        }
+        if (Committed(result) && newSite is not null && updated is not null)
+            await NotifySiteAddedAsync(services, applicationId, updated, newSite);
 
         return result;
+    }
+
+    // Adds a site only to an editable overseas sites section with room for it; creates the
+    // section when the application has none yet.
+    private static IResult? RejectIfCannotAddSite(AccreditationApplicationModel application)
+    {
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return Results.Conflict(
+                "Overseas sites section is not editable in the application's current status."
+            );
+
+        application.OverseasSites ??= new AccreditationApplicationOverseasSites();
+
+        const int maxSitesPerApplication = 500;
+        if (application.OverseasSites.Sites.Count >= maxSitesPerApplication)
+            return Results.UnprocessableEntity(
+                $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
+            );
+
+        return null;
+    }
+
+    // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
+    // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s): skip the round-trip
+    // entirely when there is nothing to notify, and defend in depth around the call even
+    // though NotifySiteAddedAsync itself already guarantees it never throws.
+    private static async Task NotifySiteAddedAsync(
+        AddOverseasSiteServices services,
+        string applicationId,
+        AccreditationApplicationModel updated,
+        OverseasSiteModel newSite
+    )
+    {
+        if (updated.CaseManagementWorkItemId is null)
+            return;
+
+        try
+        {
+            await services.CaseWorkingAdapter.NotifySiteAddedAsync(
+                updated,
+                siteType: "ors",
+                orsId: newSite.OrsId ?? string.Empty,
+                siteNumber: null,
+                isNewSite: newSite.IsNewSite,
+                cancellationToken: services.CancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            services
+                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LogWarning(
+                    ex,
+                    "Failed to notify ManagementBe of new overseas site for applicationId={ApplicationId}",
+                    applicationId
+                );
+        }
     }
 
     // RA-644 B8c: whether a unit-of-work result means the write committed, so a side effect that

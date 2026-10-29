@@ -159,13 +159,14 @@ public sealed class ApplicationModelSync(
         }
 
         // A site with no orsId (legacy data only) is found through the ORS its entry already points at.
-        private OverseasSiteEntity? Find(
-            OverseasSiteModel site,
-            ObjectId? previousOverseasSiteId
-        ) =>
-            site.OrsId is not null ? _byOrsId.GetValueOrDefault(site.OrsId)
-            : previousOverseasSiteId is { } id ? _byEntityId.GetValueOrDefault(id)
-            : null;
+        private OverseasSiteEntity? Find(OverseasSiteModel site, ObjectId? previousOverseasSiteId)
+        {
+            if (site.OrsId is not null)
+                return _byOrsId.GetValueOrDefault(site.OrsId);
+            if (previousOverseasSiteId is { } id)
+                return _byEntityId.GetValueOrDefault(id);
+            return null;
+        }
 
         // Only the application that proposed a site may change it; any other holder overlays (option B).
         private bool IsOwnProposal(OverseasSiteEntity ors) =>

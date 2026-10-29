@@ -317,9 +317,7 @@ public sealed class OverseasSiteDualWriteEndpointTests : IAsyncDisposable
         Assert.Single((await LegacyAsync(application))!.OverseasSites!.Sites);
         Assert.Null((await LegacyAsync(application))!.RegistrationEntityId);
         Assert.Empty(await CurrentSitesAsync());
-        await _caseWorking
-            .DidNotReceiveWithAnyArgs()
-            .NotifySiteAddedAsync(default!, default!, default, default, default, default);
+        await NotifySiteAdded(_caseWorking.DidNotReceive());
     }
 
     [Fact]
@@ -330,10 +328,18 @@ public sealed class OverseasSiteDualWriteEndpointTests : IAsyncDisposable
         var response = await _client.PostAsJsonAsync(Url(application), AddRequest(), Ct);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        await _caseWorking
-            .ReceivedWithAnyArgs(1)
-            .NotifySiteAddedAsync(default!, default!, default, default, default, default);
+        await NotifySiteAdded(_caseWorking.Received(1));
     }
+
+    private static Task NotifySiteAdded(ICaseWorkingApiAdapter adapter) =>
+        adapter.NotifySiteAddedAsync(
+            Arg.Any<AccreditationApplicationModel>(),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<string?>(),
+            Arg.Any<bool>(),
+            Arg.Any<CancellationToken>()
+        );
 
     [Fact]
     public async Task AddOverseasSite_DualWriteOff_WritesNoModel()
