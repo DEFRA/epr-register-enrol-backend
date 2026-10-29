@@ -109,26 +109,11 @@ public sealed class ApplicationModelSync(
             var stamps = new Dictionary<string, ObjectId>();
             foreach (var site in Sites)
             {
-                var ors = Find(site, previous.GetValueOrDefault(site.SiteId));
-                BsonDocument? changes = null;
-                if (ors is null)
-                {
-                    ors = site.OrsId is null ? null : await CreateAsync(registrationId, site);
-                }
-                else if (IsOwnProposal(ors))
-                {
-                    ors = await WriteThroughAsync(ors, site);
-                }
-                else
-                {
-                    changes = LegacySiteMapper.ProposedChanges(ors, site);
-                }
-
-                if (ors is not null)
-                {
-                    ors = await SyncInterimSitesAsync(ors, site);
-                }
-
+                var (ors, changes) = await SyncSiteAsync(
+                    registrationId,
+                    site,
+                    previous.GetValueOrDefault(site.SiteId)
+                );
                 entries.Add(Entry(site, ors, changes));
                 if (
                     site.OrsId is not null
@@ -154,6 +139,37 @@ public sealed class ApplicationModelSync(
             }
 
             return entries;
+        }
+
+        // One legacy site: its ORS (created, written through, or left alone with the edit as an overlay), then its
+        // interim sites. Returns the ORS as it now stands and the overlay, if any.
+        private async Task<(OverseasSiteEntity? Ors, BsonDocument? Changes)> SyncSiteAsync(
+            ObjectId registrationId,
+            OverseasSiteModel site,
+            ObjectId? previousOverseasSiteId
+        )
+        {
+            var ors = Find(site, previousOverseasSiteId);
+            BsonDocument? changes = null;
+            if (ors is null)
+            {
+                ors = site.OrsId is null ? null : await CreateAsync(registrationId, site);
+            }
+            else if (IsOwnProposal(ors))
+            {
+                ors = await WriteThroughAsync(ors, site);
+            }
+            else
+            {
+                changes = LegacySiteMapper.ProposedChanges(ors, site);
+            }
+
+            if (ors is not null)
+            {
+                ors = await SyncInterimSitesAsync(ors, site);
+            }
+
+            return (ors, changes);
         }
 
         private void Track(OverseasSiteEntity ors)
@@ -282,19 +298,19 @@ public sealed class ApplicationModelSync(
         )
         {
             (ChangeReason Reason, string SiteNumber)? first = null;
-            foreach (var legacy in InterimSiteSync.All(site))
+            foreach (var interim in InterimSiteSync.All(site))
             {
-                var stored = FindInterim(ors, legacy.SiteNumber);
+                var stored = FindInterim(ors, interim.SiteNumber);
                 ChangeReason? reason = null;
                 if (stored is null)
                 {
-                    stored = NewInterimSite(legacy);
+                    stored = NewInterimSite(interim);
                     ors.InterimSites.Add(stored);
                     reason = ChangeReason.InterimSiteAdded;
                 }
                 else if (IsOwnInterimProposal(stored))
                 {
-                    reason = WriteInterimThrough(stored, legacy);
+                    reason = WriteInterimThrough(stored, interim);
                 }
 
                 _heldInterims.Add((ors.EntityId, stored.SiteNumber));
@@ -314,34 +330,34 @@ public sealed class ApplicationModelSync(
             return first;
         }
 
-        private InterimSiteEntry NewInterimSite(InterimSiteModel legacy)
+        private InterimSiteEntry NewInterimSite(InterimSiteModel interim)
         {
-            var entry = LegacySiteMapper.ToInterimSite(legacy, legacy.SiteNumber);
-            entry.Status = InterimStatus(legacy);
-            entry.ProposedByApplicationId = legacy.IsNewSite ? _applicationId : null;
+            var entry = LegacySiteMapper.ToInterimSite(interim, interim.SiteNumber);
+            entry.Status = InterimStatus(interim);
+            entry.ProposedByApplicationId = interim.IsNewSite ? _applicationId : null;
             return entry;
         }
 
         // A withdrawn interim site is Withdrawn whoever added it; otherwise one this application added is Proposed,
         // and one it already held is Active, as the migration would have made it.
-        private static InterimSiteStatus InterimStatus(InterimSiteModel legacy)
+        private static InterimSiteStatus InterimStatus(InterimSiteModel interim)
         {
-            if (legacy.RemovedAt is not null)
+            if (interim.RemovedAt is not null)
                 return InterimSiteStatus.Withdrawn;
-            return legacy.IsNewSite ? InterimSiteStatus.Proposed : InterimSiteStatus.Active;
+            return interim.IsNewSite ? InterimSiteStatus.Proposed : InterimSiteStatus.Active;
         }
 
         // Copies the application's details over its own proposal; null when nothing differed.
         private static ChangeReason? WriteInterimThrough(
             InterimSiteEntry stored,
-            InterimSiteModel legacy
+            InterimSiteModel interim
         )
         {
-            if (LegacySiteMapper.InterimProposedChanges(stored, legacy) is null)
+            if (LegacySiteMapper.InterimProposedChanges(stored, interim) is null)
                 return null;
 
-            var reason = WithdrawalChange(stored.RemovedAt, legacy.RemovedAt);
-            var details = LegacySiteMapper.ToInterimSite(legacy, stored.SiteNumber);
+            var reason = WithdrawalChange(stored.RemovedAt, interim.RemovedAt);
+            var details = LegacySiteMapper.ToInterimSite(interim, stored.SiteNumber);
             stored.SiteName = details.SiteName;
             stored.Address = details.Address;
             stored.Contact = details.Contact;
@@ -440,11 +456,11 @@ public sealed class ApplicationModelSync(
             int legacySiteId
         )
         {
-            var legacy = InterimSiteSync.All(site).FirstOrDefault(i => i.SiteId == legacySiteId);
-            var stored = legacy is null ? null : FindInterim(ors, legacy.SiteNumber);
+            var interim = InterimSiteSync.All(site).FirstOrDefault(i => i.SiteId == legacySiteId);
+            var stored = interim is null ? null : FindInterim(ors, interim.SiteNumber);
             return stored is null || IsOwnInterimProposal(stored)
                 ? null
-                : LegacySiteMapper.InterimProposedChanges(stored, legacy!);
+                : LegacySiteMapper.InterimProposedChanges(stored, interim!);
         }
 
         private ChangeInfo Change(ChangeReason reason, string? orsId, string? siteNumber = null)
