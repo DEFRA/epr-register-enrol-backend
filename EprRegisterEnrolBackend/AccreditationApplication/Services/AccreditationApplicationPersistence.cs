@@ -418,6 +418,54 @@ public class AccreditationApplicationPersistence(
         );
     }
 
+    public async Task StampDomainModelForeignKeysAsync(
+        ObjectId applicationId,
+        ObjectId registrationEntityId,
+        IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var updates = new List<UpdateDefinition<AccreditationApplicationModel>>
+        {
+            Builders<AccreditationApplicationModel>.Update.Set(
+                a => a.RegistrationEntityId,
+                registrationEntityId
+            ),
+        };
+        var arrayFilters = new List<ArrayFilterDefinition>();
+        // One array filter per site, named s0, s1, ... because an identifier must be a lowercase-led word.
+        foreach (var (orsId, entityId) in overseasSiteEntityIds)
+        {
+            var name = $"s{arrayFilters.Count}";
+            updates.Add(
+                Builders<AccreditationApplicationModel>.Update.Set(
+                    $"overseasSites.sites.$[{name}].overseasSiteEntityId",
+                    entityId
+                )
+            );
+            arrayFilters.Add(
+                new BsonDocumentArrayFilterDefinition<BsonDocument>(
+                    new BsonDocument($"{name}.orsId", orsId)
+                )
+            );
+        }
+
+        var result = await Collection.UpdateOneAsync(
+            session,
+            Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, applicationId),
+            Builders<AccreditationApplicationModel>.Update.Combine(updates),
+            new UpdateOptions { ArrayFilters = arrayFilters },
+            cancellationToken
+        );
+        if (result.MatchedCount == 0)
+        {
+            throw new InvalidOperationException(
+                $"Application {applicationId} was not found to stamp its domain model foreign keys."
+            );
+        }
+    }
+
     protected override List<CreateIndexModel<AccreditationApplicationModel>> DefineIndexes(
         IndexKeysDefinitionBuilder<AccreditationApplicationModel> builder
     )

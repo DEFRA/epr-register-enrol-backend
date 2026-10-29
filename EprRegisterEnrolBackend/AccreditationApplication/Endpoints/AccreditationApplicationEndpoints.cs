@@ -7,6 +7,7 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Logging;
 using FluentValidation;
@@ -718,16 +719,25 @@ public static class AccreditationApplicationEndpoints
         return (null, file);
     }
 
+    // Bundles Seed's DI services under one [AsParameters] argument so the handler stays under Sonar's
+    // 7-parameter limit (S107) - same reasoning, and the same positional-record shape, as
+    // RecyclingOperationsServices above.
+    private sealed record SeedServices(
+        IAccreditationApplicationPersistence Persistence,
+        IReExApiAdapter ReExAdapter,
+        IValidator<SeedRequest> Validator,
+        ISeedDualWriter SeedDualWriter
+    );
+
     private static async Task<IResult> Seed(
         string organisationId,
         string registrationId,
         string materialType,
         SeedRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IReExApiAdapter reExAdapter,
-        IValidator<SeedRequest> validator
+        [AsParameters] SeedServices services
     )
     {
+        var (persistence, reExAdapter, validator, seedDualWriter) = services;
         if (!Enum.TryParse<MaterialType>(materialType, ignoreCase: true, out var materialTypeEnum))
             return Results.BadRequest("Invalid material type.");
 
@@ -857,6 +867,18 @@ public static class AccreditationApplicationEndpoints
         var created = await persistence.CreateAsync(application);
         if (created is null)
             return Results.Problem("Failed to create accreditation application.");
+
+        // Phase 2 seed dual-write (DomainModel:DualWriteSeed). Never throws: a failure is logged and counted,
+        // and the application just created is returned as before.
+        await seedDualWriter.WriteAsync(
+            new SeedDualWrite(
+                organisationId,
+                registrationId,
+                materialTypeEnum,
+                priorYearData,
+                created
+            )
+        );
 
         return Results.Created(
             $"/api/v1/accreditation-applications/{organisationId}/{created.Id}",

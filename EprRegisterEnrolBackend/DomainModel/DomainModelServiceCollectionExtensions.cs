@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.DomainModel.Diagnostics;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -19,13 +20,23 @@ public static class DomainModelServiceCollectionExtensions
     )
     {
         var section = configuration.GetSection(DomainModelConfig.SectionName);
+        var config = section.Get<DomainModelConfig>() ?? new DomainModelConfig();
+        if (config.DualWriteSeed && !config.ExpandEnabled)
+        {
+            throw new InvalidOperationException(
+                "DomainModel:DualWriteSeed needs DomainModel:ExpandEnabled: without it there are no collections to write to."
+            );
+        }
+
         services.Configure<DomainModelConfig>(section);
         services.AddHostedService<DomainModelDiagnosticsService>();
 
-        if (section.Get<DomainModelConfig>()?.ExpandEnabled == true)
+        if (config.ExpandEnabled)
         {
             AddSchema(services);
         }
+
+        AddSeedDualWrite(services, config.DualWriteSeed);
 
         return services;
     }
@@ -49,6 +60,20 @@ public static class DomainModelServiceCollectionExtensions
         services
             .AddHealthChecks()
             .AddCheck<DomainModelSchemaHealthCheck>("domain-model-schema", tags: ["ready"]);
+    }
+
+    // Phase 2, "Seed dual-write". Seed always takes an ISeedDualWriter; with the flag off it is a no-op.
+    private static void AddSeedDualWrite(IServiceCollection services, bool enabled)
+    {
+        if (!enabled)
+        {
+            services.AddSingleton<ISeedDualWriter, NoOpSeedDualWriter>();
+            return;
+        }
+
+        services.AddSingleton<SeedModelStores>();
+        services.AddSingleton<SeedDualWriteMetrics>();
+        services.AddSingleton<ISeedDualWriter, SeedDualWriter>();
     }
 
     private static void AddVersioned<TEntity, TPersistence>(IServiceCollection services)
