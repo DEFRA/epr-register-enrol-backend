@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
+using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,11 +20,11 @@ using NSubstitute.ExceptionExtensions;
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
 /// <summary>
-/// RA-644 B8c: the overseas site write paths with <c>DomainModel:DualWrite</c> on, end to end over HTTP against a
-/// real replica set: the legacy write and the model writes commit together or not at all, and side effects run
-/// only after the commit.
+/// RA-644 B8c-B8e: the overseas site, interim site and number write paths with <c>DomainModel:DualWrite</c> on, end
+/// to end over HTTP against a real replica set: the legacy write and the model writes commit together or not at
+/// all, and side effects run only after the commit.
 /// </summary>
-public sealed class OverseasSiteDualWriteEndpointTests : IAsyncDisposable
+public sealed class DualWriteEndpointTests : IAsyncDisposable
 {
     private const string OrganisationId = "6512a0f0c0ffee0000000001";
     private const string ReExRegistrationId = "6512a0f0c0ffee0000000002";
@@ -38,10 +39,13 @@ public sealed class OverseasSiteDualWriteEndpointTests : IAsyncDisposable
 
     private readonly MongoIntegrationFixture _fixture;
     private readonly ICaseWorkingApiAdapter _caseWorking = Substitute.For<ICaseWorkingApiAdapter>();
+
+    // Knows no organisation, so the registration number's OrgId comes from the request.
+    private readonly IReExApiAdapter _reEx = Substitute.For<IReExApiAdapter>();
     private WebApplicationFactory<Program> _factory;
     private HttpClient _client;
 
-    public OverseasSiteDualWriteEndpointTests(MongoIntegrationFixture fixture)
+    public DualWriteEndpointTests(MongoIntegrationFixture fixture)
     {
         _fixture = fixture;
         (_factory, _client) = Start(s_dualWriteOn);
@@ -67,6 +71,7 @@ public sealed class OverseasSiteDualWriteEndpointTests : IAsyncDisposable
             builder.ConfigureServices(services =>
             {
                 services.AddSingleton(_caseWorking);
+                services.AddSingleton(_reEx);
                 configure?.Invoke(services);
             })
         );
@@ -500,6 +505,172 @@ public sealed class OverseasSiteDualWriteEndpointTests : IAsyncDisposable
         await AddInterimSiteAsync(application);
 
         await NotifySiteAdded(_caseWorking.Received(1));
+    }
+
+    // --- B8e: registration and accreditation numbers --------------------------------------------------------------
+
+    private static readonly object s_registrationNumberBody = new
+    {
+        nation = "England",
+        orgId = 500027,
+        year = 2027,
+    };
+
+    private async Task<AccreditationApplicationModel> NumberedApplicationAsync(
+        ApplicationStatus status,
+        int year,
+        string? registrationReference = null
+    )
+    {
+        var application = await ApplicationAsync();
+        application.ApplicationStatus = status;
+        application.Year = year;
+        application.RegistrationReference = registrationReference;
+        return (await Applications.UpdateAsync(application))!;
+    }
+
+    private static string NumberUrl(AccreditationApplicationModel application, string kind) =>
+        $"/api/v1/accreditation-applications/{OrganisationId}/{application.Id}/{kind}-number";
+
+    private async Task<RegistrationEntity> RegistrationOfAsync(
+        AccreditationApplicationModel application
+    ) =>
+        (
+            await Stores.Registrations.Versions.FindCurrentAsync(
+                Builders<RegistrationEntity>.Filter.Eq(
+                    r => r.EntityId,
+                    (await CurrentApplicationAsync(application))!.RegistrationId!.Value
+                ),
+                cancellationToken: Ct
+            )
+        )!;
+
+    [Fact]
+    public async Task RegistrationNumber_FirstIssue_GoesToTheRegistrationAndTheInFlightApplications()
+    {
+        var approved = await NumberedApplicationAsync(ApplicationStatus.Approved, 2025);
+        var withdrawn = await NumberedApplicationAsync(ApplicationStatus.Withdrawn, 2026);
+        var inFlight = await NumberedApplicationAsync(ApplicationStatus.Submitted, 2026);
+        var application = await NumberedApplicationAsync(ApplicationStatus.Started, 2027);
+
+        var response = await _client.PostAsJsonAsync(
+            NumberUrl(application, "registration"),
+            s_registrationNumberBody,
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var number = (await LegacyAsync(application))!.RegistrationReference;
+        Assert.NotNull(number);
+        var registration = await RegistrationOfAsync(application);
+        Assert.Equal(number, registration.RegistrationNumber);
+        Assert.Equal(ChangeReason.RegistrationNumberIssued, registration.LastChange.Reason);
+        Assert.Equal(number, (await LegacyAsync(inFlight))!.RegistrationReference);
+        Assert.Null((await LegacyAsync(approved))!.RegistrationReference);
+        Assert.Null((await LegacyAsync(withdrawn))!.RegistrationReference);
+    }
+
+    [Fact]
+    public async Task RegistrationNumber_RegistrationAlreadyNumbered_IsReusedNotGenerated()
+    {
+        // The migration gives the Registration the approved application's number.
+        await NumberedApplicationAsync(ApplicationStatus.Approved, 2026, "R26ER5000270001ST");
+        var application = await NumberedApplicationAsync(ApplicationStatus.Started, 2027);
+
+        // No nation, OrgId or year: generating would answer 400.
+        var response = await _client.PostAsJsonAsync(
+            NumberUrl(application, "registration"),
+            new { },
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("R26ER5000270001ST", (await LegacyAsync(application))!.RegistrationReference);
+        Assert.Equal(
+            "R26ER5000270001ST",
+            (await RegistrationOfAsync(application)).RegistrationNumber
+        );
+    }
+
+    [Fact]
+    public async Task RegistrationNumber_RegenerateAnIssuedNumber_IsRefusedAndChangesNothing()
+    {
+        var application = await NumberedApplicationAsync(
+            ApplicationStatus.Started,
+            2027,
+            "R27ER5000270001ST"
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            NumberUrl(application, "registration"),
+            new
+            {
+                nation = "England",
+                orgId = 500027,
+                year = 2027,
+                regenerate = true,
+            },
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal("R27ER5000270001ST", legacy.RegistrationReference);
+        Assert.Empty(legacy.PreviousRegistrationNumbers);
+        Assert.Equal(
+            "R27ER5000270001ST",
+            (await RegistrationOfAsync(application)).RegistrationNumber
+        );
+    }
+
+    [Fact]
+    public async Task RegistrationNumber_ModelWriteFails_RollsBackEveryLegacyWrite()
+    {
+        var sync = Substitute.For<IApplicationModelSync>();
+        sync.SyncAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Throws(new InvalidOperationException("model write failed"));
+        Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(sync)));
+        var inFlight = await NumberedApplicationAsync(ApplicationStatus.Submitted, 2026);
+        var application = await NumberedApplicationAsync(ApplicationStatus.Started, 2027);
+
+        var response = await _client.PostAsJsonAsync(
+            NumberUrl(application, "registration"),
+            s_registrationNumberBody,
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Null((await LegacyAsync(application))!.RegistrationReference);
+        Assert.Null((await LegacyAsync(inFlight))!.RegistrationReference);
+    }
+
+    [Fact]
+    public async Task AccreditationNumber_IsReservedOnTheApplicationVersion()
+    {
+        var application = await NumberedApplicationAsync(ApplicationStatus.Started, 2027);
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (
+                await _client.PostAsJsonAsync(
+                    NumberUrl(application, "registration"),
+                    s_registrationNumberBody,
+                    Ct
+                )
+            ).StatusCode
+        );
+
+        var response = await _client.PostAsync(NumberUrl(application, "accreditation"), null, Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var reference = (await LegacyAsync(application))!.AccreditationReference;
+        Assert.NotNull(reference);
+        var entity = (await CurrentApplicationAsync(application))!;
+        Assert.Equal(reference, entity.ReservedAccreditationNumber);
+        Assert.Equal(ChangeReason.ApplicationEdited, entity.LastChange.Reason);
     }
 
     [Fact]

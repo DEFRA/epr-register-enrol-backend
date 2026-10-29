@@ -336,6 +336,9 @@ public static class AccreditationApplicationEndpoints
         if (application.RegistrationReference is not null && !request.Regenerate)
             return Results.Ok(application);
 
+        // RA-644 B8e: ReEx is asked before the unit of work opens, so a transaction never waits
+        // on it and a retried transaction does not ask again. The checks above are repeated
+        // inside, against what the transaction reads.
         var orgIdResolution = await ResolveOrgIdAsync(
             organisationId,
             request,
@@ -343,28 +346,73 @@ public static class AccreditationApplicationEndpoints
             services.CancellationToken
         );
 
-        if (
-            request.Nation is not { } nationValue
-            || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
-            || orgIdResolution is not { } orgId
-            || request.Year is not { } year
-        )
-            return Results.BadRequest(
-                "Nation, OrgId and Year are required to generate a registration number."
-            );
-
-        var newNumber = await services.Generator.GenerateAsync(
-            new RegulatoryNumberSpec
-            {
-                Nation = nation,
-                IsExporter = application.IsExporter,
-                OrgId = orgId,
-                Material = application.MaterialType,
-                GlassRecyclingProcess = application.GlassRecyclingProcess,
-                Year = year,
-            },
+        return await services.UnitOfWork.RunAsync(
+            nameof(GenerateOrUpdateRegistrationNumber),
+            applicationId,
+            (session, _) =>
+                IssueRegistrationNumberAsync(
+                    services,
+                    new RegistrationNumberRequest(organisationId, applicationId, request, orgIdResolution),
+                    session
+                ),
             services.CancellationToken
         );
+    }
+
+    private sealed record RegistrationNumberRequest(
+        string OrganisationId,
+        string ApplicationId,
+        GenerateOrUpdateRegulatoryNumberRequest Body,
+        int? OrgId
+    );
+
+    // RA-644 B8e: with DualWrite on (IRegistrationNumberRules.NumbersAreFixed) a registration
+    // number belongs to the Registration and never changes once issued: an application without one
+    // takes the Registration's, a regenerate is refused, and the number is copied to every other
+    // in-flight application of the registration. With the flag off the RA-448 rules are unchanged.
+    private static async Task<IResult> IssueRegistrationNumberAsync(
+        RegulatoryNumberServices services,
+        RegistrationNumberRequest call,
+        IClientSessionHandle? session
+    )
+    {
+        var (organisationId, applicationId, request, orgId) = call;
+        var application = await services.Persistence.GetByIdAsync(
+            organisationId,
+            applicationId,
+            session
+        );
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+        if (application.RegistrationReference is not null && !request.Regenerate)
+            return Results.Ok(application);
+
+        var rules = services.NumberRules;
+        var issued = await rules.IssuedNumberAsync(
+            application,
+            session,
+            services.CancellationToken
+        );
+        if (
+            rules.NumbersAreFixed
+            && request.Regenerate
+            && (issued ?? application.RegistrationReference) is not null
+        )
+            return Results.Conflict(
+                "A registration number is never regenerated once it has been issued."
+            );
+
+        var newNumber = issued;
+        if (newNumber is null)
+        {
+            if (RegistrationNumberSpec(application, request, orgId) is not { } spec)
+                return Results.BadRequest(
+                    "Nation, OrgId and Year are required to generate a registration number."
+                );
+            newNumber = await services.Generator.GenerateAsync(spec, services.CancellationToken);
+        }
 
         // Regenerate: keep the prior number in the audit trail, never reuse/reissue it
         // (AC5). A first-ever generate has no prior number to preserve.
@@ -374,10 +422,43 @@ public static class AccreditationApplicationEndpoints
         application.RegistrationReference = newNumber;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await services.Persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to update registration number.")
-            : Results.Ok(updated);
+        var updated = await services.Persistence.UpdateAsync(application, session);
+        if (updated is null)
+            return Results.Problem("Failed to update registration number.");
+
+        await rules.CopyToInFlightApplicationsAsync(
+            updated,
+            newNumber,
+            session,
+            services.CancellationToken
+        );
+        return Results.Ok(updated);
+    }
+
+    // What a new registration number is generated from, or null when the request lacks any of it.
+    private static RegulatoryNumberSpec? RegistrationNumberSpec(
+        AccreditationApplicationModel application,
+        GenerateOrUpdateRegulatoryNumberRequest request,
+        int? orgIdResolution
+    )
+    {
+        if (
+            request.Nation is not { } nationValue
+            || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
+            || orgIdResolution is not { } orgId
+            || request.Year is not { } year
+        )
+            return null;
+
+        return new RegulatoryNumberSpec
+        {
+            Nation = nation,
+            IsExporter = application.IsExporter,
+            OrgId = orgId,
+            Material = application.MaterialType,
+            GlassRecyclingProcess = application.GlassRecyclingProcess,
+            Year = year,
+        };
     }
 
     // RA-690 (replaces RA-448's counter draw and "reapply" YY increment): the accreditation
@@ -393,27 +474,65 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         IAccreditationApplicationPersistence persistence,
-        ILoggerFactory loggerFactory
+        IDualWriteUnitOfWork unitOfWork,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        // The work can re-run, so the issue is logged once, after the commit.
+        Action? logIssued = null;
+        var result = await unitOfWork.RunAsync(
+            nameof(GenerateOrUpdateAccreditationNumber),
+            applicationId,
+            async (session, _) =>
+            {
+                logIssued = null;
+                var (issueResult, log) = await IssueAccreditationNumberAsync(
+                    persistence,
+                    loggerFactory,
+                    organisationId,
+                    applicationId,
+                    session
+                );
+                logIssued = log;
+                return issueResult;
+            },
+            cancellationToken
+        );
+        if (Committed(result))
+            logIssued?.Invoke();
+        return result;
+    }
+
+    private static async Task<(IResult Result, Action? LogIssued)> IssueAccreditationNumberAsync(
+        IAccreditationApplicationPersistence persistence,
+        ILoggerFactory loggerFactory,
+        string organisationId,
+        string applicationId,
+        IClientSessionHandle? session
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
-            return Results.NotFound();
+            return (Results.NotFound(), null);
         if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
+            return (conflict, null);
 
         // RA-448 AC9: registration precedes and is independent of accreditation - an
         // accreditation number is never issued with nothing to accredit against.
         if (application.RegistrationReference is not { } registrationReference)
-            return Results.Conflict(
-                "Application has no registration number yet; an accreditation number cannot be issued."
+            return (
+                Results.Conflict(
+                    "Application has no registration number yet; an accreditation number cannot be issued."
+                ),
+                null
             );
 
         // Idempotent retry: an issued reference may already be quoted externally, so it is
         // returned unchanged and never re-derived. This holds while the application is open
         // (between approval steps 1 and 2); once Approved, RejectIfTerminal above returns 409.
         if (application.AccreditationReference is not null)
-            return Results.Ok(application);
+            return (Results.Ok(application), null);
 
         // A renewal keeps the latest previous accreditation reference held in this backend, so a
         // lapsed year doesn't change it either. Without a registration id there is nothing to
@@ -442,7 +561,7 @@ public static class AccreditationApplicationEndpoints
         // A malformed source must fail visibly rather than issue a wrong reference. A malformed
         // previous reference deliberately does not fall back to the registration reference.
         if (!derivation.IsValid)
-            return Results.UnprocessableEntity(derivation.Error);
+            return (Results.UnprocessableEntity(derivation.Error), null);
 
         // Duplicate live applications for the same registration, material and year are possible
         // (Seed is best-effort, with no unique index) and would derive the same reference. A
@@ -454,26 +573,33 @@ public static class AccreditationApplicationEndpoints
             application.Id!.Value
         );
         if (holders.Any(h => h.BlocksIssuing))
-            return Results.Conflict(
-                $"Accreditation reference {derivation.Reference} is already held by another application; it cannot be issued again."
+            return (
+                Results.Conflict(
+                    $"Accreditation reference {derivation.Reference} is already held by another application; it cannot be issued again."
+                ),
+                null
             );
 
         application.AccreditationReference = derivation.Reference;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         if (updated is null)
-            return Results.Problem("Failed to update accreditation number.");
+            return (Results.Problem("Failed to update accreditation number."), null);
 
-        LogAccreditationReferenceIssued(
-            loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
-            updated,
-            sourceKind,
-            sourceReference,
-            previous?.ApplicationId,
-            holders.Where(h => !h.BlocksIssuing).Select(h => h.Id).ToList()
+        var withdrawnHolderIds = holders.Where(h => !h.BlocksIssuing).Select(h => h.Id).ToList();
+        return (
+            Results.Ok(updated),
+            () =>
+                LogAccreditationReferenceIssued(
+                    loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                    updated,
+                    sourceKind,
+                    sourceReference,
+                    previous?.ApplicationId,
+                    withdrawnHolderIds
+                )
         );
-        return Results.Ok(updated);
     }
 
     // RA-690: the source of each issued reference is logged, not stored, so support can explain
@@ -547,6 +673,8 @@ public static class AccreditationApplicationEndpoints
         IRegulatoryNumberGenerator Generator,
         IValidator<GenerateOrUpdateRegulatoryNumberRequest> Validator,
         IReExApiAdapter ReExAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        IRegistrationNumberRules NumberRules,
         CancellationToken CancellationToken
     );
 
