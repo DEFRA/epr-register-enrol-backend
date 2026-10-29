@@ -6730,6 +6730,8 @@ public class AccreditationApplicationEndpointsTests
     [Theory]
     [InlineData("submitted", ApplicationStatus.Submitted)]
     [InlineData("duly-made", ApplicationStatus.DulyMade)]
+    [InlineData("assessment-started", ApplicationStatus.DulyMade)]
+    [InlineData("assessment-in-progress", ApplicationStatus.Updated)]
     [InlineData("updated", ApplicationStatus.Updated)]
     public async Task StatusChangedFromCaseManagement_MappedState_SetsApplicationStatus(
         string toStateId,
@@ -6913,6 +6915,77 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
+    public async Task StatusChangedFromCaseManagement_AssessmentStarted_SetsDulyMadeAndAdvancesWatermark()
+    {
+        // RA-527 follow-up: the Case Management service never pushes "assessment-started" (the
+        // start step is excluded from pushes), but a misconfigured or replayed push must land on
+        // DulyMade - never Updated and never a status no-op - and advance the ordering watermark
+        // like any other mapped push.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var watermark = DateTime.UtcNow.AddMinutes(-10);
+        SeedApplication(
+            status: ApplicationStatus.Updated,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = watermark;
+            }
+        );
+
+        var occurredAt = watermark.AddMinutes(1);
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "assessment-started",
+            ActionId = "start-assessment",
+            OccurredAt = occurredAt,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.DulyMade);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
+    }
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_AssessmentStartedOutOfOrder_IsNoOp()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var lastUpdated = DateTime.UtcNow;
+        SeedApplication(
+            status: ApplicationStatus.Updated,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = lastUpdated;
+            }
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "assessment-started",
+            ActionId = "start-assessment",
+            OccurredAt = lastUpdated.AddSeconds(-1),
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Updated);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(lastUpdated);
+    }
+
+    [Fact]
     public async Task StatusChangedFromCaseManagement_ContinueReviewDuringDulyMaking_DowngradesFromUpdatedToSubmitted()
     {
         // Mirrors the Case Management service's continue-review-during-duly-making action, which
@@ -6952,6 +7025,9 @@ public class AccreditationApplicationEndpointsTests
 
     [Theory]
     [InlineData(ApplicationStatus.Withdrawn, "duly-made")]
+    [InlineData(ApplicationStatus.Withdrawn, "assessment-started")]
+    [InlineData(ApplicationStatus.Approved, "assessment-started")]
+    [InlineData(ApplicationStatus.Rejected, "assessment-started")]
     [InlineData(ApplicationStatus.Withdrawn, "submitted")]
     [InlineData(ApplicationStatus.Withdrawn, "approved")]
     [InlineData(ApplicationStatus.Withdrawn, "rejected")]
