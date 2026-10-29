@@ -205,7 +205,9 @@ transactions are available in deployed environments. Local `compose.yml:34-43` r
 (`AccreditationApplicationEndpoints.cs:670-814`):
 
 1. An idempotency check through `GetLiveByRegistrationAsync` (non-withdrawn, newest first). This is
-   best-effort only: there is no unique index, so duplicates are possible (comment at lines 703-714).
+   best-effort only: there is no unique index, so a race can create a second live application
+   (comment at lines 703-714). That is a defect, never a valid state: there is at most one live
+   application per organisation, registration and year.
 2. `HttpReExApiAdapter.GetAccreditationAsync(org, reg, material, year - 1)`
    (`AccreditationApplication/Adapters/HttpReExApiAdapter.cs:53-373`) fetches the whole ReEx organisation,
    picks the registration by ReEx `id`, and follows `registration.accreditationId` to **one** ReEx
@@ -1229,8 +1231,8 @@ status, where ReEx's own status was the truth before.
 | --- | --- |
 | Saved, Started | Linked to the Registration. New sites become **Proposed** and edits become `proposedChanges`. The operator sees no difference, because the facade overlays the proposal |
 | Submitted, DulyMade, Queried, Updated, AwaitingDecision | As above. The management-be snapshot is untouched (it owns its copy). Pushes still find the application by `caseManagementWorkItemId`. Under dual-write a later approval runs the approval transaction normally |
-| Rejected, Withdrawn | Linked. Their Proposed sites become Discarded |
-| Duplicate live applications for one key (possible, see Seed comment `:703-714`) | Both linked to the same Registration and listed in the survey and conflicts. No automatic merge |
+| Rejected, Withdrawn | Not live: a new application can be started for the same key. Linked. Their Proposed sites become Discarded |
+| Duplicate live applications for one key (a defect: at most one may be live, see Seed comment `:703-714`) | Both linked to the same Registration and recorded as a `DuplicateLiveApplications` conflict for manual repair. No automatic merge |
 
 There is no row for Approved applications: approvals in this service go live after the migration, so
 none exist when it runs (v4, D4).
@@ -1252,7 +1254,7 @@ none exist when it runs (v4, D4).
 | R9 | The management-be payload snapshot and migrations depend on the legacy shape (M3) | The legacy shape is kept for the whole programme. The submission payload is still built from the facade's legacy model, so it stays byte-compatible |
 | R10 | The missing operator identity makes `changedBy` weak | Recorded as the service identity until bead `b3n` lands |
 | R11 | Flag-combination complexity | Flags are ordered and validated at startup (for example `ReadFromModel` requires `DualWrite`, and `LegacyWrites` off requires the soak to be recorded) |
-| R12 | Seed idempotency is best-effort (duplicates) | Unchanged by this plan. A unique partial index is a separate follow-up, made easier once the survey shows the duplicates |
+| R12 | Seed idempotency is best-effort, so a race can create a duplicate live application (a defect) | Unchanged by this plan. Enforcing one live application per key (a unique partial index) is a separate follow-up, made easier once the survey shows the duplicates |
 | R13 | **Two sources of accreditation status during the transition.** ReEx has its own status; we become the truth for PRN validity (Q2). A suspension recorded only here would not stop PRNs until ReEx calls our validity API | A sequenced cutover with the ReEx team ([Q19](#q19)). Until then, either regulator suspensions continue in ReEx, or we sync ours to ReEx. Don't expose our lifecycle actions in production before that is agreed |
 | R14 | **Reports expect non-status history from before the migration** (Q22) | History starts at migration time for every entity (§4.3). Earlier business dates are kept as attributes (`approvedAt`, `periodStart`) |
 | R15 | **Test-environment results do not prove production data shapes (accepted, Q34).** We have no access to production data because of data-protection rules. A clean survey, migration or reconciliation in test environments proves the code on test data only. This has caused production surprises before, and there is currently nothing we can do to remove it | Accepted, and reduced rather than removed: (1) dual-write is **fatal** (D9), so a surprising production document fails and rolls back that one write instead of silently corrupting the model; (2) phases 3 and 4 run in production with reads still on legacy, so the first production exposure costs a rolled-back write, not wrong data served; (3) the known legacy shapes are **required fixtures** in B7 and B10; (4) the reconciliation job reports any document it cannot project as a conflict and never skips it; (5) phase 5, the first point where a data-shape surprise can reach users, goes live per route group with the flag-off rollback rehearsed |
