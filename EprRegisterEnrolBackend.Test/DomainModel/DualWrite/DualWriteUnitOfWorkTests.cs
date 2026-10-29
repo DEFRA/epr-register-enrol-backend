@@ -35,10 +35,12 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     private readonly AccreditationApplicationPersistence _applications;
     private readonly CapturingLogger<DualWriteUnitOfWork> _logger = new();
     private readonly ServiceProvider _metricsProvider;
+    private readonly IMeterFactory _meterFactory;
     private readonly MeterListener _listener = new();
     private readonly List<string?> _failedOperations = [];
     private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
-    private readonly IApplicationGroupMigrator _migrator = Substitute.For<IApplicationGroupMigrator>();
+    private readonly IApplicationGroupMigrator _migrator =
+        Substitute.For<IApplicationGroupMigrator>();
     private readonly IApplicationModelSync _sync = Substitute.For<IApplicationModelSync>();
 
     public DualWriteUnitOfWorkTests(MongoIntegrationFixture fixture)
@@ -52,10 +54,14 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         );
 
         _metricsProvider = new ServiceCollection().AddMetrics().BuildServiceProvider();
+        _meterFactory = _metricsProvider.GetRequiredService<IMeterFactory>();
+        // Only this test's meters: a listener sees every meter in the process, and the endpoint tests' own
+        // dual-write failures run in parallel with these.
         _listener.InstrumentPublished = (instrument, listener) =>
         {
             if (
-                instrument.Meter.Name == DualWriteMetrics.MeterName
+                ReferenceEquals(instrument.Meter.Scope, _meterFactory)
+                && instrument.Meter.Name == DualWriteMetrics.MeterName
                 && instrument.Name == DualWriteMetrics.FailuresInstrument
             )
             {
@@ -76,7 +82,11 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         );
         _listener.Start();
         _migrator
-            .EnsureMigratedAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
+            .EnsureMigratedAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(GroupMigrationResult.NothingToDo);
     }
 
@@ -88,13 +98,7 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     }
 
     private DualWriteUnitOfWork UnitOfWork(IApplicationGroupMigrator? migrator = null) =>
-        new(
-            _factory,
-            migrator ?? _migrator,
-            _sync,
-            new DualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
-            _logger
-        );
+        new(_factory, migrator ?? _migrator, _sync, new DualWriteMetrics(_meterFactory), _logger);
 
     private async Task<AccreditationApplicationModel> SeedApplicationAsync()
     {
@@ -314,7 +318,11 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         var applicationId = ObjectId.GenerateNewId();
         IClientSessionHandle? migratedIn = null;
         _migrator
-            .EnsureMigratedAsync(applicationId, Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
+            .EnsureMigratedAsync(
+                applicationId,
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(call =>
             {
                 migratedIn = call.Arg<IClientSessionHandle>();
@@ -347,10 +355,18 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         Assert.IsType<NotFound>(result);
         await _migrator
             .DidNotReceive()
-            .EnsureMigratedAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>());
+            .EnsureMigratedAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            );
         await _sync
             .DidNotReceive()
-            .SyncAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>());
+            .SyncAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -383,7 +399,11 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         Assert.IsType<NoContent>(result);
         await _sync
             .Received(1)
-            .SyncAsync(applicationId, Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>());
+            .SyncAsync(
+                applicationId,
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -391,7 +411,11 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     {
         var application = await SeedApplicationAsync();
         _sync
-            .SyncAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
+            .SyncAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            )
             .Throws(new InvalidOperationException("model write failed"));
 
         var result = await UnitOfWork()
@@ -406,7 +430,10 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
                 Ct
             );
 
-        Assert.Equal(StatusCodes.Status500InternalServerError, Assert.IsType<ProblemHttpResult>(result).StatusCode);
+        Assert.Equal(
+            StatusCodes.Status500InternalServerError,
+            Assert.IsType<ProblemHttpResult>(result).StatusCode
+        );
         Assert.Equal(ApplicationStatus.Saved, await StoredStatusAsync(application));
         Assert.Null(await CurrentRegistrationAsync());
         Assert.Equal([Operation], _failedOperations);
@@ -416,8 +443,17 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     public async Task RunAsync_MigrationFails_DoesNotRunTheWorkAndAnswers500()
     {
         _migrator
-            .EnsureMigratedAsync(Arg.Any<ObjectId>(), Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
-            .Throws(new ApplicationGroupTooLargeException(ReExRegistrationId, ApplicationGroupMigrator.MaxGroupSize));
+            .EnsureMigratedAsync(
+                Arg.Any<ObjectId>(),
+                Arg.Any<IClientSessionHandle>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Throws(
+                new ApplicationGroupTooLargeException(
+                    ReExRegistrationId,
+                    ApplicationGroupMigrator.MaxGroupSize
+                )
+            );
         var ran = false;
 
         var result = await UnitOfWork()
@@ -433,8 +469,14 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
             );
 
         Assert.False(ran);
-        Assert.Equal(StatusCodes.Status500InternalServerError, Assert.IsType<ProblemHttpResult>(result).StatusCode);
-        Assert.Contains(nameof(ApplicationGroupTooLargeException), Assert.Single(_logger.Entries).Message);
+        Assert.Equal(
+            StatusCodes.Status500InternalServerError,
+            Assert.IsType<ProblemHttpResult>(result).StatusCode
+        );
+        Assert.Contains(
+            nameof(ApplicationGroupTooLargeException),
+            Assert.Single(_logger.Entries).Message
+        );
         Assert.Equal([Operation], _failedOperations);
     }
 
@@ -464,7 +506,10 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
                 {
                     Assert.NotNull(
                         await _registrations.Versions.FindCurrentAsync(
-                            Builders<RegistrationEntity>.Filter.Eq(r => r.ReExRegistrationId, ReExRegistrationId),
+                            Builders<RegistrationEntity>.Filter.Eq(
+                                r => r.ReExRegistrationId,
+                                ReExRegistrationId
+                            ),
                             session,
                             token
                         )
@@ -480,10 +525,18 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
             0,
             await _factory
                 .GetCollection<ApplicationEntity>(DomainModelCollections.ApplicationVersions)
-                .CountDocumentsAsync(FilterDefinition<ApplicationEntity>.Empty, cancellationToken: Ct)
+                .CountDocumentsAsync(
+                    FilterDefinition<ApplicationEntity>.Empty,
+                    cancellationToken: Ct
+                )
         );
         Assert.Null(
-            (await _applications.GetByIdAsync(application.OrganisationId!, application.Id.ToString()!))!.RegistrationEntityId
+            (
+                await _applications.GetByIdAsync(
+                    application.OrganisationId!,
+                    application.Id.ToString()!
+                )
+            )!.RegistrationEntityId
         );
     }
 
