@@ -1107,6 +1107,180 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         Assert.Null(legacy.Query);
     }
 
+    // A reprocessor with every section complete, ready to submit.
+    private async Task<AccreditationApplicationModel> ReadyToSubmitAsync()
+    {
+        var application = await ApplicationAsync(Guid.NewGuid());
+        application.IsExporter = false;
+        application.OverseasSites = null;
+        application.Prns.SectionStatus = SectionStatus.Completed;
+        application.BusinessPlan.SectionStatus = SectionStatus.Completed;
+        application.SamplingPlan.SectionStatus = SectionStatus.Completed;
+        return (await Applications.UpdateAsync(application))!;
+    }
+
+    private Task<HttpResponseMessage> SubmitAsync(AccreditationApplicationModel application) =>
+        _client.PostAsJsonAsync(
+            AppUrl(application, "submit"),
+            new
+            {
+                fullName = "Ann Smith",
+                jobTitle = "Director",
+                email = "ann@example.com",
+                paymentReference = "PAY-1",
+            },
+            Ct
+        );
+
+    private void CaseManagementAcceptsSubmissions(Guid workItemId) =>
+        _caseWorking
+            .SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(new CaseWorkingSubmissionResult("ACC-REF-1", workItemId));
+
+    [Fact]
+    public async Task Submit_WritesAnApplicationVersion()
+    {
+        var workItemId = Guid.NewGuid();
+        CaseManagementAcceptsSubmissions(workItemId);
+        var application = await ReadyToSubmitAsync();
+
+        var response = await SubmitAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var entity = (await CurrentApplicationAsync(application))!;
+        Assert.Equal(ApplicationStatus.Submitted, entity.Status);
+        Assert.Equal("ACC-REF-1", entity.ApplicationReference);
+        Assert.Equal(workItemId, entity.CaseManagementWorkItemId);
+    }
+
+    [Fact]
+    public async Task Submit_ModelWriteFailsThenRetried_CompletesTheSubmission()
+    {
+        Restart(
+            s_dualWriteOn,
+            services =>
+                services.Replace(
+                    ServiceDescriptor.Singleton<IApplicationModelSync>(sp => new FailsOnceSync(
+                        ActivatorUtilities.CreateInstance<ApplicationModelSync>(sp)
+                    ))
+                )
+        );
+        CaseManagementAcceptsSubmissions(Guid.NewGuid());
+        var application = await ReadyToSubmitAsync();
+
+        var failed = await SubmitAsync(application);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.Equal(
+            ApplicationStatus.Started,
+            (await LegacyAsync(application))!.ApplicationStatus
+        );
+
+        var retried = await SubmitAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        Assert.Equal(
+            ApplicationStatus.Submitted,
+            (await CurrentApplicationAsync(application))!.Status
+        );
+    }
+
+    // Queried on the business plan, as the Case Management service leaves it.
+    private async Task<AccreditationApplicationModel> QueriedAsync()
+    {
+        var application = await ApplicationAsync(Guid.NewGuid(), ReExSite());
+        application.ApplicationStatus = ApplicationStatus.Queried;
+        application.BusinessPlan.SectionStatus = SectionStatus.Queried;
+        application.Query = new AccreditationApplicationQuery
+        {
+            QueryNote = "Please check the business plan.",
+            QueriedSectionKeys = ["business-plan"],
+        };
+        return (await Applications.UpdateAsync(application))!;
+    }
+
+    private Task<HttpResponseMessage> ResubmitAsync(AccreditationApplicationModel application)
+    {
+        _caseWorking
+            .ResumeFromQueryAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(new ResumeFromQueryResult(true));
+        return _client.PostAsJsonAsync(
+            AppUrl(application, "resubmit"),
+            new
+            {
+                fullName = "Ann Smith",
+                email = "ann@example.com",
+                role = "Director",
+            },
+            Ct
+        );
+    }
+
+    [Fact]
+    public async Task Resubmit_WritesAnApplicationVersion()
+    {
+        var application = await QueriedAsync();
+
+        var response = await ResubmitAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            ApplicationStatus.Updated,
+            (await CurrentApplicationAsync(application))!.Status
+        );
+    }
+
+    [Fact]
+    public async Task Resubmit_ModelWriteFails_RollsBackTheLegacyWrite()
+    {
+        FailModelWrites();
+        var application = await QueriedAsync();
+
+        var response = await ResubmitAsync(application);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal(ApplicationStatus.Queried, legacy.ApplicationStatus);
+        Assert.Equal(["business-plan"], legacy.Query!.QueriedSectionKeys);
+    }
+
+    // RA-519 under dual-write: an operator edit and a Case Management push on the same
+    // application at once. Each runs in a transaction that re-reads on a write conflict, so
+    // neither whole-document write can lose the other's change.
+    [Fact]
+    public async Task OperatorEditAndCaseManagementPushAtOnce_BothChangesSurvive()
+    {
+        for (var round = 0; round < 5; round++)
+        {
+            var application = await QueriedAsync();
+
+            var responses = await Task.WhenAll(
+                _client.PatchAsJsonAsync(
+                    AppUrl(application, "business-plan"),
+                    new { newInfrastructurePercent = 10, newInfrastructureDetail = "A new baler" },
+                    Ct
+                ),
+                StatusPushAsync(application, "case-note-added")
+            );
+
+            Assert.All(responses, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
+            var legacy = (await LegacyAsync(application))!;
+            Assert.Equal(10, legacy.BusinessPlan.NewInfrastructurePercent);
+            Assert.NotNull(legacy.CaseManagementStatusUpdatedAt);
+            var entity = (await CurrentApplicationAsync(application))!;
+            Assert.Equal(10, entity.BusinessPlan.NewInfrastructurePercent);
+            Assert.NotNull(entity.CaseManagementStatusUpdatedAt);
+        }
+    }
+
     [Fact]
     public async Task AddOverseasSite_DualWriteOff_WritesNoModel()
     {

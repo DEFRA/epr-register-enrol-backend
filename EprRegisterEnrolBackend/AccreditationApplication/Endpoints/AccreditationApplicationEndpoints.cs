@@ -3434,6 +3434,8 @@ public static class AccreditationApplicationEndpoints
         ICaseWorkingApiAdapter CaseWorkingAdapter,
         IReExApiAdapter ReExAdapter,
         IValidator<SubmitRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
         CancellationToken CancellationToken
     );
 
@@ -3568,23 +3570,45 @@ public static class AccreditationApplicationEndpoints
         application.ApplicationReference = submissionResult.ApplicationReference;
         application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
-        var updated = await services.Persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to submit accreditation application.")
-            : Results.Ok(
-                new SubmitResponse { AccreditationReference = updated.ApplicationReference }
-            );
+        // RA-644 B8g: only the save runs in the unit of work, so a transaction never waits on
+        // the Case Management service; it saves the same prepared document on every attempt.
+        var result = await services.UnitOfWork.RunAsync(
+            nameof(Submit),
+            applicationId,
+            async (session, _) =>
+            {
+                var updated = await services.Persistence.UpdateAsync(application, session);
+                return updated is null
+                    ? Results.Problem("Failed to submit accreditation application.")
+                    : Results.Ok(
+                        new SubmitResponse { AccreditationReference = updated.ApplicationReference }
+                    );
+            },
+            services.CancellationToken
+        );
+        LogIfCaseChangeNotRecorded(services.LoggerFactory, nameof(Submit), applicationId, result);
+        return result;
     }
+
+    // RA-644 B8g: bundles Resubmit's services under one [AsParameters] argument so the handler
+    // stays under Sonar's 7-parameter limit (S107) once it takes the unit of work.
+    private sealed record ResubmitServices(
+        IAccreditationApplicationPersistence Persistence,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
 
     private static async Task<IResult> Resubmit(
         string organisationId,
         string applicationId,
         ResubmitRequest request,
-        IAccreditationApplicationPersistence persistence,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        CancellationToken cancellationToken
+        [AsParameters] ResubmitServices services
     )
     {
+        var (persistence, caseWorkingAdapter, unitOfWork, loggerFactory, cancellationToken) =
+            services;
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
@@ -3640,8 +3664,45 @@ public static class AccreditationApplicationEndpoints
         // during the round trip is invisible to the pre-round-trip `application` copy above. The
         // snapshot/status values below must be derived from this fresh read, not that stale copy,
         // or they silently overwrite a concurrent edit with outdated content.
-        var freshApplication =
-            await persistence.GetByIdAsync(organisationId, applicationId) ?? application;
+        var resubmission = new Resubmission(queriedSections, sectionKeys, contactDetails);
+        var recorded = await unitOfWork.RunAsync(
+            nameof(Resubmit),
+            applicationId,
+            async (session, token) =>
+            {
+                var freshApplication =
+                    await persistence.GetByIdAsync(organisationId, applicationId, session)
+                    ?? application;
+                return await RecordResubmissionAsync(
+                    persistence,
+                    freshApplication,
+                    resubmission,
+                    session,
+                    token
+                );
+            },
+            cancellationToken
+        );
+        LogIfCaseChangeNotRecorded(loggerFactory, nameof(Resubmit), applicationId, recorded);
+        return recorded;
+    }
+
+    private sealed record Resubmission(
+        List<OperatorSection> QueriedSections,
+        List<string> SectionKeys,
+        QuerySubmitterContactDetails ContactDetails
+    );
+
+    // RA-644 B8g: Resubmit's targeted update, run in the unit of work with the session.
+    private static async Task<IResult> RecordResubmissionAsync(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel freshApplication,
+        Resubmission resubmission,
+        IClientSessionHandle? session,
+        CancellationToken cancellationToken
+    )
+    {
+        var (queriedSections, sectionKeys, contactDetails) = resubmission;
 
         // RA-519: built as a targeted $set/$push UpdateDefinition and persisted via
         // UpdateFieldsAsync below, rather than mutated in-memory and persisted via UpdateAsync's
@@ -3735,7 +3796,8 @@ public static class AccreditationApplicationEndpoints
             freshApplication.Id!.Value,
             notAlreadyResubmittedGuard,
             combinedUpdate,
-            cancellationToken
+            cancellationToken,
+            session
         );
         // A null result here means notAlreadyResubmittedGuard rejected the write - a genuine
         // rival Resubmit already completed and cleared QueriedSectionKeys first - so this is the
@@ -4556,9 +4618,21 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-        // RA-644 B8f: the Case Management service has withdrawn the case but this write rolled back.
-        // Its withdraw is idempotent (an already-withdrawn work item replays as success), so the
-        // operator's retry records the withdrawal; this line makes the gap visible until then.
+        LogIfCaseChangeNotRecorded(loggerFactory, nameof(Withdraw), applicationId, result);
+        return result;
+    }
+
+    // RA-644 B8f/B8g: Withdraw, Submit and Resubmit call the Case Management service before their
+    // transaction opens, so a rolled-back write leaves the case changed there but not here. Its
+    // withdraw, submit and resume are idempotent (a repeat replays as success), so the operator's
+    // retry records the change; this line makes the gap visible until then.
+    private static void LogIfCaseChangeNotRecorded(
+        ILoggerFactory loggerFactory,
+        string operation,
+        string applicationId,
+        IResult result
+    )
+    {
         if (
             result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status500InternalServerError }
         )
@@ -4566,12 +4640,11 @@ public static class AccreditationApplicationEndpoints
             loggerFactory
                 .CreateLogger("AccreditationApplicationEndpoints")
                 .LogWarning(
-                    "Withdraw: applicationId={ApplicationId} is withdrawn in the case management service but the withdrawal was not recorded here; a retry completes it",
+                    "{Operation}: applicationId={ApplicationId} changed in the case management service but the change was not recorded here; a retry completes it",
+                    operation,
                     applicationId
                 );
         }
-
-        return result;
     }
 
     private static async Task<IResult> RecordWithdrawalAsync(
