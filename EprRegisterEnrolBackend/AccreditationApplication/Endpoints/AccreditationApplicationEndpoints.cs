@@ -3762,11 +3762,17 @@ public static class AccreditationApplicationEndpoints
     // push still updates CaseManagementStatusUpdatedAt for ordering purposes. "queried"/"withdrawn"
     // are never sent here: query keeps its own richer /query endpoint, and withdrawal is entirely
     // out of scope for this plan (§4.1, §4.5).
+    // "assessment-started" (RA-527 follow-up) is the Case Management service's internal "started
+    // but still Duly made" state. Its start step is excluded from pushes, so it is never sent here
+    // by design; the entry is a safeguard so a misconfigured or replayed push lands on DulyMade
+    // rather than Updated or a status no-op. Only a query response or a deadline change makes a
+    // started case Updated.
     private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(string toStateId) =>
         toStateId switch
         {
             "submitted" => ApplicationStatus.Submitted,
             "duly-made" => ApplicationStatus.DulyMade,
+            "assessment-started" => ApplicationStatus.DulyMade,
             "assessment-in-progress" => ApplicationStatus.Updated,
             "updated" => ApplicationStatus.Updated,
             "awaiting-decision" => ApplicationStatus.AwaitingDecision,
