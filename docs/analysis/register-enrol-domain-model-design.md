@@ -51,7 +51,8 @@
   partial unique index on `isCurrent: true` (§3.2, §4).
 - **Application is versioned too (D6).** Its `entityId` is the existing application `_id`, so the public
   `{applicationId}` does not change. How it relates to the legacy `accreditationApplications` collection
-  during migration is open ([Q33](#q33)).
+  during migration is settled by [Q33](#q33): the legacy collection stays the source of truth for writes until
+  the cut, and every Application write creates a version.
 - **Organisation is not versioned (D7).** It is a synced copy, overwritten in place, and may later shrink
   to an Account Management id plus augmenting data.
 - **Renames (D8).** The Accreditation's `sites[]` is the **Accreditation Overseas Site**
@@ -881,7 +882,7 @@ Legend:
 | `paymentReference` | Application | stored | |
 | `caseManagementReference` | **drop** | omitted (IgnoreIfNull already omits it) | ❓ Never written by backend code (only `Requests.cs:314` exists, on a response DTO). Confirm it is absent in deployed data ([survey](#7-risks)) |
 | `caseManagementWorkItemId` | Application | stored | Reverse key for the CM pushes |
-| `registrationReference` | Registration.`registrationNumber` | derived | ⚠ Today it is per application. Two applications under one registration can disagree after a regenerate. The migration picks the most recent and puts the others into `previousRegistrationNumbers` ([R4](#7-risks)) |
+| `registrationReference` | Registration.`registrationNumber` | derived | ⚠ Before phase 3 it was per application, so two applications under one registration can disagree after a regenerate. The migration picks the most recent and puts the others into `previousRegistrationNumbers` ([R4](#7-risks)). With `DualWrite` on, the number is fixed once issued and is never regenerated (§6.2) |
 | `previousRegistrationNumbers[]` | Registration.`previousRegistrationNumbers[]` (+ history) | derived | No consumer reads it |
 | `accreditationReference` | before approval: Application.`reservedAccreditationNumber`; after approval: Accreditation.`accreditationNumber` | derived (reserved ∨ accreditation) | ⚠ Minted **before** approval by design (M2), so it must be reserved on the Application and copied to the Accreditation at approval |
 | `previousAccreditationNumbers[]` | Application.`previousReservedAccreditationNumbers[]` | derived | An approved Accreditation's number **never changes** (Q7), so the Accreditation has no previous-numbers list. Only the reserved number on an undecided Application can be regenerated. ⚠ The current "reapply" branch (YY+1 in place on the same application, `:419-423`) contradicts Q7. Management-be always sends `regenerate:false` (M1), so the branch looks unused. A new year's number is derived as YY+1 from the prior year's (Q18 answered; B21) |
@@ -941,7 +942,7 @@ pending uploads and nonces are **unchanged**.
 | Element | Target resolution | Flag |
 | --- | --- | --- |
 | `organisationNumber` | Organisation.`organisationNumber` | ✚ Can be absent in ReEx (`OrganisationDto.OrgId` is nullable). Such organisations are unreachable by this API ([Q9](#q9)) |
-| `registrationNumber` | Registration.`registrationNumber`. **An old number resolves to the last version that carried it** (Q10): a history lookup on `registrationNumber`, newest `version` first, which needs a history index on `{registrationNumber: 1, version: -1}` | ⚠ Not stable: it can be regenerated. The response should say it is a historical version and give the current number |
+| `registrationNumber` | Registration.`registrationNumber`. **An old number resolves to the last version that carried it** (Q10): a history lookup on `registrationNumber`, newest `version` first, which needs a history index on `{registrationNumber: 1, version: -1}` | ⚠ Legacy numbers regenerated before phase 3 are still found here. From phase 3 a number is fixed once issued (§6.2). The response should say it is a historical version and give the current number |
 | `accreditationYearOrReference` | Accreditation by (`registrationId`, `year`) or `accreditationNumber` | ⚠ The reference pattern `[A-Za-z0-9/-]{12}` is unconfirmed. The A-number format `{A}{YY}{Agency}{OrgId:D6}{Seq}{Material}` should be checked against it |
 | `applicationReference` | Application.`applicationReference` | Null until submit, so unsubmitted applications are unreachable by reference |
 | `orsId` | ORS.`orsId`, unique per registration | |
@@ -1009,7 +1010,7 @@ target from §3.
 | v2 element | Model source | Flag / note |
 | --- | --- | --- |
 | `organisationNumber` | Accreditation → Registration → Organisation.`organisationNumber` | A join per page in search (`$lookup`, or a batched `$in`). Not copied onto the Accreditation, because decision 3 says Organisation is reached only through Registration |
-| `registrationNumber` | Registration.`registrationNumber` | Joined, not copied, because it can be regenerated |
+| `registrationNumber` | Registration.`registrationNumber` | Joined, not copied: it was regenerable before phase 3, and is fixed once issued from then on (§6.2) |
 | `accreditationYear` | Accreditation.`year` | |
 | `material`, `glassRecyclingProcess`, `wasteProcessingType` | Registration | The v2 mapping says the target for `glassRecyclingProcess` is "Accreditation". The model derives it from Registration (A3), and the API result is the same |
 | `status` | Accreditation.`status` (stored, recorded time; Q21) | |
@@ -1136,9 +1137,10 @@ applications, and is throttled.
    - For pre-RA-603 documents that only have the singular `interimSite`, normalise it the same way
      `InterimSiteSync` does.
    - `createdAt` is left null where it is unknown.
-   - **Interim sites in legacy `SN-000N` format:** renumbered once into the registration's 3-digit pool,
-     if the B1 survey finds any (Q30b). The old number is kept as `previousSiteNumbers[]`, and the
-     version reason is `LegacySiteNumberRenumbered`.
+   - **Interim sites in legacy `SN-000N` format, or with a number another ORS of the registration already
+     uses:** renumbered once into the registration's 3-digit pool (Q30b). The pool is per registration, so a
+     clash is as much a duplicate as an `SN-000N` number. The old number is kept as `previousSiteNumbers[]`, and
+     the version reason is `LegacySiteNumberRenumbered`.
 4. **Application versions.** Write each application as version 1 of its `applicationVersions` entity, with
    `entityId` = the legacy `_id` (Q33). Non-status history starts at migration time (Q22).
 5. **Accreditations from our own approved applications.** None are expected: the migration goes live
@@ -1146,9 +1148,10 @@ applications, and is throttled.
    Accreditation (`accreditationNumber = accreditationReference`, which may be null and is then flagged)
    and keep the approval time as the `approvedAt` attribute. They are not back-dated.
 6. **Stamp the application** with a targeted `$set` of FKs only (`registrationEntityId`,
-   `overseasSites.sites[].overseasSiteEntityId`, `accreditationEntityId`). It is guarded on `version` and retried on
-   conflict. It does **not** bump `version`, so a concurrent operator PATCH is never rejected because of
-   the migration.
+   `overseasSites.sites[].overseasSiteEntityId`, `accreditationEntityId`). It runs inside the write's transaction,
+   so a concurrent write to the same document is a transaction conflict that retries the whole unit of work; no
+   separate `version` guard is needed. It does **not** bump `version`, so a concurrent operator PATCH is never
+   rejected because of the migration.
    - **Tonnage band and codes for the above:** Accreditation.`tonnageBand` from `prns.plannedTonnageBand`,
      with the int32 band converted to the ReEx string (D2). **Basel/OECD codes:** `baselOecdCodes` = the
      non-empty values of legacy `code1`, `code2` and `code3`, in that order.
@@ -1170,8 +1173,11 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
     where missing its Registration, ORSs and interim sites). Because Registration and ORS are derived
     from every application under the registration (the "newest approved wins" rule, §6.1 step 2),
     the routine reads that registration's other applications and migrates the whole **registration
-    group**. If a group would exceed the transaction limit (100 documents), the write fails loudly
-    instead of migrating part of it.
+    group**. A group of more than 100 applications fails the write loudly instead of migrating part of
+    it. MongoDB sets no document count on a transaction; the cap keeps one first-touch transaction short and
+    well inside its time and size limits. Each application writes several documents (its Application
+    version, ORS and interim versions, the FK stamp, conflicts), so 100 applications is a cap on applications,
+    not on documents.
   - **No latency target.** Volumes are low and writes are human-initiated. Taking a few seconds to
     migrate on first touch is accepted: it is the price of incremental migration without stale data.
   - **Concurrent first touch.** Two writes can race to migrate the same application (for example a
@@ -1183,20 +1189,38 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
 - **Legacy-only writers outside the request paths.** The RA-691 accreditation reference correction
   (`AccreditationReferenceCorrectionMigration`, a one-off startup migration) writes the legacy application only.
   It refuses to apply while `DualWrite` is on and runs as a dry run instead, so it is applied with the flag off,
-  before phase 3. Any other writer that bypasses the unit of work must do the same.
+  before phase 3. Any other writer that bypasses the unit of work must do the same, with one exception: the
+  GetById backfills of `orgId` and `nation` write the legacy document outside the unit of work by decision, so
+  a read never opens a transaction. Neither field is mapped onto the model, so they cause no drift. If either is
+  ever mapped, the backfill must move into the unit of work.
 - **Approval** (`status` push `approved`), in one transaction:
   - set Application `Approved`
   - insert the Accreditation, unique on `applicationId`, so a retried push is a no-op, and taking
     `reservedAccreditationNumber` as its number (already minted by management-be, M2)
-  - set `status = approved` on the Accreditation and on each included site, recorded now (v3, Q21)
+  - set `status = approved` on the Accreditation and on each included site, recorded now (v3, Q21). The
+    included sites are the ones the operator **selected**; the others are not accredited
   - set the Accreditation's `tonnageBand` from the application's planned band (v4), and its
     `signatories` from the application's authorisers (v3)
-  - apply `proposedChanges` to each ORS and its embedded interim sites as one new ORS version per ORS
-  - move Proposed → Active
+  - apply `proposedChanges` to each selected ORS and its embedded interim sites as one new ORS version per ORS
+  - move the selected sites Proposed → Active. A registered site the operator did not select is left as it
+    was. A site the application added and did not select is Discarded, unless another in-flight application
+    holds it. The migration follows the same rule (an approved application accredits only the sites it
+    selected)
   - stamp `accreditationId` on the Application
-- **Rejected and withdrawn:** Proposed → Discarded in the same transaction.
+- **Rejected and withdrawn:** Proposed → Discarded in the same transaction, for every proposed site and interim
+  site the application holds, unless another in-flight application of the registration also holds it; then it
+  stays Proposed, and is discarded when the last holder closes, whichever application proposed it. A
+  withdrawn interim site stays Withdrawn.
+- **Case Management calls during a write.** Submit, Resubmit and Withdraw call the Case Management service
+  before the transaction opens, so a transaction never waits on it. If the model write then fails, the case has
+  changed there but not here. The service's submit, resume and withdraw are idempotent (a repeat replays as
+  success), so the operator's retry records the change; a warning names the application meanwhile.
 - `registration-number` writes Registration.`registrationNumber` (as a new version) and mirrors it to every
-  live application of that registration. Today it only updates one application.
+  **in-flight** application of that registration (approved ones keep the number they were approved with). With
+  `DualWrite` on, a registration number is **fixed once issued**: a regenerate is refused (409), and an
+  application without one takes the Registration's. A different number for a registration can only come from
+  a new registration application, which this service does not run yet, so the mirroring does not yet change
+  any other application in practice.
 - **Lifecycle actions** (new regulator endpoints, B15) use the normal recorded-time write path, each in
   one transaction:
   - suspend, unsuspend, cancel and reinstate an Accreditation
@@ -1455,12 +1479,12 @@ The working default noted for each one is what the plan assumes until it is answ
 | <a id="d9"></a>D9 | **No shadow-read phase; dual-write is fatal; reads switch with the v2 API after the migration.** Dual-write exists for lossless rollback. A failed model write fails the request, so defects show up in testing. Full dual-write now precedes the migration so no legacy write is missed. A reconciliation job, runnable in test environments and handed to production-access staff, replaces shadow reads. Switching writes becomes a **cut** that follows a soak, then an archive | §1, §6, R11, B8, B10, B11, B12, B14, B17 |
 | <a id="d10"></a>D10 | **The 2026 import is descoped; there is one migration.** ReEx already holds the 2026 data and is the primary client of the v2 APIs, so nothing imports it (it may never be needed). The migration reshapes our 2027 data with no ReEx calls and runs in-app as a `BackgroundService`, so startup is never blocked (CDP kills slow starts). Failures are loud, short Error-level lines with no personal data. The word "backfill" is retired | §6, B7, B13, Q35 |
 
-- <a id="q33"></a>**Q33. ⏳ Open (raised by D6):** how does `applicationVersions` relate to the legacy
-  `accreditationApplications` collection? Working assumption: `entityId` = the legacy `_id`, the legacy
-  collection stays the source of truth for writes until phase 6 (the cut), and phase 7 retires it (archive the whole
-  collection rather than `$unset` fields). It also needs deciding which Application writes create a
-  version, because the section PATCHes are frequent: every write, or only status and submission events.
-  This affects phases 3 to 7, the reconciliation job (B10), the facade (B11) and R6.
+- <a id="q33"></a>**Q33. ✅ Answered (raised by D6):** how does `applicationVersions` relate to the legacy
+  `accreditationApplications` collection? `entityId` = the legacy `_id`, the legacy collection stays the source
+  of truth for writes until phase 6 (the cut), and phase 7 retires it (archive the whole collection rather than
+  `$unset` fields). **Every Application write creates a version**, the frequent section PATCHes included
+  (built in phase 3, B8g): one version per write, written in the same transaction as the legacy write, and no
+  version when nothing changed. This affects phases 3 to 7, the reconciliation job (B10), the facade (B11) and R6.
 - <a id="q34"></a>**Q34. ✅ Accepted as a risk (R15):** we cannot reach production data, so the B1 survey and
   the reconciliation job run in every test environment. They are also built as self-contained scripts that
   someone with production access **may** run, returning a PII-free report (ids, field paths and counts, no
