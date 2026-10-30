@@ -4082,7 +4082,15 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(updated);
     }
 
-    // RA-644 B8g: same for AddFile.
+    // RA-605: infected files are excluded from the cap so a user can re-upload after a failed
+    // scan. The frontend keys off MaxSamplingPlanFilesErrorCode, not the message wording.
+    private const int MaxSamplingPlanFiles = 10;
+    internal const string MaxSamplingPlanFilesErrorCode = "MaxFilesExceeded";
+    internal const string MaxSamplingPlanFilesMessage =
+        "The maximum number of files permitted to be uploaded is ten";
+
+    // RA-644 B8g: bundles AddFile's services under one [AsParameters] argument (S107) once it takes the unit of
+    // work.
     private sealed record AddFileServices(
         IAccreditationApplicationPersistence Persistence,
         IValidator<FileUploadRequest> Validator,
@@ -4148,8 +4156,19 @@ public static class AccreditationApplicationEndpoints
                 "Sampling plan section is not editable in the application's current status."
             );
 
-        if (application.SamplingPlan.Files.Count >= 10)
-            return Results.UnprocessableEntity("Maximum of 10 files permitted per application.");
+        if (
+            application.SamplingPlan.Files.Count(f => f.ScanStatus != FileScanStatus.Infected)
+            >= MaxSamplingPlanFiles
+        )
+            return Results.Problem(
+                detail: MaxSamplingPlanFilesMessage,
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "Unprocessable Entity",
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = MaxSamplingPlanFilesErrorCode,
+                }
+            );
 
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))

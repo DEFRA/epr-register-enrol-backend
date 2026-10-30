@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
@@ -3153,13 +3154,15 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
-    [Fact]
-    public async Task AddFile_ExceedsMaxFileCount_Returns422()
-    {
-        Reset();
-        var app = SeedApplication(configure: a =>
+    // Seeds `count` sampling plan files, the first `infected` of them failing the virus scan.
+    private static Action<AccreditationApplicationModel> WithSamplingPlanFiles(
+        int count,
+        int infected = 0,
+        FileScanStatus otherStatus = FileScanStatus.Clean
+    ) =>
+        a =>
         {
-            for (var i = 0; i < 10; i++)
+            for (var i = 0; i < count; i++)
                 a.SamplingPlan.Files.Add(
                     new AccreditationApplicationFile
                     {
@@ -3167,28 +3170,78 @@ public class AccreditationApplicationEndpointsTests
                         Filename = $"file{i}.pdf",
                         ContentType = "application/pdf",
                         UploadedByUserId = string.Empty,
+                        ScanStatus = i < infected ? FileScanStatus.Infected : otherStatus,
                         S3Key = $"sampling-plans/existing-{i}",
                     }
                 );
-        });
+        };
 
+    private async Task<HttpResponseMessage> PostNewSamplingPlanFile(
+        AccreditationApplicationModel app
+    )
+    {
         var fileUploadId = await SeedValidatedUpload(
             "file-new",
             "new.pdf",
             "sampling-plans/file-new"
         );
-        var request = new FileUploadRequest
-        {
-            FileUploadId = fileUploadId,
-            DocumentType = AccreditationFileDocumentType.SamplingPlan,
-        };
-        var response = await _client.PostAsJsonAsync(
+        return await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
-            request,
+            new FileUploadRequest
+            {
+                FileUploadId = fileUploadId,
+                DocumentType = AccreditationFileDocumentType.SamplingPlan,
+            },
             cancellationToken: TestContext.Current.CancellationToken
         );
+    }
+
+    [Fact]
+    public async Task AddFile_ExceedsMaxFileCount_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(configure: WithSamplingPlanFiles(10));
+
+        var response = await PostNewSamplingPlanFile(app);
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        body.RootElement.GetProperty("code")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesErrorCode);
+        body.RootElement.GetProperty("detail")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesMessage);
+    }
+
+    // RA-605: files still being scanned count towards the cap.
+    [Fact]
+    public async Task AddFile_TenPendingFiles_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: WithSamplingPlanFiles(10, otherStatus: FileScanStatus.Pending)
+        );
+
+        var response = await PostNewSamplingPlanFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    // RA-605: infected files don't count towards the limit.
+    [Fact]
+    public async Task AddFile_NineCleanAndOneInfected_AcceptsAnotherFile()
+    {
+        Reset();
+        var app = SeedApplication(configure: WithSamplingPlanFiles(10, infected: 1));
+
+        var response = await PostNewSamplingPlanFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
     // RA-571 AC01/AC03
