@@ -3157,7 +3157,8 @@ public class AccreditationApplicationEndpointsTests
     // Seeds `count` sampling plan files, the first `infected` of them failing the virus scan.
     private static Action<AccreditationApplicationModel> WithSamplingPlanFiles(
         int count,
-        int infected = 0
+        int infected = 0,
+        FileScanStatus otherStatus = FileScanStatus.Clean
     ) =>
         a =>
         {
@@ -3169,7 +3170,7 @@ public class AccreditationApplicationEndpointsTests
                         Filename = $"file{i}.pdf",
                         ContentType = "application/pdf",
                         UploadedByUserId = string.Empty,
-                        ScanStatus = i < infected ? FileScanStatus.Infected : FileScanStatus.Clean,
+                        ScanStatus = i < infected ? FileScanStatus.Infected : otherStatus,
                         S3Key = $"sampling-plans/existing-{i}",
                     }
                 );
@@ -3204,9 +3205,31 @@ public class AccreditationApplicationEndpointsTests
         var response = await PostNewSamplingPlanFile(app);
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-        (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
+        var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        body.RootElement.GetProperty("code")
+            .GetString()
             .Should()
-            .Contain(AccreditationApplicationEndpoints.MaxSamplingPlanFilesMessage);
+            .Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesErrorCode);
+        body.RootElement.GetProperty("detail")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesMessage);
+    }
+
+    // RA-605: files still being scanned count towards the cap.
+    [Fact]
+    public async Task AddFile_TenPendingFiles_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: WithSamplingPlanFiles(10, otherStatus: FileScanStatus.Pending)
+        );
+
+        var response = await PostNewSamplingPlanFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
     // RA-605: infected files don't count towards the limit.

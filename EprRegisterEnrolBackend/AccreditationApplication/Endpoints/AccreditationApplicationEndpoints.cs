@@ -3170,8 +3170,9 @@ public static class AccreditationApplicationEndpoints
     }
 
     // RA-605: infected files are excluded from the cap so a user can re-upload after a failed
-    // scan. The frontend recognises the message text, so reword both together.
+    // scan. The frontend keys off MaxSamplingPlanFilesErrorCode, not the message wording.
     private const int MaxSamplingPlanFiles = 10;
+    internal const string MaxSamplingPlanFilesErrorCode = "MaxFilesExceeded";
     internal const string MaxSamplingPlanFilesMessage =
         "The maximum number of files permitted to be uploaded is ten";
 
@@ -3225,7 +3226,15 @@ public static class AccreditationApplicationEndpoints
             application.SamplingPlan.Files.Count(f => f.ScanStatus != FileScanStatus.Infected)
             >= MaxSamplingPlanFiles
         )
-            return Results.UnprocessableEntity(MaxSamplingPlanFilesMessage);
+            return Results.Problem(
+                detail: MaxSamplingPlanFilesMessage,
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "Unprocessable Entity",
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = MaxSamplingPlanFilesErrorCode,
+                }
+            );
 
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
