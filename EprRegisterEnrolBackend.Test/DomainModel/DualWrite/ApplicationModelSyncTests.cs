@@ -715,6 +715,38 @@ public sealed class ApplicationModelSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplicationClosed_LastHolderOfAnotherApplicationsProposal_DiscardsIt()
+    {
+        // The first application proposed the sites and closed while the second still held them. When the second
+        // closes, nothing holds them any more, so they are Discarded, as the migration would decide.
+        var first = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay")),
+            Site(3, "002", "Added", isNew: true)
+        );
+        var second = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            2028,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay")),
+            Site(3, "002", "Added", isNew: true)
+        );
+        await EditAsync(first, a => a.ApplicationStatus = ApplicationStatus.Rejected);
+        await SyncAsync(first);
+        Assert.Equal(OverseasSiteStatus.Proposed, (await CurrentSiteAsync("002")).Status);
+
+        await EditAsync(second, a => a.ApplicationStatus = ApplicationStatus.Withdrawn);
+        await SyncAsync(second);
+
+        var proposed = await CurrentSiteAsync("002");
+        Assert.Equal(OverseasSiteStatus.Discarded, proposed.Status);
+        Assert.Equal(ChangeReason.ProposedSiteDiscarded, proposed.LastChange.Reason);
+        Assert.Equal(
+            InterimSiteStatus.Discarded,
+            InterimEntry(await CurrentSiteAsync("001"), "001").Status
+        );
+    }
+
+    [Fact]
     public async Task ApplicationClosed_SyncedAgain_WritesNoNewVersions()
     {
         var application = await MigratedApplicationAsync(
