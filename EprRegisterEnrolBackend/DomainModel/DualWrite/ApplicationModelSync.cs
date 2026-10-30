@@ -55,7 +55,7 @@ public sealed class ApplicationModelSync(
         var run = new SyncRun(
             stores,
             applications,
-            new SyncDiagnostics(clock, logger),
+            new ClockAndLogger(clock, logger),
             session,
             legacy,
             current,
@@ -125,14 +125,14 @@ public sealed class ApplicationModelSync(
         );
     }
 
-    // What a sync needs only to record what it could not settle.
-    private sealed record SyncDiagnostics(TimeProvider Clock, ILogger<ApplicationModelSync> Logger);
+    // The clock and logger a sync needs only to record what it could not settle.
+    private sealed record ClockAndLogger(TimeProvider Clock, ILogger<ApplicationModelSync> Logger);
 
     /// <summary>One sync of one application. Never shared between calls.</summary>
     private sealed class SyncRun(
         ApplicationGroupStores stores,
         IAccreditationApplicationPersistence applications,
-        SyncDiagnostics diagnostics,
+        ClockAndLogger clockAndLogger,
         IClientSessionHandle session,
         AccreditationApplicationModel legacy,
         ApplicationEntity current,
@@ -142,7 +142,7 @@ public sealed class ApplicationModelSync(
         private readonly ObjectId _applicationId = current.EntityId;
         private readonly Dictionary<string, OverseasSiteEntity> _byOrsId = [];
         private readonly Dictionary<ObjectId, OverseasSiteEntity> _byEntityId = [];
-        private readonly HashSet<(ObjectId OrsId, string SiteNumber)> _heldInterims = [];
+        private readonly HashSet<(ObjectId OrsEntityId, string SiteNumber)> _heldInterims = [];
 
         private List<OverseasSiteModel> Sites => legacy.OverseasSites?.Sites ?? [];
 
@@ -275,7 +275,7 @@ public sealed class ApplicationModelSync(
                 return;
             }
 
-            diagnostics.Logger.LogWarning(
+            clockAndLogger.Logger.LogWarning(
                 "Dual-write sync found an overseas site without an orsId: application {ApplicationId}, site {SiteId}",
                 _applicationId,
                 site.SiteId
@@ -289,12 +289,33 @@ public sealed class ApplicationModelSync(
                         ReExRegistrationId = legacy.RegistrationId ?? "",
                         RegistrationId = registrationId,
                         ApplicationIds = [_applicationId],
-                        RecordedAt = diagnostics.Clock.GetUtcNow().UtcDateTime,
+                        RecordedAt = clockAndLogger.Clock.GetUtcNow().UtcDateTime,
                     },
                 ],
                 session,
                 cancellationToken
             );
+        }
+
+        // One new version of an ORS, written in the session and tracked as the ORS now stands. A no-op when nothing
+        // changed. The expected version is the stored one, which a copy made by WithDetailsOf does not carry.
+        private async Task<OverseasSiteEntity> UpdateOrsAsync(
+            OverseasSiteEntity next,
+            long expectedVersion,
+            ChangeInfo change
+        )
+        {
+            var written = (
+                await stores.OverseasSites.Versions.UpdateAsync(
+                    next,
+                    expectedVersion,
+                    change,
+                    session,
+                    cancellationToken
+                )
+            ).Entity;
+            Track(written);
+            return written;
         }
 
         private void Track(OverseasSiteEntity ors)
@@ -351,17 +372,11 @@ public sealed class ApplicationModelSync(
             OverseasSiteModel site
         )
         {
-            var written = (
-                await stores.OverseasSites.Versions.UpdateAsync(
-                    LegacySiteMapper.WithDetailsOf(ors, site),
-                    ors.Version,
-                    Change(ChangeReason.ProposedSiteEdited, ors.OrsId),
-                    session,
-                    cancellationToken
-                )
-            ).Entity;
-            Track(written);
-            return written;
+            return await UpdateOrsAsync(
+                LegacySiteMapper.WithDetailsOf(ors, site),
+                ors.Version,
+                Change(ChangeReason.ProposedSiteEdited, ors.OrsId)
+            );
         }
 
         private async Task DiscardRemovedProposalsAsync(List<ApplicationOverseasSiteEntry> entries)
@@ -379,12 +394,10 @@ public sealed class ApplicationModelSync(
                     OverseasSiteStatus.Discarded
                 );
                 ors.Status = OverseasSiteStatus.Discarded;
-                await stores.OverseasSites.Versions.UpdateAsync(
+                await UpdateOrsAsync(
                     ors,
                     ors.Version,
-                    Change(ChangeReason.ProposedSiteDiscarded, ors.OrsId),
-                    session,
-                    cancellationToken
+                    Change(ChangeReason.ProposedSiteDiscarded, ors.OrsId)
                 );
             }
         }
@@ -403,17 +416,11 @@ public sealed class ApplicationModelSync(
                 return ors;
             }
 
-            var written = (
-                await stores.OverseasSites.Versions.UpdateAsync(
-                    ors,
-                    ors.Version,
-                    Change(interimChange.Reason, ors.OrsId, interimChange.SiteNumber),
-                    session,
-                    cancellationToken
-                )
-            ).Entity;
-            Track(written);
-            return written;
+            return await UpdateOrsAsync(
+                ors,
+                ors.Version,
+                Change(interimChange.Reason, ors.OrsId, interimChange.SiteNumber)
+            );
         }
 
         // Changes the ORS's interim sites in place and returns the first change made, for the version's reason.
@@ -527,16 +534,10 @@ public sealed class ApplicationModelSync(
                 }
 
                 ApproveInterimSites(approved, site);
-                Track(
-                    (
-                        await stores.OverseasSites.Versions.UpdateAsync(
-                            approved,
-                            ors.Version,
-                            Change(ChangeReason.ApplicationApproved, ors.OrsId),
-                            session,
-                            cancellationToken
-                        )
-                    ).Entity
+                await UpdateOrsAsync(
+                    approved,
+                    ors.Version,
+                    Change(ChangeReason.ApplicationApproved, ors.OrsId)
                 );
             }
         }
@@ -660,20 +661,14 @@ public sealed class ApplicationModelSync(
                 }
 
                 dropped.ForEach(i => MoveInterim(i, InterimSiteStatus.Discarded));
-                Track(
-                    (
-                        await stores.OverseasSites.Versions.UpdateAsync(
-                            ors,
-                            ors.Version,
-                            Change(
-                                ChangeReason.ProposedInterimSiteDiscarded,
-                                ors.OrsId,
-                                dropped[0].SiteNumber
-                            ),
-                            session,
-                            cancellationToken
-                        )
-                    ).Entity
+                await UpdateOrsAsync(
+                    ors,
+                    ors.Version,
+                    Change(
+                        ChangeReason.ProposedInterimSiteDiscarded,
+                        ors.OrsId,
+                        dropped[0].SiteNumber
+                    )
                 );
             }
         }
@@ -725,17 +720,7 @@ public sealed class ApplicationModelSync(
                         ors.OrsId,
                         interims[0].SiteNumber
                     );
-                Track(
-                    (
-                        await stores.OverseasSites.Versions.UpdateAsync(
-                            ors,
-                            ors.Version,
-                            change,
-                            session,
-                            cancellationToken
-                        )
-                    ).Entity
-                );
+                await UpdateOrsAsync(ors, ors.Version, change);
             }
         }
 
@@ -743,7 +728,7 @@ public sealed class ApplicationModelSync(
         // application is left out by id: its current version still has the status it had before this write.
         private async Task<(
             HashSet<ObjectId> Sites,
-            HashSet<(ObjectId OrsId, string SiteNumber)> Interims
+            HashSet<(ObjectId OrsEntityId, string SiteNumber)> Interims
         )> HeldInFlightElsewhereAsync(ObjectId registrationId)
         {
             var filter = Builders<ApplicationEntity>.Filter;
@@ -760,7 +745,7 @@ public sealed class ApplicationModelSync(
         // The ORSs, and the interim sites on them, that a set of Application entries holds.
         private static (
             HashSet<ObjectId> Sites,
-            HashSet<(ObjectId OrsId, string SiteNumber)> Interims
+            HashSet<(ObjectId OrsEntityId, string SiteNumber)> Interims
         ) Holdings(IEnumerable<ApplicationOverseasSiteEntry> entries)
         {
             var held = entries.Where(e => e.OverseasSiteId is not null).ToList();
