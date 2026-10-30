@@ -458,18 +458,19 @@ public sealed class ApplicationModelSync(
         private InterimSiteEntry NewInterimSite(InterimSiteModel interim)
         {
             var entry = LegacySiteMapper.ToInterimSite(interim, interim.SiteNumber);
-            entry.Status = InterimStatus(interim);
+            entry.Status = LegacySiteMapper.InterimStatus(interim, InterimSiteStatus.Proposed);
             entry.ProposedByApplicationId = interim.IsNewSite ? _applicationId : null;
             return entry;
         }
 
-        // A withdrawn interim site is Withdrawn whoever added it; otherwise one this application added is Proposed,
-        // and one it already held is Active, as the migration would have made it.
-        private static InterimSiteStatus InterimStatus(InterimSiteModel interim)
+        // Every interim site status change goes through the interim lifecycle (§3.4); staying put is not a change.
+        private static void MoveInterim(InterimSiteEntry interim, InterimSiteStatus to)
         {
-            if (interim.RemovedAt is not null)
-                return InterimSiteStatus.Withdrawn;
-            return interim.IsNewSite ? InterimSiteStatus.Proposed : InterimSiteStatus.Active;
+            if (interim.Status != to)
+            {
+                OverseasSiteTransitions.Interim.EnsureCanTransition(interim.Status, to);
+                interim.Status = to;
+            }
         }
 
         // Copies the application's details over its own proposal; null when nothing differed.
@@ -483,9 +484,10 @@ public sealed class ApplicationModelSync(
 
             var reason = WithdrawalChange(stored.RemovedAt, interim.RemovedAt);
             CopyInterimDetails(stored, interim);
-            stored.Status = stored.RemovedAt is null
-                ? InterimSiteStatus.Proposed
-                : InterimSiteStatus.Withdrawn;
+            MoveInterim(
+                stored,
+                stored.RemovedAt is null ? InterimSiteStatus.Proposed : InterimSiteStatus.Withdrawn
+            );
             return reason;
         }
 
@@ -552,9 +554,12 @@ public sealed class ApplicationModelSync(
                 }
 
                 CopyInterimDetails(stored, interim);
-                stored.Status = stored.RemovedAt is null
-                    ? InterimSiteStatus.Active
-                    : InterimSiteStatus.Withdrawn;
+                MoveInterim(
+                    stored,
+                    stored.RemovedAt is null
+                        ? InterimSiteStatus.Active
+                        : InterimSiteStatus.Withdrawn
+                );
             }
         }
 
@@ -665,7 +670,7 @@ public sealed class ApplicationModelSync(
                     continue;
                 }
 
-                dropped.ForEach(i => i.Status = InterimSiteStatus.Discarded);
+                dropped.ForEach(i => MoveInterim(i, InterimSiteStatus.Discarded));
                 Track(
                     (
                         await stores.OverseasSites.Versions.UpdateAsync(
@@ -723,7 +728,7 @@ public sealed class ApplicationModelSync(
                     ors.Status = OverseasSiteStatus.Discarded;
                 }
 
-                interims.ForEach(i => i.Status = InterimSiteStatus.Discarded);
+                interims.ForEach(i => MoveInterim(i, InterimSiteStatus.Discarded));
                 var change = discardSite
                     ? Change(ChangeReason.ProposedSiteDiscarded, ors.OrsId)
                     : Change(

@@ -102,6 +102,19 @@ public static class LegacySiteMapper
             i.SiteNumber == siteNumber || i.PreviousSiteNumbers.Contains(siteNumber)
         );
 
+    /// <summary>
+    /// The status a legacy interim site starts with in the model: Withdrawn when removed, whoever added it; Active
+    /// when it was not added in an application; otherwise <paramref name="whenAdded"/>, which the caller decides from
+    /// the applications holding it. Shared by the migration and the sync so the two cannot drift.
+    /// </summary>
+    public static InterimSiteStatus InterimStatus(
+        InterimSiteModel interim,
+        InterimSiteStatus whenAdded
+    ) =>
+        interim.RemovedAt is not null ? InterimSiteStatus.Withdrawn
+        : interim.IsNewSite ? whenAdded
+        : InterimSiteStatus.Active;
+
     /// <summary>Whether <paramref name="siteNumber"/> is in the current format: exactly three digits, such as <c>001</c>.</summary>
     public static bool IsThreeDigitNumber(string? siteNumber) =>
         siteNumber is { Length: 3 } && siteNumber.All(char.IsAsciiDigit);

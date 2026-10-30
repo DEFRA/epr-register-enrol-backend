@@ -653,9 +653,14 @@ stateDiagram-v2
     Proposed --> Discarded : application rejected / withdrawn
     Active --> Withdrawn : interim site withdrawn (removedAt)
     Withdrawn --> Active : interim site restored
+    Proposed --> Withdrawn : interim site withdrawn while still proposed
+    Withdrawn --> Proposed : proposed interim site restored
 ```
 
-`Withdrawn` applies to interim sites only, matching RA-603. Whether an ORS itself can be withdrawn from a
+`Withdrawn` applies to interim sites only, matching RA-603. An interim site added in an application can also be
+withdrawn and restored while it is still Proposed, and goes back to Proposed. An ORS is never withdrawn. A legacy
+interim site that already has `removedAt` is migrated, or first synced, straight in as Withdrawn. Code:
+`OverseasSiteTransitions.Registered` and `OverseasSiteTransitions.Interim`. Whether an ORS itself can be withdrawn from a
 registration is still open ([Q5](#q5), second part).
 
 ---

@@ -25,6 +25,22 @@ public class StatusTransitionsTests
         (OverseasSiteStatus.Proposed, OverseasSiteStatus.Discarded),
     ];
 
+    private static readonly (InterimSiteStatus, InterimSiteStatus)[] s_legalInterim =
+    [
+        (InterimSiteStatus.Proposed, InterimSiteStatus.Active),
+        (InterimSiteStatus.Proposed, InterimSiteStatus.Withdrawn),
+        (InterimSiteStatus.Proposed, InterimSiteStatus.Discarded),
+        (InterimSiteStatus.Active, InterimSiteStatus.Withdrawn),
+        (InterimSiteStatus.Withdrawn, InterimSiteStatus.Proposed),
+        (InterimSiteStatus.Withdrawn, InterimSiteStatus.Active),
+    ];
+
+    public static TheoryData<InterimSiteStatus, InterimSiteStatus> LegalInterim =>
+        new(s_legalInterim);
+
+    public static TheoryData<InterimSiteStatus, InterimSiteStatus> IllegalInterim =>
+        new(AllPairsExcept(s_legalInterim));
+
     public static TheoryData<AccreditationStatus, AccreditationStatus> LegalAccreditation =>
         new(s_legalAccreditation);
 
@@ -91,6 +107,20 @@ public class StatusTransitionsTests
         OverseasSiteStatus from,
         OverseasSiteStatus to
     ) => Assert.False(OverseasSiteTransitions.Registered.CanTransition(from, to));
+
+    [Theory]
+    [MemberData(nameof(LegalInterim))]
+    public void InterimSite_LegalTransition_IsAllowed(
+        InterimSiteStatus from,
+        InterimSiteStatus to
+    ) => Assert.True(OverseasSiteTransitions.Interim.CanTransition(from, to));
+
+    [Theory]
+    [MemberData(nameof(IllegalInterim))]
+    public void InterimSite_IllegalTransition_IsRejected(
+        InterimSiteStatus from,
+        InterimSiteStatus to
+    ) => Assert.False(OverseasSiteTransitions.Interim.CanTransition(from, to));
 
     [Fact]
     public void EnsureCanTransition_IllegalPair_ThrowsWithTheKindAndBothStatuses()

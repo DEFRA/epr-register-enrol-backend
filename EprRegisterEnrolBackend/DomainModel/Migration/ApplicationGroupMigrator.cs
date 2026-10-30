@@ -470,25 +470,16 @@ public sealed class ApplicationGroupMigrator(
         private static InterimSiteStatus InterimStatus(
             InterimSiteModel interim,
             IEnumerable<Holding> holders
-        )
-        {
-            if (interim.RemovedAt is not null)
-            {
-                return InterimSiteStatus.Withdrawn;
-            }
-
-            if (!interim.IsNewSite)
-            {
-                return InterimSiteStatus.Active;
-            }
-
-            return StatusFor(holders) switch
-            {
-                OverseasSiteStatus.Active => InterimSiteStatus.Active,
-                OverseasSiteStatus.Proposed => InterimSiteStatus.Proposed,
-                _ => InterimSiteStatus.Discarded,
-            };
-        }
+        ) =>
+            LegacySiteMapper.InterimStatus(
+                interim,
+                StatusFor(holders) switch
+                {
+                    OverseasSiteStatus.Active => InterimSiteStatus.Active,
+                    OverseasSiteStatus.Proposed => InterimSiteStatus.Proposed,
+                    _ => InterimSiteStatus.Discarded,
+                }
+            );
 
         private void RecordInterimDifferences(
             SitePlan plan,

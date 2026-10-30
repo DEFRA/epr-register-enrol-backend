@@ -35,4 +35,29 @@ public static class OverseasSiteTransitions
                 ],
             }
         );
+
+    /// <summary>
+    /// An interim site embedded in its ORS. One added in an application is Proposed until the application is
+    /// approved (Active) or closes without it (Discarded). It can be withdrawn (removedAt) and restored, to Proposed
+    /// while its application still holds it as a proposal, otherwise to Active (RA-603).
+    /// </summary>
+    public static StatusTransitions<InterimSiteStatus> Interim { get; } =
+        new(
+            "interim site",
+            new Dictionary<InterimSiteStatus, InterimSiteStatus[]>
+            {
+                [InterimSiteStatus.Proposed] =
+                [
+                    InterimSiteStatus.Active,
+                    InterimSiteStatus.Withdrawn,
+                    InterimSiteStatus.Discarded,
+                ],
+                [InterimSiteStatus.Active] = [InterimSiteStatus.Withdrawn],
+                [InterimSiteStatus.Withdrawn] =
+                [
+                    InterimSiteStatus.Proposed,
+                    InterimSiteStatus.Active,
+                ],
+            }
+        );
 }
