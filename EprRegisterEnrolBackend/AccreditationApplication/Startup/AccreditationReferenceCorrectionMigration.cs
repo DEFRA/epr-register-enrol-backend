@@ -357,7 +357,7 @@ public class AccreditationReferenceCorrectionMigration(
             Builders<AccreditationApplicationModel>
                 .Update.Set(a => a.AccreditationReference, c.Corrected)
                 .AddToSet(a => a.PreviousAccreditationNumbers, c.Incorrect),
-            cancellationToken
+            cancellationToken: cancellationToken
         );
 
         if (updated is null)

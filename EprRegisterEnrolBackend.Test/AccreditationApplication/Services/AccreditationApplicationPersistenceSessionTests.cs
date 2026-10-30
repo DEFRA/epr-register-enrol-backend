@@ -69,8 +69,8 @@ public sealed class AccreditationApplicationPersistenceSessionTests : IDisposabl
             application.Id!.Value,
             null,
             Builders<AccreditationApplicationModel>.Update.Set(a => a.Year, 2028),
-            Ct,
-            session
+            session,
+            Ct
         );
         Assert.NotNull(targeted);
 

@@ -740,9 +740,9 @@ public sealed class ApplicationGroupMigrator(
                 application.Id!.Value,
                 _registration.EntityId,
                 siteIds,
+                _accreditations.TryGetValue(application.Id!.Value, out var id) ? id : null,
                 session,
-                cancellationToken,
-                _accreditations.TryGetValue(application.Id!.Value, out var id) ? id : null
+                cancellationToken
             );
         }
 

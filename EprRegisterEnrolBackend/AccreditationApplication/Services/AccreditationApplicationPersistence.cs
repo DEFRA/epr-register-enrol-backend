@@ -461,8 +461,8 @@ public class AccreditationApplicationPersistence(
         ObjectId id,
         FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
-        CancellationToken cancellationToken = default,
-        IClientSessionHandle? session = null
+        IClientSessionHandle? session = null,
+        CancellationToken cancellationToken = default
     )
     {
         var idFilter = Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, id);
@@ -506,9 +506,9 @@ public class AccreditationApplicationPersistence(
         ObjectId applicationId,
         ObjectId registrationEntityId,
         IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
+        ObjectId? accreditationEntityId,
         IClientSessionHandle session,
-        CancellationToken cancellationToken = default,
-        ObjectId? accreditationEntityId = null
+        CancellationToken cancellationToken = default
     )
     {
         var updates = new List<UpdateDefinition<AccreditationApplicationModel>>

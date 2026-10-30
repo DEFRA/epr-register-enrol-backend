@@ -17,16 +17,17 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         ObjectId applicationId,
         ObjectId registrationEntityId,
         IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
+        ObjectId? accreditationEntityId,
         IClientSessionHandle session,
-        CancellationToken cancellationToken = default,
-        ObjectId? accreditationEntityId = null
+        CancellationToken cancellationToken = default
     )
     {
         var application =
             _store.Find(a => a.Id == applicationId)
             ?? throw new InvalidOperationException($"Application {applicationId} not found.");
         application.RegistrationEntityId = registrationEntityId;
-        application.AccreditationEntityId = accreditationEntityId ?? application.AccreditationEntityId;
+        application.AccreditationEntityId =
+            accreditationEntityId ?? application.AccreditationEntityId;
         foreach (var site in application.OverseasSites?.Sites ?? [])
         {
             if (site.OrsId is not null && overseasSiteEntityIds.TryGetValue(site.OrsId, out var id))
@@ -168,7 +169,9 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     }
 
     // RA-690: mirrors AccreditationApplicationPersistence.GetOtherAccreditationReferenceHoldersAsync.
-    public Task<IReadOnlyList<AccreditationReferenceHolder>> GetOtherAccreditationReferenceHoldersAsync(
+    public Task<
+        IReadOnlyList<AccreditationReferenceHolder>
+    > GetOtherAccreditationReferenceHoldersAsync(
         string accreditationReference,
         ObjectId applicationId
     ) =>
@@ -221,7 +224,10 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         );
     }
 
-    public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId, IClientSessionHandle? session = null)
+    public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
+        string registrationId,
+        IClientSessionHandle? session = null
+    )
     {
         IReadOnlyList<string> orsIds = _store
             .Where(a => a.RegistrationId == registrationId)
@@ -282,13 +288,18 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     ) =>
         Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
             _store
-                .Where(a => a.OrganisationId == organisationId && a.RegistrationId == registrationId)
+                .Where(a =>
+                    a.OrganisationId == organisationId && a.RegistrationId == registrationId
+                )
                 .Take(limit)
                 .Select(ShallowCopy)
                 .ToList()
         );
 
-    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId, IClientSessionHandle? session = null)
+    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        IClientSessionHandle? session = null
+    )
     {
         var stored = _store.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
@@ -407,8 +418,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         ObjectId id,
         FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
-        CancellationToken cancellationToken = default,
-        IClientSessionHandle? session = null
+        IClientSessionHandle? session = null,
+        CancellationToken cancellationToken = default
     )
     {
         var idx = _store.FindIndex(a => a.Id == id);

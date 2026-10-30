@@ -77,8 +77,8 @@ public sealed class RegistrationNumberRules(
                 other.Id!.Value,
                 null,
                 update,
-                cancellationToken,
-                session
+                session,
+                cancellationToken
             );
         }
     }

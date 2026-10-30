@@ -3861,8 +3861,8 @@ public static class AccreditationApplicationEndpoints
             freshApplication.Id!.Value,
             notAlreadyResubmittedGuard,
             combinedUpdate,
-            cancellationToken,
-            session
+            session,
+            cancellationToken
         );
         // A null result here means notAlreadyResubmittedGuard rejected the write - a genuine
         // rival Resubmit already completed and cleared QueriedSectionKeys first - so this is the
@@ -4803,8 +4803,8 @@ public static class AccreditationApplicationEndpoints
             freshApplication.Id!.Value,
             notAlreadyWithdrawnGuard,
             combinedUpdate,
-            cancellationToken,
-            session
+            session,
+            cancellationToken
         );
         // A null result here means notAlreadyWithdrawnGuard rejected the write - a genuine rival
         // Withdraw already completed and moved ApplicationStatus to Withdrawn first - the same

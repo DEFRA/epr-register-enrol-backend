@@ -104,6 +104,7 @@ public sealed class SeedDualWriter(
             seed.Application.Id!.Value,
             registration.EntityId,
             siteIds,
+            null,
             session,
             cancellationToken
         );

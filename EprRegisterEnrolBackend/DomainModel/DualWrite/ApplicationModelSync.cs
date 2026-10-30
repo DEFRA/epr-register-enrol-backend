@@ -215,6 +215,7 @@ public sealed class ApplicationModelSync(
                     _applicationId,
                     registrationId,
                     stamps,
+                    null,
                     session,
                     cancellationToken
                 );
@@ -624,9 +625,9 @@ public sealed class ApplicationModelSync(
                 _applicationId,
                 registrationId,
                 new Dictionary<string, ObjectId>(),
+                accreditation.EntityId,
                 session,
-                cancellationToken,
-                accreditation.EntityId
+                cancellationToken
             );
             return accreditation.EntityId;
         }
