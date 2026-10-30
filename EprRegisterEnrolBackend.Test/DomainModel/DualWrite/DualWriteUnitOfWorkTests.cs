@@ -16,8 +16,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using NSubstitute;
-using NSubstitute.ExceptionExtensions;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.DualWrite;
 
@@ -39,9 +37,8 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     private readonly MeterListener _listener = new();
     private readonly List<string?> _failedOperations = [];
     private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
-    private readonly IApplicationGroupMigrator _migrator =
-        Substitute.For<IApplicationGroupMigrator>();
-    private readonly IApplicationModelSync _sync = Substitute.For<IApplicationModelSync>();
+    private readonly RecordingGroupMigrator _migrator = new();
+    private readonly RecordingModelSync _sync = new();
 
     public DualWriteUnitOfWorkTests(MongoIntegrationFixture fixture)
     {
@@ -81,13 +78,6 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
             }
         );
         _listener.Start();
-        _migrator
-            .EnsureMigratedAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(GroupMigrationResult.NothingToDo);
     }
 
     public void Dispose()
@@ -344,18 +334,13 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     {
         var applicationId = ObjectId.GenerateNewId();
         IClientSessionHandle? migratedIn = null;
-        _migrator
-            .EnsureMigratedAsync(
-                applicationId,
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(call =>
-            {
-                migratedIn = call.Arg<IClientSessionHandle>();
-                Assert.True(migratedIn.IsInTransaction);
-                return GroupMigrationResult.NothingToDo;
-            });
+        _migrator.OnMigrate = (id, session) =>
+        {
+            Assert.Equal(applicationId, id);
+            migratedIn = session;
+            Assert.True(migratedIn.IsInTransaction);
+            return GroupMigrationResult.NothingToDo;
+        };
 
         var result = await UnitOfWork()
             .RunAsync(
@@ -380,20 +365,8 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
             .RunAsync(Operation, "not-an-id", (_, _) => Task.FromResult(Results.NotFound()), Ct);
 
         Assert.IsType<NotFound>(result);
-        await _migrator
-            .DidNotReceive()
-            .EnsureMigratedAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            );
-        await _sync
-            .DidNotReceive()
-            .SyncAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            );
+        Assert.Empty(_migrator.Calls);
+        Assert.Empty(_sync.Calls);
     }
 
     [Fact]
@@ -401,15 +374,13 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     {
         var applicationId = ObjectId.GenerateNewId();
         IClientSessionHandle? workedIn = null;
-        _sync
-            .SyncAsync(applicationId, Arg.Any<IClientSessionHandle>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                Assert.NotNull(workedIn);
-                Assert.Same(workedIn, call.Arg<IClientSessionHandle>());
-                Assert.True(workedIn.IsInTransaction);
-                return Task.CompletedTask;
-            });
+        _sync.OnSync = (_, session) =>
+        {
+            Assert.NotNull(workedIn);
+            Assert.Same(workedIn, session);
+            Assert.True(workedIn.IsInTransaction);
+            return Task.CompletedTask;
+        };
 
         var result = await UnitOfWork()
             .RunAsync(
@@ -424,13 +395,7 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
             );
 
         Assert.IsType<NoContent>(result);
-        await _sync
-            .Received(1)
-            .SyncAsync(
-                applicationId,
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            );
+        Assert.Equal(applicationId, Assert.Single(_sync.Calls).ApplicationId);
     }
 
     [Fact]
@@ -474,13 +439,7 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     public async Task RunAsync_SyncFails_RollsBackTheWorkAndAnswers500()
     {
         var application = await SeedApplicationAsync();
-        _sync
-            .SyncAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Throws(new InvalidOperationException("model write failed"));
+        _sync.OnSync = (_, _) => throw new InvalidOperationException("model write failed");
 
         var result = await UnitOfWork()
             .RunAsync(
@@ -506,17 +465,10 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     [Fact]
     public async Task RunAsync_MigrationFails_DoesNotRunTheWorkAndAnswers500()
     {
-        _migrator
-            .EnsureMigratedAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Throws(
-                new ApplicationGroupTooLargeException(
-                    ReExRegistrationId,
-                    ApplicationGroupMigrator.MaxGroupSize
-                )
+        _migrator.OnMigrate = (_, _) =>
+            throw new ApplicationGroupTooLargeException(
+                ReExRegistrationId,
+                ApplicationGroupMigrator.MaxGroupSize
             );
         var ran = false;
 

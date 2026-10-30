@@ -10,6 +10,7 @@ using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
+using EprRegisterEnrolBackend.Test.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -310,13 +311,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     [Fact]
     public async Task AddOverseasSite_ModelWriteFails_RollsBackTheLegacyWriteAndSendsNoNotification()
     {
-        var sync = Substitute.For<IApplicationModelSync>();
-        sync.SyncAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Throws(new InvalidOperationException("model write failed"));
+        IApplicationModelSync sync = new FailingModelSync();
         Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(sync)));
         var application = await ApplicationAsync(Guid.NewGuid(), ReExSite());
 
@@ -484,13 +479,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     [Fact]
     public async Task AddInterimSite_ModelWriteFails_RollsBackTheLegacyWriteAndSendsNoNotification()
     {
-        var sync = Substitute.For<IApplicationModelSync>();
-        sync.SyncAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Throws(new InvalidOperationException("model write failed"));
+        IApplicationModelSync sync = new FailingModelSync();
         Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(sync)));
         var application = await ApplicationAsync(Guid.NewGuid(), ReExSite());
 
@@ -630,13 +619,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     [Fact]
     public async Task RegistrationNumber_ModelWriteFails_RollsBackEveryLegacyWrite()
     {
-        var sync = Substitute.For<IApplicationModelSync>();
-        sync.SyncAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Throws(new InvalidOperationException("model write failed"));
+        IApplicationModelSync sync = new FailingModelSync();
         Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(sync)));
         var inFlight = await NumberedApplicationAsync(ApplicationStatus.Submitted, 2026);
         var application = await NumberedApplicationAsync(ApplicationStatus.Started, 2027);
@@ -721,13 +704,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
 
     private void FailModelWrites(Action<IServiceCollection>? configure = null)
     {
-        var sync = Substitute.For<IApplicationModelSync>();
-        sync.SyncAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Throws(new InvalidOperationException("model write failed"));
+        IApplicationModelSync sync = new FailingModelSync();
         Restart(
             s_dualWriteOn,
             services =>
@@ -1269,13 +1246,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
 
     private static IApplicationModelSync FailingSync()
     {
-        var sync = Substitute.For<IApplicationModelSync>();
-        sync.SyncAsync(
-                Arg.Any<ObjectId>(),
-                Arg.Any<IClientSessionHandle>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Throws(new InvalidOperationException("model write failed"));
+        IApplicationModelSync sync = new FailingModelSync();
         return sync;
     }
 
