@@ -592,6 +592,14 @@ public sealed class ApplicationModelSync(
                 return own.EntityId;
             }
 
+            // D9 guards an approval this write makes. An application that was already approved without an
+            // Accreditation is one the migration recorded as a conflict; it is left as the migration left it, so
+            // later writes to it still succeed.
+            if (current.Status == ApplicationStatus.Approved)
+            {
+                return current.AccreditationId;
+            }
+
             if (found.NumberMissing)
             {
                 throw new DomainRuleViolationException(

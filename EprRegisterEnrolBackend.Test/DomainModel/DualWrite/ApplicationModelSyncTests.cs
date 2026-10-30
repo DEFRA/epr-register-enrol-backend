@@ -919,6 +919,25 @@ public sealed class ApplicationModelSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task AlreadyApprovedWithoutAnAccreditation_LaterWritesSucceed()
+    {
+        // Legacy data can hold two approved applications for one registration and year. The migration gives the
+        // first the Accreditation and records the second as a conflict. The D9 refusal guards an approval made now,
+        // so a later write to the second must not fail on it.
+        await MigratedApplicationAsync(ApplicationStatus.Approved, Site(1, "001", "ReEx Site"));
+        var second = await MigratedApplicationAsync(
+            ApplicationStatus.Approved,
+            Site(1, "001", "ReEx Site")
+        );
+        await EditAsync(second, a => a.DateLastEdited = Day1.AddDays(1));
+
+        await SyncAsync(second);
+
+        Assert.Single(await CurrentAccreditationsAsync());
+        Assert.Null((await CurrentApplicationAsync(second)).AccreditationId);
+    }
+
+    [Fact]
     public async Task ApplicationApproved_SyncedAgain_WritesNothing()
     {
         var application = await SubmittedWithProposalsAsync();
