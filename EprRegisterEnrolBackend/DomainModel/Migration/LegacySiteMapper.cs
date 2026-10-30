@@ -93,6 +93,15 @@ public static class LegacySiteMapper
         return changes.ElementCount > 0 ? changes : null;
     }
 
+    /// <summary>
+    /// The interim site on <paramref name="ors"/> with <paramref name="siteNumber"/>, or the one the migration
+    /// renumbered from it (found through its record of the old number). Shared by the migration and the sync.
+    /// </summary>
+    public static InterimSiteEntry? FindInterim(OverseasSiteEntity? ors, string siteNumber) =>
+        ors?.InterimSites.Find(i =>
+            i.SiteNumber == siteNumber || i.PreviousSiteNumbers.Contains(siteNumber)
+        );
+
     /// <summary>Whether <paramref name="siteNumber"/> is in the current format: exactly three digits, such as <c>001</c>.</summary>
     public static bool IsThreeDigitNumber(string? siteNumber) =>
         siteNumber is { Length: 3 } && siteNumber.All(char.IsAsciiDigit);

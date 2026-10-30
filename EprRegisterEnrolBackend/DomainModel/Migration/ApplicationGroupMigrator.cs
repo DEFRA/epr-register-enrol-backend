@@ -97,13 +97,17 @@ public sealed class ApplicationGroupMigrator(
             .ThenByDescending(a => a.Id)
             .ToList();
 
+    // The statuses that end an application. Every other status is in flight; the sync's Mongo filter
+    // uses the same list, so the migration and the sync cannot disagree on it.
+    internal static readonly ApplicationStatus[] ClosedStatuses =
+    [
+        ApplicationStatus.Approved,
+        ApplicationStatus.Rejected,
+        ApplicationStatus.Withdrawn,
+    ];
+
     internal static bool InFlight(AccreditationApplicationModel application) =>
-        application.ApplicationStatus
-            is not (
-                ApplicationStatus.Approved
-                or ApplicationStatus.Rejected
-                or ApplicationStatus.Withdrawn
-            );
+        !ClosedStatuses.Contains(application.ApplicationStatus);
 
     // An operator-added site's status follows its applications: Approved -> Active; Rejected or Withdrawn ->
     // Discarded; in flight -> Proposed (§6.1 step 2, §6.3).
@@ -372,9 +376,7 @@ public sealed class ApplicationGroupMigrator(
             {
                 foreach (var legacy in InterimHoldings(plan).Select(g => g.Key))
                 {
-                    var stored = plan.Existing?.InterimSites.Find(i =>
-                        i.SiteNumber == legacy || i.PreviousSiteNumbers.Contains(legacy)
-                    );
+                    var stored = LegacySiteMapper.FindInterim(plan.Existing, legacy);
                     if (stored is not null)
                     {
                         plan.InterimNumbers[legacy] = stored.SiteNumber;

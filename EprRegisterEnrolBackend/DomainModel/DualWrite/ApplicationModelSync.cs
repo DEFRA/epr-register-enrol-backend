@@ -360,7 +360,7 @@ public sealed class ApplicationModelSync(
             (ChangeReason Reason, string SiteNumber)? first = null;
             foreach (var interim in InterimSiteSync.All(site))
             {
-                var stored = FindInterim(ors, interim.SiteNumber);
+                var stored = LegacySiteMapper.FindInterim(ors, interim.SiteNumber);
                 ChangeReason? reason = null;
                 if (stored is null)
                 {
@@ -477,7 +477,7 @@ public sealed class ApplicationModelSync(
         {
             foreach (var interim in InterimSiteSync.All(site))
             {
-                var stored = FindInterim(ors, interim.SiteNumber);
+                var stored = LegacySiteMapper.FindInterim(ors, interim.SiteNumber);
                 if (stored is null)
                 {
                     stored = NewInterimSite(interim);
@@ -678,14 +678,7 @@ public sealed class ApplicationModelSync(
             var others = await stores.Applications.Versions.FindAllCurrentAsync(
                 filter.Eq(a => a.RegistrationId, registrationId)
                     & filter.Ne(a => a.EntityId, _applicationId)
-                    & filter.Nin(
-                        a => a.Status,
-                        [
-                            ApplicationStatus.Approved,
-                            ApplicationStatus.Rejected,
-                            ApplicationStatus.Withdrawn,
-                        ]
-                    ),
+                    & filter.Nin(a => a.Status, ApplicationGroupMigrator.ClosedStatuses),
                 session,
                 cancellationToken
             );
@@ -702,12 +695,6 @@ public sealed class ApplicationModelSync(
             );
         }
 
-        // A legacy number the migration renumbered is found through the ORS's record of the old number.
-        private static InterimSiteEntry? FindInterim(OverseasSiteEntity? ors, string siteNumber) =>
-            ors?.InterimSites.Find(i =>
-                i.SiteNumber == siteNumber || i.PreviousSiteNumbers.Contains(siteNumber)
-            );
-
         // Withdrawn counts: a proposal this application withdrew is still its own to restore.
         private bool IsOwnInterimProposal(InterimSiteEntry interim) =>
             interim.ProposedByApplicationId == _applicationId
@@ -723,7 +710,7 @@ public sealed class ApplicationModelSync(
                 site,
                 ors?.EntityId,
                 changes,
-                number => FindInterim(ors, number)?.SiteNumber ?? number
+                number => LegacySiteMapper.FindInterim(ors, number)?.SiteNumber ?? number
             );
             foreach (var interim in entry.InterimSites)
             {
@@ -741,7 +728,9 @@ public sealed class ApplicationModelSync(
         )
         {
             var interim = InterimSiteSync.All(site).FirstOrDefault(i => i.SiteId == legacySiteId);
-            var stored = interim is null ? null : FindInterim(ors, interim.SiteNumber);
+            var stored = interim is null
+                ? null
+                : LegacySiteMapper.FindInterim(ors, interim.SiteNumber);
             return stored is null || IsOwnInterimProposal(stored)
                 ? null
                 : LegacySiteMapper.InterimProposedChanges(stored, interim!);
