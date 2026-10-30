@@ -475,9 +475,6 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(updated);
     }
 
-    // RA-605: infected files are excluded from the count so a user can re-upload after a failed scan.
-    private const int MaxSamplingPlanFiles = 10;
-
     // RA-690: the source of each issued reference is logged, not stored, so support can explain
     // any reference without a schema change. A previous-accreditation source also names the
     // application it came from, and any withdrawn applications already holding the reference are
@@ -3172,6 +3169,12 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(updated);
     }
 
+    // RA-605: infected files are excluded from the cap so a user can re-upload after a failed
+    // scan. The frontend recognises the message text, so reword both together.
+    private const int MaxSamplingPlanFiles = 10;
+    internal const string MaxSamplingPlanFilesMessage =
+        "The maximum number of files permitted to be uploaded is ten";
+
     private static async Task<IResult> AddFile(
         string organisationId,
         string applicationId,
@@ -3222,9 +3225,7 @@ public static class AccreditationApplicationEndpoints
             application.SamplingPlan.Files.Count(f => f.ScanStatus != FileScanStatus.Infected)
             >= MaxSamplingPlanFiles
         )
-            return Results.UnprocessableEntity(
-                "The maximum number of files permitted to be uploaded is ten"
-            );
+            return Results.UnprocessableEntity(MaxSamplingPlanFilesMessage);
 
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))

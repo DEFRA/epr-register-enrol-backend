@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
@@ -3153,13 +3154,14 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
-    [Fact]
-    public async Task AddFile_ExceedsMaxFileCount_Returns422()
-    {
-        Reset();
-        var app = SeedApplication(configure: a =>
+    // Seeds `count` sampling plan files, the first `infected` of them failing the virus scan.
+    private static Action<AccreditationApplicationModel> WithSamplingPlanFiles(
+        int count,
+        int infected = 0
+    ) =>
+        a =>
         {
-            for (var i = 0; i < 10; i++)
+            for (var i = 0; i < count; i++)
                 a.SamplingPlan.Files.Add(
                     new AccreditationApplicationFile
                     {
@@ -3167,57 +3169,22 @@ public class AccreditationApplicationEndpointsTests
                         Filename = $"file{i}.pdf",
                         ContentType = "application/pdf",
                         UploadedByUserId = string.Empty,
+                        ScanStatus = i < infected ? FileScanStatus.Infected : FileScanStatus.Clean,
                         S3Key = $"sampling-plans/existing-{i}",
                     }
                 );
-        });
-
-        var fileUploadId = await SeedValidatedUpload(
-            "file-new",
-            "new.pdf",
-            "sampling-plans/file-new"
-        );
-        var request = new FileUploadRequest
-        {
-            FileUploadId = fileUploadId,
-            DocumentType = AccreditationFileDocumentType.SamplingPlan,
         };
-        var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
-            request,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
 
-        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-    }
-
-    // RA-605
-    [Fact]
-    public async Task AddFile_TenCleanFiles_RejectsWithMaxFilesMessage()
+    private async Task<HttpResponseMessage> PostNewSamplingPlanFile(
+        AccreditationApplicationModel app
+    )
     {
-        Reset();
-        var app = SeedApplication(configure: a =>
-        {
-            for (var i = 0; i < 10; i++)
-                a.SamplingPlan.Files.Add(
-                    new AccreditationApplicationFile
-                    {
-                        FileId = $"clean-{i}",
-                        Filename = $"clean{i}.pdf",
-                        ContentType = "application/pdf",
-                        UploadedByUserId = string.Empty,
-                        ScanStatus = FileScanStatus.Clean,
-                        S3Key = $"sampling-plans/clean-{i}",
-                    }
-                );
-        });
-
         var fileUploadId = await SeedValidatedUpload(
             "file-new",
             "new.pdf",
             "sampling-plans/file-new"
         );
-        var response = await _client.PostAsJsonAsync(
+        return await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
             new FileUploadRequest
             {
@@ -3226,11 +3193,20 @@ public class AccreditationApplicationEndpointsTests
             },
             cancellationToken: TestContext.Current.CancellationToken
         );
+    }
+
+    [Fact]
+    public async Task AddFile_ExceedsMaxFileCount_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(configure: WithSamplingPlanFiles(10));
+
+        var response = await PostNewSamplingPlanFile(app);
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
             .Should()
-            .Contain("The maximum number of files permitted to be uploaded is ten");
+            .Contain(AccreditationApplicationEndpoints.MaxSamplingPlanFilesMessage);
     }
 
     // RA-605: infected files don't count towards the limit.
@@ -3238,36 +3214,9 @@ public class AccreditationApplicationEndpointsTests
     public async Task AddFile_NineCleanAndOneInfected_AcceptsAnotherFile()
     {
         Reset();
-        var app = SeedApplication(configure: a =>
-        {
-            for (var i = 0; i < 10; i++)
-                a.SamplingPlan.Files.Add(
-                    new AccreditationApplicationFile
-                    {
-                        FileId = $"existing-{i}",
-                        Filename = $"file{i}.pdf",
-                        ContentType = "application/pdf",
-                        UploadedByUserId = string.Empty,
-                        ScanStatus = i == 0 ? FileScanStatus.Infected : FileScanStatus.Clean,
-                        S3Key = $"sampling-plans/existing-{i}",
-                    }
-                );
-        });
+        var app = SeedApplication(configure: WithSamplingPlanFiles(10, infected: 1));
 
-        var fileUploadId = await SeedValidatedUpload(
-            "file-new",
-            "new.pdf",
-            "sampling-plans/file-new"
-        );
-        var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
-            new FileUploadRequest
-            {
-                FileUploadId = fileUploadId,
-                DocumentType = AccreditationFileDocumentType.SamplingPlan,
-            },
-            cancellationToken: TestContext.Current.CancellationToken
-        );
+        var response = await PostNewSamplingPlanFile(app);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
     }
