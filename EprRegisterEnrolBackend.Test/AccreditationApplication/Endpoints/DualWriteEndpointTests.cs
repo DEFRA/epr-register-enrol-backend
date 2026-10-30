@@ -1515,6 +1515,37 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Submit_EditedDuringTheCaseManagementCall_IsNotSaved(bool dualWrite)
+    {
+        // An operator edit lands while Case Management handles the submit. Case Management holds the copy read
+        // before the call, so the newer content must not be stored as submitted, with the flag on or off.
+        if (!dualWrite)
+            Restart(new() { ["DomainModel:ExpandEnabled"] = "true" });
+        var application = await ReadyToSubmitAsync();
+        _caseWorking
+            .SubmitApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(async _ =>
+            {
+                var edited = (await LegacyAsync(application))!;
+                edited.BusinessPlan.SectionStatus = SectionStatus.InProgress;
+                await Applications.UpdateAsync(edited);
+                return new CaseWorkingSubmissionResult("ACC-REF-1", Guid.NewGuid());
+            });
+
+        var response = await SubmitAsync(application);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal(ApplicationStatus.Started, legacy.ApplicationStatus);
+        Assert.Equal(SectionStatus.InProgress, legacy.BusinessPlan.SectionStatus);
+    }
+
     // Queried on the business plan, as the Case Management service leaves it.
     private async Task<AccreditationApplicationModel> QueriedAsync()
     {

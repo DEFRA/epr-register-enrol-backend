@@ -3514,7 +3514,13 @@ public static class AccreditationApplicationEndpoints
         // applies the submission to that copy: a retried attempt must not save a copy whose Version
         // the rolled-back attempt already bumped, and the first write must keep the model links the
         // migration has just stamped on the document.
-        var submission = new Submission(request, submittedAt, application.OrgId, submissionResult);
+        var submission = new Submission(
+            request,
+            submittedAt,
+            application.OrgId,
+            submissionResult,
+            application.Version
+        );
         var result = await services.UnitOfWork.RunAsync(
             nameof(Submit),
             applicationId,
@@ -3597,7 +3603,8 @@ public static class AccreditationApplicationEndpoints
         SubmitRequest Request,
         DateTime SubmittedAt,
         int? OrgId,
-        CaseWorkingSubmissionResult CaseWorking
+        CaseWorkingSubmissionResult CaseWorking,
+        long ReadVersion
     );
 
     // RA-644 B8g: Submit's save, run in the unit of work against a read made with its session.
@@ -3613,6 +3620,13 @@ public static class AccreditationApplicationEndpoints
             return Results.Ok(
                 new SubmitResponse { AccreditationReference = application.ApplicationReference }
             );
+
+        // Case Management holds the copy read before its call. If the application changed since, an edit landed
+        // during the call: what was checked and sent is not what is stored, so nothing is saved, as before the
+        // re-read. A rolled-back attempt's version bump is undone and the FK stamp leaves the version alone, so
+        // this holds across retries and on first touch.
+        if (application.Version != submission.ReadVersion)
+            return Results.Problem("Failed to submit accreditation application.");
 
         if (application.ApplicationStatus != ApplicationStatus.Started)
             return Results.Conflict("Application must be in 'Started' status to submit.");
