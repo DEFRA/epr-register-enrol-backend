@@ -347,10 +347,9 @@ public static class AccreditationApplicationEndpoints
             services.CancellationToken
         );
 
-        return await services.UnitOfWork.RunAsync(
-            nameof(GenerateOrUpdateRegistrationNumber),
+        return await services.UnitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 IssueRegistrationNumberAsync(
                     services,
                     new RegistrationNumberRequest(
@@ -1169,10 +1168,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(PatchPrns),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PatchPrnsAsync(
                     organisationId,
                     applicationId,
@@ -1184,7 +1182,6 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-    // RA-644 B8g: the body of PatchPrns, run in the dual-write unit of work with its session.
     private static async Task<IResult> PatchPrnsAsync(
         string organisationId,
         string applicationId,
@@ -1256,10 +1253,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(PatchTonnage),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PatchTonnageAsync(
                     organisationId,
                     applicationId,
@@ -1271,7 +1267,6 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-    // RA-644 B8g: the body of PatchTonnage, run in the dual-write unit of work with its session.
     private static async Task<IResult> PatchTonnageAsync(
         string organisationId,
         string applicationId,
@@ -1341,10 +1336,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(PatchBusinessPlan),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PatchBusinessPlanAsync(
                     organisationId,
                     applicationId,
@@ -1356,7 +1350,6 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-    // RA-644 B8g: the body of PatchBusinessPlan, run in the dual-write unit of work with its session.
     private static async Task<IResult> PatchBusinessPlanAsync(
         string organisationId,
         string applicationId,
@@ -1457,10 +1450,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(PatchSamplingPlan),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PatchSamplingPlanAsync(
                     organisationId,
                     applicationId,
@@ -1471,7 +1463,6 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-    // RA-644 B8g: the body of PatchSamplingPlan, run in the dual-write unit of work with its session.
     private static async Task<IResult> PatchSamplingPlanAsync(
         string organisationId,
         string applicationId,
@@ -1533,10 +1524,9 @@ public static class AccreditationApplicationEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(PatchOverseasSites),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PatchOverseasSitesAsync(
                     organisationId,
                     applicationId,
@@ -2370,10 +2360,9 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        return await unitOfWork.RunAsync(
-            nameof(PromoteOverseasSite),
+        return await unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PromoteOverseasSiteAsync(
                     organisationId,
                     applicationId,
@@ -2443,10 +2432,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(RevertOverseasSite),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 RevertOverseasSiteAsync(
                     organisationId,
                     applicationId,
@@ -2573,10 +2561,9 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        return await unitOfWork.RunAsync(
-            nameof(UpdateInterimSite),
+        return await unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 UpdateInterimSiteAsync(
                     persistence,
                     new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
@@ -2658,10 +2645,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(WithdrawInterimSite),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 WithdrawInterimSiteAsync(
                     persistence,
                     new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
@@ -2718,10 +2704,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(RestoreInterimSite),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 RestoreInterimSiteAsync(
                     persistence,
                     new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
@@ -3003,10 +2988,9 @@ public static class AccreditationApplicationEndpoints
         AddBesEvidenceFileRequest request,
         [AsParameters] AddBesEvidenceFileServices services
     ) =>
-        services.UnitOfWork.RunAsync(
-            nameof(AddBesEvidenceFile),
+        services.UnitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 AddBesEvidenceFileAsync(
                     organisationId,
                     applicationId,
@@ -3018,7 +3002,6 @@ public static class AccreditationApplicationEndpoints
             services.CancellationToken
         );
 
-    // RA-644 B8g: the body of AddBesEvidenceFile, run in the dual-write unit of work with its session.
     private static async Task<IResult> AddBesEvidenceFileAsync(
         string organisationId,
         string applicationId,
@@ -3108,10 +3091,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(PatchBesEvidence),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PatchBesEvidenceAsync(
                     organisationId,
                     applicationId,
@@ -3123,7 +3105,6 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-    // RA-644 B8g: the body of PatchBesEvidence, run in the dual-write unit of work with its session.
     private static async Task<IResult> PatchBesEvidenceAsync(
         string organisationId,
         string applicationId,
@@ -3214,10 +3195,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(DeleteBesEvidenceFile),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 DeleteBesEvidenceFileAsync(
                     organisationId,
                     applicationId,
@@ -3229,7 +3209,6 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-    // RA-644 B8g: the body of DeleteBesEvidenceFile, run in the dual-write unit of work with its session.
     private static async Task<IResult> DeleteBesEvidenceFileAsync(
         string organisationId,
         string applicationId,
@@ -3292,10 +3271,9 @@ public static class AccreditationApplicationEndpoints
         PatchBesEvidenceFileRequest request,
         [AsParameters] PatchBesEvidenceFileServices services
     ) =>
-        services.UnitOfWork.RunAsync(
-            nameof(PatchBesEvidenceFile),
+        services.UnitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PatchBesEvidenceFileAsync(
                     organisationId,
                     applicationId,
@@ -3308,7 +3286,6 @@ public static class AccreditationApplicationEndpoints
             services.CancellationToken
         );
 
-    // RA-644 B8g: the body of PatchBesEvidenceFile, run in the dual-write unit of work with its session.
     private static async Task<IResult> PatchBesEvidenceFileAsync(
         string organisationId,
         string applicationId,
@@ -3363,10 +3340,9 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(PatchBesEvidenceSection),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
+            session =>
                 PatchBesEvidenceSectionAsync(
                     organisationId,
                     applicationId,
@@ -3378,7 +3354,6 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-    // RA-644 B8g: the body of PatchBesEvidenceSection, run in the dual-write unit of work with its session.
     private static async Task<IResult> PatchBesEvidenceSectionAsync(
         string organisationId,
         string applicationId,
@@ -4122,14 +4097,12 @@ public static class AccreditationApplicationEndpoints
         FileUploadRequest request,
         [AsParameters] AddFileServices services
     ) =>
-        services.UnitOfWork.RunAsync(
-            nameof(AddFile),
+        services.UnitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) => AddFileAsync(organisationId, applicationId, request, services, session),
+            session => AddFileAsync(organisationId, applicationId, request, services, session),
             services.CancellationToken
         );
 
-    // RA-644 B8g: the body of AddFile, run in the dual-write unit of work with its session.
     private static async Task<IResult> AddFileAsync(
         string organisationId,
         string applicationId,
@@ -4224,15 +4197,12 @@ public static class AccreditationApplicationEndpoints
         IDualWriteUnitOfWork unitOfWork,
         CancellationToken cancellationToken
     ) =>
-        unitOfWork.RunAsync(
-            nameof(DeleteFile),
+        unitOfWork.InTransactionAsync(
             applicationId,
-            (session, _) =>
-                DeleteFileAsync(organisationId, applicationId, fileId, persistence, session),
+            session => DeleteFileAsync(organisationId, applicationId, fileId, persistence, session),
             cancellationToken
         );
 
-    // RA-644 B8g: the body of DeleteFile, run in the dual-write unit of work with its session.
     private static async Task<IResult> DeleteFileAsync(
         string organisationId,
         string applicationId,
