@@ -1,5 +1,3 @@
-using EprRegisterEnrolBackend.DomainModel.Entities;
-using EprRegisterEnrolBackend.DomainModel.Migration;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -17,40 +15,4 @@ public interface IModelInterimSiteNumbers
         IClientSessionHandle? session,
         CancellationToken cancellationToken = default
     );
-}
-
-/// <summary><c>DomainModel:DualWrite</c> off: there is no model to avoid.</summary>
-public sealed class NoModelInterimSiteNumbers : IModelInterimSiteNumbers
-{
-    public Task<IReadOnlyCollection<string>> GetAsync(
-        ObjectId? registrationEntityId,
-        IClientSessionHandle? session,
-        CancellationToken cancellationToken = default
-    ) => Task.FromResult<IReadOnlyCollection<string>>([]);
-}
-
-public sealed class ModelInterimSiteNumbers(ApplicationGroupStores stores)
-    : IModelInterimSiteNumbers
-{
-    public async Task<IReadOnlyCollection<string>> GetAsync(
-        ObjectId? registrationEntityId,
-        IClientSessionHandle? session,
-        CancellationToken cancellationToken = default
-    )
-    {
-        if (registrationEntityId is not { } registrationId)
-        {
-            return [];
-        }
-
-        var sites = await stores.OverseasSites.Versions.FindAllCurrentAsync(
-            Builders<OverseasSiteEntity>.Filter.Eq(s => s.RegistrationId, registrationId),
-            session,
-            cancellationToken
-        );
-        return sites
-            .SelectMany(s => s.InterimSites)
-            .SelectMany(i => i.PreviousSiteNumbers.Prepend(i.SiteNumber))
-            .ToHashSet();
-    }
 }

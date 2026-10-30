@@ -401,11 +401,7 @@ public static class AccreditationApplicationEndpoints
             session,
             services.CancellationToken
         );
-        if (
-            rules.NumbersAreFixed
-            && request.Regenerate
-            && (issued ?? application.RegistrationReference) is not null
-        )
+        if (request.Regenerate && rules.RefusesRegenerate(application, issued))
             return Results.Conflict(
                 "A registration number is never regenerated once it has been issued."
             );

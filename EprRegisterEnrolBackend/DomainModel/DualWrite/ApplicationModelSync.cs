@@ -750,7 +750,7 @@ public sealed class ApplicationModelSync(
             var others = await stores.Applications.Versions.FindAllCurrentAsync(
                 filter.Eq(a => a.RegistrationId, registrationId)
                     & filter.Ne(a => a.EntityId, _applicationId)
-                    & filter.Nin(a => a.Status, ApplicationGroupMigrator.ClosedStatuses),
+                    & filter.Nin(a => a.Status, ApplicationStatusExtensions.Closed),
                 session,
                 cancellationToken
             );

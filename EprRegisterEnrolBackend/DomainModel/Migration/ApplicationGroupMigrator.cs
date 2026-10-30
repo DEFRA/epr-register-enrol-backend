@@ -97,18 +97,6 @@ public sealed class ApplicationGroupMigrator(
             .ThenByDescending(a => a.Id)
             .ToList();
 
-    // The statuses that end an application. Every other status is in flight; the sync's Mongo filter
-    // uses the same list, so the migration and the sync cannot disagree on it.
-    internal static readonly ApplicationStatus[] ClosedStatuses =
-    [
-        ApplicationStatus.Approved,
-        ApplicationStatus.Rejected,
-        ApplicationStatus.Withdrawn,
-    ];
-
-    internal static bool InFlight(AccreditationApplicationModel application) =>
-        !ClosedStatuses.Contains(application.ApplicationStatus);
-
     // An operator-added site's status follows its applications: accredited by an approved application that
     // selected it -> Active; otherwise held by one in flight -> Proposed; otherwise Discarded (§6.1 step 2, §6.3).
     private static OverseasSiteStatus StatusFor(IEnumerable<Holding> holders)
@@ -119,7 +107,7 @@ public sealed class ApplicationGroupMigrator(
             return OverseasSiteStatus.Active;
         }
 
-        return list.Exists(h => InFlight(h.Application))
+        return list.Exists(h => h.Application.ApplicationStatus.IsInFlight())
             ? OverseasSiteStatus.Proposed
             : OverseasSiteStatus.Discarded;
     }
@@ -572,12 +560,12 @@ public sealed class ApplicationGroupMigrator(
                     continue;
                 }
 
-                if (InFlight(holding.Application))
+                if (holding.Application.ApplicationStatus.IsInFlight())
                 {
                     _proposals[(holding.ApplicationId, holding.Site.SiteId)] = changes;
                 }
 
-                if (created || !InFlight(holding.Application))
+                if (created || !holding.Application.ApplicationStatus.IsInFlight())
                 {
                     losers.Add(holding.ApplicationId);
                 }
