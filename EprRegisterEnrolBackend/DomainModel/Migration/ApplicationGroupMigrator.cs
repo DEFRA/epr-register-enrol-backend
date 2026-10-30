@@ -704,46 +704,15 @@ public sealed class ApplicationGroupMigrator(
             return accreditation.EntityId;
         }
 
-        // Not back-dated (§6.1 step 5): the approval time is kept as an attribute, and the version starts now.
         private AccreditationEntity NewAccreditation(
             ObjectId registrationId,
             AccreditationApplicationModel application
         ) =>
-            new()
-            {
-                RegistrationId = registrationId,
-                Year = application.Year,
-                AccreditationNumber = string.IsNullOrWhiteSpace(application.AccreditationReference)
-                    ? null
-                    : application.AccreditationReference,
-                ApplicationId = application.Id,
-                Status = AccreditationStatus.Approved,
-                ApprovedAt = application.CaseManagementStatusUpdatedAt,
-                TonnageBand = TonnageBandConversion.FromLegacy(application.Prns.PlannedTonnageBand),
-                Signatories = application
-                    .Prns.Authorisers.Select(a => new Signatory
-                    {
-                        FullName = a.FullName,
-                        Email = a.Email,
-                    })
-                    .ToList(),
-                AccreditationOverseasSites = (application.OverseasSites?.Sites ?? [])
-                    .Where(s => s.Selected)
-                    .Select(s => (Site: s, Plan: PlanFor(application, s)))
-                    .Where(x => x.Plan is not null)
-                    .Select(x => new AccreditationOverseasSiteEntry
-                    {
-                        OverseasSiteId = x.Plan!.EntityId,
-                        OrsId = x.Site.OrsId,
-                        Status = AccreditedSiteStatus.Approved,
-                        BesEvidence =
-                            LegacyApplicationMapper
-                                .ToBesEvidence(x.Site.BesEvidence)
-                                ?.BesEvidenceUploads
-                            ?? [],
-                    })
-                    .ToList(),
-            };
+            AccreditationFromApplication.Build(
+                registrationId,
+                application,
+                site => PlanFor(application, site)?.EntityId
+            );
 
         // --- conflicts that span applications -----------------------------------------------------------------------
 

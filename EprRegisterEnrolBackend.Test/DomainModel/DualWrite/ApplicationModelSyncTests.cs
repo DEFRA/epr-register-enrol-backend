@@ -736,6 +736,128 @@ public sealed class ApplicationModelSyncTests : IDisposable
         Assert.Equal(proposed.Version, (await CurrentSiteAsync("002")).Version);
     }
 
+    // --- B9: approval ----------------------------------------------------------------------------------------------
+
+    private const string AccreditationNumber = "A27ER5000270001PL";
+
+    private Task<List<AccreditationEntity>> CurrentAccreditationsAsync() =>
+        AllAsync(
+            DomainModelCollections.AccreditationVersions,
+            Builders<AccreditationEntity>.Filter.Eq(x => x.IsCurrent, true)
+        );
+
+    // A submitted application holding a ReEx site (with an interim site it proposed) and a site it added.
+    private Task<AccreditationApplicationModel> SubmittedWithProposalsAsync(int year = 2027) =>
+        MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            year,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay")),
+            Site(3, "002", "Added", isNew: true)
+        );
+
+    private Task<AccreditationApplicationModel> ApproveAsync(
+        AccreditationApplicationModel application,
+        string? accreditationNumber = AccreditationNumber
+    ) =>
+        EditAsync(
+            application,
+            a =>
+            {
+                a.ApplicationStatus = ApplicationStatus.Approved;
+                a.AccreditationReference = accreditationNumber;
+                a.CaseManagementStatusUpdatedAt = Day1;
+            }
+        );
+
+    [Fact]
+    public async Task ApplicationApproved_ActivatesItsSitesAndCreatesTheAccreditation()
+    {
+        var application = await SubmittedWithProposalsAsync();
+        await EditAsync(application, a => a.OverseasSites!.Sites[0].SiteName = "Renamed");
+        await ApproveAsync(application);
+
+        await SyncAsync(application);
+
+        // Its sites take the application's details and become Active, as the migration would leave them.
+        var reEx = await CurrentSiteAsync("001");
+        Assert.Equal(OverseasSiteStatus.Active, reEx.Status);
+        Assert.Equal("Renamed", reEx.SiteName);
+        Assert.Equal(InterimSiteStatus.Active, InterimEntry(reEx, "001").Status);
+        Assert.Equal(ChangeReason.ApplicationApproved, reEx.LastChange.Reason);
+        var added = await CurrentSiteAsync("002");
+        Assert.Equal(OverseasSiteStatus.Active, added.Status);
+        Assert.Equal(ChangeReason.ApplicationApproved, added.LastChange.Reason);
+
+        var accreditation = Assert.Single(await CurrentAccreditationsAsync());
+        Assert.Equal(application.Id, accreditation.ApplicationId);
+        Assert.Equal(AccreditationNumber, accreditation.AccreditationNumber);
+        Assert.Equal(AccreditationStatus.Approved, accreditation.Status);
+        Assert.Equal(Day1, accreditation.ApprovedAt);
+        Assert.Equal(ChangeReason.ApplicationApproved, accreditation.LastChange.Reason);
+        Assert.Equal(
+            [reEx.EntityId, added.EntityId],
+            accreditation.AccreditationOverseasSites.Select(s => s.OverseasSiteId)
+        );
+
+        var entity = await CurrentApplicationAsync(application);
+        Assert.Equal(ApplicationStatus.Approved, entity.Status);
+        Assert.Equal(accreditation.EntityId, entity.AccreditationId);
+        Assert.Null(Entry(entity, 1).ProposedChanges);
+        Assert.Null(InterimEntry(entity, 1, "001").ProposedChanges);
+        Assert.Equal(
+            accreditation.EntityId,
+            (await LegacyAsync(application))!.AccreditationEntityId
+        );
+    }
+
+    [Fact]
+    public async Task ApplicationApproved_SyncedAgain_WritesNothing()
+    {
+        var application = await SubmittedWithProposalsAsync();
+        await ApproveAsync(application);
+        await SyncAsync(application);
+        var entity = await CurrentApplicationAsync(application);
+        var reEx = await CurrentSiteAsync("001");
+        var added = await CurrentSiteAsync("002");
+        var accreditation = Assert.Single(await CurrentAccreditationsAsync());
+
+        await SyncAsync(application);
+
+        Assert.Equal(entity.Version, (await CurrentApplicationAsync(application)).Version);
+        Assert.Equal(reEx.Version, (await CurrentSiteAsync("001")).Version);
+        Assert.Equal(added.Version, (await CurrentSiteAsync("002")).Version);
+        Assert.Equal(
+            accreditation.Version,
+            Assert.Single(await CurrentAccreditationsAsync()).Version
+        );
+    }
+
+    [Fact]
+    public async Task ApplicationApprovedWithoutAnAccreditationNumber_FailsAndWritesNothing()
+    {
+        var application = await SubmittedWithProposalsAsync();
+        await ApproveAsync(application, accreditationNumber: null);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SyncAsync(application));
+
+        Assert.Empty(await CurrentAccreditationsAsync());
+        Assert.Equal(OverseasSiteStatus.Proposed, (await CurrentSiteAsync("002")).Status);
+    }
+
+    [Fact]
+    public async Task RegistrationAlreadyAccreditedForTheYear_FailsTheApproval()
+    {
+        var first = await SubmittedWithProposalsAsync();
+        await ApproveAsync(first);
+        await SyncAsync(first);
+        var second = await MigratedApplicationAsync(ApplicationStatus.Submitted, 2027);
+        await ApproveAsync(second, "A27ER5000270002PL");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SyncAsync(second));
+
+        Assert.Equal(first.Id, Assert.Single(await CurrentAccreditationsAsync()).ApplicationId);
+    }
+
     // --- B8e: registration numbers --------------------------------------------------------------------------------
 
     private async Task<RegistrationEntity> CurrentRegistrationAsync(

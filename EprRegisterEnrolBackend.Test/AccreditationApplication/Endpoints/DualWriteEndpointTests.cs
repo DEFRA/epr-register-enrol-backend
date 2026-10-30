@@ -1281,6 +1281,99 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         }
     }
 
+    // --- B9: approval --------------------------------------------------------------------------------------------
+
+    // Submitted with a site it added, and given its accreditation number, as the Case Management service does
+    // before it approves.
+    private async Task<(
+        AccreditationApplicationModel Application,
+        string OrsId
+    )> ReadyToApproveAsync()
+    {
+        var (application, orsId) = await SubmittedWithProposedSiteAsync();
+        application.AccreditationReference = "A27ER5000270001ST";
+        return ((await Applications.UpdateAsync(application))!, orsId);
+    }
+
+    private Task<List<AccreditationEntity>> CurrentAccreditationsAsync() =>
+        Stores.Accreditations.Versions.FindAllCurrentAsync(
+            FilterDefinition<AccreditationEntity>.Empty,
+            cancellationToken: Ct
+        );
+
+    [Fact]
+    public async Task StatusPush_Approved_CreatesTheAccreditationAndActivatesTheSites()
+    {
+        var (application, orsId) = await ReadyToApproveAsync();
+
+        var response = await StatusPushAsync(application, "approved");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var accreditation = Assert.Single(await CurrentAccreditationsAsync());
+        Assert.Equal(application.Id, accreditation.ApplicationId);
+        Assert.Equal("A27ER5000270001ST", accreditation.AccreditationNumber);
+        Assert.Equal(2, accreditation.AccreditationOverseasSites.Count);
+        Assert.Equal(OverseasSiteStatus.Active, (await CurrentSiteAsync(orsId)).Status);
+        var entity = (await CurrentApplicationAsync(application))!;
+        Assert.Equal(ApplicationStatus.Approved, entity.Status);
+        Assert.Equal(accreditation.EntityId, entity.AccreditationId);
+        Assert.Equal(
+            accreditation.EntityId,
+            (await LegacyAsync(application))!.AccreditationEntityId
+        );
+    }
+
+    [Fact]
+    public async Task StatusPush_ApprovedAgain_CreatesNothingNew()
+    {
+        var (application, _) = await ReadyToApproveAsync();
+        await StatusPushAsync(application, "approved");
+        var accreditation = Assert.Single(await CurrentAccreditationsAsync());
+        var entity = (await CurrentApplicationAsync(application))!;
+
+        var response = await StatusPushAsync(application, "approved");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            accreditation.Version,
+            Assert.Single(await CurrentAccreditationsAsync()).Version
+        );
+        Assert.Equal(entity.Version, (await CurrentApplicationAsync(application))!.Version);
+    }
+
+    [Fact]
+    public async Task StatusPush_TwoApprovalsAtOnce_CreateOneAccreditation()
+    {
+        var (application, _) = await ReadyToApproveAsync();
+
+        var responses = await Task.WhenAll(
+            StatusPushAsync(application, "approved"),
+            StatusPushAsync(application, "approved")
+        );
+
+        Assert.All(responses, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
+        Assert.Equal(
+            application.Id,
+            Assert.Single(await CurrentAccreditationsAsync()).ApplicationId
+        );
+    }
+
+    [Fact]
+    public async Task StatusPush_ApprovedWithoutAnAccreditationNumber_FailsAndChangesNothing()
+    {
+        var (application, orsId) = await SubmittedWithProposedSiteAsync();
+
+        var response = await StatusPushAsync(application, "approved");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(
+            ApplicationStatus.Submitted,
+            (await LegacyAsync(application))!.ApplicationStatus
+        );
+        Assert.Empty(await CurrentAccreditationsAsync());
+        Assert.Empty(await CurrentSitesAsync());
+    }
+
     [Fact]
     public async Task AddOverseasSite_DualWriteOff_WritesNoModel()
     {

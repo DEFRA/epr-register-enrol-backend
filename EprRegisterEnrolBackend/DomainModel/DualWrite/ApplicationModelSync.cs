@@ -54,7 +54,8 @@ public sealed class ApplicationModelSync(
         var entries = await run.SyncSitesAsync();
 
         var next = LegacyApplicationMapper.ToEntity(legacy, current.RegistrationId, entries);
-        next.AccreditationId = current.AccreditationId;
+        next.AccreditationId =
+            await run.EnsureAccreditationAsync(entries) ?? current.AccreditationId;
         await stores.Applications.Versions.UpdateAsync(
             next,
             current.Version,
@@ -151,6 +152,10 @@ public sealed class ApplicationModelSync(
             var previous = current
                 .ApplicationOverseasSites.GroupBy(e => e.SiteId)
                 .ToDictionary(g => g.Key, g => g.First().OverseasSiteId);
+            if (legacy.ApplicationStatus == ApplicationStatus.Approved)
+            {
+                await ApproveSitesAsync(previous);
+            }
             var entries = new List<ApplicationOverseasSiteEntry>();
             var stamps = new Dictionary<string, ObjectId>();
             foreach (var site in Sites)
@@ -412,6 +417,15 @@ public sealed class ApplicationModelSync(
                 return null;
 
             var reason = WithdrawalChange(stored.RemovedAt, interim.RemovedAt);
+            CopyInterimDetails(stored, interim);
+            stored.Status = stored.RemovedAt is null
+                ? InterimSiteStatus.Proposed
+                : InterimSiteStatus.Withdrawn;
+            return reason;
+        }
+
+        private static void CopyInterimDetails(InterimSiteEntry stored, InterimSiteModel interim)
+        {
             var details = LegacySiteMapper.ToInterimSite(interim, stored.SiteNumber);
             stored.SiteName = details.SiteName;
             stored.Address = details.Address;
@@ -419,10 +433,138 @@ public sealed class ApplicationModelSync(
             stored.OperationCodes = details.OperationCodes;
             stored.RemovedAt = details.RemovedAt;
             stored.CreatedAt ??= details.CreatedAt;
-            stored.Status = stored.RemovedAt is null
-                ? InterimSiteStatus.Proposed
-                : InterimSiteStatus.Withdrawn;
-            return reason;
+        }
+
+        // B9: an approved application's sites take its details and become Active, with their interim sites, as the
+        // migration leaves them (the newest approved application wins, §6.1 step 2). One ORS version each; a
+        // versioned update is a no-op when nothing changed, so a repeated approval writes nothing.
+        private async Task ApproveSitesAsync(Dictionary<int, ObjectId?> previous)
+        {
+            foreach (var site in Sites)
+            {
+                if (Find(site, previous.GetValueOrDefault(site.SiteId)) is not { } ors)
+                {
+                    continue;
+                }
+
+                var approved = LegacySiteMapper.WithDetailsOf(ors, site);
+                if (approved.Status != OverseasSiteStatus.Active)
+                {
+                    OverseasSiteTransitions.Registered.EnsureCanTransition(
+                        approved.Status,
+                        OverseasSiteStatus.Active
+                    );
+                    approved.Status = OverseasSiteStatus.Active;
+                }
+
+                ApproveInterimSites(approved, site);
+                Track(
+                    (
+                        await stores.OverseasSites.Versions.UpdateAsync(
+                            approved,
+                            ors.Version,
+                            Change(ChangeReason.ApplicationApproved, ors.OrsId),
+                            session,
+                            cancellationToken
+                        )
+                    ).Entity
+                );
+            }
+        }
+
+        // A withdrawn interim site stays Withdrawn; every other one the application holds is Active.
+        private void ApproveInterimSites(OverseasSiteEntity ors, OverseasSiteModel site)
+        {
+            foreach (var interim in InterimSiteSync.All(site))
+            {
+                var stored = FindInterim(ors, interim.SiteNumber);
+                if (stored is null)
+                {
+                    stored = NewInterimSite(interim);
+                    ors.InterimSites.Add(stored);
+                }
+
+                CopyInterimDetails(stored, interim);
+                stored.Status = stored.RemovedAt is null
+                    ? InterimSiteStatus.Active
+                    : InterimSiteStatus.Withdrawn;
+            }
+        }
+
+        // B9: an approved application has one Accreditation (unique on applicationId, so a repeated approval finds
+        // it). A missing number, or another Accreditation for the registration and year, fails the approval: the
+        // migration only records those as conflicts, but a live approval must never store one (D9).
+        public async Task<ObjectId?> EnsureAccreditationAsync(
+            List<ApplicationOverseasSiteEntry> entries
+        )
+        {
+            if (
+                legacy.ApplicationStatus != ApplicationStatus.Approved
+                || current.RegistrationId is not { } registrationId
+            )
+            {
+                return null;
+            }
+
+            var versions = stores.Accreditations.Versions;
+            var filter = Builders<AccreditationEntity>.Filter;
+            var own = await versions.FindCurrentAsync(
+                filter.Eq(a => a.ApplicationId, _applicationId),
+                session,
+                cancellationToken
+            );
+            if (own is not null)
+            {
+                return own.EntityId;
+            }
+
+            if (string.IsNullOrWhiteSpace(legacy.AccreditationReference))
+            {
+                throw new InvalidOperationException(
+                    $"Application {_applicationId} was approved without an accreditation number."
+                );
+            }
+
+            var sameYear = await versions.FindCurrentAsync(
+                filter.Eq(a => a.RegistrationId, registrationId)
+                    & filter.Eq(a => a.Year, legacy.Year),
+                session,
+                cancellationToken
+            );
+            if (sameYear is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Registration {registrationId} already has accreditation {sameYear.EntityId} for {legacy.Year}."
+                );
+            }
+
+            var overseasSiteIds = entries
+                .Where(e => e.OverseasSiteId is not null)
+                .GroupBy(e => e.SiteId)
+                .ToDictionary(g => g.Key, g => g.First().OverseasSiteId);
+            var accreditation = await versions.InsertAsync(
+                AccreditationFromApplication.Build(
+                    registrationId,
+                    legacy,
+                    site => overseasSiteIds.GetValueOrDefault(site.SiteId)
+                ),
+                new ChangeInfo
+                {
+                    Reason = ChangeReason.ApplicationApproved,
+                    ApplicationId = _applicationId,
+                },
+                session,
+                cancellationToken
+            );
+            await applications.StampDomainModelForeignKeysAsync(
+                _applicationId,
+                registrationId,
+                new Dictionary<string, ObjectId>(),
+                session,
+                cancellationToken,
+                accreditation.EntityId
+            );
+            return accreditation.EntityId;
         }
 
         private static ChangeReason WithdrawalChange(DateTime? before, DateTime? after)
