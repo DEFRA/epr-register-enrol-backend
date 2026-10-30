@@ -879,6 +879,46 @@ public sealed class ApplicationModelSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplicationApproved_OnlyItsSelectedSitesAreActivated()
+    {
+        // Only the selected sites are accredited. A registered site it did not select stays as it was, without the
+        // application's edits; a site it added and did not select was never registered, so it is Discarded.
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            Site(1, "001", "ReEx Site"),
+            Site(2, "002", "Unselected Added", isNew: true),
+            Site(3, "003", "Selected Added", isNew: true)
+        );
+        await EditAsync(
+            application,
+            a =>
+            {
+                a.OverseasSites!.Sites[0].SiteName = "Renamed";
+                a.OverseasSites.Sites[0].Selected = false;
+                a.OverseasSites.Sites[1].Selected = false;
+            }
+        );
+        await ApproveAsync(application);
+
+        await SyncAsync(application);
+
+        var reEx = await CurrentSiteAsync("001");
+        Assert.Equal(OverseasSiteStatus.Active, reEx.Status);
+        Assert.Equal("ReEx Site", reEx.SiteName);
+        var unselected = await CurrentSiteAsync("002");
+        Assert.Equal(OverseasSiteStatus.Discarded, unselected.Status);
+        Assert.Equal(ChangeReason.ProposedSiteDiscarded, unselected.LastChange.Reason);
+        var selected = await CurrentSiteAsync("003");
+        Assert.Equal(OverseasSiteStatus.Active, selected.Status);
+        Assert.Equal(
+            [selected.EntityId],
+            Assert
+                .Single(await CurrentAccreditationsAsync())
+                .AccreditationOverseasSites.Select(s => s.OverseasSiteId)
+        );
+    }
+
+    [Fact]
     public async Task ApplicationApproved_SyncedAgain_WritesNothing()
     {
         var application = await SubmittedWithProposalsAsync();

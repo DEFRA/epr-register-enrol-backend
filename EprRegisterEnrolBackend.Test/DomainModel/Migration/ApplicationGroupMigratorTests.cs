@@ -518,6 +518,38 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     }
 
     [Fact]
+    public async Task ApprovedApplication_OnlyItsSelectedSitesAreActivated()
+    {
+        // As live approval does: a site the approved application did not select is not accredited. One it added is
+        // Discarded, and a registered one does not take its details over a newer application that holds it too.
+        var approved = NewApplication(
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Approved Edit"),
+            Site(2, "002", "Unselected Added", isNew: true),
+            Site(3, "003", "Selected Added", isNew: true)
+        );
+        approved.OverseasSites!.Sites[0].Selected = false;
+        approved.OverseasSites.Sites[1].Selected = false;
+        approved.AccreditationReference = "A27EX1234567P";
+        await _applications.CreateAsync(approved);
+        await ApplicationForYearAsync(
+            2028,
+            ApplicationStatus.Started,
+            Day2,
+            Site(1, "001", "Newer Name")
+        );
+
+        await MigrateAsync(approved);
+
+        Assert.Equal(OverseasSiteStatus.Discarded, (await CurrentSiteAsync("002")).Status);
+        Assert.Equal(OverseasSiteStatus.Active, (await CurrentSiteAsync("003")).Status);
+        var reEx = await CurrentSiteAsync("001");
+        Assert.Equal(OverseasSiteStatus.Active, reEx.Status);
+        Assert.Equal("Newer Name", reEx.SiteName);
+    }
+
+    [Fact]
     public async Task ApprovedApplication_GetsItsAccreditation()
     {
         var application = NewApplication(

@@ -109,23 +109,38 @@ public sealed class ApplicationGroupMigrator(
     internal static bool InFlight(AccreditationApplicationModel application) =>
         !ClosedStatuses.Contains(application.ApplicationStatus);
 
-    // An operator-added site's status follows its applications: Approved -> Active; Rejected or Withdrawn ->
-    // Discarded; in flight -> Proposed (§6.1 step 2, §6.3).
-    private static OverseasSiteStatus StatusFor(IEnumerable<AccreditationApplicationModel> holders)
+    // An operator-added site's status follows its applications: accredited by an approved application that
+    // selected it -> Active; otherwise held by one in flight -> Proposed; otherwise Discarded (§6.1 step 2, §6.3).
+    private static OverseasSiteStatus StatusFor(IEnumerable<Holding> holders)
     {
         var list = holders.ToList();
-        if (list.Exists(a => a.ApplicationStatus == ApplicationStatus.Approved))
+        if (list.Exists(h => h.Accredits))
         {
             return OverseasSiteStatus.Active;
         }
 
-        return list.Exists(InFlight) ? OverseasSiteStatus.Proposed : OverseasSiteStatus.Discarded;
+        return list.Exists(h => InFlight(h.Application))
+            ? OverseasSiteStatus.Proposed
+            : OverseasSiteStatus.Discarded;
     }
+
+    // Who wins a site's details: an approved application that selected it, otherwise the newest. An approved
+    // application that did not select a site did not accredit it, so it ranks like any other.
+    private static List<Holding> RankedHoldings(IEnumerable<Holding> holdings) =>
+        holdings
+            .OrderByDescending(h => h.Accredits)
+            .ThenByDescending(h => h.Application.UpdatedAt)
+            .ThenByDescending(h => h.Application.Id)
+            .ToList();
 
     /// <summary>One legacy site as one application holds it.</summary>
     private sealed record Holding(AccreditationApplicationModel Application, OverseasSiteModel Site)
     {
         public ObjectId ApplicationId => Application.Id!.Value;
+
+        /// <summary>The application was approved with this site selected, so the site is accredited.</summary>
+        public bool Accredits =>
+            Application.ApplicationStatus == ApplicationStatus.Approved && Site.Selected;
     }
 
     /// <summary>One ORS: found, or to be created, with what it maps each legacy interim site number to.</summary>
@@ -329,7 +344,7 @@ public sealed class ApplicationGroupMigrator(
             )
             {
                 _sitesByOrsId[byOrsId.Key] = new SitePlan(
-                    byOrsId.ToList(),
+                    RankedHoldings(byOrsId),
                     existingByOrsId.GetValueOrDefault(byOrsId.Key)
                 );
             }
@@ -445,7 +460,7 @@ public sealed class ApplicationGroupMigrator(
                 var (winner, interim) = byNumber.First();
                 var entry = LegacySiteMapper.ToInterimSite(interim, number);
                 entry.PreviousSiteNumbers = number == byNumber.Key ? [] : [byNumber.Key];
-                entry.Status = InterimStatus(interim, byNumber.Select(x => x.Holding.Application));
+                entry.Status = InterimStatus(interim, byNumber.Select(x => x.Holding));
                 entry.ProposedByApplicationId = interim.IsNewSite ? winner.ApplicationId : null;
                 RecordInterimDifferences(plan, byNumber.ToList(), entry);
                 yield return entry;
@@ -454,7 +469,7 @@ public sealed class ApplicationGroupMigrator(
 
         private static InterimSiteStatus InterimStatus(
             InterimSiteModel interim,
-            IEnumerable<AccreditationApplicationModel> holders
+            IEnumerable<Holding> holders
         )
         {
             if (interim.RemovedAt is not null)
@@ -543,7 +558,7 @@ public sealed class ApplicationGroupMigrator(
             site.Status =
                 site.Origin == SiteOrigin.ReEx
                     ? OverseasSiteStatus.Active
-                    : StatusFor(plan.Holdings.Select(h => h.Application));
+                    : StatusFor(plan.Holdings);
             site.ProposedByApplicationId =
                 site.Origin == SiteOrigin.Operator ? winner.ApplicationId : null;
             site.InterimSites = plan.NewInterimSites;

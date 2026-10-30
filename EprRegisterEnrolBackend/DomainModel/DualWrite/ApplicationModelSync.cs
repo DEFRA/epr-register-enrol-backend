@@ -200,6 +200,14 @@ public sealed class ApplicationModelSync(
             {
                 await DiscardClosedApplicationsProposalsAsync(registrationId, entries);
             }
+            else if (legacy.ApplicationStatus == ApplicationStatus.Approved)
+            {
+                // The sites it did not select are not accredited: its proposals among them end with it.
+                await DiscardClosedApplicationsProposalsAsync(
+                    registrationId,
+                    entries.Where(e => !e.Selected).ToList()
+                );
+            }
 
             if (stamps.Count > 0)
             {
@@ -497,7 +505,9 @@ public sealed class ApplicationModelSync(
         // versioned update is a no-op when nothing changed, so a repeated approval writes nothing.
         private async Task ApproveSitesAsync(Dictionary<int, ObjectId?> previous)
         {
-            foreach (var site in Sites)
+            // Only the selected sites are accredited. The others are left as they are: a registered site keeps its
+            // registered details, and a site the application proposed is discarded with its other proposals.
+            foreach (var site in Sites.Where(s => s.Selected))
             {
                 if (Find(site, previous.GetValueOrDefault(site.SiteId)) is not { } ors)
                 {
