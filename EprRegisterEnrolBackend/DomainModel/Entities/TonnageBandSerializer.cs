@@ -1,5 +1,3 @@
-using System.Reflection;
-using System.Text.Json.Serialization;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
@@ -12,22 +10,6 @@ namespace EprRegisterEnrolBackend.DomainModel.Entities;
 /// </summary>
 public sealed class TonnageBandSerializer : SerializerBase<TonnageBand?>
 {
-    // The names come from the enum's JSON names, so Mongo and JSON can never disagree.
-    private static readonly Dictionary<TonnageBand, string> s_toReEx = Enum.GetValues<TonnageBand>()
-        .ToDictionary(
-            band => band,
-            band =>
-                typeof(TonnageBand)
-                    .GetField(band.ToString())!
-                    .GetCustomAttribute<JsonStringEnumMemberNameAttribute>()!
-                    .Name
-        );
-
-    private static readonly Dictionary<string, TonnageBand> s_fromReEx = s_toReEx.ToDictionary(
-        p => p.Value,
-        p => p.Key
-    );
-
     public override TonnageBand? Deserialize(
         BsonDeserializationContext context,
         BsonDeserializationArgs args
@@ -41,7 +23,7 @@ public sealed class TonnageBandSerializer : SerializerBase<TonnageBand?>
         }
 
         var value = reader.ReadString();
-        return s_fromReEx.TryGetValue(value, out var band)
+        return TonnageBandConversion.TryFromReExName(value, out var band)
             ? band
             : throw new FormatException($"'{value}' is not a ReEx tonnage band.");
     }
@@ -58,7 +40,7 @@ public sealed class TonnageBandSerializer : SerializerBase<TonnageBand?>
         }
         else
         {
-            context.Writer.WriteString(s_toReEx[value.Value]);
+            context.Writer.WriteString(TonnageBandConversion.ToReExName(value.Value));
         }
     }
 }

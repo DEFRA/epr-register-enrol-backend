@@ -18,4 +18,25 @@ public class ChangeInfo
 
     /// <summary>Small, non-personal context such as the <c>orsId</c> or <c>siteNumber</c> concerned.</summary>
     public Dictionary<string, string>? Details { get; set; }
+
+    /// <summary>A change record with the <c>orsId</c> and <c>siteNumber</c> concerned as its details, when given.</summary>
+    public static ChangeInfo Of(
+        ChangeReason reason,
+        ObjectId? applicationId = null,
+        string? orsId = null,
+        string? siteNumber = null
+    )
+    {
+        var details = new Dictionary<string, string>();
+        if (orsId is not null)
+            details["orsId"] = orsId;
+        if (siteNumber is not null)
+            details["siteNumber"] = siteNumber;
+        return new ChangeInfo
+        {
+            Reason = reason,
+            ApplicationId = applicationId,
+            Details = details.Count > 0 ? details : null,
+        };
+    }
 }

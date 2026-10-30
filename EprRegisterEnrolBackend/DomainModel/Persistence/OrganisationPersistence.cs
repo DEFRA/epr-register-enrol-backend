@@ -57,6 +57,45 @@ public class OrganisationPersistence(
         return organisation.Id;
     }
 
+    /// <summary>
+    /// The organisation for <paramref name="reExOrganisationId"/>, created from <paramref name="create"/> only when
+    /// there is none, so an organisation the seed or a sync already holds is left exactly as it is.
+    /// </summary>
+    /// <returns>The organisation's <c>_id</c>.</returns>
+    public async Task<ObjectId> GetOrCreateAsync(
+        string reExOrganisationId,
+        Func<OrganisationEntity> create,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var existing = await Collection
+            .Find(
+                session,
+                Builders<OrganisationEntity>.Filter.Eq(
+                    x => x.ReExOrganisationId,
+                    reExOrganisationId
+                )
+            )
+            .Project(x => x.Id)
+            .ToListAsync(cancellationToken);
+        if (existing.Count > 0)
+        {
+            return existing[0];
+        }
+
+        var organisation = create();
+        organisation.Id = ObjectId.GenerateNewId();
+        organisation.ReExOrganisationId = reExOrganisationId;
+        // A concurrent first write that got here first fails this on reExOrganisationId_u; the caller retries.
+        await Collection.InsertOneAsync(
+            session,
+            organisation,
+            cancellationToken: cancellationToken
+        );
+        return organisation.Id;
+    }
+
     protected override List<CreateIndexModel<OrganisationEntity>> DefineIndexes(
         IndexKeysDefinitionBuilder<OrganisationEntity> builder
     ) =>

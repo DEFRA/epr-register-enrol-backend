@@ -171,7 +171,7 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
             endpointsOwnRead.Id!.Value,
             guardFilter: null,
             targetedUpdate,
-            TestContext.Current.CancellationToken
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         targetedResult
@@ -235,7 +235,7 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
             created!.Id!.Value,
             guardFilter,
             clearQueriedSectionKeys,
-            TestContext.Current.CancellationToken
+            cancellationToken: TestContext.Current.CancellationToken
         );
         first.Should().NotBeNull("the first writer's guard still matches an unresolved query");
         first!.Query!.QueriedSectionKeys.Should().BeEmpty();
@@ -247,7 +247,7 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
             created.Id!.Value,
             guardFilter,
             clearQueriedSectionKeys,
-            TestContext.Current.CancellationToken
+            cancellationToken: TestContext.Current.CancellationToken
         );
         second
             .Should()
@@ -257,6 +257,8 @@ public sealed class AccreditationApplicationPersistenceConcurrencyTests : IDispo
 
         var final = await _sut.GetByIdAsync("org-1", created.Id!.ToString()!);
         final!.Query!.QueriedSectionKeys.Should().BeEmpty();
-        final.Version.Should().Be(first.Version, "only the first writer's update should have advanced the version");
+        final
+            .Version.Should()
+            .Be(first.Version, "only the first writer's update should have advanced the version");
     }
 }
