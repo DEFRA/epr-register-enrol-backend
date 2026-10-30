@@ -255,6 +255,33 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_OtherMongoError_IsNotRetried()
+    {
+        // Only a duplicate key is an insert race worth another attempt; any other error fails at once.
+        var attempts = 0;
+
+        var result = await UnitOfWork()
+            .RunAsync(
+                Operation,
+                "app-1",
+                (_, _) =>
+                {
+                    attempts++;
+                    throw new MongoException("boom");
+                },
+                Ct
+            );
+
+        Assert.Equal(
+            StatusCodes.Status500InternalServerError,
+            Assert.IsType<ProblemHttpResult>(result).StatusCode
+        );
+        Assert.Equal(1, attempts);
+        Assert.Equal(LogLevel.Error, Assert.Single(_logger.Entries).LogLevel);
+        Assert.Equal([Operation], _failedOperations);
+    }
+
+    [Fact]
     public async Task RunAsync_LosesEveryInsertRace_GivesUpAfterMaxAttempts()
     {
         var collection = _factory

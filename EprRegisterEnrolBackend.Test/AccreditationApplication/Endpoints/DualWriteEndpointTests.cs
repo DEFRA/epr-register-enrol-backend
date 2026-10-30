@@ -719,7 +719,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     private async Task<OverseasSiteEntity> CurrentSiteAsync(string orsId) =>
         Assert.Single(await CurrentSitesAsync(), s => s.OrsId == orsId);
 
-    private void FailModelWrites()
+    private void FailModelWrites(Action<IServiceCollection>? configure = null)
     {
         var sync = Substitute.For<IApplicationModelSync>();
         sync.SyncAsync(
@@ -728,7 +728,14 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
                 Arg.Any<CancellationToken>()
             )
             .Throws(new InvalidOperationException("model write failed"));
-        Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(sync)));
+        Restart(
+            s_dualWriteOn,
+            services =>
+            {
+                services.Replace(ServiceDescriptor.Singleton(sync));
+                configure?.Invoke(services);
+            }
+        );
     }
 
     [Fact]
@@ -979,7 +986,14 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     }
 
     // Restarts with one validated upload, "upload-1", ready to attach.
-    private void UseScannedUpload(string fileId, string filename)
+    private void UseScannedUpload(string fileId, string filename) =>
+        Restart(
+            s_dualWriteOn,
+            services =>
+                services.Replace(ServiceDescriptor.Singleton(ScannedUpload(fileId, filename)))
+        );
+
+    private static IPendingUploadService ScannedUpload(string fileId, string filename)
     {
         var uploads = Substitute.For<IPendingUploadService>();
         uploads
@@ -1002,7 +1016,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
                     },
                 }
             );
-        Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(uploads)));
+        return uploads;
     }
 
     // One ORS carrying two uploaded BES evidence files, "bes-1" and "bes-2": the last file cannot be deleted.
@@ -1123,6 +1137,134 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
             (await LegacyAsync(application))!.BesEvidence!.SectionStatus
         );
         await AssertWrittenAsVersion2Async(application);
+    }
+
+    // --- rollback on every write route ----------------------------------------------------------------------------
+
+    private static InterimSiteModel StoredInterim(int siteId, string siteNumber) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = siteNumber,
+            Country = "Belgium",
+            SiteName = "Quay",
+            AddressLine1 = "1 Quay",
+            TownOrCity = "Antwerp",
+            ContactName = "Ann",
+            ContactEmail = "ann@example.com",
+            ContactPhone = "0123 456 789",
+            OperationCodes = ["R12"],
+            IsNewSite = true,
+        };
+
+    // One application every route below can write to: a ReEx site (1) with an interim site (1) and a withdrawn one
+    // (2), a site it added (2), a ReEx site it promoted (3), a sampling-plan file and a registration number.
+    private async Task<AccreditationApplicationModel> EveryRouteWritableAsync()
+    {
+        var reEx = ReExSite();
+        var withdrawn = StoredInterim(2, "002");
+        withdrawn.RemovedAt = DateTime.UtcNow;
+        reEx.InterimSites = [StoredInterim(1, "001"), withdrawn];
+        InterimSiteSync.SyncMirror(reEx);
+
+        var added = ReExSite(2, "002");
+        added.IsNewSite = true;
+        added.SiteName = "Added Site";
+
+        var promoted = ReExSite(3, "003");
+        promoted.RegisteredNowAccredited = true;
+        promoted.PreviousSites = [ReExSite(3, "003")];
+
+        var application = await ApplicationAsync(null, reEx, added, promoted);
+        application.RegistrationReference = "R27ER5000270001PL";
+        application.SamplingPlan.Files =
+        [
+            new AccreditationApplicationFile
+            {
+                FileId = "file-1",
+                Filename = "plan.pdf",
+                ContentType = "application/pdf",
+                UploadedByUserId = "user-1",
+                S3Key = "plans/plan.pdf",
+            },
+        ];
+        return (await Applications.UpdateAsync(application))!;
+    }
+
+    private Task<HttpResponseMessage> WriteAsync(
+        AccreditationApplicationModel application,
+        string route
+    ) =>
+        route switch
+        {
+            "update-site" => _client.PatchAsJsonAsync(
+                Url(application, "/2"),
+                EditRequest("Renamed"),
+                Ct
+            ),
+            "promote-site" => _client.PostAsJsonAsync(
+                Url(application, "/1/promote"),
+                EditRequest("Promoted"),
+                Ct
+            ),
+            "revert-site" => _client.PostAsync(Url(application, "/3/revert"), null, Ct),
+            "patch-sites" => PatchSitesAsync(application),
+            "update-interim" => _client.PatchAsJsonAsync(
+                InterimUrl(application, "/1"),
+                InterimRequest("Dock"),
+                Ct
+            ),
+            "withdraw-interim" => _client.DeleteAsync(InterimUrl(application, "/1"), Ct),
+            "restore-interim" => _client.PostAsync(InterimUrl(application, "/2/restore"), null, Ct),
+            "add-file" => _client.PostAsJsonAsync(
+                AppUrl(application, "files"),
+                new { fileUploadId = "upload-1" },
+                Ct
+            ),
+            "delete-file" => _client.DeleteAsync(AppUrl(application, "files/file-1"), Ct),
+            "accreditation-number" => _client.PostAsync(
+                NumberUrl(application, "accreditation"),
+                null,
+                Ct
+            ),
+            _ => throw new ArgumentOutOfRangeException(nameof(route), route, null),
+        };
+
+    private async Task<HttpResponseMessage> PatchSitesAsync(
+        AccreditationApplicationModel application
+    )
+    {
+        var sites = (await LegacyAsync(application))!.OverseasSites!.Sites;
+        sites.Single(s => s.SiteId == 2).SiteName = "Patched";
+        return await _client.PatchAsJsonAsync(Url(application), new { sites }, Ct);
+    }
+
+    // Each route reaches its legacy write (a 4xx would fail here, not pass), and a model failure rolls it back:
+    // a route that wrote without the transaction's session would leave the legacy document changed.
+    [Theory]
+    [InlineData("update-site")]
+    [InlineData("promote-site")]
+    [InlineData("revert-site")]
+    [InlineData("patch-sites")]
+    [InlineData("update-interim")]
+    [InlineData("withdraw-interim")]
+    [InlineData("restore-interim")]
+    [InlineData("add-file")]
+    [InlineData("delete-file")]
+    [InlineData("accreditation-number")]
+    public async Task WriteRoute_ModelWriteFails_RollsBackTheLegacyWrite(string route)
+    {
+        FailModelWrites(services =>
+            services.Replace(ServiceDescriptor.Singleton(ScannedUpload("file-2", "extra.pdf")))
+        );
+        var application = await EveryRouteWritableAsync();
+
+        var response = await WriteAsync(application, route);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal(application.Version, legacy.Version);
+        Assert.Equal(application.UpdatedAt, legacy.UpdatedAt, TimeSpan.FromMilliseconds(1));
     }
 
     private static IApplicationModelSync FailingSync()
