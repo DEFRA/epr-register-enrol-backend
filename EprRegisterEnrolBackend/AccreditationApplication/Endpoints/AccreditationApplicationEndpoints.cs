@@ -3497,50 +3497,8 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest("All sections must be completed before submission.");
         }
 
-        application.ApplicationStatus = ApplicationStatus.Submitted;
-        application.DateSent = DateTime.UtcNow;
-        application.DateLastEdited = DateTime.UtcNow;
-        application.SubmittedBy = new SubmittedByModel
-        {
-            FullName = request.FullName,
-            JobTitle = request.JobTitle,
-            Email = request.Email,
-        };
-        // RA-503: the operator's real bank payment reference, as shown on their own
-        // submit-confirmation/view-payment-details pages - see BuildPayload.
-        application.PaymentReference = request.PaymentReference;
-
-        // Version 1 for every section that exists on this application — only OverseasSites/
-        // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.
-        var versionedAt = DateTime.UtcNow;
-        AccreditationApplicationSections.SnapshotSection(
-            application,
-            OperatorSection.Prns,
-            versionedAt
-        );
-        AccreditationApplicationSections.SnapshotSection(
-            application,
-            OperatorSection.BusinessPlan,
-            versionedAt
-        );
-        AccreditationApplicationSections.SnapshotSection(
-            application,
-            OperatorSection.SamplingPlan,
-            versionedAt
-        );
-        if (application.IsExporter)
-        {
-            AccreditationApplicationSections.SnapshotSection(
-                application,
-                OperatorSection.OverseasSites,
-                versionedAt
-            );
-            AccreditationApplicationSections.SnapshotSection(
-                application,
-                OperatorSection.BesEvidence,
-                versionedAt
-            );
-        }
+        var submittedAt = DateTime.UtcNow;
+        ApplySubmission(application, request, submittedAt);
 
         // RA-503: resolve ReEx's numeric OrgId (e.g. 500500) fresh, immediately before submission,
         // so the work-item payload carries the operator/regulator-safe organisation number rather
@@ -3581,23 +3539,124 @@ public static class AccreditationApplicationEndpoints
         application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
         // RA-644 B8g: only the save runs in the unit of work, so a transaction never waits on
-        // the Case Management service; it saves the same prepared document on every attempt.
+        // the Case Management service. Each attempt re-reads the application with the session and
+        // applies the submission to that copy: a retried attempt must not save a copy whose Version
+        // the rolled-back attempt already bumped, and the first write must keep the model links the
+        // migration has just stamped on the document.
+        var submission = new Submission(request, submittedAt, application.OrgId, submissionResult);
         var result = await services.UnitOfWork.RunAsync(
             nameof(Submit),
             applicationId,
             async (session, _) =>
             {
-                var updated = await services.Persistence.UpdateAsync(application, session);
-                return updated is null
-                    ? Results.Problem("Failed to submit accreditation application.")
-                    : Results.Ok(
-                        new SubmitResponse { AccreditationReference = updated.ApplicationReference }
+                var freshApplication = await services.Persistence.GetByIdAsync(
+                    organisationId,
+                    applicationId,
+                    session
+                );
+                return freshApplication is null
+                    ? Results.NotFound()
+                    : await RecordSubmissionAsync(
+                        services.Persistence,
+                        freshApplication,
+                        submission,
+                        session
                     );
             },
             services.CancellationToken
         );
         LogIfCaseChangeNotRecorded(services.LoggerFactory, nameof(Submit), applicationId, result);
         return result;
+    }
+
+    // Submit's changes to the application. Applied to the copy sent to the Case Management service,
+    // then again to the fresh copy each transaction attempt saves.
+    private static void ApplySubmission(
+        AccreditationApplicationModel application,
+        SubmitRequest request,
+        DateTime submittedAt
+    )
+    {
+        application.ApplicationStatus = ApplicationStatus.Submitted;
+        application.DateSent = submittedAt;
+        application.DateLastEdited = submittedAt;
+        application.SubmittedBy = new SubmittedByModel
+        {
+            FullName = request.FullName,
+            JobTitle = request.JobTitle,
+            Email = request.Email,
+        };
+        // RA-503: the operator's real bank payment reference, as shown on their own
+        // submit-confirmation/view-payment-details pages - see BuildPayload.
+        application.PaymentReference = request.PaymentReference;
+
+        // Version 1 for every section that exists on this application — only OverseasSites/
+        // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.Prns,
+            submittedAt
+        );
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.BusinessPlan,
+            submittedAt
+        );
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.SamplingPlan,
+            submittedAt
+        );
+        if (application.IsExporter)
+        {
+            AccreditationApplicationSections.SnapshotSection(
+                application,
+                OperatorSection.OverseasSites,
+                submittedAt
+            );
+            AccreditationApplicationSections.SnapshotSection(
+                application,
+                OperatorSection.BesEvidence,
+                submittedAt
+            );
+        }
+    }
+
+    private sealed record Submission(
+        SubmitRequest Request,
+        DateTime SubmittedAt,
+        int? OrgId,
+        CaseWorkingSubmissionResult CaseWorking
+    );
+
+    // RA-644 B8g: Submit's save, run in the unit of work against a read made with its session.
+    private static async Task<IResult> RecordSubmissionAsync(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel application,
+        Submission submission,
+        IClientSessionHandle? session
+    )
+    {
+        // A concurrent submit committed first: answer as the replay at the top of Submit does.
+        if (application.ApplicationStatus == ApplicationStatus.Submitted)
+            return Results.Ok(
+                new SubmitResponse { AccreditationReference = application.ApplicationReference }
+            );
+
+        if (application.ApplicationStatus != ApplicationStatus.Started)
+            return Results.Conflict("Application must be in 'Started' status to submit.");
+
+        ApplySubmission(application, submission.Request, submission.SubmittedAt);
+        application.OrgId = submission.OrgId;
+        application.ApplicationReference = submission.CaseWorking.ApplicationReference;
+        application.CaseManagementWorkItemId = submission.CaseWorking.WorkItemId;
+
+        var updated = await persistence.UpdateAsync(application, session);
+        return updated is null
+            ? Results.Problem("Failed to submit accreditation application.")
+            : Results.Ok(
+                new SubmitResponse { AccreditationReference = updated.ApplicationReference }
+            );
     }
 
     // RA-644 B8g: bundles Resubmit's services under one [AsParameters] argument so the handler

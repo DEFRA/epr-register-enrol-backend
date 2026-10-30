@@ -10,6 +10,7 @@ using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -962,6 +963,23 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     [Fact]
     public async Task AddFile_WritesAnApplicationVersion()
     {
+        UseScannedUpload("file-1", "plan.pdf");
+        var application = await ApplicationAsync(null, ReExSite());
+
+        var response = await _client.PostAsJsonAsync(
+            AppUrl(application, "files"),
+            new { fileUploadId = "upload-1" },
+            Ct
+        );
+
+        Assert.True(response.IsSuccessStatusCode, response.StatusCode.ToString());
+        Assert.Single((await LegacyAsync(application))!.SamplingPlan.Files);
+        await AssertWrittenAsVersion2Async(application);
+    }
+
+    // Restarts with one validated upload, "upload-1", ready to attach.
+    private void UseScannedUpload(string fileId, string filename)
+    {
         var uploads = Substitute.For<IPendingUploadService>();
         uploads
             .GetStatusAsync("upload-1", Arg.Any<CancellationToken>())
@@ -974,9 +992,9 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
                     {
                         File = new CdpCallbackFile
                         {
-                            FileId = "file-1",
-                            Filename = "plan.pdf",
-                            S3Key = "plans/plan.pdf",
+                            FileId = fileId,
+                            Filename = filename,
+                            S3Key = $"uploads/{filename}",
                             S3Bucket = "bucket",
                             ContentType = "application/pdf",
                         },
@@ -984,16 +1002,125 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
                 }
             );
         Restart(s_dualWriteOn, services => services.Replace(ServiceDescriptor.Singleton(uploads)));
+    }
+
+    // One ORS carrying two uploaded BES evidence files, "bes-1" and "bes-2": the last file cannot be deleted.
+    private async Task<AccreditationApplicationModel> WithBesEvidenceFileAsync()
+    {
+        var application = await ApplicationAsync(null, ReExSite());
+        application.OverseasSites!.Sites[0].BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "bes-1",
+                    Filename = "permit.pdf",
+                    ContentType = "application/pdf",
+                    ScanStatus = "Clean",
+                    S3Key = "bes/permit.pdf",
+                },
+                new BesEvidenceFileModel
+                {
+                    FileId = "bes-2",
+                    Filename = "licence.pdf",
+                    ContentType = "application/pdf",
+                    ScanStatus = "Clean",
+                    S3Key = "bes/licence.pdf",
+                },
+            ],
+        };
+        return (await Applications.UpdateAsync(application))!;
+    }
+
+    private async Task<List<BesEvidenceFileModel>> LegacyBesUploadsAsync(
+        AccreditationApplicationModel application
+    ) => (await LegacyAsync(application))!.OverseasSites!.Sites[0].BesEvidence!.BesEvidenceUploads;
+
+    [Fact]
+    public async Task AddBesEvidenceFile_WritesAnApplicationVersion()
+    {
+        UseScannedUpload("bes-1", "permit.pdf");
         var application = await ApplicationAsync(null, ReExSite());
 
         var response = await _client.PostAsJsonAsync(
-            AppUrl(application, "files"),
+            AppUrl(application, "overseas-sites/1/bes-evidence/files"),
             new { fileUploadId = "upload-1" },
             Ct
         );
 
         Assert.True(response.IsSuccessStatusCode, response.StatusCode.ToString());
-        Assert.Single((await LegacyAsync(application))!.SamplingPlan.Files);
+        Assert.Single(await LegacyBesUploadsAsync(application));
+        await AssertWrittenAsVersion2Async(application);
+    }
+
+    [Fact]
+    public async Task DeleteBesEvidenceFile_WritesAnApplicationVersion()
+    {
+        var application = await WithBesEvidenceFileAsync();
+
+        var response = await _client.DeleteAsync(
+            AppUrl(application, "overseas-sites/1/bes-evidence/files/bes-1"),
+            Ct
+        );
+
+        Assert.True(response.IsSuccessStatusCode, response.StatusCode.ToString());
+        Assert.Equal("bes-2", Assert.Single(await LegacyBesUploadsAsync(application)).FileId);
+        await AssertWrittenAsVersion2Async(application);
+    }
+
+    [Fact]
+    public async Task DeleteBesEvidenceFile_ModelWriteFails_RollsBackTheLegacyWrite()
+    {
+        FailModelWrites();
+        var application = await WithBesEvidenceFileAsync();
+
+        var response = await _client.DeleteAsync(
+            AppUrl(application, "overseas-sites/1/bes-evidence/files/bes-1"),
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(2, (await LegacyBesUploadsAsync(application)).Count);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceFile_WritesAnApplicationVersion()
+    {
+        var application = await WithBesEvidenceFileAsync();
+
+        var response = await _client.PatchAsJsonAsync(
+            AppUrl(application, "overseas-sites/1/bes-evidence/files/bes-1"),
+            new { besEvidenceExpiryDate = "2028-01-31" },
+            Ct
+        );
+
+        Assert.True(response.IsSuccessStatusCode, response.StatusCode.ToString());
+        Assert.Equal(
+            "2028-01-31",
+            (await LegacyBesUploadsAsync(application))
+                .Single(f => f.FileId == "bes-1")
+                .BesEvidenceExpiryDate
+        );
+        await AssertWrittenAsVersion2Async(application);
+    }
+
+    [Fact]
+    public async Task PatchBesEvidenceSection_WritesAnApplicationVersion()
+    {
+        var application = await ApplicationAsync(null, ReExSite());
+
+        var response = await _client.PatchAsJsonAsync(
+            AppUrl(application, "bes-evidence"),
+            new { sectionStatus = "InProgress" },
+            Ct
+        );
+
+        Assert.True(response.IsSuccessStatusCode, response.StatusCode.ToString());
+        Assert.Equal(
+            SectionStatus.InProgress,
+            (await LegacyAsync(application))!.BesEvidence!.SectionStatus
+        );
         await AssertWrittenAsVersion2Async(application);
     }
 
@@ -1186,6 +1313,92 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
             ApplicationStatus.Submitted,
             (await CurrentApplicationAsync(application))!.Status
         );
+    }
+
+    [Fact]
+    public async Task Submit_TransactionRunsTwice_SavesTheSubmission()
+    {
+        // The first attempt loses an insert race inside the transaction, so the unit of work runs the save again in
+        // the same request.
+        var taken = ObjectId.GenerateNewId();
+        Restart(
+            s_dualWriteOn,
+            services =>
+                services.Replace(
+                    ServiceDescriptor.Singleton<IApplicationModelSync>(
+                        sp => new LosesAnInsertRaceOnceSync(
+                            ActivatorUtilities.CreateInstance<ApplicationModelSync>(sp),
+                            RaceTarget(sp),
+                            taken
+                        )
+                    )
+                )
+        );
+        await RaceTarget(_factory.Services)
+            .InsertOneAsync(new BsonDocument("_id", taken), cancellationToken: Ct);
+        CaseManagementAcceptsSubmissions(Guid.NewGuid());
+        var application = await ReadyToSubmitAsync();
+
+        var response = await SubmitAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            ApplicationStatus.Submitted,
+            (await LegacyAsync(application))!.ApplicationStatus
+        );
+        Assert.Equal(
+            ApplicationStatus.Submitted,
+            (await CurrentApplicationAsync(application))!.Status
+        );
+    }
+
+    [Fact]
+    public async Task Submit_FirstTouchWithNoSites_KeepsTheLinkToTheRegistration()
+    {
+        // The migration stamps the Registration on the legacy document in the same transaction; the submission must
+        // not write over it.
+        CaseManagementAcceptsSubmissions(Guid.NewGuid());
+        var application = await ReadyToSubmitAsync();
+
+        var response = await SubmitAsync(application);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var registrationId = (await CurrentApplicationAsync(application))!.RegistrationId;
+        Assert.NotNull(registrationId);
+        Assert.Equal(registrationId, (await LegacyAsync(application))!.RegistrationEntityId);
+    }
+
+    private static IMongoCollection<BsonDocument> RaceTarget(IServiceProvider services) =>
+        services
+            .GetRequiredService<IMongoDbClientFactory>()
+            .GetCollection<BsonDocument>("raceTarget");
+
+    // Loses one insert race: the first sync inserts a key a rival has already committed.
+    private sealed class LosesAnInsertRaceOnceSync(
+        IApplicationModelSync inner,
+        IMongoCollection<BsonDocument> raceTarget,
+        ObjectId taken
+    ) : IApplicationModelSync
+    {
+        private int _calls;
+
+        public async Task SyncAsync(
+            ObjectId applicationId,
+            IClientSessionHandle session,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                await raceTarget.InsertOneAsync(
+                    session,
+                    new BsonDocument("_id", taken),
+                    cancellationToken: cancellationToken
+                );
+            }
+
+            await inner.SyncAsync(applicationId, session, cancellationToken);
+        }
     }
 
     // Queried on the business plan, as the Case Management service leaves it.
