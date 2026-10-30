@@ -136,7 +136,9 @@ public class AccreditationApplicationPersistence(
     // read, so the scan is acceptable for now. The unique index on AccreditationReference that
     // follows RA-691 (once the counter-era references are migrated) will back it and replace
     // this check.
-    public async Task<IReadOnlyList<AccreditationReferenceHolder>> GetOtherAccreditationReferenceHoldersAsync(
+    public async Task<
+        IReadOnlyList<AccreditationReferenceHolder>
+    > GetOtherAccreditationReferenceHoldersAsync(
         string accreditationReference,
         ObjectId applicationId
     )
@@ -153,7 +155,10 @@ public class AccreditationApplicationPersistence(
             .ToListAsync();
     }
 
-    public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId, IClientSessionHandle? session = null) =>
+    public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
+        string registrationId,
+        IClientSessionHandle? session = null
+    ) =>
         (await GetSitesByRegistrationAsync(registrationId, session))
             .Select(s => s.OrsId)
             .OfType<string>()
@@ -180,7 +185,10 @@ public class AccreditationApplicationPersistence(
     )
     {
         var sections = await Find(
-                Builders<AccreditationApplicationModel>.Filter.Eq(a => a.RegistrationId, registrationId),
+                Builders<AccreditationApplicationModel>.Filter.Eq(
+                    a => a.RegistrationId,
+                    registrationId
+                ),
                 session
             )
             .Project(a => a.OverseasSites)
@@ -249,7 +257,9 @@ public class AccreditationApplicationPersistence(
             return null;
 
         return await Find(
-                Builders<AccreditationApplicationModel>.Filter.Where(a => a.OrganisationId == organisationId && a.Id == objectId),
+                Builders<AccreditationApplicationModel>.Filter.Where(a =>
+                    a.OrganisationId == organisationId && a.Id == objectId
+                ),
                 session
             )
             .FirstOrDefaultAsync();
@@ -260,7 +270,10 @@ public class AccreditationApplicationPersistence(
         IClientSessionHandle session,
         CancellationToken cancellationToken = default
     ) =>
-        await Find(Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, applicationId), session)
+        await Find(
+                Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Id, applicationId),
+                session
+            )
             .FirstOrDefaultAsync(cancellationToken);
 
     // Filters on OrganisationId as well as RegistrationId so the read uses the OrganisationId index:
@@ -275,7 +288,8 @@ public class AccreditationApplicationPersistence(
     {
         var filter = Builders<AccreditationApplicationModel>.Filter;
         return await Find(
-                filter.Eq(a => a.OrganisationId, organisationId) & filter.Eq(a => a.RegistrationId, registrationId),
+                filter.Eq(a => a.OrganisationId, organisationId)
+                    & filter.Eq(a => a.RegistrationId, registrationId),
                 session
             )
             .Limit(limit)
@@ -287,11 +301,19 @@ public class AccreditationApplicationPersistence(
         IClientSessionHandle? session = null
     )
     {
-        return await Find(Builders<AccreditationApplicationModel>.Filter.Eq(a => a.CaseManagementWorkItemId, workItemId), session)
+        return await Find(
+                Builders<AccreditationApplicationModel>.Filter.Eq(
+                    a => a.CaseManagementWorkItemId,
+                    workItemId
+                ),
+                session
+            )
             .FirstOrDefaultAsync();
     }
 
-    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByAccreditationReferenceAsync(
+    public async Task<
+        IReadOnlyList<AccreditationApplicationModel>
+    > GetByAccreditationReferenceAsync(
         string accreditationReference,
         CancellationToken cancellationToken = default
     ) =>

@@ -1798,7 +1798,7 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         AccreditationApplicationModel application,
         GeneratedIdAllocation<T> allocation,
-        IClientSessionHandle? session = null
+        IClientSessionHandle? session
     )
         where T : class
     {
@@ -1850,7 +1850,7 @@ public static class AccreditationApplicationEndpoints
     private static GeneratedIdAllocation<OverseasSiteModel> OrsIdAllocation(
         IAccreditationApplicationPersistence persistence,
         AddOverseasSiteRequest request,
-        IClientSessionHandle? session = null
+        IClientSessionHandle? session
     ) =>
         new(
             CapacityNoun: "overseas sites",
@@ -1934,7 +1934,7 @@ public static class AccreditationApplicationEndpoints
     private static async Task<IEnumerable<string?>> OrsIdScope(
         IAccreditationApplicationPersistence persistence,
         AccreditationApplicationModel application,
-        IClientSessionHandle? session = null
+        IClientSessionHandle? session
     )
     {
         if (application.RegistrationId is null)
@@ -2529,7 +2529,7 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         int siteId,
-        IClientSessionHandle? session = null
+        IClientSessionHandle? session
     )
     {
         var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
@@ -3971,7 +3971,7 @@ public static class AccreditationApplicationEndpoints
         var push = new CaseManagementQueryPush(workItemId, request, correlationId);
         var result = await unitOfWork.RunAsync(
             nameof(QueryFromCaseManagement),
-            known.Id.ToString()!,
+            known.Id!.Value.ToString(),
             (session, _) => RecordQueryAsync(persistence, logger, push, session),
             httpContext.RequestAborted
         );
@@ -4435,7 +4435,7 @@ public static class AccreditationApplicationEndpoints
         var applied = new StrongBox<bool>();
         var result = await unitOfWork.RunAsync(
             nameof(StatusChangedFromCaseManagement),
-            known.Id.ToString()!,
+            known.Id!.Value.ToString(),
             async (session, _) =>
             {
                 var (pushResult, wrote) = await ApplyStatusPushAsync(
