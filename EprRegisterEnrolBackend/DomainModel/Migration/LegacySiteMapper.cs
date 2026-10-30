@@ -110,10 +110,15 @@ public static class LegacySiteMapper
     public static InterimSiteStatus InterimStatus(
         InterimSiteModel interim,
         InterimSiteStatus whenAdded
-    ) =>
-        interim.RemovedAt is not null ? InterimSiteStatus.Withdrawn
-        : interim.IsNewSite ? whenAdded
-        : InterimSiteStatus.Active;
+    )
+    {
+        if (interim.RemovedAt is not null)
+        {
+            return InterimSiteStatus.Withdrawn;
+        }
+
+        return interim.IsNewSite ? whenAdded : InterimSiteStatus.Active;
+    }
 
     /// <summary>Whether <paramref name="siteNumber"/> is in the current format: exactly three digits, such as <c>001</c>.</summary>
     public static bool IsThreeDigitNumber(string? siteNumber) =>
