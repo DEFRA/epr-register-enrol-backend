@@ -21,7 +21,9 @@ namespace EprRegisterEnrolBackend.DomainModel.DualWrite;
 /// </remarks>
 public sealed class ApplicationModelSync(
     IAccreditationApplicationPersistence applications,
-    ApplicationGroupStores stores
+    ApplicationGroupStores stores,
+    TimeProvider clock,
+    ILogger<ApplicationModelSync> logger
 ) : IApplicationModelSync
 {
     public async Task SyncAsync(
@@ -50,7 +52,15 @@ public sealed class ApplicationModelSync(
             return;
         }
 
-        var run = new SyncRun(stores, applications, session, legacy, current, cancellationToken);
+        var run = new SyncRun(
+            stores,
+            applications,
+            new SyncDiagnostics(clock, logger),
+            session,
+            legacy,
+            current,
+            cancellationToken
+        );
         var entries = await run.SyncSitesAsync();
 
         var next = LegacyApplicationMapper.ToEntity(legacy, current.RegistrationId, entries);
@@ -115,10 +125,14 @@ public sealed class ApplicationModelSync(
         );
     }
 
+    // What a sync needs only to record what it could not settle.
+    private sealed record SyncDiagnostics(TimeProvider Clock, ILogger<ApplicationModelSync> Logger);
+
     /// <summary>One sync of one application. Never shared between calls.</summary>
     private sealed class SyncRun(
         ApplicationGroupStores stores,
         IAccreditationApplicationPersistence applications,
+        SyncDiagnostics diagnostics,
         IClientSessionHandle session,
         AccreditationApplicationModel legacy,
         ApplicationEntity current,
@@ -211,9 +225,13 @@ public sealed class ApplicationModelSync(
         {
             var ors = Find(site, previousOverseasSiteId);
             BsonDocument? changes = null;
-            if (ors is null)
+            if (ors is null && site.OrsId is null)
             {
-                ors = site.OrsId is null ? null : await CreateAsync(registrationId, site);
+                await RecordOrsIdMissingAsync(registrationId, site);
+            }
+            else if (ors is null)
+            {
+                ors = await CreateAsync(registrationId, site);
             }
             else if (IsOwnProposal(ors))
             {
@@ -230,6 +248,45 @@ public sealed class ApplicationModelSync(
             }
 
             return (ors, changes);
+        }
+
+        // Live writes carry a backend-allocated orsId (RA-482), so a site without one is old legacy data. It stays
+        // unlinked, as the sync cannot invent an id (R3), and is recorded once per application for the
+        // reconciliation report, as the migration records it. Ids only in the log and the conflict.
+        private async Task RecordOrsIdMissingAsync(ObjectId registrationId, OverseasSiteModel site)
+        {
+            if (
+                await stores.Conflicts.ExistsAsync(
+                    MigrationConflictKind.OrsIdMissing,
+                    _applicationId,
+                    session,
+                    cancellationToken
+                )
+            )
+            {
+                return;
+            }
+
+            diagnostics.Logger.LogWarning(
+                "Dual-write sync found an overseas site without an orsId: application {ApplicationId}, site {SiteId}",
+                _applicationId,
+                site.SiteId
+            );
+            await stores.Conflicts.InsertManyAsync(
+                [
+                    new MigrationConflict
+                    {
+                        Id = ObjectId.GenerateNewId(),
+                        Kind = MigrationConflictKind.OrsIdMissing,
+                        ReExRegistrationId = legacy.RegistrationId ?? "",
+                        RegistrationId = registrationId,
+                        ApplicationIds = [_applicationId],
+                        RecordedAt = diagnostics.Clock.GetUtcNow().UtcDateTime,
+                    },
+                ],
+                session,
+                cancellationToken
+            );
         }
 
         private void Track(OverseasSiteEntity ors)

@@ -7,6 +7,8 @@ using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -33,6 +35,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
     private readonly ApplicationGroupStores _stores;
     private readonly ApplicationGroupMigrator _migrator;
     private readonly ApplicationModelSync _sync;
+    private readonly CapturingLogger<ApplicationModelSync> _syncLogger = new();
 
     public ApplicationModelSyncTests(MongoIntegrationFixture fixture)
     {
@@ -50,7 +53,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
             new MigrationConflictPersistence(_factory, logs)
         );
         _migrator = new ApplicationGroupMigrator(_applications, _stores, clock);
-        _sync = new ApplicationModelSync(_applications, _stores);
+        _sync = new ApplicationModelSync(_applications, _stores, clock, _syncLogger);
     }
 
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
@@ -363,6 +366,39 @@ public sealed class ApplicationModelSyncTests : IDisposable
             (await CurrentApplicationAsync(application)).ApplicationOverseasSites,
             e => e.SiteId == 2
         );
+    }
+
+    [Fact]
+    public async Task SiteWithoutAnOrsId_IsRecordedOnceAsAConflictAndLogged()
+    {
+        // Live writes carry a backend-allocated orsId (RA-482). A site that reaches the sync without one stays
+        // unlinked, but is recorded for the reconciliation report, as the migration records it, not passed over.
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            Site(1, "001", "ReEx Site")
+        );
+        await EditAsync(
+            application,
+            a => a.OverseasSites!.Sites.Add(Site(2, null, "No id", isNew: true))
+        );
+
+        await SyncAsync(application);
+        await SyncAsync(application);
+
+        var conflict = Assert.Single(
+            await AllAsync(
+                DomainModelCollections.MigrationConflicts,
+                Builders<MigrationConflict>.Filter.Eq(
+                    c => c.Kind,
+                    MigrationConflictKind.OrsIdMissing
+                )
+            )
+        );
+        Assert.Equal([application.Id!.Value], conflict.ApplicationIds);
+        Assert.Equal(ReExRegistrationId, conflict.ReExRegistrationId);
+        Assert.NotNull(conflict.RegistrationId);
+        Assert.Null(Entry(await CurrentApplicationAsync(application), 2).OverseasSiteId);
+        Assert.Single(_syncLogger.Entries, e => e.LogLevel == LogLevel.Warning);
     }
 
     [Fact]
