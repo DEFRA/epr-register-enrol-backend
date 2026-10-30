@@ -1,6 +1,9 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
+using EprRegisterEnrolBackend.DomainModel.Versioning;
 using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.DomainModel.Migration;
 
@@ -10,6 +13,67 @@ namespace EprRegisterEnrolBackend.DomainModel.Migration;
 /// </summary>
 public static class AccreditationFromApplication
 {
+    /// <summary>What decides whether an approved application gets an Accreditation; see <see cref="FindAsync"/>.</summary>
+    /// <param name="Own">The application's Accreditation, when it already has one (unique on <c>applicationId</c>).</param>
+    /// <param name="SameYear">Another Accreditation for the registration and year, looked for only without <paramref name="Own"/>.</param>
+    /// <param name="NumberMissing">The application has no accreditation number.</param>
+    public sealed record Lookup(
+        AccreditationEntity? Own,
+        AccreditationEntity? SameYear,
+        bool NumberMissing
+    );
+
+    /// <summary>
+    /// The facts the migration and a live approval both act on. They react differently: the migration records a
+    /// conflict, a live approval refuses (D9), but they find the same things in the same way.
+    /// </summary>
+    public static async Task<Lookup> FindAsync(
+        IVersionedPersistence<AccreditationEntity> accreditations,
+        ObjectId registrationId,
+        AccreditationApplicationModel application,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
+    )
+    {
+        var versions = accreditations.Versions;
+        var filter = Builders<AccreditationEntity>.Filter;
+        var own = await versions.FindCurrentAsync(
+            filter.Eq(a => a.ApplicationId, application.Id),
+            session,
+            cancellationToken
+        );
+        var sameYear = own is not null
+            ? null
+            : await versions.FindCurrentAsync(
+                filter.Eq(a => a.RegistrationId, registrationId)
+                    & filter.Eq(a => a.Year, application.Year),
+                session,
+                cancellationToken
+            );
+        return new Lookup(
+            own,
+            sameYear,
+            string.IsNullOrWhiteSpace(application.AccreditationReference)
+        );
+    }
+
+    /// <summary>Inserts the Accreditation <see cref="Build"/> makes, as its first version.</summary>
+    public static async Task<AccreditationEntity> InsertAsync(
+        IVersionedPersistence<AccreditationEntity> accreditations,
+        ObjectId registrationId,
+        AccreditationApplicationModel application,
+        Func<OverseasSiteModel, ObjectId?> overseasSiteIdOf,
+        ChangeReason reason,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
+    ) =>
+        await accreditations.Versions.InsertAsync(
+            Build(registrationId, application, overseasSiteIdOf),
+            ChangeInfo.Of(reason, application.Id),
+            session,
+            cancellationToken
+        );
+
     /// <param name="overseasSiteIdOf">The ORS a legacy site maps to, or null to leave the site out.</param>
     /// <remarks>Not back-dated: the approval time is kept as an attribute, and the version starts when it is written.</remarks>
     public static AccreditationEntity Build(

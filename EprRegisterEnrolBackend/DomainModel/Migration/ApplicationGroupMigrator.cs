@@ -664,25 +664,19 @@ public sealed class ApplicationGroupMigrator(
             AccreditationApplicationModel application
         )
         {
-            var versions = stores.Accreditations.Versions;
-            var filter = Builders<AccreditationEntity>.Filter;
-            var own = await versions.FindCurrentAsync(
-                filter.Eq(x => x.ApplicationId, application.Id),
+            var found = await AccreditationFromApplication.FindAsync(
+                stores.Accreditations,
+                registrationId,
+                application,
                 session,
                 cancellationToken
             );
-            if (own is not null)
+            if (found.Own is { } own)
             {
                 return own.EntityId;
             }
 
-            var sameYear = await versions.FindCurrentAsync(
-                filter.Eq(x => x.RegistrationId, registrationId)
-                    & filter.Eq(x => x.Year, application.Year),
-                session,
-                cancellationToken
-            );
-            if (sameYear is not null)
+            if (found.SameYear is not null)
             {
                 Conflicts.Add(
                     Conflict(
@@ -693,7 +687,7 @@ public sealed class ApplicationGroupMigrator(
                 return null;
             }
 
-            if (string.IsNullOrWhiteSpace(application.AccreditationReference))
+            if (found.NumberMissing)
             {
                 Conflicts.Add(
                     Conflict(
@@ -703,24 +697,17 @@ public sealed class ApplicationGroupMigrator(
                 );
             }
 
-            var accreditation = await versions.InsertAsync(
-                NewAccreditation(registrationId, application),
-                new ChangeInfo { Reason = ChangeReason.Migration, ApplicationId = application.Id },
+            var accreditation = await AccreditationFromApplication.InsertAsync(
+                stores.Accreditations,
+                registrationId,
+                application,
+                site => PlanFor(application, site)?.EntityId,
+                ChangeReason.Migration,
                 session,
                 cancellationToken
             );
             return accreditation.EntityId;
         }
-
-        private AccreditationEntity NewAccreditation(
-            ObjectId registrationId,
-            AccreditationApplicationModel application
-        ) =>
-            AccreditationFromApplication.Build(
-                registrationId,
-                application,
-                site => PlanFor(application, site)?.EntityId
-            );
 
         // --- conflicts that span applications -----------------------------------------------------------------------
 
@@ -803,13 +790,6 @@ public sealed class ApplicationGroupMigrator(
         private static ChangeInfo Change(
             ChangeReason reason = ChangeReason.Migration,
             string? orsId = null
-        ) =>
-            new()
-            {
-                Reason = reason,
-                Details = orsId is null
-                    ? null
-                    : new Dictionary<string, string> { ["orsId"] = orsId },
-            };
+        ) => ChangeInfo.Of(reason, orsId: orsId);
     }
 }

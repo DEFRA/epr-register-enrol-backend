@@ -578,19 +578,19 @@ public sealed class ApplicationModelSync(
                 return null;
             }
 
-            var versions = stores.Accreditations.Versions;
-            var filter = Builders<AccreditationEntity>.Filter;
-            var own = await versions.FindCurrentAsync(
-                filter.Eq(a => a.ApplicationId, _applicationId),
+            var found = await AccreditationFromApplication.FindAsync(
+                stores.Accreditations,
+                registrationId,
+                legacy,
                 session,
                 cancellationToken
             );
-            if (own is not null)
+            if (found.Own is { } own)
             {
                 return own.EntityId;
             }
 
-            if (string.IsNullOrWhiteSpace(legacy.AccreditationReference))
+            if (found.NumberMissing)
             {
                 throw new DomainRuleViolationException(
                     DomainRule.AccreditationNumberMissing,
@@ -598,13 +598,7 @@ public sealed class ApplicationModelSync(
                 );
             }
 
-            var sameYear = await versions.FindCurrentAsync(
-                filter.Eq(a => a.RegistrationId, registrationId)
-                    & filter.Eq(a => a.Year, legacy.Year),
-                session,
-                cancellationToken
-            );
-            if (sameYear is not null)
+            if (found.SameYear is { } sameYear)
             {
                 throw new DomainRuleViolationException(
                     DomainRule.YearAlreadyAccredited,
@@ -616,17 +610,12 @@ public sealed class ApplicationModelSync(
                 .Where(e => e.OverseasSiteId is not null)
                 .GroupBy(e => e.SiteId)
                 .ToDictionary(g => g.Key, g => g.First().OverseasSiteId);
-            var accreditation = await versions.InsertAsync(
-                AccreditationFromApplication.Build(
-                    registrationId,
-                    legacy,
-                    site => overseasSiteIds.GetValueOrDefault(site.SiteId)
-                ),
-                new ChangeInfo
-                {
-                    Reason = ChangeReason.ApplicationApproved,
-                    ApplicationId = _applicationId,
-                },
+            var accreditation = await AccreditationFromApplication.InsertAsync(
+                stores.Accreditations,
+                registrationId,
+                legacy,
+                site => overseasSiteIds.GetValueOrDefault(site.SiteId),
+                ChangeReason.ApplicationApproved,
                 session,
                 cancellationToken
             );
@@ -825,19 +814,7 @@ public sealed class ApplicationModelSync(
                 : LegacySiteMapper.InterimProposedChanges(stored, interim!);
         }
 
-        private ChangeInfo Change(ChangeReason reason, string? orsId, string? siteNumber = null)
-        {
-            var details = new Dictionary<string, string>();
-            if (orsId is not null)
-                details["orsId"] = orsId;
-            if (siteNumber is not null)
-                details["siteNumber"] = siteNumber;
-            return new ChangeInfo
-            {
-                Reason = reason,
-                ApplicationId = _applicationId,
-                Details = details.Count > 0 ? details : null,
-            };
-        }
+        private ChangeInfo Change(ChangeReason reason, string? orsId, string? siteNumber = null) =>
+            ChangeInfo.Of(reason, _applicationId, orsId, siteNumber);
     }
 }
