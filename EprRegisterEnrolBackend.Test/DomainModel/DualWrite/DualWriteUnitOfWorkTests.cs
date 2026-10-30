@@ -407,6 +407,43 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_DomainRuleBroken_RollsBackAndAnswers409NamingTheRule()
+    {
+        var application = await SeedApplicationAsync();
+
+        var result = await UnitOfWork()
+            .RunAsync(
+                Operation,
+                application.Id.ToString()!,
+                async (session, token) =>
+                {
+                    await WriteBothAsync(application, session, token);
+                    throw new DomainRuleViolationException(
+                        DomainRule.YearAlreadyAccredited,
+                        "Registration for Jane Smith already accredited"
+                    );
+                },
+                Ct
+            );
+
+        var problem = Assert.IsType<ProblemHttpResult>(result);
+        Assert.Equal(StatusCodes.Status409Conflict, problem.StatusCode);
+        Assert.Equal(
+            nameof(DomainRule.YearAlreadyAccredited),
+            problem.ProblemDetails.Extensions["rule"]
+        );
+        Assert.Equal(ApplicationStatus.Saved, await StoredStatusAsync(application));
+        Assert.Null(await CurrentRegistrationAsync());
+        Assert.Equal([Operation], _failedOperations);
+
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.LogLevel);
+        Assert.Contains(nameof(DomainRule.YearAlreadyAccredited), entry.Message);
+        Assert.Contains(application.Id.ToString()!, entry.Message);
+        Assert.DoesNotContain("Jane", entry.Message);
+    }
+
+    [Fact]
     public async Task RunAsync_SyncFails_RollsBackTheWorkAndAnswers500()
     {
         var application = await SeedApplicationAsync();

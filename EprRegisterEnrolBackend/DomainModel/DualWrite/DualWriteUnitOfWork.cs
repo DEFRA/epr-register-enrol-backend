@@ -35,6 +35,23 @@ public sealed class DualWriteUnitOfWork(
         {
             throw;
         }
+        catch (DomainRuleViolationException ex)
+        {
+            // A rule, not a fault: every retry fails the same way, so the caller is told which rule, not asked to
+            // try again. The rule is a fixed code; the message, which can name ids, is not logged.
+            metrics.RecordFailure(operation);
+            logger.LogWarning(
+                "Dual-write {Operation} broke the rule {Rule} and was rolled back: application {ApplicationId}",
+                operation,
+                ex.Rule,
+                applicationId
+            );
+            return Results.Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: "The change breaks a rule of the domain model.",
+                extensions: new Dictionary<string, object?> { ["rule"] = ex.Rule.ToString() }
+            );
+        }
         catch (Exception ex)
         {
             metrics.RecordFailure(operation);

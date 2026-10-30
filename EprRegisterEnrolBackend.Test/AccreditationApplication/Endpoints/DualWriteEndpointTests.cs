@@ -5,6 +5,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
@@ -1578,7 +1579,12 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
 
         var response = await StatusPushAsync(application, "approved");
 
-        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        // A rule, not a fault: a retry fails the same way, so it is a 409 naming the rule.
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains(
+            nameof(DomainRule.AccreditationNumberMissing),
+            await response.Content.ReadAsStringAsync(Ct)
+        );
         Assert.Equal(
             ApplicationStatus.Submitted,
             (await LegacyAsync(application))!.ApplicationStatus

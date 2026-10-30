@@ -577,7 +577,8 @@ public sealed class ApplicationModelSync(
 
             if (string.IsNullOrWhiteSpace(legacy.AccreditationReference))
             {
-                throw new InvalidOperationException(
+                throw new DomainRuleViolationException(
+                    DomainRule.AccreditationNumberMissing,
                     $"Application {_applicationId} was approved without an accreditation number."
                 );
             }
@@ -590,7 +591,8 @@ public sealed class ApplicationModelSync(
             );
             if (sameYear is not null)
             {
-                throw new InvalidOperationException(
+                throw new DomainRuleViolationException(
+                    DomainRule.YearAlreadyAccredited,
                     $"Registration {registrationId} already has accreditation {sameYear.EntityId} for {legacy.Year}."
                 );
             }

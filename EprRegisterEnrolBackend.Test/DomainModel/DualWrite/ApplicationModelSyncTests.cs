@@ -906,7 +906,10 @@ public sealed class ApplicationModelSyncTests : IDisposable
         var application = await SubmittedWithProposalsAsync();
         await ApproveAsync(application, accreditationNumber: null);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => SyncAsync(application));
+        var refused = await Assert.ThrowsAsync<DomainRuleViolationException>(() =>
+            SyncAsync(application)
+        );
+        Assert.Equal(DomainRule.AccreditationNumberMissing, refused.Rule);
 
         Assert.Empty(await CurrentAccreditationsAsync());
         Assert.Equal(OverseasSiteStatus.Proposed, (await CurrentSiteAsync("002")).Status);
@@ -921,7 +924,10 @@ public sealed class ApplicationModelSyncTests : IDisposable
         var second = await MigratedApplicationAsync(ApplicationStatus.Submitted, 2027);
         await ApproveAsync(second, "A27ER5000270002PL");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => SyncAsync(second));
+        var refused = await Assert.ThrowsAsync<DomainRuleViolationException>(() =>
+            SyncAsync(second)
+        );
+        Assert.Equal(DomainRule.YearAlreadyAccredited, refused.Rule);
 
         Assert.Equal(first.Id, Assert.Single(await CurrentAccreditationsAsync()).ApplicationId);
     }
