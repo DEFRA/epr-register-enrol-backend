@@ -10,10 +10,9 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// </summary>
 ///
 /// <remarks>
-/// RA-690: the single derivation rule for accreditation references (also intended for reuse by
-/// RA-691's migration). Deliberately I/O-free - the caller chooses the source (the latest
-/// previous approved accreditation held in this backend, otherwise the application's
-/// registration reference) and supplies the year applied for.
+/// RA-690: the single derivation rule for accreditation references. Deliberately I/O-free - the
+/// caller chooses the source (the latest previous approved accreditation held in this backend,
+/// otherwise the application's registration reference) and supplies the year applied for.
 ///
 /// Source validation is shape only: the source must be a 17-character reference
 /// (<c>{R|A}</c> + <c>YY</c> + agency <c>{E|S|W|N}</c> + process type <c>{R|X}</c> + 6-digit

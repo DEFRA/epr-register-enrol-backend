@@ -1186,10 +1186,9 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   - **No ReEx calls.** The routine only reshapes data already held here. Enrichment stays pending
     ([Q35](#q35)). A write never waits on ReEx.
 - The RA-519 rule still holds: targeted updates, never whole-document replace, on paths that race the CM push.
-- **Legacy-only writers outside the request paths.** The RA-691 accreditation reference correction
-  (`AccreditationReferenceCorrectionMigration`, a one-off startup migration) writes the legacy application only.
-  It refuses to apply while `DualWrite` is on and runs as a dry run instead, so it is applied with the flag off,
-  before phase 3. Any other writer that bypasses the unit of work must do the same, with one exception: the
+- **Legacy-only writers outside the request paths.** A writer that bypasses the unit of work and writes the
+  legacy application only (for example a one-off startup migration) must refuse to apply while `DualWrite` is
+  on, so it is applied with the flag off, before phase 3. There is one exception: the
   GetById backfills of `orgId` and `nation` write the legacy document outside the unit of work by decision, so
   a read never opens a transaction. Neither field is mapped onto the model, so they cause no drift. If either is
   ever mapped, the backfill must move into the unit of work.

@@ -566,7 +566,7 @@ public static class AccreditationApplicationEndpoints
 
         // Duplicate live applications for the same registration, material and year are possible
         // (Seed is best-effort, with no unique index) and would derive the same reference. A
-        // reference is never issued twice. Read-then-write: a unique index is a follow-up to RA-691.
+        // reference is never issued twice. Read-then-write: a unique index is a follow-up.
         // A withdrawn holder doesn't block: an operator who withdrew and started again derives
         // the same reference, and the withdrawn record keeps its value for audit.
         var holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
