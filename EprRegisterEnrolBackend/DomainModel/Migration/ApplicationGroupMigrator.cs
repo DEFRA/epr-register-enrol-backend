@@ -137,6 +137,10 @@ public sealed class ApplicationGroupMigrator(
         public List<Holding> Holdings { get; } = holdings;
         public OverseasSiteEntity? Existing { get; } = existing;
         public OverseasSiteEntity? Saved { get; set; }
+
+        /// <summary>The winning application's details replaced those of the ORS that already existed.</summary>
+        public bool WinnerApplied { get; set; }
+
         public ObjectId EntityId => (Saved ?? Existing)!.EntityId;
         public string? OrsId => Holdings[0].Site.OrsId ?? Existing?.OrsId;
 
@@ -238,10 +242,15 @@ public sealed class ApplicationGroupMigrator(
                     cancellationToken
                 );
             }
-            else if (current.RegistrationNumber is null && winner is not null)
+            else
             {
-                // Keep everything the seed copied from ReEx; only fill in the number it did not have.
-                current.RegistrationNumber = winner.RegistrationReference;
+                // Keep everything the seed copied from ReEx; only fill in the number it did not have and the older
+                // numbers the applications hold. A no-op, writing no version, when there are none to add.
+                current.RegistrationNumber ??= winner?.RegistrationReference;
+                current.PreviousRegistrationNumbers = OlderNumbers(
+                    current.RegistrationNumber,
+                    current.PreviousRegistrationNumbers
+                );
                 registration = (
                     await versions.UpdateAsync(
                         current,
@@ -252,14 +261,22 @@ public sealed class ApplicationGroupMigrator(
                     )
                 ).Entity;
             }
-            else
-            {
-                registration = current;
-            }
 
             RecordRegistrationNumberConflicts(registration, winner);
             return registration;
         }
+
+        // Every number the group's applications hold or held, other than the Registration's own (§6.1 step 1).
+        private List<string> OlderNumbers(string? number, IEnumerable<string> alreadyHeld) =>
+            alreadyHeld
+                .Concat(
+                    ranked.SelectMany(a =>
+                        a.PreviousRegistrationNumbers.Prepend(a.RegistrationReference ?? "")
+                    )
+                )
+                .Where(n => !string.IsNullOrWhiteSpace(n) && n != number)
+                .Distinct()
+                .ToList();
 
         private RegistrationEntity NewRegistration(
             ObjectId organisationId,
@@ -271,10 +288,7 @@ public sealed class ApplicationGroupMigrator(
                 OrganisationId = organisationId,
                 ReExRegistrationId = reExRegistrationId,
                 RegistrationNumber = numberWinner?.RegistrationReference,
-                PreviousRegistrationNumbers = ranked
-                    .SelectMany(a => a.PreviousRegistrationNumbers)
-                    .Distinct()
-                    .ToList(),
+                PreviousRegistrationNumbers = OlderNumbers(numberWinner?.RegistrationReference, []),
                 Material = Newest.MaterialType,
                 Nation = Newest.Nation,
                 GlassRecyclingProcess = Newest.GlassRecyclingProcess,
@@ -510,14 +524,20 @@ public sealed class ApplicationGroupMigrator(
                 plan.Renumbered ? ChangeReason.LegacySiteNumberRenumbered : ChangeReason.Migration,
                 plan.OrsId
             );
+            var winner = plan.Holdings[0];
             if (plan.Existing is { } existing)
             {
-                if (plan.NewInterimSites.Count > 0)
+                // The newest approval wins over details the seed copied from ReEx, when it is being migrated now. One
+                // already migrated applied its details when it was approved, and an older one must not replace them.
+                plan.WinnerApplied = winner.Accredits && _pendingIds.Contains(winner.ApplicationId);
+                if (plan.WinnerApplied || plan.NewInterimSites.Count > 0)
                 {
                     existing.InterimSites.AddRange(plan.NewInterimSites);
                     plan.Saved = (
                         await versions.UpdateAsync(
-                            existing,
+                            plan.WinnerApplied
+                                ? LegacySiteMapper.WithDetailsOf(existing, winner.Site)
+                                : existing,
                             existing.Version,
                             change,
                             session,
@@ -529,7 +549,6 @@ public sealed class ApplicationGroupMigrator(
                 return;
             }
 
-            var winner = plan.Holdings[0];
             var site = LegacySiteMapper.NewOverseasSite(registrationId, winner.Site);
             site.Origin = plan.Holdings.Exists(h => !h.Site.IsNewSite)
                 ? SiteOrigin.ReEx
@@ -546,11 +565,12 @@ public sealed class ApplicationGroupMigrator(
 
         // Where an application's copy of a site differs from the ORS: an in-flight application keeps its version as
         // proposedChanges; an application that cannot change any more has lost it, which is a conflict. A site this
-        // run created was built from the winner, so differing applications are its losers (§6.1 step 2).
+        // run created or gave the winner's details now holds the winner's, so differing applications are its losers
+        // (§6.1 step 2).
         private void RecordSiteDifferences(SitePlan plan)
         {
             var ors = plan.Saved ?? plan.Existing!;
-            var created = plan.Existing is null;
+            var fromWinner = plan.Existing is null || plan.WinnerApplied;
             var losers = new List<ObjectId>();
             foreach (var holding in plan.Holdings.Where(h => _pendingIds.Contains(h.ApplicationId)))
             {
@@ -565,7 +585,7 @@ public sealed class ApplicationGroupMigrator(
                     _proposals[(holding.ApplicationId, holding.Site.SiteId)] = changes;
                 }
 
-                if (created || !holding.Application.ApplicationStatus.IsInFlight())
+                if (fromWinner || !holding.Application.ApplicationStatus.IsInFlight())
                 {
                     losers.Add(holding.ApplicationId);
                 }
@@ -577,7 +597,7 @@ public sealed class ApplicationGroupMigrator(
                     Conflict(
                         MigrationConflictKind.OrsDetailsDiffer,
                         losers.Distinct().ToList(),
-                        created ? plan.Holdings[0].ApplicationId : null,
+                        fromWinner ? plan.Holdings[0].ApplicationId : null,
                         plan.OrsId
                     )
                 );

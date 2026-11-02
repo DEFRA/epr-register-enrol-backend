@@ -882,7 +882,7 @@ Legend:
 | `paymentReference` | Application | stored | |
 | `caseManagementReference` | **drop** | omitted (IgnoreIfNull already omits it) | ❓ Never written by backend code (only `Requests.cs:314` exists, on a response DTO). Confirm it is absent in deployed data ([survey](#7-risks)) |
 | `caseManagementWorkItemId` | Application | stored | Reverse key for the CM pushes |
-| `registrationReference` | Registration.`registrationNumber` | derived | ⚠ Before phase 3 it was per application, so two applications under one registration can disagree after a regenerate. The migration picks the most recent and puts the others into `previousRegistrationNumbers` ([R4](#7-risks)). With `DualWrite` on, the number is fixed once issued and is never regenerated (§6.2) |
+| `registrationReference` | Registration.`registrationNumber` | derived | ⚠ Before phase 3 it was per application, so two applications under one registration can disagree after a regenerate. The migration keeps the number per §6.1 step 1 and puts the others into `previousRegistrationNumbers` ([R4](#7-risks)). With `DualWrite` on, the number is fixed once issued and is never regenerated (§6.2) |
 | `previousRegistrationNumbers[]` | Registration.`previousRegistrationNumbers[]` (+ history) | derived | No consumer reads it |
 | `accreditationReference` | before approval: Application.`reservedAccreditationNumber`; after approval: Accreditation.`accreditationNumber` | derived (reserved ∨ accreditation) | ⚠ Minted **before** approval by design (M2), so it must be reserved on the Application and copied to the Accreditation at approval |
 | `previousAccreditationNumbers[]` | Application.`previousReservedAccreditationNumbers[]` | derived | An approved Accreditation's number **never changes** (Q7), so the Accreditation has no previous-numbers list. Only the reserved number on an undecided Application can be regenerated. ⚠ The current "reapply" branch (YY+1 in place on the same application, `:419-423`) contradicts Q7. Management-be always sends `regenerate:false` (M1), so the branch looks unused. A new year's number is derived as YY+1 from the prior year's (Q18 answered; B21) |
@@ -1123,6 +1123,10 @@ applications, and is throttled.
      them from ReEx (structured addresses, permits, contacts and the other ✚ items) is deferred until the
      v2 API needs it ([Q35](#q35)).
    - Data is never invented. Unknown values stay null.
+   - **Registration numbers.** A Registration that already exists, from the seed for example, keeps its number. A
+     new one takes the newest approved application's, otherwise the newest application's. Either way, every other
+     number the applications hold, current or previous, goes into `previousRegistrationNumbers`, and differing
+     current numbers are also written to `migrationConflicts`.
 2. **ORS.** For each distinct `orsId` across the registration's applications:
    - ReEx-originated sites, with no `isNewSite` and present in ORS-A, become **Active**.
    - Operator-added sites take their status from their application: Approved → Active;
@@ -1130,6 +1134,12 @@ applications, and is throttled.
    - If two applications disagree on details, the newest **approved** application wins; otherwise the
      newest application wins. Losers are written to `migrationConflicts` and, for in-flight applications,
      into that application's `proposedChanges`.
+   - **An ORS that already exists,** from the seed for example, takes the details of the newest approved application
+     that selected the site, if that application is being migrated now, as a new version. An approved application
+     already in the model applied its details when it was approved, so an older one being migrated later does not
+     replace them. Otherwise the ORS keeps its details: an in-flight application holds its differences in
+     `proposedChanges`, and a closed one is listed in `migrationConflicts`. The ORS's status and the details of interim
+     sites it already holds do not change.
    - Legacy `orsId == null` sites get **no** id invented: they become Proposed with `orsId = null` and are
      listed as conflicts ([R3](#7-risks)).
 3. **Interim sites.** Same rules, keyed on `siteNumber`, written as entries in their ORS's
