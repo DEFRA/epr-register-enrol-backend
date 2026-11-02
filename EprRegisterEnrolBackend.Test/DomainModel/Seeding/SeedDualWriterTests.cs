@@ -279,6 +279,24 @@ public sealed class SeedDualWriterTests : IDisposable
             .ToListAsync(Ct);
 
     [Fact]
+    public async Task WriteAsync_NumberChangedInReEx_WritesANewVersionKeepingTheOldNumber()
+    {
+        var first = ReEx();
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+
+        _clock.Advance(TimeSpan.FromMinutes(5));
+        var changed = ReEx();
+        changed.RegistrationReference = "R27EX1234567P";
+        await Writer().WriteAsync(Seed(changed, await LegacyApplicationAsync(changed)), Ct);
+
+        var current = (await RegistrationVersionsAsync()).Single(r => r.IsCurrent);
+        Assert.Equal(2, current.Version);
+        Assert.Equal(ChangeReason.ReExRefresh, current.LastChange.Reason);
+        Assert.Equal("R27EX1234567P", current.RegistrationNumber);
+        Assert.Equal(["R26EX1234567P"], current.PreviousRegistrationNumbers);
+    }
+
+    [Fact]
     public async Task WriteAsync_SiteOnAnApprovedApplication_IsNotChangedAndTheDifferenceIsRecorded()
     {
         await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);

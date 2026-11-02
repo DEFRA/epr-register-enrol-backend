@@ -1202,6 +1202,11 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   as it is and, where ReEx differs, writes `ReExDetailsDiffer` to `migrationConflicts`. This protects the ORS only: until
   seeding stops using ReEx after 2027 (see [Carrying sites across years](#carrying-sites-across-years-a22)), a later
   year's application still starts from ReEx's details, and approving it would apply them.
+- **A seed can change an issued registration number.** ReEx masters registration data until this service handles
+  registrations and their updates, so a number changed in ReEx replaces the Registration's, as a new version, and the
+  old number goes onto `previousRegistrationNumbers`. "Fixed once issued" below refers to this service's own
+  `registration-number` route. Once this service is the source of truth for registrations, there is no seeding from
+  ReEx at all.
 - **Legacy-only writers outside the request paths.** The RA-691 accreditation reference correction
   (`AccreditationReferenceCorrectionMigration`, a one-off startup migration) writes the legacy application only.
   It refuses to apply while `DualWrite` is on and runs as a dry run instead, so it is applied with the flag off,

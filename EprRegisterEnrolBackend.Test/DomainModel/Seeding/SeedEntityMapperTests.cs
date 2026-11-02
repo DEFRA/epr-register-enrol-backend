@@ -118,6 +118,65 @@ public class SeedEntityMapperTests
     }
 
     [Fact]
+    public void ApplyToRegistration_NumberChangedInReEx_TakesItAndKeepsTheOldOneAsPrevious()
+    {
+        var target = new RegistrationEntity
+        {
+            RegistrationNumber = "R27EX0000001P",
+            PreviousRegistrationNumbers = ["R26EX0000001P"],
+        };
+        var dto = Dto();
+        dto.RegistrationReference = "R28EX0000001P";
+
+        SeedEntityMapper.ApplyTo(target, dto, "reg-1", MaterialType.Plastic);
+
+        Assert.Equal("R28EX0000001P", target.RegistrationNumber);
+        Assert.Equal(["R26EX0000001P", "R27EX0000001P"], target.PreviousRegistrationNumbers);
+    }
+
+    [Fact]
+    public void ApplyToRegistration_NumberUnchangedInReEx_AddsNothingToPrevious()
+    {
+        var target = new RegistrationEntity { RegistrationNumber = "R27EX0000001P" };
+        var dto = Dto();
+        dto.RegistrationReference = "R27EX0000001P";
+
+        SeedEntityMapper.ApplyTo(target, dto, "reg-1", MaterialType.Plastic);
+
+        Assert.Equal("R27EX0000001P", target.RegistrationNumber);
+        Assert.Empty(target.PreviousRegistrationNumbers);
+    }
+
+    [Fact]
+    public void ApplyToRegistration_FirstNumber_AddsNothingToPrevious()
+    {
+        var target = new RegistrationEntity();
+        var dto = Dto();
+        dto.RegistrationReference = "R27EX0000001P";
+
+        SeedEntityMapper.ApplyTo(target, dto, "reg-1", MaterialType.Plastic);
+
+        Assert.Empty(target.PreviousRegistrationNumbers);
+    }
+
+    [Fact]
+    public void ApplyToRegistration_ReExGoesBackToAnOlderNumber_SwapsThemWithoutDuplicates()
+    {
+        var target = new RegistrationEntity
+        {
+            RegistrationNumber = "R27EX0000001P",
+            PreviousRegistrationNumbers = ["R26EX0000001P"],
+        };
+        var dto = Dto();
+        dto.RegistrationReference = "R26EX0000001P";
+
+        SeedEntityMapper.ApplyTo(target, dto, "reg-1", MaterialType.Plastic);
+
+        Assert.Equal("R26EX0000001P", target.RegistrationNumber);
+        Assert.Equal(["R27EX0000001P"], target.PreviousRegistrationNumbers);
+    }
+
+    [Fact]
     public void ApplyToOverseasSite_AnySite_CopiesReExFieldsAndListsNonEmptyCodesInOrder()
     {
         var target = new OverseasSiteEntity();
