@@ -1700,6 +1700,42 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task StatusPush_ApprovedAgainOnTheOlderApplication_KeepsTheNewerApprovalsDetails()
+    {
+        // Two approved applications share a selected site; the newest approved wins (§6.1 step 2).
+        var older = await SubmittedForYearAsync(2026, "Old", "A26ER5000270001ST");
+        var newer = await SubmittedForYearAsync(2027, "New", "A27ER5000270001ST");
+        Assert.Equal(HttpStatusCode.OK, (await StatusPushAsync(older, "approved")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await StatusPushAsync(newer, "approved")).StatusCode);
+        var ors = Assert.Single(await CurrentSitesAsync());
+        Assert.Equal("New", ors.SiteName);
+        var olderVersion = (await CurrentApplicationAsync(older))!.Version;
+
+        var repeated = await StatusPushAsync(older, "approved");
+
+        Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
+        var after = Assert.Single(await CurrentSitesAsync());
+        Assert.Equal("New", after.SiteName);
+        Assert.Equal(ors.Version, after.Version);
+        Assert.Equal(olderVersion, (await CurrentApplicationAsync(older))!.Version);
+    }
+
+    private async Task<AccreditationApplicationModel> SubmittedForYearAsync(
+        int year,
+        string siteName,
+        string accreditationNumber
+    )
+    {
+        var site = ReExSite();
+        site.SiteName = siteName;
+        var application = await ApplicationAsync(Guid.NewGuid(), site);
+        application.Year = year;
+        application.ApplicationStatus = ApplicationStatus.Submitted;
+        application.AccreditationReference = accreditationNumber;
+        return (await Applications.UpdateAsync(application))!;
+    }
+
+    [Fact]
     public async Task StatusPush_TwoApprovalsAtOnce_CreateOneAccreditation()
     {
         var (application, _) = await ReadyToApproveAsync();

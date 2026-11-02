@@ -622,6 +622,36 @@ public sealed class ApplicationModelSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task OwnWithdrawnInterimSiteDropped_StaysWithdrawn()
+    {
+        // As when an application closes: a withdrawn interim site stays Withdrawn. Discarded is not a legal move
+        // from Withdrawn (§3.4), so this must not fail the write.
+        var application = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay"))
+        );
+        await EditAsync(
+            application,
+            a =>
+            {
+                var site = a.OverseasSites!.Sites[0];
+                site.InterimSites[0].RemovedAt = Day1;
+                InterimSiteSync.SyncMirror(site);
+            }
+        );
+        await SyncAsync(application);
+        var before = await CurrentSiteAsync("001");
+        Assert.Equal(InterimSiteStatus.Withdrawn, InterimEntry(before, "001").Status);
+
+        await EditAsync(application, a => WithInterims(a.OverseasSites!.Sites[0]));
+        await SyncAsync(application);
+
+        var ors = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, ors.Version);
+        Assert.Equal(InterimSiteStatus.Withdrawn, InterimEntry(ors, "001").Status);
+    }
+
+    [Fact]
     public async Task InterimSiteRenumberedByMigration_IsMatchedByItsOldNumberNotAddedAgain()
     {
         var application = await MigratedApplicationAsync(
@@ -935,6 +965,89 @@ public sealed class ApplicationModelSyncTests : IDisposable
 
         Assert.Single(await CurrentAccreditationsAsync());
         Assert.Null((await CurrentApplicationAsync(second)).AccreditationId);
+    }
+
+    [Fact]
+    public async Task ApprovedApplicationSyncedAgain_DoesNotOverwriteANewerApproval()
+    {
+        // The newest approved application wins (§6.1 step 2). A later sync of the older one, such as a repeated
+        // status push, must not write its details back, and it holds no overlay, as the migration leaves it.
+        var older = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            2026,
+            WithInterims(Site(1, "001", "Old"), Interim(2, "001", "Quay"))
+        );
+        var newer = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            2027,
+            WithInterims(Site(1, "001", "New"), Interim(2, "001", "Dock"))
+        );
+        await ApproveAsync(older, "A26ER5000270001PL");
+        await SyncAsync(older);
+        await ApproveAsync(newer);
+        await SyncAsync(newer);
+        var ors = await CurrentSiteAsync("001");
+        Assert.Equal("New", ors.SiteName);
+        Assert.Equal("Dock", InterimEntry(ors, "001").SiteName);
+        var entity = await CurrentApplicationAsync(older);
+
+        await SyncAsync(older);
+
+        var after = await CurrentSiteAsync("001");
+        Assert.Equal(ors.Version, after.Version);
+        Assert.Equal("New", after.SiteName);
+        Assert.Equal("Dock", InterimEntry(after, "001").SiteName);
+        var entityAfter = await CurrentApplicationAsync(older);
+        Assert.Equal(entity.Version, entityAfter.Version);
+        Assert.Null(Entry(entityAfter, 1).ProposedChanges);
+        Assert.Null(InterimEntry(entityAfter, 1, "001").ProposedChanges);
+    }
+
+    [Fact]
+    public async Task ApprovedApplicationSyncedAgain_LeavesAnUnselectedProposalAnotherApplicationHeld()
+    {
+        // Discarding its unselected proposals belongs to the write that approves it, not to every later sync. An
+        // in-flight application holds this one at that write, so it stays Proposed; a repeat changes nothing.
+        var approved = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            2026,
+            Site(1, "001", "Added", isNew: true)
+        );
+        var inFlight = await MigratedApplicationAsync(
+            ApplicationStatus.Started,
+            2027,
+            Site(1, "001", "Added", isNew: true)
+        );
+        await EditAsync(approved, a => a.OverseasSites!.Sites[0].Selected = false);
+        await ApproveAsync(approved);
+        await SyncAsync(approved);
+        Assert.Equal(OverseasSiteStatus.Proposed, (await CurrentSiteAsync("001")).Status);
+
+        // The other holder lets go without being synced: only the guard now stops the discard.
+        await EditAsync(inFlight, a => a.ApplicationStatus = ApplicationStatus.Rejected);
+        await InTransactionAsync(
+            async (session, token) =>
+            {
+                var current = await _stores.Applications.Versions.FindCurrentAsync(
+                    Builders<ApplicationEntity>.Filter.Eq(a => a.EntityId, inFlight.Id!.Value),
+                    session,
+                    token
+                );
+                current!.Status = ApplicationStatus.Rejected;
+                await _stores.Applications.Versions.UpdateAsync(
+                    current,
+                    current.Version,
+                    new ChangeInfo { Reason = ChangeReason.ApplicationEdited },
+                    session,
+                    token
+                );
+                return true;
+            }
+        );
+
+        await SyncAsync(approved);
+
+        Assert.Equal(OverseasSiteStatus.Proposed, (await CurrentSiteAsync("001")).Status);
     }
 
     [Fact]

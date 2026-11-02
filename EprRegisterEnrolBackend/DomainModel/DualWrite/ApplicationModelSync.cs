@@ -146,6 +146,13 @@ public sealed class ApplicationModelSync(
 
         private List<OverseasSiteModel> Sites => legacy.OverseasSites?.Sites ?? [];
 
+        // The unit of work syncs after every request, whatever the handler answered. Approval's writes to the sites
+        // belong to the one write that approves: a later sync of an approved application, such as a repeated status
+        // push, must not put its details back over a newer approval's (§6.1 step 2).
+        private bool ApprovedByThisWrite =>
+            legacy.ApplicationStatus == ApplicationStatus.Approved
+            && current.Status != ApplicationStatus.Approved;
+
         public async Task<List<ApplicationOverseasSiteEntry>> SyncSitesAsync()
         {
             if (current.RegistrationId is not { } registrationId)
@@ -166,10 +173,11 @@ public sealed class ApplicationModelSync(
             var previous = current
                 .ApplicationOverseasSites.GroupBy(e => e.SiteId)
                 .ToDictionary(g => g.Key, g => g.First().OverseasSiteId);
-            if (legacy.ApplicationStatus == ApplicationStatus.Approved)
+            if (ApprovedByThisWrite)
             {
                 await ApproveSitesAsync(previous);
             }
+
             var entries = new List<ApplicationOverseasSiteEntry>();
             var stamps = new Dictionary<string, ObjectId>();
             foreach (var site in Sites)
@@ -200,7 +208,7 @@ public sealed class ApplicationModelSync(
             {
                 await DiscardClosedApplicationsProposalsAsync(registrationId, entries);
             }
-            else if (legacy.ApplicationStatus == ApplicationStatus.Approved)
+            else if (ApprovedByThisWrite)
             {
                 // The sites it did not select are not accredited: its proposals among them end with it.
                 await DiscardClosedApplicationsProposalsAsync(
@@ -246,7 +254,7 @@ public sealed class ApplicationModelSync(
             {
                 ors = await WriteThroughAsync(ors, site);
             }
-            else
+            else if (legacy.ApplicationStatus.IsInFlight())
             {
                 changes = LegacySiteMapper.ProposedChanges(ors, site);
             }
@@ -649,7 +657,8 @@ public sealed class ApplicationModelSync(
             return ChangeReason.InterimSiteUpdated;
         }
 
-        // An interim proposal of this application that it no longer holds on an ORS it still holds is Discarded.
+        // An interim proposal of this application that it no longer holds on an ORS it still holds is Discarded. One it
+        // had withdrawn stays Withdrawn, as it does when an application closes.
         // An ORS the application dropped altogether keeps its interim sites as they are; they go with the ORS.
         private async Task DiscardDroppedInterimProposalsAsync(
             List<ApplicationOverseasSiteEntry> entries
@@ -661,8 +670,11 @@ public sealed class ApplicationModelSync(
             )
             {
                 var dropped = ors
-                    .InterimSites.Where(IsOwnInterimProposal)
-                    .Where(i => !_heldInterims.Contains((ors.EntityId, i.SiteNumber)))
+                    .InterimSites.Where(i =>
+                        i.ProposedByApplicationId == _applicationId
+                        && i.Status == InterimSiteStatus.Proposed
+                        && !_heldInterims.Contains((ors.EntityId, i.SiteNumber))
+                    )
                     .ToList();
                 if (dropped.Count == 0)
                 {
@@ -793,6 +805,8 @@ public sealed class ApplicationModelSync(
         }
 
         // Option B for interim sites: the overlay holds this application's edits to an interim site it does not own.
+        // As for an ORS, and as the migration decides, only an application in flight holds one: a closed application
+        // can no longer propose anything.
         private BsonDocument? InterimOverlay(
             OverseasSiteModel site,
             OverseasSiteEntity? ors,
@@ -803,7 +817,10 @@ public sealed class ApplicationModelSync(
             var stored = interim is null
                 ? null
                 : LegacySiteMapper.FindInterim(ors, interim.SiteNumber);
-            return stored is null || IsOwnInterimProposal(stored)
+            return
+                !legacy.ApplicationStatus.IsInFlight()
+                || stored is null
+                || IsOwnInterimProposal(stored)
                 ? null
                 : LegacySiteMapper.InterimProposedChanges(stored, interim!);
         }

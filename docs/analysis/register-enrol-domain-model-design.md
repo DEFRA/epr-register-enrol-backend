@@ -1206,7 +1206,11 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
     was. A site the application added and did not select is Discarded, unless another in-flight application
     holds it. The migration follows the same rule (an approved application accredits only the sites it
     selected)
+  - these steps belong to the one write that approves. A later write that reaches an approved application, such
+    as a repeated push, does not touch its sites, so it cannot overwrite a newer approval's details (§6.1 step 2)
   - stamp `accreditationId` on the Application
+- **`proposedChanges` only while in flight.** As the migration decides, an approved, rejected or withdrawn
+  application holds no overlay, on an ORS or an interim site: it can no longer propose anything.
 - **Rejected and withdrawn:** Proposed → Discarded in the same transaction, for every proposed site and interim
   site the application holds, unless another in-flight application of the registration also holds it; then it
   stays Proposed, and is discarded when the last holder closes, whichever application proposed it. A
