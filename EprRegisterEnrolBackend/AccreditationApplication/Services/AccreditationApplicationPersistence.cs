@@ -133,9 +133,8 @@ public class AccreditationApplicationPersistence(
     }
 
     // RA-690: no index yet, so this scans the collection. It runs once per approval, not per
-    // read, so the scan is acceptable for now. The unique index on AccreditationReference that
-    // follows RA-691 (once the counter-era references are migrated) will back it and replace
-    // this check.
+    // read, so the scan is acceptable for now. A unique index on AccreditationReference is a
+    // follow-up; it would back this check and replace it.
     public async Task<
         IReadOnlyList<AccreditationReferenceHolder>
     > GetOtherAccreditationReferenceHoldersAsync(
@@ -310,16 +309,6 @@ public class AccreditationApplicationPersistence(
             )
             .FirstOrDefaultAsync();
     }
-
-    public async Task<
-        IReadOnlyList<AccreditationApplicationModel>
-    > GetByAccreditationReferenceAsync(
-        string accreditationReference,
-        CancellationToken cancellationToken = default
-    ) =>
-        await Collection
-            .Find(a => a.AccreditationReference == accreditationReference)
-            .ToListAsync(cancellationToken);
 
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,

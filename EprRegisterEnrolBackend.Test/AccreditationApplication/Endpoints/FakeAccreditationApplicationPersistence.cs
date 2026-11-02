@@ -305,17 +305,6 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
 
-    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByAccreditationReferenceAsync(
-        string accreditationReference,
-        CancellationToken cancellationToken = default
-    ) =>
-        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
-            _store
-                .Where(a => a.AccreditationReference == accreditationReference)
-                .Select(ShallowCopy)
-                .ToList()
-        );
-
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null
