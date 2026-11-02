@@ -7,4 +7,5 @@ public static class DomainModelCollections
     public const string OverseasSiteVersions = "overseasSiteVersions";
     public const string ApplicationVersions = "applicationVersions";
     public const string AccreditationVersions = "accreditationVersions";
+    public const string MigrationConflicts = "migrationConflicts";
 }

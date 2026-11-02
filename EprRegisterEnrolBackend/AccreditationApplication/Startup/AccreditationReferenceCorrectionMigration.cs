@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -139,6 +140,16 @@ public class AccreditationReferenceCorrectionMigration(
             apply = false;
         }
 
+        if (apply && DualWriteIsOn())
+        {
+            logger.LogError(
+                "RA-691 accreditation reference correction: DomainModel:DualWrite is on, and this "
+                    + "correction writes the legacy application without the domain model, so running as "
+                    + "a DRY RUN. Apply it with DualWrite off."
+            );
+            apply = false;
+        }
+
         var mode = apply ? "APPLY" : "DRY RUN (nothing will be written)";
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
@@ -146,7 +157,8 @@ public class AccreditationReferenceCorrectionMigration(
                 mode
             );
 
-        var persistence = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
+        var persistence =
+            serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
 
         var plans = new List<Plan>();
         foreach (var correction in Corrections)
@@ -178,6 +190,11 @@ public class AccreditationReferenceCorrectionMigration(
             );
         return apply ? RunResult.Applied : RunResult.DryRun;
     }
+
+    // RA-644: with dual-write on, every legacy write must also update the domain model in one
+    // transaction. This correction predates that and writes the legacy application only.
+    private bool DualWriteIsOn() =>
+        serviceProvider.GetService<IOptions<DomainModelConfig>>()?.Value.DualWrite == true;
 
     // Logs one planned change (or skip) and, when confirmedBy is set (an authorised apply run),
     // writes it.
@@ -314,7 +331,10 @@ public class AccreditationReferenceCorrectionMigration(
     // Every reference here is a reprocessor one (ER...PL is England plastic, WR...WO is Wales
     // wood). The nation is not checked because Nation is nullable on applications seeded before
     // RA-526.
-    private static bool IsTargetAccreditation(AccreditationApplicationModel application, Correction c) =>
+    private static bool IsTargetAccreditation(
+        AccreditationApplicationModel application,
+        Correction c
+    ) =>
         application.OrgId == c.OrgId
         && application.Year == AccreditationYear
         && application.MaterialType == c.Material
@@ -337,7 +357,7 @@ public class AccreditationReferenceCorrectionMigration(
             Builders<AccreditationApplicationModel>
                 .Update.Set(a => a.AccreditationReference, c.Corrected)
                 .AddToSet(a => a.PreviousAccreditationNumbers, c.Incorrect),
-            cancellationToken
+            cancellationToken: cancellationToken
         );
 
         if (updated is null)

@@ -155,7 +155,12 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     private static string GenerateReference(AccreditationApplicationModel application)
     {
         var postcode = HttpCaseWorkingApiAdapter.ExtractPostcode(application.SiteAddress);
-        var year = application.Year % 100;
+        // Two digits for a real accreditation year, as the real generator does. The E2E specs use
+        // made-up years (3000-3999) on one organisation, registration and material, so outside the
+        // 2000s the full year keeps their references apart.
+        var year = application.Year is >= 2000 and < 2100
+            ? application.Year % 100
+            : application.Year;
         var agency = ResolveAgencyCode(postcode);
         var orgNumber = application.OrgId?.ToString("D6") ?? string.Empty;
         var postcodeSuffix = PostcodeSuffix(postcode);

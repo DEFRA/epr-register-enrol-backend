@@ -114,6 +114,15 @@ public class VersionedMongoRepository<T>(
         await Find(session, filter & Filter.Eq(x => x.IsCurrent, true))
             .FirstOrDefaultAsync(cancellationToken);
 
+    /// <summary>Every current version matching <paramref name="filter"/>, for example all of a registration's ORSs.</summary>
+    public async Task<List<T>> FindAllCurrentAsync(
+        FilterDefinition<T> filter,
+        IClientSessionHandle? session = null,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Find(session, filter & Filter.Eq(x => x.IsCurrent, true))
+            .ToListAsync(cancellationToken);
+
     /// <summary>The version that was current at <paramref name="at"/>: <c>validFrom &lt;= at &lt; validTo</c>.</summary>
     public async Task<T?> GetAsOfAsync(
         ObjectId entityId,

@@ -1,5 +1,6 @@
 using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Status;
 
 namespace EprRegisterEnrolBackend.AccreditationApi;
 
@@ -168,20 +169,7 @@ public static class AccreditationApiMapper
     private static DateTime Approval(AccreditationApplicationModel application) =>
         AsUtc(application.CaseManagementStatusUpdatedAt ?? application.DateLastEdited);
 
-    private static DateOnly UkDate(DateTime utc)
-    {
-        TimeZoneInfo zone;
-        try
-        {
-            zone = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
-        }
-        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
-        {
-            zone = TimeZoneInfo.Utc;
-        }
-
-        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(AsUtc(utc), zone));
-    }
+    private static DateOnly UkDate(DateTime utc) => UkCalendar.ToUkDate(utc);
 
     private static DateTime AsUtc(DateTime value) =>
         value.Kind == DateTimeKind.Unspecified

@@ -76,6 +76,13 @@ The domain model (`docs/analysis/register-enrol-domain-model-design.md`) ships i
   startup and adds the `domain-model-schema` check to `/health/ready`. If Mongo is unreachable at startup,
   it retries in the background until the check passes, so readiness recovers on its own. `compose.yml`
   turns it on locally. Turning it off again is the rollback.
+- `DomainModel__DualWriteSeed=true` (phase 2, needs `ExpandEnabled`) makes Seed also write the Organisation,
+  Registration and overseas sites, and stamp their ids on the application. A failure is logged and counted,
+  and the seed still succeeds. Turning it off is the rollback.
+- `DomainModel__DualWrite=true` (phase 3, needs `ExpandEnabled`; the service refuses to start without it) makes
+  every write path write the legacy application and the domain model in one transaction. A failed model write
+  fails the request and rolls the legacy write back. Turning it off is the rollback; the model is then stale until
+  the migration is re-run.
 - `DomainModel__DiagnosticsEnabled=true` (test environments only) runs the diagnostics below.
 
 #### Domain model diagnostics (test environments only)

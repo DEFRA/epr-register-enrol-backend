@@ -22,6 +22,13 @@ public class DomainModelConfig
     public bool DualWriteSeed { get; set; }
 
     /// <summary>
+    /// Phase 3, "Full dual-write": the write paths write the legacy application and the domain model in one
+    /// transaction, and a model-write failure fails the request and rolls back the legacy write (D9). Needs
+    /// <see cref="ExpandEnabled"/>. Turning it off is the rollback.
+    /// </summary>
+    public bool DualWrite { get; set; }
+
+    /// <summary>
     /// Run the B0 transaction smoke test and the B1 legacy-data survey once at startup. Only for test
     /// environments, where the data is test data (R15).
     /// </summary>

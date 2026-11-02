@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
@@ -76,7 +77,11 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     // The three incorrect records plus unrelated ones that must never change: another
     // accreditation of the same material for the same org (a second site) and a 2026 record, for
     // both a plastic and the wood target, and another org entirely.
-    private async Task<(ObjectId Infinity, ObjectId Plasgran, ObjectId Kronospan)> SeedIncorrectStateAsync()
+    private async Task<(
+        ObjectId Infinity,
+        ObjectId Plasgran,
+        ObjectId Kronospan
+    )> SeedIncorrectStateAsync()
     {
         var infinity = await SeedAsync(Application(500527, InfinityIncorrect));
         var plasgran = await SeedAsync(Application(500105, PlasgranIncorrect));
@@ -85,7 +90,9 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(Application(500527, "A26ER5005270246PL", year: 2026));
         await SeedAsync(Kronospan("A27WR5001080100WO"));
         await SeedAsync(Kronospan("A26WR5001080008WO", year: 2026));
-        await SeedAsync(Application(500999, "A27EX5009990123GL", material: MaterialType.Glass, isExporter: true));
+        await SeedAsync(
+            Application(500999, "A27EX5009990123GL", material: MaterialType.Glass, isExporter: true)
+        );
         return (infinity.Id!.Value, plasgran.Id!.Value, kronospan.Id!.Value);
     }
 
@@ -93,12 +100,14 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         bool enabled,
         bool apply = false,
         string? confirmedBy = "A Reviewer",
-        bool registerPersistence = true
+        bool registerPersistence = true,
+        bool dualWrite = false
     )
     {
         var services = new ServiceCollection();
         if (registerPersistence)
             services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
+        services.AddSingleton(Options.Create(new DomainModelConfig { DualWrite = dualWrite }));
         return new AccreditationReferenceCorrectionMigration(
             services.BuildServiceProvider(),
             Options.Create(
@@ -155,18 +164,24 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         (await SnapshotAsync()).Should().Equal(before);
         var changes = Logged(LogLevel.Information).Where(m => m.Contains(" -> ")).ToList();
         changes.Should().HaveCount(3);
-        changes.Should().ContainSingle(m =>
-            m.Contains("Infinity Plastic Solutions Ltd (500527)")
-            && m.Contains($"{InfinityIncorrect} -> {InfinityCorrected}")
-        );
-        changes.Should().ContainSingle(m =>
-            m.Contains("PLASGRAN LIMITED (500105)")
-            && m.Contains($"{PlasgranIncorrect} -> {PlasgranCorrected}")
-        );
-        changes.Should().ContainSingle(m =>
-            m.Contains("Kronospan Limited (500108)")
-            && m.Contains($"{KronospanIncorrect} -> {KronospanCorrected}")
-        );
+        changes
+            .Should()
+            .ContainSingle(m =>
+                m.Contains("Infinity Plastic Solutions Ltd (500527)")
+                && m.Contains($"{InfinityIncorrect} -> {InfinityCorrected}")
+            );
+        changes
+            .Should()
+            .ContainSingle(m =>
+                m.Contains("PLASGRAN LIMITED (500105)")
+                && m.Contains($"{PlasgranIncorrect} -> {PlasgranCorrected}")
+            );
+        changes
+            .Should()
+            .ContainSingle(m =>
+                m.Contains("Kronospan Limited (500108)")
+                && m.Contains($"{KronospanIncorrect} -> {KronospanCorrected}")
+            );
         changes.Should().OnlyContain(m => m.Contains("DRY RUN"));
         Logged(LogLevel.Error).Should().BeEmpty();
     }
@@ -183,6 +198,22 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         result.Should().Be(RunResult.DryRun);
         (await SnapshotAsync()).Should().Equal(before);
         Logged(LogLevel.Error).Should().ContainSingle(m => m.Contains("SpotCheckConfirmedBy"));
+    }
+
+    // RA-644: the correction writes the legacy application directly, without the domain model, so with
+    // dual-write on it would leave the model holding the incorrect numbers.
+    [Fact]
+    public async Task Apply_with_dual_write_on_runs_as_a_dry_run_and_writes_nothing()
+    {
+        await SeedIncorrectStateAsync();
+        var before = await SnapshotAsync();
+
+        var result = await CreateMigration(enabled: true, apply: true, dualWrite: true)
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        result.Should().Be(RunResult.DryRun);
+        (await SnapshotAsync()).Should().Equal(before);
+        Logged(LogLevel.Error).Should().ContainSingle(m => m.Contains("DualWrite"));
     }
 
     [Fact]
@@ -215,7 +246,9 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     {
         var (infinityId, plasgranId, kronospanId) = await SeedIncorrectStateAsync();
         var targets = new[] { infinityId, plasgranId, kronospanId };
-        var before = (await SnapshotAsync()).Where(d => !targets.Contains(d["_id"].AsObjectId)).ToList();
+        var before = (await SnapshotAsync())
+            .Where(d => !targets.Contains(d["_id"].AsObjectId))
+            .ToList();
 
         await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
@@ -257,12 +290,16 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
             .RunAsync(TestContext.Current.CancellationToken);
 
         result.Should().Be(RunResult.Applied);
-        (await _raw.Find(new BsonDocument("_id", infinity.Id!.Value))
-            .FirstAsync(TestContext.Current.CancellationToken))
+        (
+            await _raw.Find(new BsonDocument("_id", infinity.Id!.Value))
+                .FirstAsync(TestContext.Current.CancellationToken)
+        )
             .Should()
             .Equal(infinityBefore);
         (await ReadAsync(plasgran.Id!.Value)).AccreditationReference.Should().Be(PlasgranCorrected);
-        (await ReadAsync(kronospan.Id!.Value)).AccreditationReference.Should().Be(KronospanCorrected);
+        (await ReadAsync(kronospan.Id!.Value))
+            .AccreditationReference.Should()
+            .Be(KronospanCorrected);
     }
 
     [Fact]
