@@ -66,6 +66,21 @@ public static class SeedEntityMapper
             .ToList();
     }
 
+    /// <summary>Whether the ORS already holds every field <see cref="ApplyTo(OverseasSiteEntity, OverseasSiteModel)"/> would write.</summary>
+    public static bool HasSameDetails(OverseasSiteEntity current, OverseasSiteModel site)
+    {
+        var reEx = new OverseasSiteEntity();
+        ApplyTo(reEx, site);
+        return current.SiteName == reEx.SiteName
+            && current.FormattedAddress == reEx.FormattedAddress
+            && Equals(current.Address?.ToBsonDocument(), reEx.Address?.ToBsonDocument())
+            && current.Country == reEx.Country
+            && current.IsEu == reEx.IsEu
+            && current.IsOecd == reEx.IsOecd
+            && current.Coordinates == reEx.Coordinates
+            && current.BaselOecdCodes.SequenceEqual(reEx.BaselOecdCodes);
+    }
+
     /// <summary>A site from ReEx's ORS-A is already registered there, so it starts Active (§6.1 step 2).</summary>
     public static OverseasSiteEntity NewReExSite(ObjectId registrationId, OverseasSiteModel site)
     {

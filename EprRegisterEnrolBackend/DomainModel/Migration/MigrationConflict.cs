@@ -59,4 +59,7 @@ public enum MigrationConflictKind
 
     /// <summary>An approved application whose registration already has an Accreditation for that year.</summary>
     AccreditationAlreadyExists,
+
+    /// <summary>A seed's ReEx details differ from an accredited ORS, which a seed never changes.</summary>
+    ReExDetailsDiffer,
 }

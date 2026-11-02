@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson;
@@ -82,6 +83,7 @@ public sealed class SeedDualWriter(
             cancellationToken
         );
 
+        var accredited = await AccreditedOrsIdsAsync(session, seed, cancellationToken);
         var siteIds = new Dictionary<string, ObjectId>();
         foreach (var site in seed.ReEx.OverseasSites)
         {
@@ -96,6 +98,7 @@ public sealed class SeedDualWriter(
                 seed,
                 registration.EntityId,
                 site,
+                accredited,
                 cancellationToken
             );
         }
@@ -109,6 +112,29 @@ public sealed class SeedDualWriter(
             cancellationToken
         );
         return true;
+    }
+
+    // The sites an approved application selected. The legacy applications are read rather than the Accreditations
+    // because one approved before phase 3 has no Accreditation until its group is first touched (§6.2).
+    private async Task<HashSet<string>> AccreditedOrsIdsAsync(
+        IClientSessionHandle session,
+        SeedDualWrite seed,
+        CancellationToken cancellationToken
+    )
+    {
+        var group = await applications.GetRegistrationGroupAsync(
+            seed.ReExOrganisationId,
+            seed.ReExRegistrationId,
+            ApplicationGroupMigrator.MaxGroupSize + 1,
+            session,
+            cancellationToken
+        );
+        return group
+            .Where(a => a.ApplicationStatus == ApplicationStatus.Approved)
+            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+            .Where(s => s.Selected && s.OrsId is not null)
+            .Select(s => s.OrsId!)
+            .ToHashSet();
     }
 
     private async Task<RegistrationEntity> UpsertRegistrationAsync(
@@ -158,6 +184,7 @@ public sealed class SeedDualWriter(
         SeedDualWrite seed,
         ObjectId registrationId,
         OverseasSiteModel site,
+        HashSet<string> accredited,
         CancellationToken cancellationToken
     )
     {
@@ -181,6 +208,17 @@ public sealed class SeedDualWriter(
             return created.EntityId;
         }
 
+        // A site on an accreditation holds what this service collected and approved, so a seed never changes it.
+        if (accredited.Contains(site.OrsId!))
+        {
+            if (!SeedEntityMapper.HasSameDetails(current, site))
+            {
+                await RecordReExDifferenceAsync(session, seed, current, cancellationToken);
+            }
+
+            return current.EntityId;
+        }
+
         SeedEntityMapper.ApplyTo(current, site);
         var result = await versions.UpdateAsync(
             current,
@@ -191,6 +229,29 @@ public sealed class SeedDualWriter(
         );
         return result.Entity.EntityId;
     }
+
+    private Task RecordReExDifferenceAsync(
+        IClientSessionHandle session,
+        SeedDualWrite seed,
+        OverseasSiteEntity site,
+        CancellationToken cancellationToken
+    ) =>
+        stores.Conflicts.InsertManyAsync(
+            [
+                new MigrationConflict
+                {
+                    Id = ObjectId.GenerateNewId(),
+                    Kind = MigrationConflictKind.ReExDetailsDiffer,
+                    ReExRegistrationId = seed.ReExRegistrationId,
+                    RegistrationId = site.RegistrationId,
+                    OrsId = site.OrsId,
+                    ApplicationIds = [seed.Application.Id!.Value],
+                    RecordedAt = clock.GetUtcNow().UtcDateTime,
+                },
+            ],
+            session,
+            cancellationToken
+        );
 
     private static ChangeInfo Change(
         SeedDualWrite seed,

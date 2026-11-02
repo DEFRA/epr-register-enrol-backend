@@ -3,6 +3,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
@@ -76,7 +77,12 @@ public sealed class SeedDualWriterTests : IDisposable
     private SeedDualWriter Writer(ILogger<SeedDualWriter>? logger = null) =>
         new(
             _factory,
-            new SeedModelStores(_organisations, _registrations, _overseasSites),
+            new SeedModelStores(
+                _organisations,
+                _registrations,
+                _overseasSites,
+                new MigrationConflictPersistence(_factory, NullLoggerFactory.Instance)
+            ),
             _applications,
             new SeedDualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
             _clock,
@@ -245,6 +251,126 @@ public sealed class SeedDualWriterTests : IDisposable
         Assert.Equal(OverseasSiteStatus.Discarded, current.Status);
         Assert.Equal(ChangeReason.ReExRefresh, current.LastChange!.Reason);
         Assert.Equal("001", current.LastChange.Details!["orsId"]);
+    }
+
+    private async Task<AccreditationApplicationModel> ClosedApplicationAsync(
+        ApplicationStatus status,
+        bool selected = true
+    )
+    {
+        var reEx = ReEx();
+        foreach (var site in reEx.OverseasSites)
+        {
+            site.Selected = selected;
+        }
+
+        var application = await LegacyApplicationAsync(reEx);
+        application.ApplicationStatus = status;
+        return (await _applications.UpdateAsync(application))!;
+    }
+
+    private async Task<OverseasSiteEntity> CurrentSiteAsync(string orsId) =>
+        (await SiteVersionsAsync()).Single(s => s.OrsId == orsId && s.IsCurrent);
+
+    private Task<List<MigrationConflict>> ConflictsAsync() =>
+        _factory
+            .GetCollection<MigrationConflict>(DomainModelCollections.MigrationConflicts)
+            .Find(FilterDefinition<MigrationConflict>.Empty)
+            .ToListAsync(Ct);
+
+    [Fact]
+    public async Task WriteAsync_SiteOnAnApprovedApplication_IsNotChangedAndTheDifferenceIsRecorded()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+        var before = await CurrentSiteAsync("001");
+
+        var renamed = ReEx("Site One Renamed");
+        var seeded = await LegacyApplicationAsync(renamed);
+        await Writer().WriteAsync(Seed(renamed, seeded), Ct);
+
+        var after = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, after.Version);
+        Assert.Equal("Site One", after.SiteName);
+        var conflict = Assert.Single(await ConflictsAsync());
+        Assert.Equal(MigrationConflictKind.ReExDetailsDiffer, conflict.Kind);
+        Assert.Equal("001", conflict.OrsId);
+        Assert.Equal(ReExRegistrationId, conflict.ReExRegistrationId);
+        Assert.Equal(before.RegistrationId, conflict.RegistrationId);
+        Assert.Equal(seeded.Id, Assert.Single(conflict.ApplicationIds));
+        var stamped = await _applications.GetByIdAsync(
+            ReExOrganisationId,
+            seeded.Id!.Value.ToString()
+        );
+        Assert.Equal(
+            after.EntityId,
+            stamped!.OverseasSites!.Sites.Single(s => s.OrsId == "001").OverseasSiteEntityId
+        );
+    }
+
+    [Fact]
+    public async Task WriteAsync_SiteOnAnApprovedApplication_MatchingReEx_RecordsNoDifference()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+
+        Assert.Empty(await ConflictsAsync());
+    }
+
+    [Fact]
+    public async Task WriteAsync_SiteApprovedApplicationDidNotSelect_IsStillRefreshed()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved, selected: false);
+
+        var renamed = ReEx("Site One Renamed");
+        await Writer().WriteAsync(Seed(renamed, await LegacyApplicationAsync(renamed)), Ct);
+
+        var after = await CurrentSiteAsync("001");
+        Assert.Equal("Site One Renamed", after.SiteName);
+        Assert.Equal(ChangeReason.ReExRefresh, after.LastChange.Reason);
+        Assert.Empty(await ConflictsAsync());
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Rejected)]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Submitted)]
+    public async Task WriteAsync_SiteOnAnApplicationNotApproved_IsStillRefreshed(
+        ApplicationStatus status
+    )
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(status);
+
+        var renamed = ReEx("Site One Renamed");
+        await Writer().WriteAsync(Seed(renamed, await LegacyApplicationAsync(renamed)), Ct);
+
+        Assert.Equal("Site One Renamed", (await CurrentSiteAsync("001")).SiteName);
+        Assert.Empty(await ConflictsAsync());
+    }
+
+    [Fact]
+    public async Task WriteAsync_NewSiteOnARegistrationWithAnApprovedApplication_IsCreated()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+
+        var withNewSite = ReEx();
+        withNewSite.OverseasSites.Add(
+            new OverseasSiteModel
+            {
+                SiteId = 3,
+                OrsId = "003",
+                SiteName = "Site Three",
+                Country = "Italy",
+            }
+        );
+        await Writer().WriteAsync(Seed(withNewSite, await LegacyApplicationAsync(withNewSite)), Ct);
+
+        Assert.Equal("Site Three", (await CurrentSiteAsync("003")).SiteName);
     }
 
     [Fact]

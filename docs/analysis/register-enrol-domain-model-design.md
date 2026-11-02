@@ -437,8 +437,9 @@ seeding no longer calls ReEx at all.** A new year's application is built from th
 
 Seeding is a **convenience for operators**: it may not carry everything, and the operator may have gaps to
 fill. The new world seeds an **Application** (from the previous year's Accreditation), where the old world
-seeds an `AccreditationApplication`. This is first a 2026 to 2027 change. Seeding 2027 to 2028 may still
-happen, but it will not come from ReEx.
+seeds an `AccreditationApplication`. This is first a 2026 to 2027 change. **ReEx only ever seeds a 2027
+application, never a later year.** Seeding 2027 to 2028 may still happen, but it will not come from ReEx. The current
+code still calls ReEx for any year.
 
 Only a site the operator adds gets a new number from the registration's pool. A number is never
 reissued, including after withdrawal or discard.
@@ -1196,6 +1197,11 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   - **No ReEx calls.** The routine only reshapes data already held here. Enrichment stays pending
     ([Q35](#q35)). A write never waits on ReEx.
 - The RA-519 rule still holds: targeted updates, never whole-document replace, on paths that race the CM push.
+- **A seed never changes an accredited ORS.** A seed may refresh an ORS that only belongs to the registration, from
+  ReEx. An ORS an approved application selected holds what this service collected and approved, so a seed leaves it
+  as it is and, where ReEx differs, writes `ReExDetailsDiffer` to `migrationConflicts`. This protects the ORS only: until
+  seeding stops using ReEx after 2027 (see [Carrying sites across years](#carrying-sites-across-years-a22)), a later
+  year's application still starts from ReEx's details, and approving it would apply them.
 - **Legacy-only writers outside the request paths.** The RA-691 accreditation reference correction
   (`AccreditationReferenceCorrectionMigration`, a one-off startup migration) writes the legacy application only.
   It refuses to apply while `DualWrite` is on and runs as a dry run instead, so it is applied with the flag off,
