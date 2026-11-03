@@ -857,7 +857,7 @@ public static class AccreditationApplicationEndpoints
     // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
     // from the server-held PendingUploadService record, populated only by the real
     // CDP-uploader webhook callback — never trusted verbatim from the client request body.
-    private static async Task<(
+    internal static async Task<(
         IResult? Error,
         CdpCallbackFile? ScannedFile
     )> TryResolveScannedFileAsync(
@@ -4836,7 +4836,6 @@ public static class AccreditationApplicationEndpoints
             persistence,
             cdpUploaderService,
             pendingUploadService,
-            cdpConfig,
             appConfig,
             cancellationToken,
             cdpConfig.Value.SamplingPlanBucket,
@@ -4861,7 +4860,6 @@ public static class AccreditationApplicationEndpoints
             persistence,
             cdpUploaderService,
             pendingUploadService,
-            cdpConfig,
             appConfig,
             cancellationToken,
             cdpConfig.Value.BesEvidenceBucket,
@@ -4875,7 +4873,6 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         ICdpUploaderService cdpUploaderService,
         IPendingUploadService pendingUploadService,
-        IOptions<CdpUploaderConfig> cdpConfig,
         IOptions<AppConfig> appConfig,
         CancellationToken cancellationToken,
         string bucketPrefix,
@@ -4896,8 +4893,33 @@ public static class AccreditationApplicationEndpoints
         )
             return Results.Conflict("Section is not editable in the application's current status.");
 
+        return await StartCdpUploadAsync(
+            organisationId,
+            applicationId,
+            request,
+            cdpUploaderService,
+            pendingUploadService,
+            appConfig.Value,
+            bucketPrefix,
+            cancellationToken
+        );
+    }
+
+    // Shared with the RA-492 change-request BES upload, whose guards differ (it uploads against
+    // an Approved application, which InitiateUploadInternal rejects as terminal).
+    internal static async Task<IResult> StartCdpUploadAsync(
+        string organisationId,
+        string applicationId,
+        InitiateUploadRequest request,
+        ICdpUploaderService cdpUploaderService,
+        IPendingUploadService pendingUploadService,
+        AppConfig appConfig,
+        string bucketPrefix,
+        CancellationToken cancellationToken
+    )
+    {
         var fileUploadId = Guid.NewGuid().ToString();
-        var baseUrl = appConfig.Value.BaseUrl.TrimEnd('/');
+        var baseUrl = appConfig.BaseUrl.TrimEnd('/');
         var callbackUrl = $"{baseUrl}/api/v1/accreditation-applications/files/upload-completed";
         var statusUrl =
             $"{baseUrl}/api/v1/accreditation-applications/{organisationId}/{applicationId}/files/{fileUploadId}/status";

@@ -24,6 +24,7 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
     public static readonly ObjectId Reg50016 = ObjectId.Parse("aaa000000000000000050016");
     public static readonly ObjectId Reg50017 = ObjectId.Parse("aaa000000000000000050017");
+    public static readonly ObjectId Reg50018 = ObjectId.Parse("aaa000000000000000050018");
 
     // RA-690: each material's registration reference code. Perftest glass registrations have no
     // GlassRecyclingProcess, so they take "other" (GO), as StubReExApiAdapter does.
@@ -673,6 +674,58 @@ public class FakeOrganisationPersistence
                         WasteManagementPermits =
                         [
                             new WasteManagementPermitModel { PermitNumber = "WML50017" },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        // RA-492: dedicated exporter for the in-year "add a registered ORS to your accreditation"
+        // journey. DevInYearChangeSeedService gives it an Approved 2026 accreditation holding
+        // these four sites (one accredited, three registered), so the e2e spec owns its data and
+        // shares no org with another spec.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50018,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "In-Year Change Exports Ltd",
+                    TradingName = "In-Year Change Exports",
+                    RegistrationNumber = "R25EX0500180018PL",
+                    CompaniesHouseNumber = "12345018",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "Change House",
+                        Town = "Hull",
+                        Postcode = "HU1 1AA",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Export Manager",
+                    Email = "info@inyearchangeexports.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50018,
+                        SiteId = "REG018",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeExporter,
+                        OverseasSites = ["900181", "900182", "900183", "900184"],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50018" },
                         ],
                     },
                 ],

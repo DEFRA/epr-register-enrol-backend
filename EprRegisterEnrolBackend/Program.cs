@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
@@ -131,6 +132,11 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+    // RA-492: in-year change requests (add registered ORS to a granted accreditation).
+    builder.Services.AddSingleton<IChangeRequestPersistence, ChangeRequestPersistence>();
+    builder.Services.Configure<AccreditationChangesConfig>(
+        builder.Configuration.GetSection(AccreditationChangesConfig.SectionName)
+    );
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
     );
@@ -314,6 +320,11 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
     // test hosts run as Development too; the local compose stack sets it.
     if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
         builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
+
+    // RA-492: org 50018's granted accreditation for the in-year add-ORS journey. Its own key so
+    // the fe-tests stack can enable it without also seeding Delta Green.
+    if (builder.Configuration.GetValue<bool>(DevInYearChangeSeedService.ConfigKey))
+        builder.Services.AddHostedService<DevInYearChangeSeedService>();
 }
 
 [ExcludeFromCodeCoverage]
@@ -449,6 +460,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseReExOrganisationEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
+    // RA-492: in-year change requests against a granted accreditation
+    app.UseAccreditationChangeEndpoints();
     // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
     app.UseAccreditationApiEndpoints();
 

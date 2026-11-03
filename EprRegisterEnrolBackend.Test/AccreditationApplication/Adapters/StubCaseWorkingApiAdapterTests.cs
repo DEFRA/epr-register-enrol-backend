@@ -1,5 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 
@@ -253,5 +255,27 @@ public class StubCaseWorkingApiAdapterTests
             sut.NotifySiteAddedAsync(CreateApplication(), "overseas", "ORS456", null, false);
 
         await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_ReturnsAStubReferenceAndWorkItemId()
+    {
+        var accreditation = DevInYearChangeSeedService.Accreditation();
+        var request = new AccreditationChangeRequest
+        {
+            OrganisationId = accreditation.OrganisationId,
+            ApplicationId = accreditation.ApplicationId!,
+            MaterialType = accreditation.MaterialType,
+            Year = accreditation.Year,
+        };
+
+        var result = await BuildSut().SubmitChangeRequestAsync(
+            request,
+            accreditation,
+            TestContext.Current.CancellationToken
+        );
+
+        result.ApplicationReference.Should().Be($"STUB-CHANGE-{request.RequestId[..8].ToUpperInvariant()}");
+        result.WorkItemId.Should().NotBeNull();
     }
 }

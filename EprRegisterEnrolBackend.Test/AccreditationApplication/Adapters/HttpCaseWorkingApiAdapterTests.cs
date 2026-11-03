@@ -4,6 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -2211,6 +2213,105 @@ public class HttpCaseWorkingApiAdapterTests
         var act = async () => await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
 
         await act.Should().NotThrowAsync();
+    }
+
+    // ---------------------------------------------------------------- RA-492 change requests
+
+    private static (AccreditationChangeRequest Request, AccreditationApplicationModel Accreditation) CreateChangeRequest()
+    {
+        var accreditation = DevInYearChangeSeedService.Accreditation();
+        var request = new AccreditationChangeRequest
+        {
+            OrganisationId = accreditation.OrganisationId,
+            ApplicationId = accreditation.ApplicationId!,
+            RegistrationId = accreditation.RegistrationId,
+            MaterialType = accreditation.MaterialType,
+            Year = accreditation.Year,
+            AccreditationReference = accreditation.AccreditationReference,
+            ChargePence = 32800,
+            SubmittedBy = new SubmittedByModel
+            {
+                FullName = "Jane Smith",
+                JobTitle = "Director",
+                Email = "jane@example.com",
+            },
+            Sites =
+            [
+                new ChangeRequestSite
+                {
+                    SiteId = 900184,
+                    OrsId = "004",
+                    SiteName = "Izmir Recycling AS",
+                    Answers = new ChangeRequestSiteAnswers
+                    {
+                        OperationCodes = ["R3"],
+                        ConditionsOfExport = false,
+                    },
+                },
+            ],
+        };
+        return (request, accreditation);
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_PostsAnAddOverseasSiteWorkItemWithTheEffectiveSiteValues()
+    {
+        var (adapter, handler) = CreateAdapter(sharedSecret: "secret");
+        var (request, accreditation) = CreateChangeRequest();
+
+        var result = await adapter.SubmitChangeRequestAsync(
+            request,
+            accreditation,
+            TestContext.Current.CancellationToken
+        );
+
+        result.ApplicationReference.Should().Be(TestApplicationReference);
+        handler.CapturedRequest!.RequestUri!.ToString().Should().Be($"{TestUrl}/work-items");
+        handler.CapturedRequest.Headers.GetValues("x-cdp-user-id").Single().Should().Be("jane@example.com");
+        handler.CapturedRequest.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
+        var body = JsonNode.Parse(handler.CapturedRequestBody!)!;
+        body["typeId"]!.GetValue<string>().Should().Be("add-overseas-site");
+        var payload = body["payload"]!;
+        payload["operatorRequestId"]!.GetValue<string>().Should().Be(request.RequestId);
+        payload["accreditationReference"]!.GetValue<string>().Should().Be("A26ER0500180018PL");
+        payload["chargePence"]!.GetValue<int>().Should().Be(32800);
+        var site = payload["sites"]![0]!;
+        site["orsId"]!.GetValue<string>().Should().Be("004");
+        site["country"]!.GetValue<string>().Should().Be("Turkey");
+        site["coordinates"]!.GetValue<string>().Should().Be("38.4237, 27.1428");
+        site["operationCodes"]![0]!.GetValue<string>().Should().Be("R3");
+        site["suppliedFields"]!.AsArray().Select(n => n!.GetValue<string>())
+            .Should().Equal("operationCodes", "conditionsOfExport");
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_NoUrlConfigured_Throws()
+    {
+        var (adapter, _) = CreateAdapter(url: null);
+        var (request, accreditation) = CreateChangeRequest();
+
+        var act = () => adapter.SubmitChangeRequestAsync(request, accreditation);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_ManagementBeRejectsTheType_Throws()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl, ClientId = TestClientId });
+        var handler = new CapturingHttpMessageHandler(HttpStatusCode.BadRequest, new { title = "Unknown type" });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var (request, accreditation) = CreateChangeRequest();
+
+        var act = () => adapter.SubmitChangeRequestAsync(request, accreditation);
+
+        await act.Should().ThrowAsync<HttpRequestException>();
     }
 
     #region Test infrastructure
