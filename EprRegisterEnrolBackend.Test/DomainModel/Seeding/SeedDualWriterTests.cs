@@ -423,6 +423,50 @@ public sealed class SeedDualWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_GroupOverTheSizeLimit_RollsBackAndLeavesAnAccreditedSiteAlone()
+    {
+        var original = ReEx();
+        await Writer().WriteAsync(Seed(original, await LegacyApplicationAsync(original)), Ct);
+        for (var i = 0; i < ApplicationGroupMigrator.MaxGroupSize; i++)
+        {
+            await LegacyApplicationAsync(original);
+        }
+
+        // Inserted last, so the capped read would miss it if the count went unchecked.
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+        var before = await CurrentSiteAsync("001");
+
+        var renamed = ReEx("Site One Renamed");
+        var seeded = await LegacyApplicationAsync(renamed);
+        await Writer().WriteAsync(Seed(renamed, seeded), Ct);
+
+        var after = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, after.Version);
+        Assert.Equal("Site One", after.SiteName);
+        Assert.Empty(await ConflictsAsync());
+        Assert.Equal(1, Interlocked.Read(ref _failures));
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Error, entry.LogLevel);
+        Assert.Contains(seeded.Id.ToString()!, entry.Message);
+        Assert.Contains(nameof(ApplicationGroupTooLargeException), entry.Message);
+    }
+
+    [Fact]
+    public async Task WriteAsync_GroupAtTheSizeLimit_StillWrites()
+    {
+        var original = ReEx();
+        for (var i = 0; i < ApplicationGroupMigrator.MaxGroupSize - 1; i++)
+        {
+            await LegacyApplicationAsync(original);
+        }
+
+        await Writer().WriteAsync(Seed(original, await LegacyApplicationAsync(original)), Ct);
+
+        Assert.Equal(0, Interlocked.Read(ref _failures));
+        Assert.Equal("Site One", (await CurrentSiteAsync("001")).SiteName);
+    }
+
+    [Fact]
     public async Task WriteAsync_ModelWriteFails_RollsBackLogsWithoutPersonalDataAndDoesNotThrow()
     {
         var reEx = ReEx();

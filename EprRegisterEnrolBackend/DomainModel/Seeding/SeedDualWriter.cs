@@ -129,6 +129,15 @@ public sealed class SeedDualWriter(
             session,
             cancellationToken
         );
+        // The read is capped, so past the limit an approved application could be missing and its sites overwritten.
+        if (group.Count > ApplicationGroupMigrator.MaxGroupSize)
+        {
+            throw new ApplicationGroupTooLargeException(
+                seed.ReExRegistrationId,
+                ApplicationGroupMigrator.MaxGroupSize
+            );
+        }
+
         return group
             .Where(a => a.ApplicationStatus == ApplicationStatus.Approved)
             .SelectMany(a => a.OverseasSites?.Sites ?? [])
