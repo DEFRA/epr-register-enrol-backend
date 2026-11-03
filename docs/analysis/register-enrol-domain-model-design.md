@@ -1126,8 +1126,10 @@ applications, and is throttled.
    - Data is never invented. Unknown values stay null.
    - **Registration numbers.** A Registration that already exists, from the seed for example, keeps its number. A
      new one takes the newest approved application's, otherwise the newest application's. Either way, every other
-     number the applications hold, current or previous, goes into `previousRegistrationNumbers`, and differing
-     current numbers are also written to `migrationConflicts`.
+     number the applications hold, current or previous, goes into `previousRegistrationNumbers`. A differing current
+     number is also written to `migrationConflicts`, unless the Registration already listed it as previous, which
+     means ReEx replaced it. The conflict names a winner only if an application holds the number the Registration
+     kept.
 2. **ORS.** For each distinct `orsId` across the registration's applications:
    - ReEx-originated sites, with no `isNewSite` and present in ORS-A, become **Active**.
    - Operator-added sites take their status from their application: Approved → Active;
@@ -1201,7 +1203,9 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   ReEx. An ORS an approved application selected holds what this service collected and approved, so a seed leaves it
   as it is and, where ReEx differs, writes `ReExDetailsDiffer` to `migrationConflicts`. This protects the ORS only: until
   seeding stops using ReEx after 2027 (see [Carrying sites across years](#carrying-sites-across-years-a22)), a later
-  year's application still starts from ReEx's details, and approving it would apply them.
+  year's application still starts from ReEx's details, and approving it would apply them. A registration with more
+  than 100 applications can't be checked in full, so its seed writes nothing to the model, and logs and counts the
+  failure. The legacy application is still created and returned.
 - **A seed can change an issued registration number.** ReEx masters registration data until this service handles
   registrations and their updates, so a number changed in ReEx replaces the Registration's, as a new version, and the
   old number goes onto `previousRegistrationNumbers`. "Fixed once issued" below refers to this service's own

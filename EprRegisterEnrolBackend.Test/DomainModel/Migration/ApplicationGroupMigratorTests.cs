@@ -719,6 +719,50 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplicationHoldingANumberTheRegistrationAlreadyReplaced_IsNotAConflict()
+    {
+        await SeededRegistrationAsync("R27FROMREEX", "R26REPLACED");
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.RegistrationReference = "R26REPLACED";
+        await _applications.CreateAsync(application);
+
+        var result = await MigrateAsync(application);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal("R27FROMREEX", registration.RegistrationNumber);
+        Assert.Equal(["R26REPLACED"], registration.PreviousRegistrationNumbers);
+        Assert.DoesNotContain(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.RegistrationNumberDiffers
+        );
+    }
+
+    [Fact]
+    public async Task ApplicationHoldingAnUnknownNumber_IsAConflictNamingNoWinner()
+    {
+        await SeededRegistrationAsync("R27FROMREEX", "R26REPLACED");
+        var application = NewApplication(ApplicationStatus.Approved, Day1);
+        application.RegistrationReference = "R26UNKNOWN";
+        await _applications.CreateAsync(application);
+
+        var result = await MigrateAsync(application);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal("R27FROMREEX", registration.RegistrationNumber);
+        Assert.Contains("R26UNKNOWN", registration.PreviousRegistrationNumbers);
+        var conflict = Assert.Single(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.RegistrationNumberDiffers
+        );
+        Assert.Equal(application.Id, Assert.Single(conflict.ApplicationIds));
+        Assert.Null(conflict.WinnerApplicationId);
+    }
+
+    [Fact]
     public async Task RegistrationTheSeedCreated_WithNoOlderNumbers_GetsNoNewVersion()
     {
         await SeededRegistrationAsync(RegistrationNumber);

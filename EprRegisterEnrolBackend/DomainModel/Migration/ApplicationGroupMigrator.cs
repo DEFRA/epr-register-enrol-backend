@@ -231,6 +231,7 @@ public sealed class ApplicationGroupMigrator(
                 cancellationToken
             );
             var winner = ranked.Find(a => !string.IsNullOrWhiteSpace(a.RegistrationReference));
+            var alreadyReplaced = current?.PreviousRegistrationNumbers.ToHashSet() ?? [];
 
             RegistrationEntity registration;
             if (current is null)
@@ -262,7 +263,7 @@ public sealed class ApplicationGroupMigrator(
                 ).Entity;
             }
 
-            RecordRegistrationNumberConflicts(registration, winner);
+            RecordRegistrationNumberConflicts(registration, winner, alreadyReplaced);
             return registration;
         }
 
@@ -303,22 +304,31 @@ public sealed class ApplicationGroupMigrator(
                 },
             };
 
+        // A number the Registration had already replaced is its history, not a disagreement. Only an application holding
+        // the number that survived is the winner: an existing Registration keeps its own, whatever the applications hold.
         private void RecordRegistrationNumberConflicts(
             RegistrationEntity registration,
-            AccreditationApplicationModel? winner
+            AccreditationApplicationModel? winner,
+            HashSet<string> alreadyReplaced
         )
         {
             var losers = pending
                 .Where(a =>
                     !string.IsNullOrWhiteSpace(a.RegistrationReference)
                     && a.RegistrationReference != registration.RegistrationNumber
+                    && !alreadyReplaced.Contains(a.RegistrationReference)
                 )
                 .Select(a => a.Id!.Value)
                 .ToList();
             if (losers.Count > 0)
             {
+                var kept = winner?.RegistrationReference == registration.RegistrationNumber;
                 Conflicts.Add(
-                    Conflict(MigrationConflictKind.RegistrationNumberDiffers, losers, winner?.Id)
+                    Conflict(
+                        MigrationConflictKind.RegistrationNumberDiffers,
+                        losers,
+                        kept ? winner?.Id : null
+                    )
                 );
             }
         }
