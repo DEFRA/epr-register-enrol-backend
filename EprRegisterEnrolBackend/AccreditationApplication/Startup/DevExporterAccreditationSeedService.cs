@@ -12,8 +12,10 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // flag. DevRegistrationSeedService gives the same registration its Approved registration version.
 //
 // The data matches the frontend stub's exporter (stub-manage-accreditations.js): three accredited
-// ORSs and one registered only. ORS 001 has a withdrawn interim site, and an interim site shared
-// with ORS 002, so the overseas-sites page's per-ORS filtering shows locally.
+// ORSs and one registered only. ORS 001 has a withdrawn interim site, and ORSs 001 and 002 both use
+// the same physical site, so the overseas-sites page's per-ORS filtering shows locally. Each copy
+// has its own id and number: interim site ids key the edit routes and test ids application-wide,
+// and the number allocator keeps numbers unique within an application.
 //
 // The year comes from the clock at startup. Idempotent: the id is fixed for each year, so it is
 // inserted once per year and left alone after that, including any changes a tester makes to it.
@@ -25,8 +27,9 @@ public class DevExporterAccreditationSeedService(
 {
     internal const string ExporterOrganisationId = "50018";
     internal const string ExporterOrganisationName = "Manage Accreditation Test Ltd";
+    internal const string ExporterCompaniesHouseNumber = "12345018";
 
-    // The stub registry's registration number for this registration (FakeOrganisationPersistence).
+    // Issued in 2026, so it keeps that year whatever year the accreditation is for.
     internal const string ExporterRegistrationNumber = "R26EX0500180001PL";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -102,7 +105,7 @@ public class DevExporterAccreditationSeedService(
             Nation = Nation.England,
             CompanyRegisterAddressPostcode = "IP11 3AB",
             CompanyRegisteredAddress = "18 Harbour Road, Felixstowe, IP11 3AB",
-            CompaniesHouseNumber = "12345018",
+            CompaniesHouseNumber = ExporterCompaniesHouseNumber,
             PermitNumbers = ["WML50018"],
             WasteProcessingType = "exporter",
             RegistrationReference = ExporterRegistrationNumber,
@@ -137,7 +140,7 @@ public class DevExporterAccreditationSeedService(
                 accreditedFrom,
                 [
                     InterimSite(901802, "001", "Calais Storage SARL", "France", ["R13"]),
-                    SharedInterimSite(),
+                    AntwerpInterimSite(901803, "002"),
                     removed,
                 ]
             ),
@@ -148,7 +151,7 @@ public class DevExporterAccreditationSeedService(
                 "12 Ring Road",
                 "India",
                 accreditedFrom,
-                [SharedInterimSite()]
+                [AntwerpInterimSite(901808, "004")]
             ),
             Ors(
                 901806,
@@ -191,10 +194,10 @@ public class DevExporterAccreditationSeedService(
             InterimSites = interimSites,
         };
 
-    // The same interim site (same SiteId and SiteNumber) serving two ORSs: a separate copy under
-    // each, so withdrawing it from one ORS leaves the other untouched.
-    private static InterimSiteModel SharedInterimSite() =>
-        InterimSite(901803, "002", "Antwerp Transfer Hub", "Belgium");
+    // One physical site serving two ORSs: a separate copy under each, so withdrawing it from one ORS
+    // leaves the other untouched.
+    private static InterimSiteModel AntwerpInterimSite(int siteId, string siteNumber) =>
+        InterimSite(siteId, siteNumber, "Antwerp Transfer Hub", "Belgium");
 
     private static InterimSiteModel InterimSite(
         int siteId,

@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.Organisation.Models;
 using MongoDB.Bson;
 
@@ -697,10 +698,11 @@ public class FakeOrganisationPersistence
                 ReprocessingNations = [NationEngland],
                 CompanyDetails = new CompanyDetailsModel
                 {
-                    Name = "Manage Accreditation Test Ltd",
+                    Name = DevExporterAccreditationSeedService.ExporterOrganisationName,
                     TradingName = "Manage Accreditation Test",
-                    RegistrationNumber = "R26EX0500180001PL",
-                    CompaniesHouseNumber = "12345018",
+                    RegistrationNumber = DevExporterAccreditationSeedService.ExporterRegistrationNumber,
+                    CompaniesHouseNumber =
+                        DevExporterAccreditationSeedService.ExporterCompaniesHouseNumber,
                     RegisteredAddress = new RegisteredAddressModel
                     {
                         Line1 = "18 Harbour Road",

@@ -4,7 +4,6 @@ using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
 using MongoDB.Bson;
-using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
@@ -68,12 +67,10 @@ public class DevRegistrationSeedService(
         CancellationToken cancellationToken
     )
     {
-        var existing = await store.Versions.FindCurrentAsync(
-            Builders<RegistrationEntity>.Filter.Eq(
-                x => x.ReExRegistrationId,
-                registration.ReExRegistrationId
-            ),
-            cancellationToken: cancellationToken
+        // Every seeded registration sets its ReEx id (SeededRegistrations).
+        var existing = await store.FindCurrentByReExRegistrationIdAsync(
+            registration.ReExRegistrationId!,
+            cancellationToken
         );
         if (existing is not null)
         {

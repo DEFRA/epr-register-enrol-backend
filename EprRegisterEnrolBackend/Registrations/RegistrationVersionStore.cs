@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Utils.Mongo;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
@@ -31,4 +32,13 @@ public sealed class RegistrationVersionStore(
     );
 
     public VersionedMongoRepository<RegistrationEntity> Versions => _versions.Value;
+
+    public Task<RegistrationEntity?> FindCurrentByReExRegistrationIdAsync(
+        string reExRegistrationId,
+        CancellationToken cancellationToken
+    ) =>
+        Versions.FindCurrentAsync(
+            Builders<RegistrationEntity>.Filter.Eq(x => x.ReExRegistrationId, reExRegistrationId),
+            cancellationToken: cancellationToken
+        );
 }

@@ -1,7 +1,6 @@
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
@@ -40,9 +39,9 @@ public static class RegistrationStatusEndpoints
         CancellationToken cancellationToken
     )
     {
-        var current = await store.Versions.FindCurrentAsync(
-            Builders<RegistrationEntity>.Filter.Eq(x => x.ReExRegistrationId, registrationId),
-            cancellationToken: cancellationToken
+        var current = await store.FindCurrentByReExRegistrationIdAsync(
+            registrationId,
+            cancellationToken
         );
 
         return current is null

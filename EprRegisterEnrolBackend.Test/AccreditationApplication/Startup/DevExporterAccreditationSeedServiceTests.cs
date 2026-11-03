@@ -84,7 +84,7 @@ public class DevExporterAccreditationSeedServiceTests
     }
 
     [Fact]
-    public async Task SeedAsync_InterimSitesIncludeARemovedOneAndOneSharedBetweenTwoOrss()
+    public async Task SeedAsync_InterimSitesIncludeARemovedOneAndOneSiteServingTwoOrss()
     {
         var seeded = await SeedOnce();
 
@@ -97,13 +97,23 @@ public class DevExporterAccreditationSeedServiceTests
             .Should()
             .OnlyContain(i => i.RemovedAt == null);
 
-        var shared = ors001.Single(i => i.SiteName == "Antwerp Transfer Hub");
+        var antwerp = ors001.Single(i => i.SiteName == "Antwerp Transfer Hub");
         var ors002 = Ors(seeded, "002").InterimSites.Should().ContainSingle().Subject;
-        ors002.SiteNumber.Should().Be(shared.SiteNumber);
-        ors002.SiteId.Should().Be(shared.SiteId);
+        ors002.SiteName.Should().Be(antwerp.SiteName);
         ors002.RemovedAt.Should().BeNull();
 
         Ors(seeded, "003").InterimSites.Should().BeEmpty();
+    }
+
+    // Interim site ids key the edit routes and test ids, and numbers are unique within an application.
+    [Fact]
+    public async Task SeedAsync_InterimSiteIdsAndNumbersAreUnique()
+    {
+        var seeded = await SeedOnce();
+
+        var interimSites = seeded.OverseasSites!.Sites.SelectMany(s => s.InterimSites).ToList();
+        interimSites.Select(i => i.SiteId).Should().OnlyHaveUniqueItems();
+        interimSites.Select(i => i.SiteNumber).Should().OnlyHaveUniqueItems();
     }
 
     // The legacy single-interim-site mirror must never point at a withdrawn site.
