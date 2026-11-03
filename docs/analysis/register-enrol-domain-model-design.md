@@ -1,6 +1,13 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.2, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.3, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03
+
+**Changes in v6.3 (2026-11-03): phases are released in groups**
+
+- **Phases 0 and 1 are released together, and so are phases 2 and 3.** `DualWriteSeed` and `DualWrite` stay separate
+  flags, switched on at the same time in each environment. Phase order, the migration and the cut don't change (§6).
+- **The survey doesn't hold up either release.** R3's "only after the survey" didn't match what was built: phase 1
+  builds the index on an empty collection. A collision is highly unlikely, so production is monitored at go-live (R3).
 
 **Changes in v6.2 (2026-11-03): phases 2–3 as built, and the rule for a new application**
 
@@ -176,7 +183,7 @@ This plan:
 - Implements history as **versioned documents in one collection per entity** (`isCurrent`, `validFrom`,
   `validTo`), written in one multi-document transaction. This is the closest Mongo equivalent of a SQL Server system-versioned temporal table.
 - Migrates **expand → seed dual-write → full dual-write → migrate and reconcile → switch reads (and v2 API go-live) →
-  cut → archive**. Each step is behind a flag and reversible **until the cut** (phase 6), after which rollback loses data. The existing endpoints keep
+  cut → archive**. Expand ships with the preparation work, and seed and full dual-write ship together (§6). Each step is behind a flag and reversible **until the cut** (phase 6), after which rollback loses data. The existing endpoints keep
   their exact JSON throughout, served first from the legacy document and later from a read-model facade.
 - Builds the **v2 Accreditation API** (four read endpoints, not yet live) on the new collections only.
   It goes live after the migration and full dual-write, and never reads the legacy document (v4, D3).
@@ -1074,7 +1081,19 @@ target from §3.
 
 ## 6. Migration plan
 
-Every phase is a separate deploy behind configuration flags under `DomainModel:*`, defaulting to off.
+**How the phases are released:**
+
+- **Phases 0 and 1 are released together.**
+- **Phases 2 and 3 are released together.** `DomainModel:DualWriteSeed` and `DomainModel:DualWrite` stay separate
+  flags, and both are switched on at the same time in each environment. No environment runs seed dual-write without
+  continuous dual-write, so there is no unusual period between seeding and the writes that keep the data consistent.
+- **Phases 4 to 7 are each a separate deploy.**
+
+Applications that already exist at the release still reach the model through first touch (§6.2) or the migration (§6.1).
+In a rollback, either flag can still be turned off alone. With only `DualWriteSeed` on, seeds keep writing the model
+but other writes don't. With only `DualWrite` on, a new application has no model entities until its first write.
+
+Every phase is behind configuration flags under `DomainModel:*`, defaulting to off.
 Phase 1 uses `DomainModel:ExpandEnabled`; the B0/B1 diagnostics use `DomainModel:DiagnosticsEnabled`.
 **The legacy collection stays current, and the source of truth for writes, until phase 6 (the cut).** At every
 earlier point, turning a flag off and redeploying returns to today's behaviour, with no data lost.
@@ -1094,7 +1113,7 @@ Dual-write exists for exactly that: rollback without losing data (v5, D9).
 
 | # | Phase | What ships | Existing endpoints served by | Check | Rollback |
 | --- | --- | --- | --- | --- | --- |
-| 0 | **Prepare** | (a) a read-only data survey per environment (§7 R1), packaged as a script that someone with production access can run and return aggregate, PII-free counts ([Q34](#q34)) (built: `tools/domain-model/legacy-data-survey.js`, for `mongosh`; test environments also run it at startup); (b) compose single-node replica set; (c) `VersionedMongoRepository<T>` and tests | Legacy, unchanged | Survey report reviewed; transaction tests green on EphemeralMongo | No runtime effect |
+| 0 | **Prepare** | (a) a read-only data survey per environment (§7 R1), packaged as a script that someone with production access can run and return aggregate, PII-free counts ([Q34](#q34)) (built: `tools/domain-model/legacy-data-survey.js`, for `mongosh`; test environments also run it at startup); (b) compose single-node replica set; (c) `VersionedMongoRepository<T>` and tests | Legacy, unchanged | Transaction tests green on EphemeralMongo. Survey report reviewed before phase 4 (R1), which doesn't hold up this release | No runtime effect |
 | 1 | **Expand** | New `*Versions` collections and their (partial) indexes via `DefineIndexes` / `MongoIndexReconciler`; domain models and repositories; no callers | Legacy | Indexes present in each environment; `/health/ready` green | Turn `DomainModel:ExpandEnabled` off and redeploy, which also removes the readiness check. Leave or drop the empty collections |
 | 2 | **Seed dual-write** (`DualWriteSeed`) | Seed also upserts Organisation, Registration and ORS from the same ReEx response, and stamps `registrationEntityId` on the new application with targeted `$set`. It creates no Accreditation: none exists before an approval here (A11 refuted) | Legacy | A failure does **not** fail the seed. The model write rolls back and is logged and counted, and the application is returned. The legacy insert has already committed, so failing the request would report an error for an application that exists. First touch (§6.2) fills in the model later | Flag off. Stamped fields are ignored by legacy code (`IgnoreExtraElements`) |
 | 3 | **Full dual-write** (`DualWrite`) | Every write path also writes the entities, **in one transaction** with the legacy write: ORS add, update, promote and revert; interim add, update, withdraw and restore (each a new ORS version, v4); recycling-operations; registration-number; accreditation-number; approved, rejected and withdrawn transitions (§6.2). A failed model write **fails the whole request** and rolls back the legacy write (v5, D9). This phase comes **before** the migration, so no legacy write can slip between the two. A write to an application the migration has not reached yet first **ensures it is migrated** in the same transaction (§6.2) | Legacy | Per-path unit tests for every dual-write; integration tests on a replica set, including concurrent operator PATCH against a CM push (RA-519); fe-tests e2e green in each test environment | Flag off. The model is then stale until the migration (phase 4) is re-run, and legacy is untouched |
@@ -1333,7 +1352,7 @@ none exist when it runs (v4, D4).
 | --- | --- | --- |
 | R1 | **Real data differs from the code's assumptions** (int32 enums, legacy shapes, null `orsId`, duplicates, conflicting registration numbers, approved applications with no `accreditationReference`) | Phase 0 survey per environment (read-only aggregation script), run before phase 4. It closes the PR #210 "verify against a real document" open item too |
 | R2 | **The facade's JSON drifts from the legacy JSON**: field order, nulls omitted (`IgnoreIfNull`) or set to null, int32 enums inside sections, `DateTime` precision | The reconciliation job (through the same facade), then golden contract tests (no shadow-read phase, D9). The facade serialises through the **same** `AccreditationApplicationModel` class, so no hand-built JSON |
-| R3 | ORS ids are allocated from a different source (unique index instead of a scan); legacy `null` orsIds | The unique index on (`registrationId`, `orsId`) is created only after the survey shows no collisions. `OrsIdGenerator` is reused against the entity collection. Nulls are not repaired automatically |
+| R3 | ORS ids are allocated from a different source (unique index instead of a scan); legacy `null` orsIds | Phase 1 creates the unique index on (`registrationId`, `orsId`) on an empty collection, so it can't fail then. Real data first meets it when phases 2 and 3 go on. Given the known data structure, and as first touch merges sites with the same `orsId`, a collision is highly unlikely. This is a minimal risk: production is monitored at go-live rather than waiting for the survey. `OrsIdGenerator` is reused against the entity collection. Nulls are not repaired automatically |
 | R4 | Registration numbers diverge across applications of one registration | Migration conflict rule plus a report. Product confirms the winner where it matters |
 | R5 | **Transactions may not be available in CDP** (A10 is *unknown*). The whole history design and the dual-write rest on them | **Blocking check first** (B0): confirm with CDP, and prove it with a transaction smoke test in each environment. If transactions are unavailable, the fallback is a **transactional outbox in the same document**: append a pending change to the current doc atomically, and have an idempotent worker apply it as a close-and-insert of versions. That keeps no-loss but makes history eventually consistent, which needs a design revisit before B3. Locally, compose moves to a replica set (phase 0). Startup check: if the topology is standalone and a `DualWrite` flag is on, readiness fails loudly |
 | R6 | Write amplification and latency (approval touches 5+ docs; GET list joins 4 collections) | Batch `$in` lookups per list. Reconciliation measures p95. The list endpoint serves all of an organisation's applications, and current volumes are small |
@@ -1580,7 +1599,8 @@ cancelled Accreditation can't be reinstated once a new application has been appr
 
 ## 10. Proposed beads issues
 
-These are for `epr-register-enrol-backend`, and **not created yet**. Each one can ship on its own.
+These are for `epr-register-enrol-backend`, and **not created yet**. Each one can be merged on its own; §6 sets which
+phases are released together.
 Priority runs from 0 (critical) to 4 (backlog).
 
 | # | Title | Type | P | Depends on | Ships / done when |
