@@ -1,6 +1,20 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.1, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.2, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03
+
+**Changes in v6.2 (2026-11-03): phases 2–3 as built, and the rule for a new application**
+
+- **A failed seed write is not fatal.** It rolls back, is logged and counted, and the seed still succeeds, because
+  the legacy application is already created. D9's fatal rule applies to full dual-write (phase 3) (§6).
+- **A seed protects accredited sites.** It never changes an ORS an approved application selected, and past 100
+  applications it writes nothing to the model (§6.2).
+- **Registration numbers.** A seed can change an issued number, keeping the old one. First touch keeps every number
+  the applications hold, and reports only those the Registration has not already replaced (§6.1).
+- **"Live" is defined:** in progress or approved. A rejected or withdrawn application, or a cancelled Accreditation,
+  can be followed by a new application for that year. The rejected and cancelled cases are not built (§2, §6.3).
+- **New open question:** how a cancelled Accreditation and its replacement fit one registration and year ([Q36](#q36)).
+  A4 is reopened until that is settled.
+- **New risks:** site volume (R16) and out-of-date `proposedChanges` (R17).
 
 **Changes in v6.1 (2026-10-28): phases 0–1 as built, after the PR #219 review**
 
@@ -208,7 +222,10 @@ transactions are available in deployed environments. Local `compose.yml:34-43` r
 1. An idempotency check through `GetLiveByRegistrationAsync` (non-withdrawn, newest first). This is
    best-effort only: there is no unique index, so a race can create a second live application
    (comment at lines 703-714). That is a defect, never a valid state: there is at most one live
-   application per organisation, registration and year.
+   application per organisation, registration and year. An application is **live** if it is in progress or
+   approved. A rejected or withdrawn application is not live, and a cancelled Accreditation doesn't block a new
+   application either. Today's check excludes only withdrawn applications, so a rejected one still blocks a new
+   seed. Changing that is a follow-up, in this service and the frontend together.
 2. `HttpReExApiAdapter.GetAccreditationAsync(org, reg, material, year - 1)`
    (`AccreditationApplication/Adapters/HttpReExApiAdapter.cs:53-373`) fetches the whole ReEx organisation,
    picks the registration by ReEx `id`, and follows `registration.accreditationId` to **one** ReEx
@@ -595,6 +612,9 @@ stateDiagram-v2
 
 `approved` and `suspended` together are ReEx's `ACTIVE_ACCREDITATION_STATUSES`: the accreditation exists
 and is in force or paused. Only `approved` is **valid for PRN issuance** (Q2).
+
+A cancelled Accreditation can't be reinstated once a new application has been approved for that year: a year has only
+one Accreditation in force. How the two are stored is open ([Q36](#q36)).
 
 **ORS within an Accreditation** (`accreditationVersions.accreditationOverseasSites[].status`). It is independent of the
 accreditation's own status ([A2](#assumptions), confirmed). The interim sites under a suspended ORS are
@@ -999,7 +1019,7 @@ target from §3.
 
 | v2 element | Model source | Flag / note |
 | --- | --- | --- |
-| `organisationNumber`, `registrationNumber`, `year` (v4, D5: the path that identifies one accreditation) | Registration by `registrationNumber`, checked against Organisation.`organisationNumber`; then Accreditation by the unique (`registrationId`, `year`) index (A4) | `year` is the **year the accreditation applies to**, not the year it was created or approved. A registration that doesn't belong to the organisation returns 404. An old `registrationNumber` resolves as Q10 says. Organisations without an `organisationNumber` can't be reached (Q9). Only approved accreditations are addressable: an undecided Application for that year must **not** resolve |
+| `organisationNumber`, `registrationNumber`, `year` (v4, D5: the path that identifies one accreditation) | Registration by `registrationNumber`, checked against Organisation.`organisationNumber`; then Accreditation by the unique (`registrationId`, `year`) index (A4) | `year` is the **year the accreditation applies to**, not the year it was created or approved. Which Accreditation this returns after a cancellation and a new approval is open ([Q36](#q36)). A registration that doesn't belong to the organisation returns 404. An old `registrationNumber` resolves as Q10 says. Organisations without an `organisationNumber` can't be reached (Q9). Only approved accreditations are addressable: an undecided Application for that year must **not** resolve |
 | `accreditationNumber` | Accreditation.`accreditationNumber` (unique index) | Returned in the body and in search; **not** a path identifier (D5) |
 | `orsId` | `accreditationOverseasSites[].orsId` | |
 | `year` (search) | Accreditation.`year` | Index `{year: 1, accreditationNumber: 1}` |
@@ -1076,7 +1096,7 @@ Dual-write exists for exactly that: rollback without losing data (v5, D9).
 | --- | --- | --- | --- | --- | --- |
 | 0 | **Prepare** | (a) a read-only data survey per environment (§7 R1), packaged as a script that someone with production access can run and return aggregate, PII-free counts ([Q34](#q34)) (built: `tools/domain-model/legacy-data-survey.js`, for `mongosh`; test environments also run it at startup); (b) compose single-node replica set; (c) `VersionedMongoRepository<T>` and tests | Legacy, unchanged | Survey report reviewed; transaction tests green on EphemeralMongo | No runtime effect |
 | 1 | **Expand** | New `*Versions` collections and their (partial) indexes via `DefineIndexes` / `MongoIndexReconciler`; domain models and repositories; no callers | Legacy | Indexes present in each environment; `/health/ready` green | Turn `DomainModel:ExpandEnabled` off and redeploy, which also removes the readiness check. Leave or drop the empty collections |
-| 2 | **Seed dual-write** (`DualWriteSeed`) | Seed also upserts Organisation, Registration and ORS from the same ReEx response, and stamps `registrationEntityId` on the new application with targeted `$set`. It creates no Accreditation: none exists before an approval here (A11 refuted) | Legacy | Failure is **fatal** (v5, D9): the seed request fails, so a defect in the model write shows up in testing instead of being hidden. Counter and log as well | Flag off. Stamped fields are ignored by legacy code (`IgnoreExtraElements`) |
+| 2 | **Seed dual-write** (`DualWriteSeed`) | Seed also upserts Organisation, Registration and ORS from the same ReEx response, and stamps `registrationEntityId` on the new application with targeted `$set`. It creates no Accreditation: none exists before an approval here (A11 refuted) | Legacy | A failure does **not** fail the seed. The model write rolls back and is logged and counted, and the application is returned. The legacy insert has already committed, so failing the request would report an error for an application that exists. First touch (§6.2) fills in the model later | Flag off. Stamped fields are ignored by legacy code (`IgnoreExtraElements`) |
 | 3 | **Full dual-write** (`DualWrite`) | Every write path also writes the entities, **in one transaction** with the legacy write: ORS add, update, promote and revert; interim add, update, withdraw and restore (each a new ORS version, v4); recycling-operations; registration-number; accreditation-number; approved, rejected and withdrawn transitions (§6.2). A failed model write **fails the whole request** and rolls back the legacy write (v5, D9). This phase comes **before** the migration, so no legacy write can slip between the two. A write to an application the migration has not reached yet first **ensures it is migrated** in the same transaction (§6.2) | Legacy | Per-path unit tests for every dual-write; integration tests on a replica set, including concurrent operator PATCH against a CM push (RA-519); fe-tests e2e green in each test environment | Flag off. The model is then stale until the migration (phase 4) is re-run, and legacy is untouched |
 | 4 | **Migrate and reconcile** | **The migration of our 2027 data:** `DomainModelMigrationService` reshapes the applications we hold into Registration, ORS, interim-site and Application versions, with no ReEx calls (§6.1). It is an in-app `BackgroundService` (the `RegulatoryNumberSequenceBackfillService` pattern), idempotent, leased and checkpointed; failures are short Error-level log lines with no personal data. Then the **reconciliation job** (B10) projects every application from the entities **through the same `ApplicationReadModel` facade that phase 5 serves**, and diffs it against the legacy document. It runs in every environment we can reach, and can optionally be run by someone with production access, returning a PII-free report ([Q34](#q34)) | Legacy | Readiness green; reconciliation report: every application linked, counts per status, conflict list in `migrationConflicts`; **zero diffs for 2 days per environment** | Entities are derived data: truncate and re-run. Stamped FKs are harmless |
 | 5 | **Go live: switch reads and the v2 API** (`ReadFromModel`, per route group; `AccreditationApiEnabled`) | The facade (`ApplicationReadModel`) serves GET list and GET by id, then the PATCH and status responses. The four v2 read endpoints (B13) go live in the same step, reading **only** `registrationVersions`, `overseasSiteVersions` and `accreditationVersions` (v4, D3). There is **no separate shadow-read phase** (v5, D9): the reconciliation job in phase 4 is the real-data check, and the golden-JSON, per-path unit and fe-tests suites are the code check. Dual-write stays on, so legacy stays current | Facade (existing endpoints); new model (v2 API) | Phase 4 reconciliation at zero diffs; **golden-JSON contract tests** from captured responses in each status, exporter and reprocessor; fe-tests e2e green against the environment; v2 contract tests on migrated data | Flag off per route group: reads return to legacy, which is still current. v2 flag off: routes return 404, and ReEx keeps using its own accreditation status (R13) |
@@ -1129,7 +1149,9 @@ applications, and is throttled.
      number the applications hold, current or previous, goes into `previousRegistrationNumbers`. A differing current
      number is also written to `migrationConflicts`, unless the Registration already listed it as previous, which
      means ReEx replaced it. The conflict names a winner only if an application holds the number the Registration
-     kept.
+     kept. An application created before phase 2 seeding was on can still report a conflict after a renumbering, as the
+     Registration never recorded its old number. This is accepted: the number is still kept, and telling the two
+     cases apart would need a call to ReEx.
 2. **ORS.** For each distinct `orsId` across the registration's applications:
    - ReEx-originated sites, with no `isNewSite` and present in ORS-A, become **Active**.
    - Operator-added sites take their status from their application: Approved → Active;
@@ -1191,8 +1213,9 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
     well inside its time and size limits. Each application writes several documents (its Application
     version, ORS and interim versions, the FK stamp, conflicts), so 100 applications is a cap on applications,
     not on documents.
-  - **No latency target.** Volumes are low and writes are human-initiated. Taking a few seconds to
-    migrate on first touch is accepted: it is the price of incremental migration without stale data.
+  - **No latency target.** Application numbers are low and writes are human-initiated. Taking a few seconds to
+    migrate on first touch is accepted: it is the price of incremental migration without stale data. The number of
+    sites may not be low, which is untested ([R16](#7-risks)).
   - **Concurrent first touch.** Two writes can race to migrate the same application (for example a
     double click on a slow page). The partial unique indexes and the `version` check let one win and the
     other retry on the transaction error. This is covered by an integration test (B8), not by a lock.
@@ -1235,7 +1258,9 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
     as a repeated push, does not touch its sites, so it cannot overwrite a newer approval's details (§6.1 step 2)
   - stamp `accreditationId` on the Application
 - **`proposedChanges` only while in flight.** As the migration decides, an approved, rejected or withdrawn
-  application holds no overlay, on an ORS or an interim site: it can no longer propose anything.
+  application holds no overlay, on an ORS or an interim site: it can no longer propose anything. An in-flight
+  application's overlay is only recalculated on its own next write, so a change to the ORS can leave it out of date
+  until then ([R17](#7-risks)).
 - **Rejected and withdrawn:** Proposed → Discarded in the same transaction, for every proposed site and interim
   site the application holds, unless another in-flight application of the registration also holds it; then it
   stays Proposed, and is discarded when the last holder closes, whichever application proposed it. A
@@ -1293,7 +1318,8 @@ status, where ReEx's own status was the truth before.
 | --- | --- |
 | Saved, Started | Linked to the Registration. New sites become **Proposed** and edits become `proposedChanges`. The operator sees no difference, because the facade overlays the proposal |
 | Submitted, DulyMade, Queried, Updated, AwaitingDecision | As above. The management-be snapshot is untouched (it owns its copy). Pushes still find the application by `caseManagementWorkItemId`. Under dual-write a later approval runs the approval transaction normally |
-| Rejected, Withdrawn | Not live: a new application can be started for the same key. Linked. Their Proposed sites become Discarded |
+| Approved | Not in flight, but still live: no new application for the same key, unless its Accreditation is cancelled ([Q36](#q36)). Linked, and its Accreditation is created (§6.1) |
+| Rejected, Withdrawn | Not live: a new application can be started for the same key. Linked. Their Proposed sites become Discarded. A rejected application still blocks a new seed today (§2) |
 | Duplicate live applications for one key (a defect: at most one may be live, see Seed comment `:703-714`) | Both linked to the same Registration and recorded as a `DuplicateLiveApplications` conflict for manual repair. No automatic merge |
 
 There is no row for Approved applications: approvals in this service go live after the migration, so
@@ -1316,10 +1342,12 @@ none exist when it runs (v4, D4).
 | R9 | The management-be payload snapshot and migrations depend on the legacy shape (M3) | The legacy shape is kept for the whole programme. The submission payload is still built from the facade's legacy model, so it stays byte-compatible |
 | R10 | The missing operator identity makes `changedBy` weak | Recorded as the service identity until bead `b3n` lands |
 | R11 | Flag-combination complexity | Flags are ordered and validated at startup (for example `ReadFromModel` requires `DualWrite`, and `LegacyWrites` off requires the soak to be recorded) |
-| R12 | Seed idempotency is best-effort, so a race can create a duplicate live application (a defect) | Unchanged by this plan. Enforcing one live application per key (a unique partial index) is a separate follow-up, made easier once the survey shows the duplicates |
+| R12 | Seed idempotency is best-effort, so a race can create a duplicate live application (a defect) | Unchanged by this plan. Enforcing one live application per key (a unique partial index) is a separate follow-up, made easier once the survey shows the duplicates. The index would exclude rejected and withdrawn applications. The legacy document can't show that an approved application's Accreditation is cancelled, so that case needs a new field or an index on the model's collections ([Q36](#q36)) |
 | R13 | **Two sources of accreditation status during the transition.** ReEx has its own status; we become the truth for PRN validity (Q2). A suspension recorded only here would not stop PRNs until ReEx calls our validity API | A sequenced cutover with the ReEx team ([Q19](#q19)). Until then, either regulator suspensions continue in ReEx, or we sync ours to ReEx. Don't expose our lifecycle actions in production before that is agreed |
 | R14 | **Reports expect non-status history from before the migration** (Q22) | History starts at migration time for every entity (§4.3). Earlier business dates are kept as attributes (`approvedAt`, `periodStart`) |
 | R15 | **Test-environment results do not prove production data shapes (accepted, Q34).** We have no access to production data because of data-protection rules. A clean survey, migration or reconciliation in test environments proves the code on test data only. This has caused production surprises before, and there is currently nothing we can do to remove it | Accepted, and reduced rather than removed: (1) dual-write is **fatal** (D9), so a surprising production document fails and rolls back that one write instead of silently corrupting the model; (2) phases 3 and 4 run in production with reads still on legacy, so the first production exposure costs a rolled-back write, not wrong data served; (3) the known legacy shapes are **required fixtures** in B7 and B10; (4) the reconciliation job reports any document it cannot project as a conflict and never skips it; (5) phase 5, the first point where a data-shape surprise can reach users, goes live per route group with the flag-off rollback rehearsed |
+| R16 | **Site volume is untested.** One Accreditation can have hundreds of ORSs. The seed and first touch write sites one at a time in one transaction, against MongoDB's default 60-second limit, and the 100-application cap doesn't count sites. A first touch that runs out of time fails the write, and the registration stays blocked until that is fixed; a seed only logs and counts it | Test both at 1,000 ORSs on one registration, then batch the writes or change the limits if the results need it |
+| R17 | **`proposedChanges` can be out of date.** An in-flight application's overlay is recalculated only on its own next write, so a seed or approval that changes the ORS leaves it calculated against the old details until then | Corrects itself on the next write, and nothing reads the overlay in production yet. Fix where the ORS changes, or settle this when deciding whether to keep the overlay |
 
 ---
 
@@ -1333,7 +1361,9 @@ Status after the 2026-10-21 review: **✅ confirmed**, **✏️ revised**, **❌
 - **A2 ✅** An individual ORS within an Accreditation can be suspended and unsuspended independently. Its
   effective status is suspended if either it or its accreditation is suspended. Its interim sites follow it (Q6).
 - **A3 ✅** A Registration covers exactly one material.
-- **A4 ✅** A Registration has at most one Accreditation per year, enforced by a unique (`registrationId`, `year`) index.
+- **A4 ⏳** A Registration has at most one Accreditation per year, enforced by a unique (`registrationId`, `year`) index.
+  *(Built, and it holds until cancellation ships. Reopened, because a cancelled Accreditation now allows a new
+  application for that year: see [Q36](#q36).)*
 - **A5 ✅** An application is for one material and one year, under one registration. Several can exist for
   the same key after a withdrawal and restart (RA-357).
 - **A6 ✅ (final, 2026-10-22)** System time is recording time (Q21). Nothing is back-dated (§4.3). Earlier business dates are kept as attributes.
@@ -1349,7 +1379,7 @@ Status after the 2026-10-21 review: **✅ confirmed**, **✏️ revised**, **❌
   Registration and ORS.
 - **A12 ✅** `caseManagementReference` is dropped, subject to the survey (B1) confirming it is absent from stored data.
 - **A13 ⏳** Data volumes are small enough for online migration without a maintenance window. *(Not yet
-  confirmed; the B1 survey will report real counts.)*
+  confirmed; the B1 survey will report real counts. Site volume is a separate risk: [R16](#7-risks).)*
 - **A14 ✅** The existing API contract is the JSON produced by serialising `AccreditationApplicationModel`.
   Consumers tolerate unknown extra fields but not missing or renamed ones.
 - **A15 (new)** Accreditation and Registration lifecycles mirror ReEx's (`epr-backend` `status.js`),
@@ -1505,7 +1535,7 @@ The working default noted for each one is what the plan assumes until it is answ
 | <a id="d6"></a>D6 | **Versioned documents in one collection (option B)** for Registration, ORS, Application and Accreditation, in `*Versions` collections. Application is versioned too | §1, §3.2, §3.3, §4, §6, B3, B4 |
 | <a id="d7"></a>D7 | **Organisation is not versioned.** It is held until Account Management is the source of truth, and may later keep only an id plus augmenting data | §3.2, §4, A16, B16 |
 | <a id="d8"></a>D8 | **Renames:** `sites[]` on Accreditation becomes **Accreditation Overseas Site** (`accreditationOverseasSites[]`), and `siteSelections[]` on Application becomes **Application Overseas Site** (`applicationOverseasSites[]`). Both stay embedded, not promoted to collections | §3.2, §3.3, §5, §6 |
-| <a id="d9"></a>D9 | **No shadow-read phase; dual-write is fatal; reads switch with the v2 API after the migration.** Dual-write exists for lossless rollback. A failed model write fails the request, so defects show up in testing. Full dual-write now precedes the migration so no legacy write is missed. A reconciliation job, runnable in test environments and handed to production-access staff, replaces shadow reads. Switching writes becomes a **cut** that follows a soak, then an archive | §1, §6, R11, B8, B10, B11, B12, B14, B17 |
+| <a id="d9"></a>D9 | **No shadow-read phase; dual-write is fatal; reads switch with the v2 API after the migration.** Dual-write exists for lossless rollback. A failed model write fails the request, so defects show up in testing. The phase 2 seed write is the exception, as the legacy insert has already committed (§6). Full dual-write now precedes the migration so no legacy write is missed. A reconciliation job, runnable in test environments and handed to production-access staff, replaces shadow reads. Switching writes becomes a **cut** that follows a soak, then an archive | §1, §6, R11, B8, B10, B11, B12, B14, B17 |
 | <a id="d10"></a>D10 | **The 2026 import is descoped; there is one migration.** ReEx already holds the 2026 data and is the primary client of the v2 APIs, so nothing imports it (it may never be needed). The migration reshapes our 2027 data with no ReEx calls and runs in-app as a `BackgroundService`, so startup is never blocked (CDP kills slow starts). Failures are loud, short Error-level lines with no personal data. The word "backfill" is retired | §6, B7, B13, Q35 |
 
 - <a id="q33"></a>**Q33. ✅ Answered (raised by D6):** how does `applicationVersions` relate to the legacy
@@ -1525,6 +1555,27 @@ The working default noted for each one is what the plan assumes until it is answ
   `source.enrichmentPending`. ReEx may ask for such fields later. If so, a small separate ReEx sync (B16)
   would fill them, not the migration.
 
+### 9.7 New applications after a rejection or cancellation (v6.2)
+
+Decided: per registration and year there is one application if one is in progress or approved. A rejected or
+withdrawn application, or a cancelled Accreditation, can be followed by a new application for that year. A
+cancelled Accreditation can't be reinstated once a new application has been approved for that year.
+
+- <a id="q36"></a>**Q36. How do a cancelled Accreditation and its replacement fit one registration and year?** For
+  product and Adam to decide, before cancellation is built (B15). Nothing can reach this until then.
+  - **The problem:** the unique (`registrationId`, `year`) index (A4) allows one Accreditation, so approving the new
+    application fails with `YearAlreadyAccredited`. The v2 API also identifies an Accreditation by registration and
+    year alone, so that path could match two.
+  - **Option (a), one Accreditation per year:** the new approval moves the existing Accreditation from cancelled back
+    to approved, as a new version with the new application's details. A4 and the v2 path stay as they are, and
+    the history shows both periods. The Accreditation would need to change its `applicationId`.
+  - **Option (b), a new Accreditation:** the index covers only non-cancelled Accreditations, and the path returns the
+    one in force. The cancelled one isn't reachable by that path unless the v2 contract changes, and
+    the replacement's number must differ, or the number index must change too.
+  - **To check either way:** how ReEx handles this; the number the new application gets, as a number is unique and
+    fixed once approved (Q7); and how the seed and frontend learn of the cancellation, as the legacy application stays
+    approved. The duplicate check in §6.3 would also report the old and new applications as duplicates.
+
 ---
 
 ## 10. Proposed beads issues
@@ -1540,7 +1591,7 @@ Priority runs from 0 (critical) to 4 (backlog).
 | B3 | `VersionedMongoRepository<T>`: versions in one collection (`isCurrent`, `validTo` sentinel), transactions, monotonic `validFrom`, as-of and all-versions queries, `ChangeInfo` | feature | 1 | B0, B2 | Integration tests on EphemeralMongo, including concurrent update, same-millisecond writes, and as-of queries |
 | B4 | Expand: Organisation, Registration, OverseasSite and Accreditation entities, with collections and indexes (string enums). v3: ORS `baselOecdCodes[]` (list, with migration from `code1`–`code3`), Accreditation `signatories[]`, globally unique `accreditationNumber`, index `{year, accreditationNumber}`. v4: interim sites embedded in ORS `interimSites[]`, with the partial multikey unique index on (`registrationId`, `interimSites.siteNumber`) and the in-document duplicate check (§4.2); Accreditation `tonnageBand` | feature | 1 | B3 | Collections and indexes created by the reconciler; no `interimSites` or `tonnageBands` collection; no callers |
 | B5 | Additive FK fields on the legacy Application (built: `registrationEntityId`, `overseasSites.sites[].overseasSiteEntityId`, `accreditationEntityId`). No `reservedAccreditationNumber`: `accreditationReference` already holds it until approval (M2) | task | 2 | B4 | Round-trip tests prove legacy reads are unaffected |
-| B6 | Seed dual-write: upsert Organisation, Registration and ORS from ReEx (flag `DualWriteSeed`). **No** Accreditation at seed (A11) | feature | 1 | B4, B5 | Seed behaviour unchanged with the flag off; entities created with it on; failure is **fatal** (D9) and counted |
+| B6 | Seed dual-write: upsert Organisation, Registration and ORS from ReEx (flag `DualWriteSeed`). **No** Accreditation at seed (A11) | feature | 1 | B4, B5 | Seed behaviour unchanged with the flag off; entities created with it on; a failure rolls back, is logged and counted, and the seed still succeeds |
 | B7 | Migration of our 2027 data (phase 4): `DomainModelMigrationService` (`BackgroundService`, no ReEx calls), checkpoint, lease, conflict report and readiness check. Non-status history starts at migration time; accreditations approved in this service are not back-dated (D4). Failures are Error-level, one line, no personal data | feature | 1 | B1, B8 | Idempotent re-run; two instances never work the same batch; reconciliation report; §6.1 steps 1–6 tested on fixtures for every status; `SN-000N` renumbering if the survey finds any (Q30b); log assertions that no name, address or contact detail is ever written; **identity rule (§3.1): `Location` headers and every other id builder (for example `created.Id` in the create endpoint) return the `entityId`, never a version `_id`; a contract test writes the same application at least twice, then asserts no version `_id` appears in any response body, URL or header**; **the known legacy shapes as fixtures: int32 enums, singular `interimSite`-only documents, null `orsId`s, duplicate live applications for one key, legacy `SN-000N` interim numbers, approved applications with no `accreditationReference`, and conflicting registration numbers across one registration (R1, R15)** |
 | B8 | Dual-write on all site and number write paths, in one transaction (flag `DualWrite`). **Fatal on failure** (D9). Ships **before** the migration, and runs the shared ensure-migrated routine (§6.2) for an unmigrated application | feature | 1 | B6 | Every listed handler writes both; a write to an unmigrated application migrates its whole registration group in the same transaction, and fails loudly if the group exceeds the transaction limit; an integration test fires two concurrent first writes to the same unmigrated application and proves one wins and the other retries cleanly; a model-write failure fails the request and rolls back the legacy write; RA-519 targeted-update rule kept; unit tests for each path and replica-set integration tests for concurrency |
 | B9 | Approval creates an Accreditation and activates or discards proposed sites, atomically and idempotently. Ships with the phase 3 dual-write | feature | 1 | B8 | Retried `approved` push creates nothing new; reject or withdraw discards Proposed sites |
@@ -1552,7 +1603,7 @@ Priority runs from 0 (critical) to 4 (backlog).
 | B22 | Status on Accreditation and accredited ORS: stored `status` (recorded time, Q21), transition checks against the current status (§3.4), and the API's `statusHistory[]` projected from version history (§4.4) | feature | 1 | B4 | Each status change is one version with its reason; the projection lists only status changes; illegal transitions rejected |
 | B23 | *(Repurposed in v4, D2.)* `tonnageBand` on the Accreditation (ReEx band values), with `tonnageBandHistory[]` projected from Accreditation versions, and set at approval from `prns.plannedTonnageBand` (int32 to ReEx string, D2) | feature | 2 | B3, B4 | Each band change is one version with reason `TonnageBandChanged`; the projection lists only band changes; int32 to string conversion tested |
 | B14 | Cut: stop writing the legacy collection and freeze it (flag `LegacyWrites` off), after the soak (phase 6) | task | 2 | B12 | Soak of at least 4 weeks at zero diffs; the loss of rollback after the cut is acknowledged by the owners |
-| B15 | Lifecycle actions for regulators: suspend, unsuspend, cancel and reinstate an Accreditation; suspend and unsuspend an ORS; withdraw and restore an interim site on its ORS; cancel and reinstate a Registration **with cascade** (ReEx rules, manual only) | feature | 2 | B9 | Transition tables match ReEx `status.js`; cascade (in-force accreditations only, Q16) in one transaction; history reasons; as-of tests. Not enabled in production before the R13 cutover is agreed |
+| B15 | Lifecycle actions for regulators: suspend, unsuspend, cancel and reinstate an Accreditation; suspend and unsuspend an ORS; withdraw and restore an interim site on its ORS; cancel and reinstate a Registration **with cascade** (ReEx rules, manual only) | feature | 2 | B9 | Transition tables match ReEx `status.js`; cascade (in-force accreditations only, Q16) in one transaction; history reasons; as-of tests. Not enabled in production before the R13 cutover is agreed; a cancelled Accreditation can't be reinstated once a new application is approved for that year; needs [Q36](#q36) answered |
 | B16 | Organisation and Registration sync: refresh from ReEx (Organisation in place, Registration as new versions with no-op suppression); later Account Management | feature | 3 | B6; blocked on Q15 | Re-running a refresh with no changes writes no Registration versions; `lastSyncedAt` recorded |
 | B19 | **Probably folded into B13 (v3).** A separate validity endpoint, only if ReEx still wants a yes/no call (§6.4) | feature | 3 | B13; Q19 | Served from current versions only; new caller auth; as-of tests across suspend and unsuspend |
 | B20 | Agree the accreditation-status cutover with the ReEx team (R13, Q19) | task | 1 | — | A written cutover plan: when ReEx reads status from this service, and where suspensions are recorded until then |
