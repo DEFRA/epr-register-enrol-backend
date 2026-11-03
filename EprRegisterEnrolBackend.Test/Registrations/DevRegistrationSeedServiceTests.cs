@@ -65,6 +65,29 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SeedAsync_WritesAnApprovedCurrentVersionForTheManageExportersRegistration()
+    {
+        await CreateSut().SeedAsync(Ct);
+
+        var seeded = (
+            await _store.Versions.FindAllCurrentAsync(
+                Builders<RegistrationEntity>.Filter.Eq(
+                    x => x.ReExRegistrationId,
+                    FakeOrganisationPersistence.Reg50018.ToString()
+                ),
+                cancellationToken: Ct
+            )
+        )
+            .Should()
+            .ContainSingle()
+            .Subject;
+        seeded.Status.Should().Be(RegistrationStatus.Approved);
+        seeded.Material.Should().Be(MaterialType.Plastic);
+        seeded.WasteProcessingType.Should().Be(WasteProcessingKind.Exporter);
+        seeded.RegistrationNumber.Should().Be("R26EX0500180001PL");
+    }
+
+    [Fact]
     public async Task SeedAsync_RunTwice_ChangesNothing()
     {
         var sut = CreateSut();

@@ -8,10 +8,11 @@ using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
-// RA-425: local manual testing only. Gives the dev-seeded registrations an Approved current version in the
-// domain model, so the frontend's material dashboard pages, which show only Approved registrations, have
-// something to show. Registered alongside the RA-690 DevAccreditationHistorySeedService, under the same
-// Development-only DevSeedData:Enabled flag.
+// RA-425: local manual testing and the fe-tests stack only. Gives the dev-seeded registrations (Delta Green's
+// reprocessor and the dedicated exporter, stub org 50018) an Approved current version in the domain model, so
+// the frontend's material dashboard pages, which show only Approved registrations, have something to show.
+// Registered alongside the RA-690 DevAccreditationHistorySeedService, under the same Development-only
+// DevSeedData:Enabled flag.
 //
 // Idempotent: a registration that already has a current version (seeded earlier, written by the seed
 // dual-write, or changed by a tester) is left alone.
@@ -26,6 +27,12 @@ public class DevRegistrationSeedService(
     );
     internal static readonly ObjectId DeltaGreenRegistrationEntityId = ObjectId.Parse(
         "0e0000000000000000050003"
+    );
+    internal static readonly ObjectId ManageExporterOrganisationEntityId = ObjectId.Parse(
+        "0d0000000000000000050018"
+    );
+    internal static readonly ObjectId ManageExporterRegistrationEntityId = ObjectId.Parse(
+        "0e0000000000000000050018"
     );
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -100,6 +107,18 @@ public class DevRegistrationSeedService(
                     DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference,
                 Status = RegistrationStatus.Approved,
                 WasteProcessingType = WasteProcessingKind.Reprocessor,
+                Material = MaterialType.Plastic,
+                Nation = Nation.England,
+                Source = new EntitySource { System = SourceSystem.ReEx },
+            },
+            new()
+            {
+                EntityId = ManageExporterRegistrationEntityId,
+                OrganisationId = ManageExporterOrganisationEntityId,
+                ReExRegistrationId = FakeOrganisationPersistence.Reg50018.ToString(),
+                RegistrationNumber = DevExporterAccreditationSeedService.ExporterRegistrationNumber,
+                Status = RegistrationStatus.Approved,
+                WasteProcessingType = WasteProcessingKind.Exporter,
                 Material = MaterialType.Plastic,
                 Nation = Nation.England,
                 Source = new EntitySource { System = SourceSystem.ReEx },

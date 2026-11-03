@@ -24,6 +24,7 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
     public static readonly ObjectId Reg50016 = ObjectId.Parse("aaa000000000000000050016");
     public static readonly ObjectId Reg50017 = ObjectId.Parse("aaa000000000000000050017");
+    public static readonly ObjectId Reg50018 = ObjectId.Parse("aaa000000000000000050018");
 
     // RA-690: each material's registration reference code. Perftest glass registrations have no
     // GlassRecyclingProcess, so they take "other" (GO), as StubReExApiAdapter does.
@@ -673,6 +674,60 @@ public class FakeOrganisationPersistence
                         WasteManagementPermits =
                         [
                             new WasteManagementPermitModel { PermitNumber = "WML50017" },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        // RA-425 org: dedicated to the material dashboard pages (/manage) and their ra-425 e2e
+        // journey. DevExporterAccreditationSeedService gives this registration an Approved
+        // current-year accreditation with ORSs and interim sites. It is its own org because many
+        // specs change the shared exporter orgs, and an Approved current-year application on one
+        // of them would change its 2027 reference behaviour (RA-690). OverseasSites lists the
+        // seeded ORSs' SiteIds, so a fresh application for this registration has the same four.
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = 50018,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = "Manage Accreditation Test Ltd",
+                    TradingName = "Manage Accreditation Test",
+                    RegistrationNumber = "R26EX0500180001PL",
+                    CompaniesHouseNumber = "12345018",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = "18 Harbour Road",
+                        Town = "Felixstowe",
+                        Postcode = "IP11 3AB",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Export Manager",
+                    Email = "info@manageaccreditationtest.co.uk",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = Reg50018,
+                        SiteId = "REG018",
+                        Status = RegistrationStatusCreated,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeExporter,
+                        OverseasSites = ["901801", "901805", "901806", "901807"],
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = "WML50018" },
                         ],
                     },
                 ],

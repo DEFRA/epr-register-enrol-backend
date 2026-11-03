@@ -315,10 +315,12 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
 
     // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
     // test hosts run as Development too; the local compose stack sets it.
-    // RA-425: the same flag gives the seeded registrations an Approved domain model version.
+    // RA-425: the same flag gives the seeded registrations an Approved domain model version, and
+    // the dedicated exporter (org 50018) an Approved current-year accreditation.
     if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
     {
         builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
+        builder.Services.AddHostedService<DevExporterAccreditationSeedService>();
         builder.Services.AddHostedService<DevRegistrationSeedService>();
     }
 }
