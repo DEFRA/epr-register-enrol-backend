@@ -4897,13 +4897,17 @@ public static class AccreditationApplicationEndpoints
             organisationId,
             applicationId,
             request,
-            cdpUploaderService,
-            pendingUploadService,
-            appConfig.Value,
             bucketPrefix,
+            new(cdpUploaderService, pendingUploadService, appConfig.Value),
             cancellationToken
         );
     }
+
+    internal sealed record CdpUploadServices(
+        ICdpUploaderService CdpUploader,
+        IPendingUploadService PendingUploads,
+        AppConfig AppConfig
+    );
 
     // Shared with the RA-492 change-request BES upload, whose guards differ (it uploads against
     // an Approved application, which InitiateUploadInternal rejects as terminal).
@@ -4911,15 +4915,13 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         InitiateUploadRequest request,
-        ICdpUploaderService cdpUploaderService,
-        IPendingUploadService pendingUploadService,
-        AppConfig appConfig,
         string bucketPrefix,
+        CdpUploadServices services,
         CancellationToken cancellationToken
     )
     {
         var fileUploadId = Guid.NewGuid().ToString();
-        var baseUrl = appConfig.BaseUrl.TrimEnd('/');
+        var baseUrl = services.AppConfig.BaseUrl.TrimEnd('/');
         var callbackUrl = $"{baseUrl}/api/v1/accreditation-applications/files/upload-completed";
         var statusUrl =
             $"{baseUrl}/api/v1/accreditation-applications/{organisationId}/{applicationId}/files/{fileUploadId}/status";
@@ -4940,8 +4942,8 @@ public static class AccreditationApplicationEndpoints
             Metadata = metadata,
         };
 
-        var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
-        await pendingUploadService.CreateAsync(
+        var cdpResponse = await services.CdpUploader.InitiateAsync(cdpRequest, cancellationToken);
+        await services.PendingUploads.CreateAsync(
             fileUploadId,
             cdpResponse.StatusUrl,
             cdpResponse.UploadId,

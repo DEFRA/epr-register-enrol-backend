@@ -89,36 +89,43 @@ public class DevInYearChangeSeedService(
             OverseasSites = new AccreditationApplicationOverseasSites
             {
                 SectionStatus = SectionStatus.Completed,
-                Sites =
-                [
-                    Site(900181, "001", "Hamburg Plastics GmbH", "Germany", isEu: true, isOecd: true,
-                        coordinates: "53.5511, 9.9937", operationCodes: ["R3"], conditionsOfExport: true,
-                        selected: true),
-                    Site(900182, "002", "Lyon Polymer Recycling", "France", isEu: true, isOecd: true,
-                        coordinates: "45.7640, 4.8357", operationCodes: ["R3"], conditionsOfExport: true,
-                        selected: false),
-                    Site(900183, "003", "Chennai Plastic Works", "India", isEu: false, isOecd: false,
-                        coordinates: null, operationCodes: [], conditionsOfExport: null,
-                        selected: false),
-                    Site(900184, "004", "Izmir Recycling AS", "Turkey", isEu: false, isOecd: true,
-                        coordinates: "38.4237, 27.1428", operationCodes: [], conditionsOfExport: null,
-                        selected: false),
-                ],
+                Sites = Sites(),
             },
         };
     }
 
+    private static List<OverseasSiteModel> Sites()
+    {
+        var accredited = Site(900181, "001", "Hamburg Plastics GmbH", "Germany", isEu: true, isOecd: true);
+        accredited.Coordinates = "53.5511, 9.9937";
+        accredited.OperationCodes = ["R3"];
+        accredited.ConditionsOfExport = true;
+        accredited.Selected = true;
+        accredited.ValidFrom = "2026-03-01T00:00:00Z";
+
+        var complete = Site(900182, "002", "Lyon Polymer Recycling", "France", isEu: true, isOecd: true);
+        complete.Coordinates = "45.7640, 4.8357";
+        complete.OperationCodes = ["R3"];
+        complete.ConditionsOfExport = true;
+
+        // Country only: coordinates, R code and conditions of export to be supplied, and BES
+        // evidence unless conditions of export are met (India is outside the EU and OECD).
+        var countryOnly = Site(900183, "003", "Chennai Plastic Works", "India", isEu: false, isOecd: false);
+
+        var noRecyclingDetails = Site(900184, "004", "Izmir Recycling AS", "Turkey", isEu: false, isOecd: true);
+        noRecyclingDetails.Coordinates = "38.4237, 27.1428";
+
+        return [accredited, complete, countryOnly, noRecyclingDetails];
+    }
+
+    // A registered (not accredited) site with no coordinates, R code or conditions of export.
     private static OverseasSiteModel Site(
         int siteId,
         string orsId,
         string name,
         string country,
         bool isEu,
-        bool isOecd,
-        string? coordinates,
-        List<string> operationCodes,
-        bool? conditionsOfExport,
-        bool selected
+        bool isOecd
     ) =>
         new()
         {
@@ -129,17 +136,14 @@ public class DevInYearChangeSeedService(
             TownOrCity = name.Split(' ')[0],
             SiteAddress = $"{siteId} Industrial Estate, {name.Split(' ')[0]}, {country}",
             Country = country,
-            Coordinates = coordinates,
             ContactName = "Site Manager",
             ContactEmail = $"site{siteId}@example.com",
             ContactPhone = "+44 1234 567890",
-            OperationCodes = operationCodes,
+            OperationCodes = [],
             Code1 = "B3011",
             RepatriatedLoads = "Rejected loads are returned to the UK exporter.",
-            ConditionsOfExport = conditionsOfExport,
             IsEu = isEu,
             IsOecd = isOecd,
-            Selected = selected,
-            ValidFrom = selected ? "2026-03-01T00:00:00Z" : null,
+            Selected = false,
         };
 }

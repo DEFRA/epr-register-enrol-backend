@@ -127,8 +127,10 @@ public static class AccreditationChangeEndpoints
         // to this service yet, so a Submitted request stays pending (AC09).
         var inFlightBySite = new Dictionary<int, AccreditationChangeRequest>();
         foreach (var request in requests)
-        foreach (var site in request.Sites)
-            inFlightBySite.TryAdd(site.SiteId, request);
+        {
+            foreach (var site in request.Sites)
+                inFlightBySite.TryAdd(site.SiteId, request);
+        }
 
         var sites = (accreditation!.OverseasSites?.Sites ?? [])
             .Select(site =>
@@ -341,10 +343,8 @@ public static class AccreditationChangeEndpoints
             organisationId,
             applicationId,
             body,
-            uploads.CdpUploader,
-            uploads.PendingUploads,
-            uploads.AppConfig.Value,
             uploads.CdpConfig.Value.BesEvidenceBucket,
+            new(uploads.CdpUploader, uploads.PendingUploads, uploads.AppConfig.Value),
             services.CancellationToken
         );
     }

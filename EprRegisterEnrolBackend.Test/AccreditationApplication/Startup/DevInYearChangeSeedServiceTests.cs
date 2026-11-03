@@ -45,9 +45,9 @@ public class DevInYearChangeSeedServiceTests
     }
 
     [Fact]
-    public void FakeOrganisation50018_IsAnExporterWithTheSeededSites()
+    public async Task FakeOrganisation50018_IsAnExporterWithTheSeededSites()
     {
-        var org = new FakeOrganisationPersistence().GetByOrgIdAsync(50018).Result;
+        var org = await new FakeOrganisationPersistence().GetByOrgIdAsync(50018);
 
         org!.Registrations!.Single().OverseasSites.Should().Equal("900181", "900182", "900183", "900184");
     }

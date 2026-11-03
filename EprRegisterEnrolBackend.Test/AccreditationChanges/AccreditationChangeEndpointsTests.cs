@@ -25,6 +25,8 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     private static readonly string Sites = $"{Base}/requests/current/sites";
     private static readonly string SubmitUrl = $"{Base}/requests/current/submit";
 
+    private static readonly string[] R3 = ["R3"];
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private readonly AccreditationChangeTestFactory _factory;
@@ -45,7 +47,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
 
     private static object Declaration => new { fullName = "Jane Smith", jobTitle = "Director" };
 
-    private async Task<JsonElement> ReadJson(HttpResponseMessage response) =>
+    private static async Task<JsonElement> ReadJson(HttpResponseMessage response) =>
         await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
 
     private Task<HttpResponseMessage> AddSite(int siteId) =>
@@ -264,7 +266,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     {
         await AddSite(900184);
 
-        var response = await Patch(900184, new { operationCodes = new[] { "R3" }, conditionsOfExport = false });
+        var response = await Patch(900184, new { operationCodes = R3, conditionsOfExport = false });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var site = SiteIn(await ReadJson(response), 900184);
@@ -288,7 +290,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     public async Task BesEvidence_CleanUploadSatisfiesTheRequirementAndRemovingItRestoresIt()
     {
         await AddSite(900183);
-        await Patch(900183, new { coordinates = "13.0827, 80.2707", operationCodes = new[] { "R3" }, conditionsOfExport = false });
+        await Patch(900183, new { coordinates = "13.0827, 80.2707", operationCodes = R3, conditionsOfExport = false });
         var fileUploadId = await SeedCleanUpload("file-1", "bes.pdf");
 
         var added = await _client.PostAsJsonAsync(
@@ -316,7 +318,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     {
         await AddSite(900183);
 
-        var response = await Patch(900183, new { coordinates = "13.0827, 80.2707", operationCodes = new[] { "R3" }, conditionsOfExport = true });
+        var response = await Patch(900183, new { coordinates = "13.0827, 80.2707", operationCodes = R3, conditionsOfExport = true });
 
         var site = SiteIn(await ReadJson(response), 900183);
         site.GetProperty("besEvidenceRequired").GetBoolean().Should().BeFalse();
@@ -443,7 +445,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         stored.SubmittedAt.Should().NotBeNull();
         stored.CaseManagementReference.Should().BeNull();
         await _factory.MockCaseWorkingAdapter.DidNotReceiveWithAnyArgs()
-            .SubmitChangeRequestAsync(default!, default!, default);
+            .SubmitChangeRequestAsync(default!, default!, Ct);
 
         // AC08: the existing registration association stays; the site is shown as pending.
         var view = await Get();
