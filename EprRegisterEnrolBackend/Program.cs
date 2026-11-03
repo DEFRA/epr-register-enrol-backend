@@ -14,6 +14,7 @@ using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
+using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.StubPersistence.Endpoints;
 using EprRegisterEnrolBackend.StubPersistence.Services;
 using EprRegisterEnrolBackend.Utils;
@@ -144,6 +145,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a
     // DomainModel:* flag, off by default; phase 1 "Expand" adds the domain-model-schema readiness check.
     builder.Services.AddDomainModel(builder.Configuration);
+    // RA-425: registration status for the frontend's material dashboard, read whatever the Expand flag.
+    builder.Services.AddRegistrationStatus();
 
     // RA-448: registration/accreditation number generation
     builder.Services.AddSingleton<
@@ -312,8 +315,12 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
 
     // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
     // test hosts run as Development too; the local compose stack sets it.
+    // RA-425: the same flag gives the seeded registrations an Approved domain model version.
     if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
+    {
         builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
+        builder.Services.AddHostedService<DevRegistrationSeedService>();
+    }
 }
 
 [ExcludeFromCodeCoverage]
@@ -451,6 +458,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseAccreditationApplicationEndpoints();
     // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
     app.UseAccreditationApiEndpoints();
+    // RA-425: the current registration status, for the frontend's material dashboard pages
+    app.UseRegistrationStatusEndpoints();
 
     if (app.Environment.IsDevelopment())
     {
