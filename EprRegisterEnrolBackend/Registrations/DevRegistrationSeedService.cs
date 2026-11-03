@@ -17,6 +17,7 @@ namespace EprRegisterEnrolBackend.Registrations;
 // dual-write, or changed by a tester) is left alone.
 public class DevRegistrationSeedService(
     RegistrationVersionStore store,
+    TimeProvider clock,
     ILogger<DevRegistrationSeedService> logger
 ) : BackgroundService
 {
@@ -46,7 +47,7 @@ public class DevRegistrationSeedService(
     {
         try
         {
-            foreach (var registration in SeededRegistrations())
+            foreach (var registration in SeededRegistrations(clock.GetUtcNow().Year))
             {
                 await SeedOneAsync(registration, cancellationToken);
             }
@@ -93,7 +94,7 @@ public class DevRegistrationSeedService(
         );
     }
 
-    internal static IReadOnlyList<RegistrationEntity> SeededRegistrations() =>
+    internal static IReadOnlyList<RegistrationEntity> SeededRegistrations(int year) =>
         [
             new()
             {
@@ -113,7 +114,7 @@ public class DevRegistrationSeedService(
                 EntityId = ManageExporterRegistrationEntityId,
                 OrganisationId = ManageExporterOrganisationEntityId,
                 ReExRegistrationId = FakeOrganisationPersistence.Reg50018.ToString(),
-                RegistrationNumber = DevExporterAccreditationSeedService.ExporterRegistrationNumber,
+                RegistrationNumber = DevExporterAccreditationSeedService.ExporterRegistrationNumberFor(year),
                 Status = RegistrationStatus.Approved,
                 WasteProcessingType = WasteProcessingKind.Exporter,
                 Material = MaterialType.Plastic,

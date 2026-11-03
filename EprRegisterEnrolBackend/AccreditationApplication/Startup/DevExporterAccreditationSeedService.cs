@@ -29,8 +29,11 @@ public class DevExporterAccreditationSeedService(
     internal const string ExporterOrganisationName = "Manage Accreditation Test Ltd";
     internal const string ExporterCompaniesHouseNumber = "12345018";
 
-    // Issued in 2026, so it keeps that year whatever year the accreditation is for.
-    internal const string ExporterRegistrationNumber = "R26EX0500180001PL";
+    // R + 2-digit year + agency letter + X (exporter) + 6-digit org id + 4-digit sequence + material.
+    // Follows the clock, like the accreditation number, so the stub registry, the registration seed
+    // and this accreditation agree in any year.
+    internal static string ExporterRegistrationNumberFor(int year) =>
+        $"R{year % 100:D2}EX0500180001PL";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -108,7 +111,7 @@ public class DevExporterAccreditationSeedService(
             CompaniesHouseNumber = ExporterCompaniesHouseNumber,
             PermitNumbers = ["WML50018"],
             WasteProcessingType = "exporter",
-            RegistrationReference = ExporterRegistrationNumber,
+            RegistrationReference = ExporterRegistrationNumberFor(year),
             AccreditationReference = $"A{year % 100:D2}EX0500180001PL",
             MaterialType = MaterialType.Plastic,
             ApplicationStatus = ApplicationStatus.Approved,

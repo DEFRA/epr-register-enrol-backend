@@ -62,6 +62,10 @@ public class FakeOrganisationPersistence
     private readonly object _lock = new();
 
     public FakeOrganisationPersistence()
+        : this(TimeProvider.System) { }
+
+    // The clock only dates org 50018's registration number, so it matches the RA-425 dev seeds.
+    public FakeOrganisationPersistence(TimeProvider clock)
     {
         _store.Add(
             new OrganisationModel
@@ -700,7 +704,9 @@ public class FakeOrganisationPersistence
                 {
                     Name = DevExporterAccreditationSeedService.ExporterOrganisationName,
                     TradingName = "Manage Accreditation Test",
-                    RegistrationNumber = DevExporterAccreditationSeedService.ExporterRegistrationNumber,
+                    RegistrationNumber = DevExporterAccreditationSeedService.ExporterRegistrationNumberFor(
+                        clock.GetUtcNow().Year
+                    ),
                     CompaniesHouseNumber =
                         DevExporterAccreditationSeedService.ExporterCompaniesHouseNumber,
                     RegisteredAddress = new RegisteredAddressModel

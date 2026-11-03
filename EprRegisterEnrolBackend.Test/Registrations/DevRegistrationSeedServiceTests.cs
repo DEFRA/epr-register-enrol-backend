@@ -37,8 +37,12 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private DevRegistrationSeedService CreateSut() =>
-        new(_store, NullLogger<DevRegistrationSeedService>.Instance);
+    private static readonly TestClock Clock2026 = new(
+        new DateTime(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc)
+    );
+
+    private DevRegistrationSeedService CreateSut(TimeProvider? clock = null) =>
+        new(_store, clock ?? Clock2026, NullLogger<DevRegistrationSeedService>.Instance);
 
     private Task<List<RegistrationEntity>> DeltaGreenVersions() =>
         _store
@@ -62,6 +66,28 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
         seeded.WasteProcessingType.Should().Be(WasteProcessingKind.Reprocessor);
         seeded.RegistrationNumber.Should()
             .Be(DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference);
+    }
+
+    private Task<List<RegistrationEntity>> ManageExporterVersions() =>
+        _store.Versions.FindAllCurrentAsync(
+            Builders<RegistrationEntity>.Filter.Eq(
+                x => x.ReExRegistrationId,
+                FakeOrganisationPersistence.Reg50018.ToString()
+            ),
+            cancellationToken: Ct
+        );
+
+    [Fact]
+    public async Task SeedAsync_InALaterYear_NumbersTheManageExportersRegistrationForThatYear()
+    {
+        await CreateSut(new TestClock(new DateTime(2031, 1, 1, 0, 0, 0, DateTimeKind.Utc)))
+            .SeedAsync(Ct);
+
+        (await ManageExporterVersions())
+            .Should()
+            .ContainSingle()
+            .Which.RegistrationNumber.Should()
+            .Be("R31EX0500180001PL");
     }
 
     [Fact]

@@ -58,6 +58,7 @@ public class DevExporterAccreditationSeedServiceTests
         seeded.WasteProcessingType.Should().Be("exporter");
         seeded.OrganisationName.Should().Be("Manage Accreditation Test Ltd");
         seeded.AccreditationReference.Should().Be("A26EX0500180001PL");
+        seeded.RegistrationReference.Should().Be("R26EX0500180001PL");
     }
 
     [Fact]
@@ -69,6 +70,7 @@ public class DevExporterAccreditationSeedServiceTests
 
         seeded.Year.Should().Be(2031);
         seeded.AccreditationReference.Should().Be("A31EX0500180001PL");
+        seeded.RegistrationReference.Should().Be("R31EX0500180001PL");
     }
 
     [Fact]
@@ -217,7 +219,7 @@ public class DevExporterAccreditationSeedServiceTests
     public async Task StubOrganisationStore_MatchesTheSeededExporter()
     {
         var seeded = await SeedOnce();
-        var org = await new FakeOrganisationPersistence().GetByOrgIdAsync(50018);
+        var org = await new FakeOrganisationPersistence(Clock2026).GetByOrgIdAsync(50018);
 
         org!.CompanyDetails!.Name.Should().Be(seeded.OrganisationName);
         org.CompanyDetails.RegistrationNumber.Should().Be(seeded.RegistrationReference);
