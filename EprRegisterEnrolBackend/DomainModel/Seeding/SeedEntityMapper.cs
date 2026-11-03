@@ -46,24 +46,6 @@ public static class SeedEntityMapper
         MarkFromReEx(target.Source);
     }
 
-    // ReEx masters the number until this service does registrations, so it can change one already issued. The old
-    // number goes onto the previous numbers, and the current one is never among them.
-    private static void ApplyNumber(RegistrationEntity target, string? number)
-    {
-        if (string.IsNullOrWhiteSpace(number) || number == target.RegistrationNumber)
-        {
-            return;
-        }
-
-        if (target.RegistrationNumber is { } old)
-        {
-            target.PreviousRegistrationNumbers.Add(old);
-        }
-
-        target.PreviousRegistrationNumbers.Remove(number);
-        target.RegistrationNumber = number;
-    }
-
     public static void ApplyTo(OverseasSiteEntity target, OverseasSiteModel site)
     {
         target.OrsId = site.OrsId;
@@ -106,6 +88,24 @@ public static class SeedEntityMapper
         };
         ApplyTo(entity, site);
         return entity;
+    }
+
+    // ReEx masters the number until this service does registrations, so it can change one already issued. The old
+    // number goes onto the previous numbers, and the current one is never among them.
+    private static void ApplyNumber(RegistrationEntity target, string? number)
+    {
+        if (string.IsNullOrWhiteSpace(number) || number == target.RegistrationNumber)
+        {
+            return;
+        }
+
+        if (target.RegistrationNumber is { } old)
+        {
+            target.PreviousRegistrationNumbers.Add(old);
+        }
+
+        target.PreviousRegistrationNumbers.Remove(number);
+        target.RegistrationNumber = number;
     }
 
     private static PostalAddress? Address(OverseasSiteModel site) =>
