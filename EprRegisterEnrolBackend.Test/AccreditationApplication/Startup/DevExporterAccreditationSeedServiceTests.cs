@@ -135,6 +135,17 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         Ors(seeded, "003").InterimSites.Should().BeEmpty();
     }
 
+    // The overseas-sites page must hide a registered-only ORS's interim sites, so the seed gives it one.
+    [Fact]
+    public async Task SeedAsync_RegisteredOnlyOrsHasAnInterimSite()
+    {
+        var seeded = await SeedOnce();
+
+        var ors004 = Ors(seeded, "004");
+        ors004.Selected.Should().BeFalse();
+        ors004.InterimSites.Should().ContainSingle().Which.RemovedAt.Should().BeNull();
+    }
+
     // Interim site ids key the edit routes and test ids, and numbers are unique within an application.
     [Fact]
     public async Task SeedAsync_InterimSiteIdsAndNumbersAreUnique()

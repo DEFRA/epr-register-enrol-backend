@@ -16,7 +16,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 //
 // The data matches the frontend stub's exporter (stub-manage-accreditations.js): three accredited
 // ORSs and one registered only. ORS 001 has a withdrawn interim site, and ORSs 001 and 002 both use
-// the same physical site, so the overseas-sites page's per-ORS filtering shows locally. Each copy
+// the same physical site, so the overseas-sites page's per-ORS filtering shows locally. The
+// registered-only ORS 004 has an interim site too, which the page must not show. Each copy
 // has its own id and number: interim site ids key the edit routes and test ids application-wide,
 // and the number allocator keeps numbers unique within an application.
 //
@@ -181,7 +182,17 @@ public class DevExporterAccreditationSeedService(
                 accreditedFrom,
                 []
             ),
-            Ors(901807, "004", "Dragon Recyclers", "8 Harbour Avenue", "Vietnam", null, []),
+            // Registered only, but its registration lists an interim site: the overseas-sites page
+            // must still show no interim sites for it, as they belong to the accreditation.
+            Ors(
+                901807,
+                "004",
+                "Dragon Recyclers",
+                "8 Harbour Avenue",
+                "Vietnam",
+                null,
+                [InterimSite(901809, "005", "Saigon Port Storage", "Vietnam")]
+            ),
         ];
         sites.ForEach(InterimSiteSync.SyncMirror);
         return sites;
