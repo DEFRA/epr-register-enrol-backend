@@ -749,9 +749,9 @@ public class FakeOrganisationPersistence
                 CompaniesHouseNumber = ManageExporterOrg.CompaniesHouseNumber,
                 RegisteredAddress = new RegisteredAddressModel
                 {
-                    Line1 = "18 Harbour Road",
-                    Town = "Felixstowe",
-                    Postcode = "IP11 3AB",
+                    Line1 = ManageExporterOrg.AddressLine1,
+                    Town = ManageExporterOrg.Town,
+                    Postcode = ManageExporterOrg.Postcode,
                 },
             },
             ContactDetails = new ContactDetailsModel

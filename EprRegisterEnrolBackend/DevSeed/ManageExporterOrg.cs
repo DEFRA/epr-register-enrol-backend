@@ -12,8 +12,8 @@ namespace EprRegisterEnrolBackend.DevSeed;
 /// so the two agree.
 /// </summary>
 /// <remarks>
-/// The frontend stub (stub-manage-accreditations.js, stub-operator-orgs.js) mirrors these ids, names and numbers;
-/// keep the two in step.
+/// The frontend mirrors these ids and names in src/server/common/constants/test-orgs.js, and the numbers in its
+/// stub (stub-manage-accreditations.js); keep the two in step.
 /// </remarks>
 internal static class ManageExporterOrg
 {
@@ -27,6 +27,11 @@ internal static class ManageExporterOrg
     internal const string CompaniesHouseNumber = "12345018";
     internal const MaterialType Material = MaterialType.Plastic;
     internal static readonly string PermitNumber = $"WML{OrgId}";
+
+    internal const string AddressLine1 = "18 Harbour Road";
+    internal const string Town = "Felixstowe";
+    internal const string Postcode = "IP11 3AB";
+    internal const string RegisteredAddress = $"{AddressLine1}, {Town}, {Postcode}";
 
     // Both numbers follow the clock, so the stub registry, the registration version and the
     // accreditation agree in any year, e.g. R26EX0500180001PL.

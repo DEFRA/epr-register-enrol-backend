@@ -135,7 +135,7 @@ public class FakeOrganisationPersistenceTests
     }
 
     [Fact]
-    public async Task ExporterOrg50018_RegistrationNumber_IsSetOnTheFirstRead_WhicheverReadItIs()
+    public async Task ExporterOrg50018_RegistrationNumber_IsCurrentFromAnyReadPath_WithoutAnEarlierRead()
     {
         (await WithManageExporter(new TestClock(Late2026)).GetAllAsync())
             .Single(o => o.OrgId == 50018)
