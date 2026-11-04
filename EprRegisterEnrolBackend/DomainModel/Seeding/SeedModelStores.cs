@@ -7,5 +7,6 @@ namespace EprRegisterEnrolBackend.DomainModel.Seeding;
 public sealed record SeedModelStores(
     OrganisationPersistence Organisations,
     IVersionedPersistence<RegistrationEntity> Registrations,
-    IVersionedPersistence<OverseasSiteEntity> OverseasSites
+    IVersionedPersistence<OverseasSiteEntity> OverseasSites,
+    MigrationConflictPersistence Conflicts
 );

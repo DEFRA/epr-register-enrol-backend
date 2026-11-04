@@ -3,6 +3,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
@@ -76,7 +77,12 @@ public sealed class SeedDualWriterTests : IDisposable
     private SeedDualWriter Writer(ILogger<SeedDualWriter>? logger = null) =>
         new(
             _factory,
-            new SeedModelStores(_organisations, _registrations, _overseasSites),
+            new SeedModelStores(
+                _organisations,
+                _registrations,
+                _overseasSites,
+                new MigrationConflictPersistence(_factory, NullLoggerFactory.Instance)
+            ),
             _applications,
             new SeedDualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
             _clock,
@@ -247,6 +253,144 @@ public sealed class SeedDualWriterTests : IDisposable
         Assert.Equal("001", current.LastChange.Details!["orsId"]);
     }
 
+    private async Task<AccreditationApplicationModel> ClosedApplicationAsync(
+        ApplicationStatus status,
+        bool selected = true
+    )
+    {
+        var reEx = ReEx();
+        foreach (var site in reEx.OverseasSites)
+        {
+            site.Selected = selected;
+        }
+
+        var application = await LegacyApplicationAsync(reEx);
+        application.ApplicationStatus = status;
+        return (await _applications.UpdateAsync(application))!;
+    }
+
+    private async Task<OverseasSiteEntity> CurrentSiteAsync(string orsId) =>
+        (await SiteVersionsAsync()).Single(s => s.OrsId == orsId && s.IsCurrent);
+
+    private Task<List<MigrationConflict>> ConflictsAsync() =>
+        _factory
+            .GetCollection<MigrationConflict>(DomainModelCollections.MigrationConflicts)
+            .Find(FilterDefinition<MigrationConflict>.Empty)
+            .ToListAsync(Ct);
+
+    [Fact]
+    public async Task WriteAsync_NumberChangedInReEx_WritesANewVersionKeepingTheOldNumber()
+    {
+        var first = ReEx();
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+
+        _clock.Advance(TimeSpan.FromMinutes(5));
+        var changed = ReEx();
+        changed.RegistrationReference = "R27EX1234567P";
+        await Writer().WriteAsync(Seed(changed, await LegacyApplicationAsync(changed)), Ct);
+
+        var current = (await RegistrationVersionsAsync()).Single(r => r.IsCurrent);
+        Assert.Equal(2, current.Version);
+        Assert.Equal(ChangeReason.ReExRefresh, current.LastChange.Reason);
+        Assert.Equal("R27EX1234567P", current.RegistrationNumber);
+        Assert.Equal(["R26EX1234567P"], current.PreviousRegistrationNumbers);
+    }
+
+    [Fact]
+    public async Task WriteAsync_SiteOnAnApprovedApplication_IsNotChangedAndTheDifferenceIsRecorded()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+        var before = await CurrentSiteAsync("001");
+
+        var renamed = ReEx("Site One Renamed");
+        var seeded = await LegacyApplicationAsync(renamed);
+        await Writer().WriteAsync(Seed(renamed, seeded), Ct);
+
+        var after = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, after.Version);
+        Assert.Equal("Site One", after.SiteName);
+        var conflict = Assert.Single(await ConflictsAsync());
+        Assert.Equal(MigrationConflictKind.ReExDetailsDiffer, conflict.Kind);
+        Assert.Equal("001", conflict.OrsId);
+        Assert.Equal(ReExRegistrationId, conflict.ReExRegistrationId);
+        Assert.Equal(before.RegistrationId, conflict.RegistrationId);
+        Assert.Equal(seeded.Id, Assert.Single(conflict.ApplicationIds));
+        var stamped = await _applications.GetByIdAsync(
+            ReExOrganisationId,
+            seeded.Id!.Value.ToString()
+        );
+        Assert.Equal(
+            after.EntityId,
+            stamped!.OverseasSites!.Sites.Single(s => s.OrsId == "001").OverseasSiteEntityId
+        );
+    }
+
+    [Fact]
+    public async Task WriteAsync_SiteOnAnApprovedApplication_MatchingReEx_RecordsNoDifference()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+
+        Assert.Empty(await ConflictsAsync());
+    }
+
+    [Fact]
+    public async Task WriteAsync_SiteApprovedApplicationDidNotSelect_IsStillRefreshed()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved, selected: false);
+
+        var renamed = ReEx("Site One Renamed");
+        await Writer().WriteAsync(Seed(renamed, await LegacyApplicationAsync(renamed)), Ct);
+
+        var after = await CurrentSiteAsync("001");
+        Assert.Equal("Site One Renamed", after.SiteName);
+        Assert.Equal(ChangeReason.ReExRefresh, after.LastChange.Reason);
+        Assert.Empty(await ConflictsAsync());
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Rejected)]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Submitted)]
+    public async Task WriteAsync_SiteOnAnApplicationNotApproved_IsStillRefreshed(
+        ApplicationStatus status
+    )
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(status);
+
+        var renamed = ReEx("Site One Renamed");
+        await Writer().WriteAsync(Seed(renamed, await LegacyApplicationAsync(renamed)), Ct);
+
+        Assert.Equal("Site One Renamed", (await CurrentSiteAsync("001")).SiteName);
+        Assert.Empty(await ConflictsAsync());
+    }
+
+    [Fact]
+    public async Task WriteAsync_NewSiteOnARegistrationWithAnApprovedApplication_IsCreated()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+
+        var withNewSite = ReEx();
+        withNewSite.OverseasSites.Add(
+            new OverseasSiteModel
+            {
+                SiteId = 3,
+                OrsId = "003",
+                SiteName = "Site Three",
+                Country = "Italy",
+            }
+        );
+        await Writer().WriteAsync(Seed(withNewSite, await LegacyApplicationAsync(withNewSite)), Ct);
+
+        Assert.Equal("Site Three", (await CurrentSiteAsync("003")).SiteName);
+    }
+
     [Fact]
     public async Task WriteAsync_ConcurrentSeedsOfOneRegistration_WriteOneModelAndStampBoth()
     {
@@ -276,6 +420,149 @@ public sealed class SeedDualWriterTests : IDisposable
             );
             Assert.Equal(registration.EntityId, stamped!.RegistrationEntityId);
         }
+    }
+
+    [Fact]
+    public async Task WriteAsync_NumberChangedInReEx_LogsAWarningWithBothNumbers()
+    {
+        var first = ReEx();
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+        Assert.Empty(_logger.Entries);
+
+        var changed = ReEx();
+        changed.RegistrationReference = "R27EX1234567P";
+        var seeded = await LegacyApplicationAsync(changed);
+        await Writer().WriteAsync(Seed(changed, seeded), Ct);
+
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.LogLevel);
+        Assert.Contains(ReExRegistrationId, entry.Message);
+        Assert.Contains("R26EX1234567P", entry.Message);
+        Assert.Contains("R27EX1234567P", entry.Message);
+        Assert.Contains(seeded.Id.ToString()!, entry.Message);
+        Assert.Empty(await ConflictsAsync());
+    }
+
+    [Fact]
+    public async Task WriteAsync_NumberUnchanged_LogsNoWarning()
+    {
+        var reEx = ReEx();
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+
+        Assert.Empty(_logger.Entries);
+    }
+
+    [Fact]
+    public async Task WriteAsync_RolledBackAfterANumberChange_LogsOnlyTheFailure()
+    {
+        var first = ReEx();
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+        var changed = ReEx();
+        changed.RegistrationReference = "R27EX1234567P";
+        // The application is never inserted, so stamping it fails after the number changed.
+        var missing = new AccreditationApplicationModel
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = ReExOrganisationId,
+            RegistrationId = ReExRegistrationId,
+            MaterialType = MaterialType.Plastic,
+            Year = 2027,
+        };
+
+        await Writer().WriteAsync(Seed(changed, missing), Ct);
+
+        var current = (await RegistrationVersionsAsync()).Single(r => r.IsCurrent);
+        Assert.Equal("R26EX1234567P", current.RegistrationNumber);
+        Assert.Equal(LogLevel.Error, Assert.Single(_logger.Entries).LogLevel);
+    }
+
+    [Fact]
+    public async Task WriteAsync_ReExDiffersFromAnAccreditedSite_LogsTheConflictWithoutPersonalData()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+
+        var renamed = ReEx("Site One Renamed");
+        var seeded = await LegacyApplicationAsync(renamed);
+        await Writer().WriteAsync(Seed(renamed, seeded), Ct);
+
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.LogLevel);
+        Assert.Contains(nameof(MigrationConflictKind.ReExDetailsDiffer), entry.Message);
+        Assert.Contains(ReExRegistrationId, entry.Message);
+        Assert.Contains("001", entry.Message);
+        Assert.Contains(seeded.Id.ToString()!, entry.Message);
+        foreach (var personal in new[] { "Acme", "Site One", "France" })
+        {
+            Assert.DoesNotContain(personal, entry.Message);
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_RolledBackAfterAConflict_LogsOnlyTheFailure()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+        // The application is never inserted, so stamping it fails after the conflict was recorded.
+        var missing = new AccreditationApplicationModel
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = ReExOrganisationId,
+            RegistrationId = ReExRegistrationId,
+            MaterialType = MaterialType.Plastic,
+            Year = 2027,
+        };
+
+        await Writer().WriteAsync(Seed(ReEx("Site One Renamed"), missing), Ct);
+
+        Assert.Empty(await ConflictsAsync());
+        Assert.Equal(LogLevel.Error, Assert.Single(_logger.Entries).LogLevel);
+    }
+
+    [Fact]
+    public async Task WriteAsync_GroupOverTheSizeLimit_RollsBackAndLeavesAnAccreditedSiteAlone()
+    {
+        var original = ReEx();
+        await Writer().WriteAsync(Seed(original, await LegacyApplicationAsync(original)), Ct);
+        for (var i = 0; i < ApplicationGroupMigrator.MaxGroupSize; i++)
+        {
+            await LegacyApplicationAsync(original);
+        }
+
+        // Inserted last, so the capped read would miss it if the count went unchecked.
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+        var before = await CurrentSiteAsync("001");
+
+        var renamed = ReEx("Site One Renamed");
+        var seeded = await LegacyApplicationAsync(renamed);
+        await Writer().WriteAsync(Seed(renamed, seeded), Ct);
+
+        var after = await CurrentSiteAsync("001");
+        Assert.Equal(before.Version, after.Version);
+        Assert.Equal("Site One", after.SiteName);
+        Assert.Empty(await ConflictsAsync());
+        Assert.Equal(1, Interlocked.Read(ref _failures));
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Error, entry.LogLevel);
+        Assert.Contains(seeded.Id.ToString()!, entry.Message);
+        Assert.Contains(nameof(ApplicationGroupTooLargeException), entry.Message);
+    }
+
+    [Fact]
+    public async Task WriteAsync_GroupAtTheSizeLimit_StillWrites()
+    {
+        var original = ReEx();
+        for (var i = 0; i < ApplicationGroupMigrator.MaxGroupSize - 1; i++)
+        {
+            await LegacyApplicationAsync(original);
+        }
+
+        await Writer().WriteAsync(Seed(original, await LegacyApplicationAsync(original)), Ct);
+
+        Assert.Equal(0, Interlocked.Read(ref _failures));
+        Assert.Equal("Site One", (await CurrentSiteAsync("001")).SiteName);
     }
 
     [Fact]

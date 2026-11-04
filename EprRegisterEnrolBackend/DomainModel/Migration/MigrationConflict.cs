@@ -51,7 +51,7 @@ public enum MigrationConflictKind
     /// <summary>More than one live application for the same material and year: all linked, none merged (§6.3).</summary>
     DuplicateLiveApplications,
 
-    /// <summary>Applications disagree on the registration number; the newest approved, else the newest, won.</summary>
+    /// <summary>An application holds a number the Registration has never held. A new Registration takes the newest approved application's, else the newest's; an existing one keeps its own.</summary>
     RegistrationNumberDiffers,
 
     /// <summary>An approved application with no accreditation number: its Accreditation was created without one.</summary>
@@ -59,4 +59,7 @@ public enum MigrationConflictKind
 
     /// <summary>An approved application whose registration already has an Accreditation for that year.</summary>
     AccreditationAlreadyExists,
+
+    /// <summary>A seed's ReEx details differ from an accredited ORS, which a seed never changes.</summary>
+    ReExDetailsDiffer,
 }

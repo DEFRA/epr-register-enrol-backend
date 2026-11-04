@@ -42,11 +42,7 @@ public static class SeedEntityMapper
         target.WasteProcessingType = dto.IsExporter
             ? WasteProcessingKind.Exporter
             : WasteProcessingKind.Reprocessor;
-        if (!string.IsNullOrWhiteSpace(dto.RegistrationReference))
-        {
-            target.RegistrationNumber = dto.RegistrationReference;
-        }
-
+        ApplyNumber(target, dto.RegistrationReference);
         MarkFromReEx(target.Source);
     }
 
@@ -66,6 +62,21 @@ public static class SeedEntityMapper
             .ToList();
     }
 
+    /// <summary>Whether the ORS already holds every field <see cref="ApplyTo(OverseasSiteEntity, OverseasSiteModel)"/> would write.</summary>
+    public static bool HasSameDetails(OverseasSiteEntity current, OverseasSiteModel site)
+    {
+        var reEx = new OverseasSiteEntity();
+        ApplyTo(reEx, site);
+        return current.SiteName == reEx.SiteName
+            && current.FormattedAddress == reEx.FormattedAddress
+            && Equals(current.Address?.ToBsonDocument(), reEx.Address?.ToBsonDocument())
+            && current.Country == reEx.Country
+            && current.IsEu == reEx.IsEu
+            && current.IsOecd == reEx.IsOecd
+            && current.Coordinates == reEx.Coordinates
+            && current.BaselOecdCodes.SequenceEqual(reEx.BaselOecdCodes);
+    }
+
     /// <summary>A site from ReEx's ORS-A is already registered there, so it starts Active (§6.1 step 2).</summary>
     public static OverseasSiteEntity NewReExSite(ObjectId registrationId, OverseasSiteModel site)
     {
@@ -77,6 +88,24 @@ public static class SeedEntityMapper
         };
         ApplyTo(entity, site);
         return entity;
+    }
+
+    // ReEx masters the number until this service does registrations, so it can change one already issued. The old
+    // number goes onto the previous numbers, and the current one is never among them.
+    private static void ApplyNumber(RegistrationEntity target, string? number)
+    {
+        if (string.IsNullOrWhiteSpace(number) || number == target.RegistrationNumber)
+        {
+            return;
+        }
+
+        if (target.RegistrationNumber is { } old)
+        {
+            target.PreviousRegistrationNumbers.Add(old);
+        }
+
+        target.PreviousRegistrationNumbers.Remove(number);
+        target.RegistrationNumber = number;
     }
 
     private static PostalAddress? Address(OverseasSiteModel site) =>

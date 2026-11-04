@@ -464,9 +464,10 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         var result = await MigrateAsync(application);
 
         var stored = Assert.Single(
-            await AllAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
         );
         Assert.Equal("R27FROMREEX", stored.RegistrationNumber);
+        Assert.Equal([RegistrationNumber], stored.PreviousRegistrationNumbers);
         var site = Assert.Single(
             await AllAsync<OverseasSiteEntity>(DomainModelCollections.OverseasSiteVersions)
         );
@@ -481,6 +482,325 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
             result.Conflicts,
             c => c.Kind == MigrationConflictKind.OrsDetailsDiffer
         );
+    }
+
+    private async Task<RegistrationEntity> SeededRegistrationAsync(
+        string number = "R27FROMREEX",
+        params string[] previousNumbers
+    ) =>
+        await _stores.Registrations.Versions.InsertAsync(
+            new RegistrationEntity
+            {
+                ReExRegistrationId = ReExRegistrationId,
+                RegistrationNumber = number,
+                PreviousRegistrationNumbers = [.. previousNumbers],
+                Source = new EntitySource { System = SourceSystem.ReEx },
+            },
+            new ChangeInfo { Reason = ChangeReason.ReExImport },
+            cancellationToken: Ct
+        );
+
+    private async Task<OverseasSiteEntity> SeededSiteAsync(RegistrationEntity registration) =>
+        await _stores.OverseasSites.Versions.InsertAsync(
+            new OverseasSiteEntity
+            {
+                RegistrationId = registration.EntityId,
+                OrsId = "001",
+                SiteName = "ReEx Name",
+                Status = OverseasSiteStatus.Active,
+                Origin = SiteOrigin.ReEx,
+            },
+            new ChangeInfo { Reason = ChangeReason.ReExImport },
+            cancellationToken: Ct
+        );
+
+    private static OverseasSiteModel Unselected(OverseasSiteModel site)
+    {
+        site.Selected = false;
+        return site;
+    }
+
+    [Fact]
+    public async Task ApprovedApplication_OnASiteTheSeedCreated_ItsDetailsWin()
+    {
+        var seeded = await SeededSiteAsync(await SeededRegistrationAsync());
+        var application = await ApplicationAsync(
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Approved Name")
+        );
+
+        var result = await MigrateAsync(application);
+
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(seeded.EntityId, site.EntityId);
+        Assert.Equal(2, site.Version);
+        Assert.Equal("Approved Name", site.SiteName);
+        Assert.Equal(OverseasSiteStatus.Active, site.Status);
+        Assert.Equal(SiteOrigin.ReEx, site.Origin);
+        Assert.Equal(ChangeReason.Migration, site.LastChange.Reason);
+        Assert.Null(
+            Assert
+                .Single((await CurrentApplicationAsync(application)).ApplicationOverseasSites)
+                .ProposedChanges
+        );
+        Assert.DoesNotContain(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.OrsDetailsDiffer
+        );
+    }
+
+    [Fact]
+    public async Task TwoApprovedApplications_OnASiteTheSeedCreated_TheNewestWinsAndTheOtherLoses()
+    {
+        await SeededSiteAsync(await SeededRegistrationAsync());
+        var older = await ApplicationForYearAsync(
+            2026,
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Older Name")
+        );
+        var newer = await ApplicationForYearAsync(
+            2027,
+            ApplicationStatus.Approved,
+            Day2,
+            Site(1, "001", "Newer Name")
+        );
+
+        var result = await MigrateAsync(older);
+
+        Assert.Equal("Newer Name", (await CurrentSiteAsync("001")).SiteName);
+        var conflict = Assert.Single(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.OrsDetailsDiffer
+        );
+        Assert.Equal(newer.Id, conflict.WinnerApplicationId);
+        Assert.Equal(older.Id, Assert.Single(conflict.ApplicationIds));
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Rejected)]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Submitted)]
+    public async Task ApplicationThatDidNotAccredit_OnASiteTheSeedCreated_LeavesItsDetails(
+        ApplicationStatus status
+    )
+    {
+        await SeededSiteAsync(await SeededRegistrationAsync());
+        var application = await ApplicationAsync(status, Day1, Site(1, "001", "Other Name"));
+
+        await MigrateAsync(application);
+
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(1, site.Version);
+        Assert.Equal("ReEx Name", site.SiteName);
+    }
+
+    [Fact]
+    public async Task ApprovedApplicationThatDidNotSelect_ASiteTheSeedCreated_LeavesItsDetails()
+    {
+        await SeededSiteAsync(await SeededRegistrationAsync());
+        var application = await ApplicationAsync(
+            ApplicationStatus.Approved,
+            Day1,
+            Unselected(Site(1, "001", "Unselected Name"))
+        );
+
+        await MigrateAsync(application);
+
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(1, site.Version);
+        Assert.Equal("ReEx Name", site.SiteName);
+    }
+
+    [Fact]
+    public async Task InFlightApplication_NextToAnApprovedOne_ProposesAgainstTheApprovedDetails()
+    {
+        await SeededSiteAsync(await SeededRegistrationAsync());
+        var approved = await ApplicationForYearAsync(
+            2026,
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Approved Name")
+        );
+        var inFlight = await ApplicationForYearAsync(
+            2027,
+            ApplicationStatus.Started,
+            Day2,
+            Site(1, "001", "Edited Name")
+        );
+
+        await MigrateAsync(approved);
+
+        Assert.Equal("Approved Name", (await CurrentSiteAsync("001")).SiteName);
+        Assert.Equal(
+            "Edited Name",
+            Assert
+                .Single((await CurrentApplicationAsync(inFlight)).ApplicationOverseasSites)
+                .ProposedChanges!["siteName"]
+                .AsString
+        );
+    }
+
+    [Fact]
+    public async Task OlderApprovedApplicationMigratedLater_DoesNotOverwriteANewerApproval()
+    {
+        await SeededSiteAsync(await SeededRegistrationAsync());
+        var newer = await ApplicationForYearAsync(
+            2027,
+            ApplicationStatus.Approved,
+            Day2,
+            Site(1, "001", "Newer Name")
+        );
+        await MigrateAsync(newer);
+        var versionAfterNewer = (await CurrentSiteAsync("001")).Version;
+        var older = await ApplicationForYearAsync(
+            2026,
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Older Name")
+        );
+
+        await MigrateAsync(older);
+
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(versionAfterNewer, site.Version);
+        Assert.Equal("Newer Name", site.SiteName);
+    }
+
+    [Fact]
+    public async Task ApprovedApplicationMigratedTwice_WritesTheSiteOnce()
+    {
+        await SeededSiteAsync(await SeededRegistrationAsync());
+        var application = await ApplicationAsync(
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Approved Name")
+        );
+        await MigrateAsync(application);
+
+        var second = await MigrateAsync(application);
+
+        Assert.Equal(GroupMigrationOutcome.AlreadyMigrated, second.Outcome);
+        Assert.Equal(2, (await CurrentSiteAsync("001")).Version);
+    }
+
+    [Fact]
+    public async Task RegistrationTheSeedCreated_GainsTheApplicationsOlderNumbers()
+    {
+        var seeded = await SeededRegistrationAsync("R27FROMREEX", "R25KEPT");
+        var older = NewApplication(ApplicationStatus.Approved, Day1);
+        older.Year = 2026;
+        older.RegistrationReference = "R26OTHER";
+        older.PreviousRegistrationNumbers = ["R25KEPT", "R25REGENERATED"];
+        await _applications.CreateAsync(older);
+        var newer = NewApplication(ApplicationStatus.Started, Day2);
+        newer.RegistrationReference = "R27FROMREEX";
+        newer.PreviousRegistrationNumbers = ["R27FROMREEX"];
+        await _applications.CreateAsync(newer);
+
+        var result = await MigrateAsync(newer);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal(seeded.EntityId, registration.EntityId);
+        Assert.Equal(2, registration.Version);
+        Assert.Equal(ChangeReason.Migration, registration.LastChange.Reason);
+        Assert.Equal("R27FROMREEX", registration.RegistrationNumber);
+        Assert.Equal(3, registration.PreviousRegistrationNumbers.Count);
+        Assert.Contains("R25KEPT", registration.PreviousRegistrationNumbers);
+        Assert.Contains("R25REGENERATED", registration.PreviousRegistrationNumbers);
+        Assert.Contains("R26OTHER", registration.PreviousRegistrationNumbers);
+        Assert.Contains(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.RegistrationNumberDiffers
+        );
+    }
+
+    [Fact]
+    public async Task ApplicationHoldingANumberTheRegistrationAlreadyReplaced_IsNotAConflict()
+    {
+        await SeededRegistrationAsync("R27FROMREEX", "R26REPLACED", "R25REPLACED");
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.RegistrationReference = "R25REPLACED";
+        application.PreviousRegistrationNumbers = ["R26REPLACED"];
+        await _applications.CreateAsync(application);
+
+        var result = await MigrateAsync(application);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal("R27FROMREEX", registration.RegistrationNumber);
+        // Same numbers in the stored order, whatever order the application holds them in, so no new version.
+        Assert.Equal(["R26REPLACED", "R25REPLACED"], registration.PreviousRegistrationNumbers);
+        Assert.Equal(1, registration.Version);
+        Assert.DoesNotContain(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.RegistrationNumberDiffers
+        );
+    }
+
+    [Fact]
+    public async Task ApplicationHoldingAnUnknownNumber_IsAConflictNamingNoWinner()
+    {
+        await SeededRegistrationAsync("R27FROMREEX", "R26REPLACED");
+        var application = NewApplication(ApplicationStatus.Approved, Day1);
+        application.RegistrationReference = "R26UNKNOWN";
+        await _applications.CreateAsync(application);
+
+        var result = await MigrateAsync(application);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal("R27FROMREEX", registration.RegistrationNumber);
+        Assert.Contains("R26UNKNOWN", registration.PreviousRegistrationNumbers);
+        var conflict = Assert.Single(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.RegistrationNumberDiffers
+        );
+        Assert.Equal(application.Id, Assert.Single(conflict.ApplicationIds));
+        Assert.Null(conflict.WinnerApplicationId);
+    }
+
+    [Fact]
+    public async Task RegistrationTheSeedCreated_WithNoOlderNumbers_GetsNoNewVersion()
+    {
+        await SeededRegistrationAsync(RegistrationNumber);
+        var application = await ApplicationAsync(ApplicationStatus.Started, Day1);
+
+        await MigrateAsync(application);
+
+        var registration = Assert.Single(
+            await AllAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal(1, registration.Version);
+        Assert.Empty(registration.PreviousRegistrationNumbers);
+    }
+
+    [Fact]
+    public async Task NewRegistration_TakesTheLosingCurrentNumbersAsPrevious()
+    {
+        var older = NewApplication(ApplicationStatus.Started, Day1);
+        older.Year = 2026;
+        older.RegistrationReference = "R26LOSER";
+        older.PreviousRegistrationNumbers = ["R25REGENERATED"];
+        await _applications.CreateAsync(older);
+        var newer = NewApplication(ApplicationStatus.Started, Day2);
+        newer.RegistrationReference = "R27WINNER";
+        await _applications.CreateAsync(newer);
+
+        await MigrateAsync(newer);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal("R27WINNER", registration.RegistrationNumber);
+        Assert.Equal(2, registration.PreviousRegistrationNumbers.Count);
+        Assert.Contains("R26LOSER", registration.PreviousRegistrationNumbers);
+        Assert.Contains("R25REGENERATED", registration.PreviousRegistrationNumbers);
     }
 
     // One live application per organisation, registration and year is the rule, but Seed only enforces it

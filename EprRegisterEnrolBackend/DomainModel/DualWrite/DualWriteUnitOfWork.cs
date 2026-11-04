@@ -69,13 +69,16 @@ public sealed class DualWriteUnitOfWork(
         }
     }
 
-    private Task<IResult> RunWithRetryAsync(
+    private async Task<IResult> RunWithRetryAsync(
         string operation,
         string applicationId,
         Func<IClientSessionHandle?, CancellationToken, Task<IResult>> work,
         CancellationToken cancellationToken
-    ) =>
-        InsertRaceRetry.RunInTransactionAsync(
+    )
+    {
+        // Set by each attempt, so only the attempt that committed is logged.
+        IReadOnlyList<MigrationConflict> conflicts = [];
+        var committed = await InsertRaceRetry.RunInTransactionAsync(
             clientFactory,
             async (session, token) =>
             {
@@ -85,7 +88,8 @@ public sealed class DualWriteUnitOfWork(
                     return await work(session, token);
                 }
 
-                await migrator.EnsureMigratedAsync(id, session, token);
+                var migration = await migrator.EnsureMigratedAsync(id, session, token);
+                conflicts = migration.Conflicts;
                 var result = await work(session, token);
                 await sync.SyncAsync(id, session, token);
                 return result;
@@ -99,4 +103,7 @@ public sealed class DualWriteUnitOfWork(
                 ),
             cancellationToken
         );
+        logger.LogRecorded(conflicts);
+        return committed;
+    }
 }
