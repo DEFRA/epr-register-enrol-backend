@@ -1,6 +1,12 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.4, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.5, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04
+
+**Changes in v6.5 (2026-11-04): seed decisions and accepted risks, after the PR #228 review**
+
+- **A seed that changes an issued registration number logs a Warning,** so someone can check with ReEx (§6.2).
+- **§9.8 records the decisions and accepted risks** on what a seed can overwrite, and the order of the follow-ups.
+- **Seeding after 2027 from this service's own data must ship before 2028 applications open** (§9.8).
 
 **Changes in v6.4 (2026-11-04): what production can see**
 
@@ -1257,7 +1263,9 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   failure. The legacy application is still created and returned.
 - **A seed can change an issued registration number.** ReEx masters registration data until this service handles
   registrations and their updates, so a number changed in ReEx replaces the Registration's, as a new version, and the
-  old number goes onto `previousRegistrationNumbers`. "Fixed once issued" below refers to this service's own
+  old number goes onto `previousRegistrationNumbers`. This should be very rare. ReEx is the oracle for it, so the
+  change goes through, and a Warning with both numbers is logged once it commits, in case it was a mistake on their side
+  and someone needs to check with them. "Fixed once issued" below refers to this service's own
   `registration-number` route. Once this service is the source of truth for registrations, there is no seeding from
   ReEx at all.
 - **Legacy-only writers outside the request paths.** The RA-691 accreditation reference correction
@@ -1374,7 +1382,7 @@ none exist when it runs (v4, D4).
 | R15 | **Test-environment results do not prove production data shapes (accepted, Q34).** We have no access to production data because of data-protection rules. A clean survey, migration or reconciliation in test environments proves the code on test data only. This has caused production surprises before, and there is currently nothing we can do to remove it | Accepted, and reduced rather than removed: (1) dual-write is **fatal** (D9), so a surprising production document fails and rolls back that one write instead of silently corrupting the model; (2) phases 3 and 4 run in production with reads still on legacy, so the first production exposure costs a rolled-back write, not wrong data served; (3) the known legacy shapes are **required fixtures** in B7 and B10; (4) the reconciliation job reports any document it cannot project as a conflict and never skips it; (5) a data-shape surprise can reach users from phase 3 as a failed write, because first touch runs the migration routine (§6.2), and turning `DualWrite` off is the rollback; (6) phase 5, the first point where one could reach users as wrong data, goes live per route group with the flag-off rollback rehearsed |
 | R16 | **Site volume is untested.** One Accreditation can have hundreds of ORSs. The seed and first touch write sites one at a time in one transaction, against MongoDB's default 60-second limit, and the 100-application cap doesn't count sites. A first touch that runs out of time fails the write, and the registration stays blocked until that is fixed; a seed only logs and counts it | Test both at 1,000 ORSs on one registration, then batch the writes or change the limits if the results need it |
 | R17 | **`proposedChanges` can be out of date.** An in-flight application's overlay is recalculated only on its own next write, so a seed or approval that changes the ORS leaves it calculated against the old details until then | Corrects itself on the next write, and nothing reads the overlay in production yet. Fix where the ORS changes, or settle this when deciding whether to keep the overlay |
-| R18 | **Limited visibility of production.** System access is highly restricted, so problems after go-live have to be seen without reading the database. Failed dual-writes and failed seed writes are logged at Error with ids and the error kind only. Each `migrationConflicts` row from first touch or a seed is logged at Warning once its transaction commits, with ids, ORS ids, site numbers and the conflict kind only | Monitor and alert through logs. A basic admin tool that can report on this is hoped for by the read cutover (phase 5), and this is still being discussed |
+| R18 | **Limited visibility of production.** System access is highly restricted, so problems after go-live have to be seen without reading the database. Failed dual-writes and failed seed writes are logged at Error with ids and the error kind only. Each `migrationConflicts` row from first touch or a seed is logged at Warning once its transaction commits, with ids, ORS ids, site numbers and the conflict kind only. So is a seed changing an issued registration number, with both numbers | Monitor and alert through logs. A basic admin tool that can report on this is hoped for by the read cutover (phase 5), and this is still being discussed |
 
 ---
 
@@ -1602,6 +1610,36 @@ cancelled Accreditation can't be reinstated once a new application has been appr
   - **To check either way:** how ReEx handles this; the number the new application gets, as a number is unique and
     fixed once approved (Q7); and how the seed and frontend learn of the cancellation, as the legacy application stays
     approved. The duplicate check in §6.3 would also report the old and new applications as duplicates.
+
+### 9.8 What a seed can overwrite: decisions and accepted risks (v6.5)
+
+A seed only creates a new application, and never changes an existing one. Organisation, Registration and ORS are
+shared across a registration's applications, so a seed can update them. An approved 2027 application counts as live, so
+it stops any further 2027 seed.
+
+**Working assumption:** only 2027 applications exist, with none for 2026. The B1 survey will confirm this.
+
+**Required order of work:**
+
+1. Seeding after 2027 from this service's own data must ship **before 2028 applications open**. Today a later-year seed
+   still calls ReEx, which could overwrite data this service owns. This service is the source of truth for more data
+   from then on.
+2. The unique index for one live application (R12) follows PR #228.
+3. Allowing a new application after a rejection (§6.3) follows that index.
+
+**Decided or accepted:**
+
+| Case | Decision | Why |
+| --- | --- | --- |
+| Starting again after a withdrawal | Fine | It is a new application. A withdrawn application has no Accreditation, and ReEx is still the master for this data |
+| Two seeds at once | Accepted until the unique index ships | It leaves a duplicate live application, which the index closes (R12) |
+| A new application after a rejection, once allowed | Accepted | The same as starting again after a withdrawal |
+| Another registration's seed updates the shared Organisation | Accepted, very low impact | It means the data changed in ReEx, and the new data should reach this service. It most likely corrects data and could prevent a query |
+| A seed changes an issued registration number | Goes through, with a Warning (§6.2) | ReEx is the oracle until this service holds registrations, and it should be very rare |
+| Repeated `ReExDetailsDiffer` rows and log lines | Accepted, no de-duplication | A repeat seed stops before it writes, and an approved 2027 application blocks further 2027 seeds. Only a later-year seed can reach this, and that goes away with item 1 above |
+| `HasSameDetails` lists its fields by hand, so a new field could be missed | Accepted | It would only miss a `ReExDetailsDiffer` report. The site stays protected either way |
+| More than 100 applications fails the seed's model write (§6.2) | Accepted | It is unrealistic with one live application per year. The seed still succeeds, and the failure is logged and counted |
+| An approved application's details replace what a seed copied, with no conflict row (§6.1) | Intended | Approved details win. The old values stay in the previous version |
 
 ---
 
