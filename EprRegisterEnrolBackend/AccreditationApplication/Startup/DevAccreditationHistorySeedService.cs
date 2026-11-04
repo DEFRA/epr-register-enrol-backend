@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.Organisation.Services;
 using MongoDB.Bson;
 
@@ -21,7 +22,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 public class DevAccreditationHistorySeedService(
     IAccreditationApplicationPersistence persistence,
     ILogger<DevAccreditationHistorySeedService> logger
-) : BackgroundService
+) : DevSeedService(logger)
 {
     public const string ConfigKey = "DevSeedData:Enabled";
 
@@ -36,54 +37,34 @@ public class DevAccreditationHistorySeedService(
     internal const string DeltaGreen2026RegistrationReference = "R25ER0500036908PL";
     internal const string DeltaGreen2026AccreditationReference = "A26ER0500030042PL";
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
     {
-        // Yield so host startup is never held up by anything below.
-        await Task.Yield();
-        await SeedAsync(stoppingToken);
-    }
-
-    // Extracted so tests can await it deterministically.
-    internal async Task SeedAsync(CancellationToken cancellationToken)
-    {
-        try
+        var existing = await persistence
+            .GetByIdAsync(DeltaGreenOrganisationId, DeltaGreen2026ApplicationId.ToString())
+            .WaitAsync(cancellationToken);
+        if (existing is not null)
         {
-            var existing = await persistence
-                .GetByIdAsync(DeltaGreenOrganisationId, DeltaGreen2026ApplicationId.ToString())
-                .WaitAsync(cancellationToken);
-            if (existing is not null)
-            {
-                logger.LogInformation(
-                    "DevAccreditationHistorySeedService: Delta Green 2026 accreditation already present"
-                );
-                return;
-            }
-
-            var created = await persistence
-                .CreateAsync(DeltaGreen2026Accreditation())
-                .WaitAsync(cancellationToken);
-            if (created is null)
-            {
-                logger.LogWarning(
-                    "DevAccreditationHistorySeedService: failed to seed the Delta Green 2026 accreditation"
-                );
-                return;
-            }
-
-            logger.LogInformation(
-                "DevAccreditationHistorySeedService: seeded Delta Green 2026 accreditation {AccreditationReference}",
-                DeltaGreen2026AccreditationReference
+            Logger.LogInformation(
+                "DevAccreditationHistorySeedService: Delta Green 2026 accreditation already present"
             );
+            return;
         }
-        catch (OperationCanceledException)
+
+        var created = await persistence
+            .CreateAsync(DeltaGreen2026Accreditation())
+            .WaitAsync(cancellationToken);
+        if (created is null)
         {
-            // Host is shutting down before seeding finished - nothing to do.
+            Logger.LogWarning(
+                "DevAccreditationHistorySeedService: failed to seed the Delta Green 2026 accreditation"
+            );
+            return;
         }
-        catch (Exception ex)
-        {
-            // Best-effort dev data: a Mongo hiccup must not crash-loop the local backend.
-            logger.LogError(ex, "DevAccreditationHistorySeedService: seeding failed");
-        }
+
+        Logger.LogInformation(
+            "DevAccreditationHistorySeedService: seeded Delta Green 2026 accreditation {AccreditationReference}",
+            DeltaGreen2026AccreditationReference
+        );
     }
 
     internal static AccreditationApplicationModel DeltaGreen2026Accreditation()
