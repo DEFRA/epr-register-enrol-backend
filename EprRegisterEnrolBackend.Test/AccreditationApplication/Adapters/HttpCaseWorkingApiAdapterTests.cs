@@ -2275,6 +2275,9 @@ public class HttpCaseWorkingApiAdapterTests
         payload["operatorRequestId"]!.GetValue<string>().Should().Be(request.RequestId);
         payload["accreditationReference"]!.GetValue<string>().Should().Be("A26ER0500180018PL");
         payload["chargePence"]!.GetValue<int>().Should().Be(32800);
+        payload["wasteProcessingType"]!.GetValue<string>().Should().Be("exporter");
+        payload["companyRegisterAddressPostcode"]!.GetValue<string>().Should().Be("HU1 1AA");
+        payload["operatorOrgNumber"]!.GetValue<int>().Should().Be(50018);
         var site = payload["sites"]![0]!;
         site["orsId"]!.GetValue<string>().Should().Be("004");
         site["country"]!.GetValue<string>().Should().Be("Turkey");

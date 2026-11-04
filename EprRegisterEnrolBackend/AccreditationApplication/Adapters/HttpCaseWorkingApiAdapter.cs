@@ -153,6 +153,13 @@ public class HttpCaseWorkingApiAdapter(
             material = changeRequest.MaterialType.ToString(),
             accreditationYear = changeRequest.Year,
             nation = accreditation.Nation?.ToString(),
+            // The fields management-be's ApplicationReferenceGenerator reads, sent as BuildPayload
+            // sends them, so a change request's applicationReference has the same shape as an
+            // application's.
+            wasteProcessingType = accreditation.WasteProcessingType,
+            companyRegisterAddressPostcode = accreditation.CompanyRegisterAddressPostcode,
+            siteAddressPostcode = ExtractPostcode(accreditation.SiteAddress),
+            operatorOrgNumber = accreditation.OrgId,
             chargePence = changeRequest.ChargePence,
             submittedBy = changeRequest.SubmittedBy,
             paymentReference = changeRequest.PaymentReference,

@@ -258,7 +258,7 @@ public class StubCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitChangeRequestAsync_ReturnsAStubReferenceAndWorkItemId()
+    public async Task SubmitChangeRequestAsync_ReturnsAnApplicationFormatReferenceAndWorkItemId()
     {
         var accreditation = DevInYearChangeSeedService.Accreditation();
         var request = new AccreditationChangeRequest
@@ -275,7 +275,8 @@ public class StubCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Be($"STUB-CHANGE-{request.RequestId[..8].ToUpperInvariant()}");
+        // Same AP format as SubmitApplicationAsync: year 26, EA, org 050018, no site postcode, plastic.
+        result.ApplicationReference.Should().Be("AP26EA050018PL");
         result.WorkItemId.Should().NotBeNull();
     }
 }

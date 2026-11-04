@@ -74,7 +74,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     )
     {
         var workItemId = Guid.NewGuid();
-        var reference = $"STUB-CHANGE-{changeRequest.RequestId[..8].ToUpperInvariant()}";
+        var reference = GenerateReference(accreditation);
 
         if (logger.IsEnabled(LogLevel.Information))
         {
