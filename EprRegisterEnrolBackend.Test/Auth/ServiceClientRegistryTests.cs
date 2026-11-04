@@ -1,6 +1,8 @@
 using EprRegisterEnrolBackend.Auth;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -77,6 +79,62 @@ public class ServiceClientRegistryTests
 
         registry.TryGet("reex-client", out _).Should().BeFalse();
         registry.All.Should().BeEmpty();
+    }
+
+    // RA-733: a client registered before its secret exists is normal, so it must not put an
+    // error line in the start-up log.
+    [Fact]
+    public void ClientWithNoSecret_IsLoggedAtInformation_NotError()
+    {
+        var logger = new CapturingLogger<ServiceClientRegistry>();
+
+        _ = new ServiceClientRegistry(
+            Options.Create(
+                new ServiceClientsConfig
+                {
+                    Clients =
+                    [
+                        new ServiceClientDefinition { Name = "reex", ClientId = "reex-client" },
+                    ],
+                }
+            ),
+            new ConfigurationBuilder().Build(),
+            logger
+        );
+
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.LogLevel.Should().Be(LogLevel.Information);
+        entry
+            .Message.Should()
+            .Be(
+                "Service client reex has no secret configured yet; its requests will be rejected until AUTH_SHARED_SECRET__REEX is provisioned."
+            );
+    }
+
+    [Fact]
+    public void ClientWithASecret_LogsNothing()
+    {
+        var logger = new CapturingLogger<ServiceClientRegistry>();
+
+        _ = new ServiceClientRegistry(
+            Options.Create(
+                new ServiceClientsConfig
+                {
+                    Clients =
+                    [
+                        new ServiceClientDefinition { Name = "reex", ClientId = "reex-client" },
+                    ],
+                }
+            ),
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?> { ["AUTH_SHARED_SECRET:REEX"] = "s" }
+                )
+                .Build(),
+            logger
+        );
+
+        logger.Entries.Should().BeEmpty();
     }
 
     [Fact]
