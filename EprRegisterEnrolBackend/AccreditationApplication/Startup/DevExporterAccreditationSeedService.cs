@@ -1,3 +1,4 @@
+using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DevSeed;
@@ -33,7 +34,12 @@ public class DevExporterAccreditationSeedService(
 {
     public const string ConfigKey = "DevSeedData:ManageExporterEnabled";
 
-    internal const string ExporterOrganisationId = "50018";
+    // The frontend stub (stub-manage-accreditations.js, stub-operator-orgs.js) mirrors this
+    // exporter's ids, names and numbers; keep the two in step.
+    internal const int ExporterOrgId = 50018;
+    internal static readonly string ExporterOrganisationId = ExporterOrgId.ToString(
+        CultureInfo.InvariantCulture
+    );
     internal const string ExporterOrganisationName = "Manage Accreditation Test Ltd";
     internal const string ExporterCompaniesHouseNumber = "12345018";
 
@@ -45,11 +51,32 @@ public class DevExporterAccreditationSeedService(
         "0e0000000000000000050018"
     );
 
-    // R + 2-digit year + agency letter + X (exporter) + 6-digit org id + 4-digit sequence + material.
-    // Follows the clock, like the accreditation number, so the stub registry, the registration
-    // version and this accreditation agree in any year.
+    // Both numbers follow the clock, so the stub registry, the registration version and this
+    // accreditation agree in any year, e.g. R26EX0500180001PL.
     internal static string ExporterRegistrationNumberFor(int year) =>
-        $"R{year % 100:D2}EX0500180001PL";
+        RegulatoryNumberFormat
+            .For(
+                new RegulatoryNumberSpec
+                {
+                    Nation = Nation.England,
+                    IsExporter = true,
+                    OrgId = ExporterOrgId,
+                    Material = MaterialType.Plastic,
+                    Year = year,
+                }
+            )
+            .RegistrationNumber(sequence: 1);
+
+    // Derived from the registration number, as a real accreditation number is,
+    // e.g. A26EX0500180001PL.
+    internal static string ExporterAccreditationNumberFor(int year) =>
+        AccreditationReferenceDerivation
+            .Derive(
+                ExporterRegistrationNumberFor(year),
+                AccreditationReferenceSourceKind.Registration,
+                year
+            )
+            .Reference!;
 
     protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
     {
@@ -120,7 +147,7 @@ public class DevExporterAccreditationSeedService(
 
     // "a" + year + padding + org id, e.g. a20260000000000000050018.
     internal static ObjectId ApplicationIdFor(int year) =>
-        ObjectId.Parse($"a{year:D4}00000000000000{ExporterOrganisationId}");
+        ObjectId.Parse($"a{year:D4}{ExporterOrgId:D19}");
 
     internal static AccreditationApplicationModel ExporterAccreditation(int year)
     {
@@ -129,7 +156,7 @@ public class DevExporterAccreditationSeedService(
         {
             Id = ApplicationIdFor(year),
             OrganisationId = ExporterOrganisationId,
-            OrgId = 50018,
+            OrgId = ExporterOrgId,
             OrganisationName = ExporterOrganisationName,
             Year = year,
             RegistrationId = FakeOrganisationPersistence.Reg50018.ToString(),
@@ -141,7 +168,7 @@ public class DevExporterAccreditationSeedService(
             PermitNumbers = ["WML50018"],
             WasteProcessingType = "exporter",
             RegistrationReference = ExporterRegistrationNumberFor(year),
-            AccreditationReference = $"A{year % 100:D2}EX0500180001PL",
+            AccreditationReference = ExporterAccreditationNumberFor(year),
             MaterialType = MaterialType.Plastic,
             ApplicationStatus = ApplicationStatus.Approved,
             SourceYear = year - 1,

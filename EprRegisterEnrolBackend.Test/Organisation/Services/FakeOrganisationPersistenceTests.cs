@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.Organisation.Models;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
 
 namespace EprRegisterEnrolBackend.Test.Organisation.Services;
@@ -83,6 +84,25 @@ public class FakeOrganisationPersistenceTests
         var result = await sut.GetByOrgIdAsync(int.MaxValue);
 
         result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExporterOrg50018_RegistrationNumber_FollowsTheClockAcrossAYearBoundary()
+    {
+        var clock = new TestClock(new DateTime(2026, 12, 31, 23, 59, 0, DateTimeKind.Utc));
+        var sut = new FakeOrganisationPersistence(clock);
+
+        (await sut.GetByOrgIdAsync(50018))!
+            .CompanyDetails!.RegistrationNumber.Should()
+            .Be("R26EX0500180001PL");
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        (await sut.GetByOrgIdAsync(50018))!
+            .CompanyDetails!.RegistrationNumber.Should()
+            .Be("R27EX0500180001PL");
+        (await sut.SearchByValueAsync("R27EX0500180001PL")).Should()
+            .ContainSingle(o => o.OrgId == 50018);
     }
 
     [Fact]

@@ -61,12 +61,32 @@ public class FakeOrganisationPersistence
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
 
+    // The clock only dates org 50018's registration number, so it matches the RA-425 dev seeds. It
+    // is dated on every read, not at construction, so a process running across 1 January reports
+    // the new year's number.
+    private readonly TimeProvider _clock;
+    private readonly CompanyDetailsModel _exporterCompanyDetails;
+
     public FakeOrganisationPersistence()
         : this(TimeProvider.System) { }
 
-    // The clock only dates org 50018's registration number, so it matches the RA-425 dev seeds.
     public FakeOrganisationPersistence(TimeProvider clock)
     {
+        _clock = clock;
+        _exporterCompanyDetails = new CompanyDetailsModel
+        {
+            Name = DevExporterAccreditationSeedService.ExporterOrganisationName,
+            TradingName = "Manage Accreditation Test",
+            CompaniesHouseNumber =
+                DevExporterAccreditationSeedService.ExporterCompaniesHouseNumber,
+            RegisteredAddress = new RegisteredAddressModel
+            {
+                Line1 = "18 Harbour Road",
+                Town = "Felixstowe",
+                Postcode = "IP11 3AB",
+            },
+        };
+
         _store.Add(
             new OrganisationModel
             {
@@ -694,28 +714,13 @@ public class FakeOrganisationPersistence
         _store.Add(
             new OrganisationModel
             {
-                OrgId = 50018,
+                OrgId = DevExporterAccreditationSeedService.ExporterOrgId,
                 SchemaVersion = 1,
                 Version = 1,
                 BusinessType = BusinessTypeUnincorporated,
                 WasteProcessingTypes = [WasteProcessingTypeExporter],
                 ReprocessingNations = [NationEngland],
-                CompanyDetails = new CompanyDetailsModel
-                {
-                    Name = DevExporterAccreditationSeedService.ExporterOrganisationName,
-                    TradingName = "Manage Accreditation Test",
-                    RegistrationNumber = DevExporterAccreditationSeedService.ExporterRegistrationNumberFor(
-                        clock.GetUtcNow().Year
-                    ),
-                    CompaniesHouseNumber =
-                        DevExporterAccreditationSeedService.ExporterCompaniesHouseNumber,
-                    RegisteredAddress = new RegisteredAddressModel
-                    {
-                        Line1 = "18 Harbour Road",
-                        Town = "Felixstowe",
-                        Postcode = "IP11 3AB",
-                    },
-                },
+                CompanyDetails = _exporterCompanyDetails,
                 ContactDetails = new ContactDetailsModel
                 {
                     FullName = "Export Manager",
@@ -963,6 +968,12 @@ public class FakeOrganisationPersistence
         }
     }
 
+    private void DateExporterRegistrationNumber() =>
+        _exporterCompanyDetails.RegistrationNumber =
+            DevExporterAccreditationSeedService.ExporterRegistrationNumberFor(
+                _clock.GetUtcNow().Year
+            );
+
     public Task<bool> CreateAsync(OrganisationModel organisation)
     {
         lock (_lock)
@@ -979,6 +990,7 @@ public class FakeOrganisationPersistence
     {
         lock (_lock)
         {
+            DateExporterRegistrationNumber();
             return Task.FromResult(_store.FirstOrDefault(o => o.OrgId == orgId));
         }
     }
@@ -987,6 +999,7 @@ public class FakeOrganisationPersistence
     {
         lock (_lock)
         {
+            DateExporterRegistrationNumber();
             return Task.FromResult<IEnumerable<OrganisationSummaryModel>>(
                 _store.Select(ToSummary).ToList()
             );
@@ -997,6 +1010,7 @@ public class FakeOrganisationPersistence
     {
         lock (_lock)
         {
+            DateExporterRegistrationNumber();
             if (string.IsNullOrWhiteSpace(searchTerm))
                 return Task.FromResult<IEnumerable<OrganisationSummaryModel>>(
                     _store.Select(ToSummary).ToList()
