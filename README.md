@@ -70,7 +70,9 @@ and the credentials exposed as enviromment variables.
 #### Domain model flags
 
 The domain model (`docs/analysis/register-enrol-domain-model-design.md`) ships in phases, each behind a
-`DomainModel:*` flag that is off by default:
+`DomainModel:*` flag that is off by default. Phases 0 and 1 are released together, and so are phases 2 and 3:
+`DualWriteSeed` and `DualWrite` are switched on at the same time in each environment, though either can be turned off
+alone in a rollback. See §6 of the design doc for the release plan.
 
 - `DomainModel__ExpandEnabled=true` (phase 1) builds the empty versioned collections and their indexes at
   startup and adds the `domain-model-schema` check to `/health/ready`. If Mongo is unreachable at startup,
