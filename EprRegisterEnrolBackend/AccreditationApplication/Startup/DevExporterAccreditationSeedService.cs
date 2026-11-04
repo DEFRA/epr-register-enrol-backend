@@ -1,15 +1,19 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DevSeed;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.Registrations;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
 // RA-425: local manual testing and the fe-tests stack only. Gives the dedicated exporter (stub org
-// 50018, Plastic) an Approved accreditation for the current calendar year, so the frontend's
-// material dashboard, manage page and overseas-sites page show content. Registered alongside the
-// RA-690 DevAccreditationHistorySeedService, under the same Development-only DevSeedData:Enabled
-// flag. DevRegistrationSeedService gives the same registration its Approved registration version.
+// 50018, Plastic) an Approved accreditation for the current calendar year, and its registration an
+// Approved current version in the domain model, so the frontend's material dashboard, manage page
+// and overseas-sites page show content. Development-only, registered with DevSeedData:Enabled
+// (the local compose stack, alongside the RA-690 Delta Green seeds) or with ConfigKey alone (the
+// fe-tests stack, whose other specs must not see the Delta Green data).
 //
 // The data matches the frontend stub's exporter (stub-manage-accreditations.js): three accredited
 // ORSs and one registered only. ORS 001 has a withdrawn interim site, and ORSs 001 and 002 both use
@@ -17,77 +21,102 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // has its own id and number: interim site ids key the edit routes and test ids application-wide,
 // and the number allocator keeps numbers unique within an application.
 //
-// The year comes from the clock at startup. Idempotent: the id is fixed for each year, so it is
-// inserted once per year and left alone after that, including any changes a tester makes to it.
+// The year comes from the clock at startup. Idempotent: the accreditation's id is fixed for each
+// year, so it is inserted once per year and left alone after that, including any changes a tester
+// makes to it; a registration that already has a current version is left alone.
 public class DevExporterAccreditationSeedService(
     IAccreditationApplicationPersistence persistence,
+    RegistrationVersionStore registrations,
     TimeProvider clock,
     ILogger<DevExporterAccreditationSeedService> logger
-) : BackgroundService
+) : DevSeedService(logger)
 {
+    public const string ConfigKey = "DevSeedData:ManageExporterEnabled";
+
     internal const string ExporterOrganisationId = "50018";
     internal const string ExporterOrganisationName = "Manage Accreditation Test Ltd";
     internal const string ExporterCompaniesHouseNumber = "12345018";
 
+    // Fixed so the seeded registration version is recognisable. Nothing reads the Organisation itself yet.
+    internal static readonly ObjectId ExporterOrganisationEntityId = ObjectId.Parse(
+        "0d0000000000000000050018"
+    );
+    internal static readonly ObjectId ExporterRegistrationEntityId = ObjectId.Parse(
+        "0e0000000000000000050018"
+    );
+
     // R + 2-digit year + agency letter + X (exporter) + 6-digit org id + 4-digit sequence + material.
-    // Follows the clock, like the accreditation number, so the stub registry, the registration seed
-    // and this accreditation agree in any year.
+    // Follows the clock, like the accreditation number, so the stub registry, the registration
+    // version and this accreditation agree in any year.
     internal static string ExporterRegistrationNumberFor(int year) =>
         $"R{year % 100:D2}EX0500180001PL";
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
     {
-        // Yield so host startup is never held up by anything below.
-        await Task.Yield();
-        await SeedAsync(stoppingToken);
+        var year = clock.GetUtcNow().Year;
+        await SeedAccreditationAsync(year, cancellationToken);
+        await SeedRegistrationAsync(year, cancellationToken);
     }
 
-    // Extracted so tests can await it deterministically.
-    internal async Task SeedAsync(CancellationToken cancellationToken)
+    private async Task SeedAccreditationAsync(int year, CancellationToken cancellationToken)
     {
-        try
+        var existing = await persistence
+            .GetByIdAsync(ExporterOrganisationId, ApplicationIdFor(year).ToString())
+            .WaitAsync(cancellationToken);
+        if (existing is not null)
         {
-            var year = clock.GetUtcNow().Year;
-            var existing = await persistence
-                .GetByIdAsync(ExporterOrganisationId, ApplicationIdFor(year).ToString())
-                .WaitAsync(cancellationToken);
-            if (existing is not null)
-            {
-                logger.LogInformation(
-                    "DevExporterAccreditationSeedService: {Year} exporter accreditation already present",
-                    year
-                );
-                return;
-            }
-
-            var created = await persistence
-                .CreateAsync(ExporterAccreditation(year))
-                .WaitAsync(cancellationToken);
-            if (created is null)
-            {
-                logger.LogWarning(
-                    "DevExporterAccreditationSeedService: failed to seed the {Year} exporter accreditation",
-                    year
-                );
-                return;
-            }
-
-            logger.LogInformation(
-                "DevExporterAccreditationSeedService: seeded {Year} exporter accreditation {AccreditationReference}",
-                year,
-                created.AccreditationReference
+            Logger.LogInformation(
+                "DevExporterAccreditationSeedService: {Year} exporter accreditation already present",
+                year
             );
+            return;
         }
-        catch (OperationCanceledException)
+
+        var created = await persistence
+            .CreateAsync(ExporterAccreditation(year))
+            .WaitAsync(cancellationToken);
+        if (created is null)
         {
-            // Host is shutting down before seeding finished - nothing to do.
+            Logger.LogWarning(
+                "DevExporterAccreditationSeedService: failed to seed the {Year} exporter accreditation",
+                year
+            );
+            return;
         }
-        catch (Exception ex)
-        {
-            // Best-effort dev data: a Mongo hiccup must not crash-loop the local backend.
-            logger.LogError(ex, "DevExporterAccreditationSeedService: seeding failed");
-        }
+
+        Logger.LogInformation(
+            "DevExporterAccreditationSeedService: seeded {Year} exporter accreditation {AccreditationReference}",
+            year,
+            created.AccreditationReference
+        );
     }
+
+    private async Task SeedRegistrationAsync(int year, CancellationToken cancellationToken)
+    {
+        var seeded = await registrations.SeedIfAbsentAsync(
+            ExporterRegistration(year),
+            cancellationToken
+        );
+        Logger.LogInformation(
+            seeded
+                ? "DevExporterAccreditationSeedService: seeded the exporter's Approved registration version"
+                : "DevExporterAccreditationSeedService: exporter registration version already present"
+        );
+    }
+
+    internal static RegistrationEntity ExporterRegistration(int year) =>
+        new()
+        {
+            EntityId = ExporterRegistrationEntityId,
+            OrganisationId = ExporterOrganisationEntityId,
+            ReExRegistrationId = FakeOrganisationPersistence.Reg50018.ToString(),
+            RegistrationNumber = ExporterRegistrationNumberFor(year),
+            Status = RegistrationStatus.Approved,
+            WasteProcessingType = WasteProcessingKind.Exporter,
+            Material = MaterialType.Plastic,
+            Nation = Nation.England,
+            Source = new EntitySource { System = SourceSystem.ReEx },
+        };
 
     // "a" + year + padding + org id, e.g. a20260000000000000050018.
     internal static ObjectId ApplicationIdFor(int year) =>

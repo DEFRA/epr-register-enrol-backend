@@ -6,7 +6,6 @@ using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Driver;
 
@@ -27,7 +26,7 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
         _databaseName = MongoIntegrationFixture.NewDatabaseName("dev_registration_seed");
         _mongo = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _store = new RegistrationVersionStore(
-            new ServiceCollection().BuildServiceProvider(),
+            () => null,
             _mongo,
             new TestClock(new DateTime(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc))
         );
@@ -37,22 +36,14 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static readonly TestClock Clock2026 = new(
-        new DateTime(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc)
-    );
-
-    private DevRegistrationSeedService CreateSut(TimeProvider? clock = null) =>
-        new(_store, clock ?? Clock2026, NullLogger<DevRegistrationSeedService>.Instance);
+    private DevRegistrationSeedService CreateSut() =>
+        new(_store, NullLogger<DevRegistrationSeedService>.Instance);
 
     private Task<List<RegistrationEntity>> DeltaGreenVersions() =>
-        _store
-            .Versions.FindAllCurrentAsync(
-                Builders<RegistrationEntity>.Filter.Eq(
-                    x => x.ReExRegistrationId,
-                    DeltaGreenRegistration
-                ),
-                cancellationToken: Ct
-            );
+        _store.Versions.FindAllCurrentAsync(
+            Builders<RegistrationEntity>.Filter.Eq(x => x.ReExRegistrationId, DeltaGreenRegistration),
+            cancellationToken: Ct
+        );
 
     [Fact]
     public async Task SeedAsync_WritesAnApprovedCurrentVersionForDeltaGreensRegistration()
@@ -68,49 +59,20 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
             .Be(DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference);
     }
 
-    private Task<List<RegistrationEntity>> ManageExporterVersions() =>
-        _store.Versions.FindAllCurrentAsync(
-            Builders<RegistrationEntity>.Filter.Eq(
-                x => x.ReExRegistrationId,
-                FakeOrganisationPersistence.Reg50018.ToString()
-            ),
-            cancellationToken: Ct
-        );
-
+    // The dedicated exporter is DevExporterAccreditationSeedService's, so the fe-tests stack can seed it alone.
     [Fact]
-    public async Task SeedAsync_InALaterYear_NumbersTheManageExportersRegistrationForThatYear()
-    {
-        await CreateSut(new TestClock(new DateTime(2031, 1, 1, 0, 0, 0, DateTimeKind.Utc)))
-            .SeedAsync(Ct);
-
-        (await ManageExporterVersions())
-            .Should()
-            .ContainSingle()
-            .Which.RegistrationNumber.Should()
-            .Be("R31EX0500180001PL");
-    }
-
-    [Fact]
-    public async Task SeedAsync_WritesAnApprovedCurrentVersionForTheManageExportersRegistration()
+    public async Task SeedAsync_DoesNotSeedTheManageExportersRegistration()
     {
         await CreateSut().SeedAsync(Ct);
 
-        var seeded = (
-            await _store.Versions.FindAllCurrentAsync(
-                Builders<RegistrationEntity>.Filter.Eq(
-                    x => x.ReExRegistrationId,
-                    FakeOrganisationPersistence.Reg50018.ToString()
-                ),
-                cancellationToken: Ct
+        (
+            await _store.FindCurrentByReExRegistrationIdAsync(
+                FakeOrganisationPersistence.Reg50018.ToString(),
+                Ct
             )
         )
             .Should()
-            .ContainSingle()
-            .Subject;
-        seeded.Status.Should().Be(RegistrationStatus.Approved);
-        seeded.Material.Should().Be(MaterialType.Plastic);
-        seeded.WasteProcessingType.Should().Be(WasteProcessingKind.Exporter);
-        seeded.RegistrationNumber.Should().Be("R26EX0500180001PL");
+            .BeNull();
     }
 
     [Fact]

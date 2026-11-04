@@ -1,125 +1,63 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
-using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
-// RA-425: local manual testing and the fe-tests stack only. Gives the dev-seeded registrations (Delta Green's
-// reprocessor and the dedicated exporter, stub org 50018) an Approved current version in the domain model, so
-// the frontend's material dashboard pages, which show only Approved registrations, have something to show.
-// Registered alongside the RA-690 DevAccreditationHistorySeedService, under the same Development-only
-// DevSeedData:Enabled flag.
+// RA-425: local manual testing only. Gives Delta Green's registration (stub org 50003, the RA-690
+// DevAccreditationHistorySeedService's organisation) an Approved current version in the domain model, so the
+// frontend's material dashboard pages, which show only Approved registrations, have something to show.
+// Registered alongside DevAccreditationHistorySeedService, under the same Development-only DevSeedData:Enabled
+// flag. The dedicated exporter's (org 50018) registration is seeded by DevExporterAccreditationSeedService.
 //
 // Idempotent: a registration that already has a current version (seeded earlier, written by the seed
 // dual-write, or changed by a tester) is left alone.
 public class DevRegistrationSeedService(
     RegistrationVersionStore store,
-    TimeProvider clock,
     ILogger<DevRegistrationSeedService> logger
-) : BackgroundService
+) : DevSeedService(logger)
 {
-    // Fixed so the seeded versions are recognisable. Nothing reads the Organisation itself yet.
+    // Fixed so the seeded version is recognisable. Nothing reads the Organisation itself yet.
     internal static readonly ObjectId DeltaGreenOrganisationEntityId = ObjectId.Parse(
         "0d0000000000000000050003"
     );
     internal static readonly ObjectId DeltaGreenRegistrationEntityId = ObjectId.Parse(
         "0e0000000000000000050003"
     );
-    internal static readonly ObjectId ManageExporterOrganisationEntityId = ObjectId.Parse(
-        "0d0000000000000000050018"
-    );
-    internal static readonly ObjectId ManageExporterRegistrationEntityId = ObjectId.Parse(
-        "0e0000000000000000050018"
-    );
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
     {
-        // Yield so host startup is never held up by anything below.
-        await Task.Yield();
-        await SeedAsync(stoppingToken);
-    }
-
-    // Extracted so tests can await it deterministically.
-    internal async Task SeedAsync(CancellationToken cancellationToken)
-    {
-        try
+        var registration = DeltaGreenRegistration();
+        if (!await store.SeedIfAbsentAsync(registration, cancellationToken))
         {
-            foreach (var registration in SeededRegistrations(clock.GetUtcNow().Year))
-            {
-                await SeedOneAsync(registration, cancellationToken);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Host is shutting down before seeding finished - nothing to do.
-        }
-        catch (Exception ex)
-        {
-            // Best-effort dev data: a Mongo hiccup must not crash-loop the local backend.
-            logger.LogError(ex, "DevRegistrationSeedService: seeding failed");
-        }
-    }
-
-    private async Task SeedOneAsync(
-        RegistrationEntity registration,
-        CancellationToken cancellationToken
-    )
-    {
-        // Every seeded registration sets its ReEx id (SeededRegistrations).
-        var existing = await store.FindCurrentByReExRegistrationIdAsync(
-            registration.ReExRegistrationId!,
-            cancellationToken
-        );
-        if (existing is not null)
-        {
-            logger.LogInformation(
+            Logger.LogInformation(
                 "DevRegistrationSeedService: registration {ReExRegistrationId} already present",
                 registration.ReExRegistrationId
             );
             return;
         }
 
-        await store.Versions.InsertAsync(
-            registration,
-            new ChangeInfo { Reason = ChangeReason.ReExImport, ChangedBy = "dev-seed" },
-            cancellationToken: cancellationToken
-        );
-        logger.LogInformation(
+        Logger.LogInformation(
             "DevRegistrationSeedService: seeded {Status} registration {ReExRegistrationId}",
             registration.Status,
             registration.ReExRegistrationId
         );
     }
 
-    internal static IReadOnlyList<RegistrationEntity> SeededRegistrations(int year) =>
-        [
-            new()
-            {
-                EntityId = DeltaGreenRegistrationEntityId,
-                OrganisationId = DeltaGreenOrganisationEntityId,
-                ReExRegistrationId = FakeOrganisationPersistence.Reg50003.ToString(),
-                RegistrationNumber =
-                    DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference,
-                Status = RegistrationStatus.Approved,
-                WasteProcessingType = WasteProcessingKind.Reprocessor,
-                Material = MaterialType.Plastic,
-                Nation = Nation.England,
-                Source = new EntitySource { System = SourceSystem.ReEx },
-            },
-            new()
-            {
-                EntityId = ManageExporterRegistrationEntityId,
-                OrganisationId = ManageExporterOrganisationEntityId,
-                ReExRegistrationId = FakeOrganisationPersistence.Reg50018.ToString(),
-                RegistrationNumber = DevExporterAccreditationSeedService.ExporterRegistrationNumberFor(year),
-                Status = RegistrationStatus.Approved,
-                WasteProcessingType = WasteProcessingKind.Exporter,
-                Material = MaterialType.Plastic,
-                Nation = Nation.England,
-                Source = new EntitySource { System = SourceSystem.ReEx },
-            },
-        ];
+    internal static RegistrationEntity DeltaGreenRegistration() =>
+        new()
+        {
+            EntityId = DeltaGreenRegistrationEntityId,
+            OrganisationId = DeltaGreenOrganisationEntityId,
+            ReExRegistrationId = FakeOrganisationPersistence.Reg50003.ToString(),
+            RegistrationNumber = DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference,
+            Status = RegistrationStatus.Approved,
+            WasteProcessingType = WasteProcessingKind.Reprocessor,
+            Material = MaterialType.Plastic,
+            Nation = Nation.England,
+            Source = new EntitySource { System = SourceSystem.ReEx },
+        };
 }

@@ -14,21 +14,29 @@ namespace EprRegisterEnrolBackend.Registrations;
 /// this reads the same collection through a plain repository instead. A collection that doesn't exist yet reads
 /// as empty.
 /// </summary>
+/// <remarks>
+/// The persistence is taken as a factory and resolved on first use, not injected: constructing it builds its
+/// indexes synchronously against Mongo, and this store is a dependency of the dev seed hosted services, which
+/// the host constructs on its startup thread. That build belongs to MongoIndexInitializerService, in the
+/// background. A failed first use is retried on the next, rather than cached.
+/// </remarks>
 public sealed class RegistrationVersionStore(
-    IServiceProvider services,
+    Func<IVersionedPersistence<RegistrationEntity>?> persistence,
     IMongoDbClientFactory connectionFactory,
     TimeProvider clock
 )
 {
-    private readonly Lazy<VersionedMongoRepository<RegistrationEntity>> _versions = new(() =>
-        services.GetService<IVersionedPersistence<RegistrationEntity>>()?.Versions
-        ?? new VersionedMongoRepository<RegistrationEntity>(
-            connectionFactory.GetClient(),
-            connectionFactory.GetCollection<RegistrationEntity>(
-                DomainModelCollections.RegistrationVersions
+    private readonly Lazy<VersionedMongoRepository<RegistrationEntity>> _versions = new(
+        () =>
+            persistence()?.Versions
+            ?? new VersionedMongoRepository<RegistrationEntity>(
+                connectionFactory.GetClient(),
+                connectionFactory.GetCollection<RegistrationEntity>(
+                    DomainModelCollections.RegistrationVersions
+                ),
+                clock
             ),
-            clock
-        )
+        LazyThreadSafetyMode.PublicationOnly
     );
 
     public VersionedMongoRepository<RegistrationEntity> Versions => _versions.Value;

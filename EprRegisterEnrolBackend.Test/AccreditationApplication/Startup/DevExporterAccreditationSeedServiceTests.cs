@@ -1,7 +1,10 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
@@ -12,21 +15,40 @@ using NSubstitute.ExceptionExtensions;
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
 // RA-425: the local stack's dedicated exporter (stub org 50018) has an Approved current-year
-// accreditation with ORSs and interim sites, so its material dashboard pages show content.
-public class DevExporterAccreditationSeedServiceTests
+// accreditation with ORSs and interim sites, and an Approved registration version, so its material
+// dashboard pages show content.
+public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
 {
     private const string ExporterOrg = "50018";
+    private static readonly string ExporterRegistration =
+        FakeOrganisationPersistence.Reg50018.ToString();
 
     private static readonly TestClock Clock2026 = new(
         new DateTime(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc)
     );
 
-    private static DevExporterAccreditationSeedService CreateSut(
+    private readonly TestMongoDbClientFactory _mongo;
+    private readonly string _databaseName;
+    private readonly RegistrationVersionStore _registrations;
+
+    public DevExporterAccreditationSeedServiceTests(MongoIntegrationFixture fixture)
+    {
+        _databaseName = MongoIntegrationFixture.NewDatabaseName("dev_exporter_seed");
+        _mongo = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
+        _registrations = new RegistrationVersionStore(() => null, _mongo, Clock2026);
+    }
+
+    public void Dispose() => _mongo.GetClient().DropDatabase(_databaseName);
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private DevExporterAccreditationSeedService CreateSut(
         IAccreditationApplicationPersistence persistence,
         TimeProvider? clock = null
     ) =>
         new(
             persistence,
+            _registrations,
             clock ?? Clock2026,
             NullLogger<DevExporterAccreditationSeedService>.Instance
         );
@@ -35,10 +57,13 @@ public class DevExporterAccreditationSeedServiceTests
         FakeAccreditationApplicationPersistence persistence
     ) => (await persistence.GetByOrganisationAsync(ExporterOrg)).ToList();
 
-    private static async Task<AccreditationApplicationModel> SeedOnce(TimeProvider? clock = null)
+    private Task<RegistrationEntity?> ExporterRegistrationVersion() =>
+        _registrations.FindCurrentByReExRegistrationIdAsync(ExporterRegistration, Ct);
+
+    private async Task<AccreditationApplicationModel> SeedOnce(TimeProvider? clock = null)
     {
         var persistence = new FakeAccreditationApplicationPersistence();
-        await CreateSut(persistence, clock).SeedAsync(CancellationToken.None);
+        await CreateSut(persistence, clock).SeedAsync(Ct);
         return (await ExporterApplications(persistence)).Should().ContainSingle().Subject;
     }
 
@@ -138,6 +163,68 @@ public class DevExporterAccreditationSeedServiceTests
         await sut.SeedAsync(CancellationToken.None);
 
         (await ExporterApplications(persistence)).Should().ContainSingle();
+        var registration = await ExporterRegistrationVersion();
+        (await _registrations.Versions.GetVersionsAsync(registration!.EntityId, cancellationToken: Ct))
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task SeedAsync_WritesAnApprovedCurrentVersionForTheExportersRegistration()
+    {
+        await SeedOnce();
+
+        var seeded = (await ExporterRegistrationVersion())!;
+        seeded.Status.Should().Be(RegistrationStatus.Approved);
+        seeded.Version.Should().Be(1);
+        seeded.Material.Should().Be(MaterialType.Plastic);
+        seeded.WasteProcessingType.Should().Be(WasteProcessingKind.Exporter);
+        seeded.RegistrationNumber.Should().Be("R26EX0500180001PL");
+    }
+
+    [Fact]
+    public async Task SeedAsync_InALaterYear_NumbersTheRegistrationForThatYear()
+    {
+        await SeedOnce(new TestClock(new DateTime(2031, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+
+        (await ExporterRegistrationVersion())!.RegistrationNumber.Should().Be("R31EX0500180001PL");
+    }
+
+    // The fe-tests stack seeds only this organisation: the Delta Green data is DevSeedData:Enabled's.
+    [Fact]
+    public async Task SeedAsync_SeedsNoOtherRegistration()
+    {
+        await SeedOnce();
+
+        (
+            await _registrations.FindCurrentByReExRegistrationIdAsync(
+                FakeOrganisationPersistence.Reg50003.ToString(),
+                Ct
+            )
+        )
+            .Should()
+            .BeNull();
+    }
+
+    [Fact]
+    public async Task SeedAsync_RegistrationAlreadyHasACurrentVersion_LeavesItAlone()
+    {
+        var existing = await _registrations.Versions.InsertAsync(
+            new RegistrationEntity
+            {
+                ReExRegistrationId = ExporterRegistration,
+                Status = RegistrationStatus.Cancelled,
+                Material = MaterialType.Plastic,
+            },
+            new ChangeInfo { Reason = ChangeReason.ReExImport },
+            cancellationToken: Ct
+        );
+
+        await SeedOnce();
+
+        var only = (await ExporterRegistrationVersion())!;
+        only.Id.Should().Be(existing.Id);
+        only.Status.Should().Be(RegistrationStatus.Cancelled);
     }
 
     [Fact]
@@ -169,6 +256,7 @@ public class DevExporterAccreditationSeedServiceTests
 
         await act.Should().NotThrowAsync();
         await persistence.Received(1).CreateAsync(Arg.Any<AccreditationApplicationModel>());
+        (await ExporterRegistrationVersion()).Should().NotBeNull();
     }
 
     [Fact]
@@ -211,6 +299,7 @@ public class DevExporterAccreditationSeedServiceTests
         await sut.StopAsync(CancellationToken.None);
 
         (await ExporterApplications(persistence)).Should().ContainSingle();
+        (await ExporterRegistrationVersion()).Should().NotBeNull();
     }
 
     // Guards drift: the stub ReEx registry's org 50018 is the organisation, registration and ORSs

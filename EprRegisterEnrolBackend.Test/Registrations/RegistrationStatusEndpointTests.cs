@@ -17,7 +17,7 @@ namespace EprRegisterEnrolBackend.Test.Registrations;
 // RA-425: the frontend asks for a registration's current status before showing any of the
 // material dashboard pages. Driven through the real host and auth pipeline (outside Development,
 // where the Frontend scheme's bypass would hide a missing gate), against a real ephemeral Mongo,
-// with the domain model's Expand flag both off and on.
+// with the domain model's Expand flag both off and on. Mapped only with FeatureFlags:InYearChangesEnabled.
 public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixture)
 {
     private const string FrontendSecret = "integration-frontend-secret";
@@ -27,7 +27,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private EphemeralMongoTestFactory Factory(bool expandEnabled) =>
+    private EphemeralMongoTestFactory Factory(bool expandEnabled, bool inYearChangesEnabled = true) =>
         new(
             fixture,
             "registration_status",
@@ -38,6 +38,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-management-be-secret",
                 ["CaseWorking:UseStub"] = "true",
                 ["DomainModel:ExpandEnabled"] = expandEnabled ? "true" : "false",
+                [RegistrationStatusEndpoints.FeatureFlagKey] = inYearChangesEnabled ? "true" : "false",
             }
         );
 
@@ -130,6 +131,24 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
             new ChangeInfo { Reason = ChangeReason.ReExRefresh },
             cancellationToken: Ct
         );
+
+        var response = await client.GetAsync(StatusPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Off, the route does not exist, even for a registration that has a current version.
+    [Fact]
+    public async Task InYearChangesFlagOff_ReturnsNotFound()
+    {
+        using var factory = Factory(expandEnabled: true, inYearChangesEnabled: false);
+        using var client = FrontendClient(factory);
+        await Versions(factory)
+            .InsertAsync(
+                Registration(RegistrationStatus.Approved),
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
 
         var response = await client.GetAsync(StatusPath, Ct);
 
