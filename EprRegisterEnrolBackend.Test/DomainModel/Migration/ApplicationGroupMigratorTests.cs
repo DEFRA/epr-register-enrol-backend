@@ -721,9 +721,10 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     [Fact]
     public async Task ApplicationHoldingANumberTheRegistrationAlreadyReplaced_IsNotAConflict()
     {
-        await SeededRegistrationAsync("R27FROMREEX", "R26REPLACED");
+        await SeededRegistrationAsync("R27FROMREEX", "R26REPLACED", "R25REPLACED");
         var application = NewApplication(ApplicationStatus.Started, Day1);
-        application.RegistrationReference = "R26REPLACED";
+        application.RegistrationReference = "R25REPLACED";
+        application.PreviousRegistrationNumbers = ["R26REPLACED"];
         await _applications.CreateAsync(application);
 
         var result = await MigrateAsync(application);
@@ -732,7 +733,9 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
             await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
         );
         Assert.Equal("R27FROMREEX", registration.RegistrationNumber);
-        Assert.Equal(["R26REPLACED"], registration.PreviousRegistrationNumbers);
+        // Same numbers in the stored order, whatever order the application holds them in, so no new version.
+        Assert.Equal(["R26REPLACED", "R25REPLACED"], registration.PreviousRegistrationNumbers);
+        Assert.Equal(1, registration.Version);
         Assert.DoesNotContain(
             result.Conflicts,
             c => c.Kind == MigrationConflictKind.RegistrationNumberDiffers

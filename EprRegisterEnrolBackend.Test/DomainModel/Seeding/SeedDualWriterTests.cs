@@ -423,6 +423,62 @@ public sealed class SeedDualWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_NumberChangedInReEx_LogsAWarningWithBothNumbers()
+    {
+        var first = ReEx();
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+        Assert.Empty(_logger.Entries);
+
+        var changed = ReEx();
+        changed.RegistrationReference = "R27EX1234567P";
+        var seeded = await LegacyApplicationAsync(changed);
+        await Writer().WriteAsync(Seed(changed, seeded), Ct);
+
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.LogLevel);
+        Assert.Contains(ReExRegistrationId, entry.Message);
+        Assert.Contains("R26EX1234567P", entry.Message);
+        Assert.Contains("R27EX1234567P", entry.Message);
+        Assert.Contains(seeded.Id.ToString()!, entry.Message);
+        Assert.Empty(await ConflictsAsync());
+    }
+
+    [Fact]
+    public async Task WriteAsync_NumberUnchanged_LogsNoWarning()
+    {
+        var reEx = ReEx();
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+
+        Assert.Empty(_logger.Entries);
+    }
+
+    [Fact]
+    public async Task WriteAsync_RolledBackAfterANumberChange_LogsOnlyTheFailure()
+    {
+        var first = ReEx();
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+        var changed = ReEx();
+        changed.RegistrationReference = "R27EX1234567P";
+        // The application is never inserted, so stamping it fails after the number changed.
+        var missing = new AccreditationApplicationModel
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = ReExOrganisationId,
+            RegistrationId = ReExRegistrationId,
+            MaterialType = MaterialType.Plastic,
+            Year = 2027,
+        };
+
+        await Writer().WriteAsync(Seed(changed, missing), Ct);
+
+        var current = (await RegistrationVersionsAsync()).Single(r => r.IsCurrent);
+        Assert.Equal("R26EX1234567P", current.RegistrationNumber);
+        Assert.Equal(LogLevel.Error, Assert.Single(_logger.Entries).LogLevel);
+    }
+
+    [Fact]
     public async Task WriteAsync_ReExDiffersFromAnAccreditedSite_LogsTheConflictWithoutPersonalData()
     {
         await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);

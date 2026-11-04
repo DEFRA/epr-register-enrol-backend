@@ -556,6 +556,46 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_RetryFindsTheGroupAlreadyMigrated_LogsNoConflict()
+    {
+        var collection = _factory
+            .GetClient()
+            .GetDatabase(_databaseName)
+            .GetCollection<BsonDocument>("raceTarget");
+        var taken = ObjectId.GenerateNewId();
+        await collection.InsertOneAsync(new BsonDocument("_id", taken), cancellationToken: Ct);
+        // A rival migrated the group: the first attempt's conflict rolled back, and the retry has nothing to do.
+        var migrations = 0;
+        _migrator.OnMigrate = (id, _) =>
+            ++migrations == 1 ? MigratedWithAConflict(id) : GroupMigrationResult.NothingToDo;
+        var attempts = 0;
+
+        await UnitOfWork()
+            .RunAsync(
+                Operation,
+                ObjectId.GenerateNewId().ToString(),
+                async (session, token) =>
+                {
+                    attempts++;
+                    var id = attempts == 1 ? taken : ObjectId.GenerateNewId();
+                    await collection.InsertOneAsync(
+                        session!,
+                        new BsonDocument("_id", id),
+                        cancellationToken: token
+                    );
+                    return Results.NoContent();
+                },
+                Ct
+            );
+
+        Assert.Equal(2, attempts);
+        Assert.DoesNotContain(
+            _logger.Entries,
+            e => e.Message.Contains(nameof(MigrationConflictKind.OrsDetailsDiffer))
+        );
+    }
+
+    [Fact]
     public async Task RunAsync_MigrationFails_DoesNotRunTheWorkAndAnswers500()
     {
         _migrator.OnMigrate = (_, _) =>

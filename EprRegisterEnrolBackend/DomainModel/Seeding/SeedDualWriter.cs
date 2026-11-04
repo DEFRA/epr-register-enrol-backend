@@ -50,7 +50,7 @@ public sealed class SeedDualWriter(
 
     private async Task WriteWithRetryAsync(SeedDualWrite seed, CancellationToken cancellationToken)
     {
-        var conflicts = await InsertRaceRetry.RunInTransactionAsync(
+        var (conflicts, replacedNumber) = await InsertRaceRetry.RunInTransactionAsync(
             clientFactory,
             (session, token) => WriteCoreAsync(session, seed, token),
             attempt =>
@@ -62,9 +62,21 @@ public sealed class SeedDualWriter(
             cancellationToken
         );
         logger.LogRecorded(conflicts);
+        if (replacedNumber is not null)
+        {
+            // ReEx is the oracle for this until we hold registrations, so it went through. It should be very rare, and
+            // could be a mistake on their side, so it needs checking with them.
+            logger.LogWarning(
+                "Seed changed an issued registration number because ReEx holds a different one, check with ReEx: registration {ReExRegistrationId}, from {OldNumber} to {NewNumber}, application {ApplicationId}",
+                seed.ReExRegistrationId,
+                replacedNumber,
+                seed.ReEx.RegistrationReference,
+                seed.Application.Id
+            );
+        }
     }
 
-    private async Task<List<MigrationConflict>> WriteCoreAsync(
+    private async Task<(List<MigrationConflict> Conflicts, string? ReplacedNumber)> WriteCoreAsync(
         IClientSessionHandle session,
         SeedDualWrite seed,
         CancellationToken cancellationToken
@@ -78,7 +90,7 @@ public sealed class SeedDualWriter(
             session,
             cancellationToken
         );
-        var registration = await UpsertRegistrationAsync(
+        var (registration, replacedNumber) = await UpsertRegistrationAsync(
             session,
             seed,
             organisationId,
@@ -121,7 +133,7 @@ public sealed class SeedDualWriter(
             session,
             cancellationToken
         );
-        return conflicts;
+        return (conflicts, replacedNumber);
     }
 
     // The sites an approved application selected. The legacy applications are read rather than the Accreditations
@@ -156,7 +168,10 @@ public sealed class SeedDualWriter(
             .ToHashSet();
     }
 
-    private async Task<RegistrationEntity> UpsertRegistrationAsync(
+    private async Task<(
+        RegistrationEntity Registration,
+        string? ReplacedNumber
+    )> UpsertRegistrationAsync(
         IClientSessionHandle session,
         SeedDualWrite seed,
         ObjectId organisationId,
@@ -173,6 +188,7 @@ public sealed class SeedDualWriter(
             session,
             cancellationToken
         );
+        var oldNumber = current?.RegistrationNumber;
         var registration = current ?? new RegistrationEntity();
         registration.OrganisationId = organisationId;
         SeedEntityMapper.ApplyTo(registration, seed.ReEx, seed.ReExRegistrationId, seed.Material);
@@ -180,12 +196,13 @@ public sealed class SeedDualWriter(
 
         if (current is null)
         {
-            return await versions.InsertAsync(
+            var created = await versions.InsertAsync(
                 registration,
                 Change(seed, ChangeReason.ReExImport),
                 session,
                 cancellationToken
             );
+            return (created, null);
         }
 
         var result = await versions.UpdateAsync(
@@ -195,7 +212,8 @@ public sealed class SeedDualWriter(
             session,
             cancellationToken
         );
-        return result.Entity;
+        var replaced = oldNumber != result.Entity.RegistrationNumber ? oldNumber : null;
+        return (result.Entity, replaced);
     }
 
     private async Task<ObjectId> UpsertOverseasSiteAsync(
