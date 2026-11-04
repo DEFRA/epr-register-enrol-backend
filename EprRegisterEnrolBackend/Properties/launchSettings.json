@@ -7,7 +7,8 @@
       "applicationUrl": "http://localhost:5000",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "DevSeedData__Enabled": "true"
+        "DevSeedData__Enabled": "true",
+        "FeatureFlags__InYearChangesEnabled": "true"
       }
     }
   }

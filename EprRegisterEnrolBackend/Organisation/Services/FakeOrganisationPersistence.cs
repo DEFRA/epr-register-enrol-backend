@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.Organisation.Models;
 using MongoDB.Bson;
 
@@ -59,8 +60,23 @@ public class FakeOrganisationPersistence
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
 
+    // The clock only dates org 50018's registration number, so it matches the RA-425 dev seeds. It
+    // is dated as each read returns it, not at construction, so a process running across 1 January
+    // reports the new year's number.
+    private readonly TimeProvider _clock;
+    private readonly bool _includeManageExporter;
+
     public FakeOrganisationPersistence()
+        : this(TimeProvider.System, includeManageExporter: false) { }
+
+    /// <param name="includeManageExporter">
+    /// Whether to include org 50018, which only DevExporterAccreditationSeedService accredits.
+    /// </param>
+    public FakeOrganisationPersistence(TimeProvider clock, bool includeManageExporter)
     {
+        _clock = clock;
+        _includeManageExporter = includeManageExporter;
+
         _store.Add(
             new OrganisationModel
             {
@@ -679,6 +695,9 @@ public class FakeOrganisationPersistence
             }
         );
 
+        if (includeManageExporter)
+            _store.Add(ManageExporterOrganisation());
+
         // RA-512: perftest fixtures, generated (not hand-written) because 200
         // near-identical literals would be unreviewable. See Impl-RA-512.md.
         AddPerfTestReprocessors();
@@ -706,6 +725,62 @@ public class FakeOrganisationPersistence
             "info@appdevrecycling.co.uk"
         );
     }
+
+    // RA-425 org: dedicated to the material dashboard pages (/manage) and their ra-425 e2e
+    // journey. DevExporterAccreditationSeedService gives this registration an Approved
+    // current-year accreditation with ORSs and interim sites. It is its own org because many
+    // specs change the shared exporter orgs, and an Approved current-year application on one
+    // of them would change its 2027 reference behaviour (RA-690). OverseasSites lists the
+    // seeded ORSs' SiteIds, so a fresh application for this registration has the same four.
+    // No registration number here: WithDatedRegistrationNumber adds it on read.
+    private static OrganisationModel ManageExporterOrganisation() =>
+        new()
+        {
+            OrgId = ManageExporterOrg.OrgId,
+            SchemaVersion = 1,
+            Version = 1,
+            BusinessType = BusinessTypeUnincorporated,
+            WasteProcessingTypes = [WasteProcessingTypeExporter],
+            ReprocessingNations = [NationEngland],
+            CompanyDetails = new CompanyDetailsModel
+            {
+                Name = ManageExporterOrg.Name,
+                TradingName = "Manage Accreditation Test",
+                CompaniesHouseNumber = ManageExporterOrg.CompaniesHouseNumber,
+                RegisteredAddress = new RegisteredAddressModel
+                {
+                    Line1 = ManageExporterOrg.AddressLine1,
+                    Town = ManageExporterOrg.Town,
+                    Postcode = ManageExporterOrg.Postcode,
+                },
+            },
+            ContactDetails = new ContactDetailsModel
+            {
+                FullName = "Export Manager",
+                Email = "info@manageaccreditationtest.co.uk",
+            },
+            Users = [],
+            Accreditations = [],
+            Registrations =
+            [
+                new RegistrationModel
+                {
+                    Id = ManageExporterOrg.RegistrationId,
+                    SiteId = "REG018",
+                    Status = RegistrationStatusCreated,
+                    Material = ManageExporterOrg.Material.ToString().ToLowerInvariant(),
+                    WasteProcessingType = WasteProcessingTypeExporter,
+                    OverseasSites = ["901801", "901805", "901806", "901807"],
+                    WasteManagementPermits =
+                    [
+                        new WasteManagementPermitModel
+                        {
+                            PermitNumber = ManageExporterOrg.PermitNumber,
+                        },
+                    ],
+                },
+            ],
+        };
 
     private void AddPlasticReprocessor(
         int orgId,
@@ -900,6 +975,21 @@ public class FakeOrganisationPersistence
         }
     }
 
+    // A copy, so a read never changes the store. Org 50018's number is always the clock's, even
+    // after an Update replaced its record, so it keeps matching what the dev seed wrote.
+    private OrganisationModel WithDatedRegistrationNumber(OrganisationModel organisation)
+    {
+        if (!_includeManageExporter || organisation.OrgId != ManageExporterOrg.OrgId)
+            return organisation;
+
+        var dated = organisation.ShallowCopy();
+        dated.CompanyDetails = organisation.CompanyDetails?.ShallowCopy() ?? new();
+        dated.CompanyDetails.RegistrationNumber = ManageExporterOrg.RegistrationNumberFor(
+            _clock.GetUtcNow().Year
+        );
+        return dated;
+    }
+
     public Task<bool> CreateAsync(OrganisationModel organisation)
     {
         lock (_lock)
@@ -916,7 +1006,10 @@ public class FakeOrganisationPersistence
     {
         lock (_lock)
         {
-            return Task.FromResult(_store.FirstOrDefault(o => o.OrgId == orgId));
+            var organisation = _store.FirstOrDefault(o => o.OrgId == orgId);
+            return Task.FromResult(
+                organisation is null ? null : WithDatedRegistrationNumber(organisation)
+            );
         }
     }
 
@@ -925,7 +1018,7 @@ public class FakeOrganisationPersistence
         lock (_lock)
         {
             return Task.FromResult<IEnumerable<OrganisationSummaryModel>>(
-                _store.Select(ToSummary).ToList()
+                _store.Select(WithDatedRegistrationNumber).Select(ToSummary).ToList()
             );
         }
     }
@@ -934,13 +1027,14 @@ public class FakeOrganisationPersistence
     {
         lock (_lock)
         {
+            var organisations = _store.Select(WithDatedRegistrationNumber);
             if (string.IsNullOrWhiteSpace(searchTerm))
                 return Task.FromResult<IEnumerable<OrganisationSummaryModel>>(
-                    _store.Select(ToSummary).ToList()
+                    organisations.Select(ToSummary).ToList()
                 );
 
             var term = searchTerm.Trim();
-            var matches = _store
+            var matches = organisations
                 .Where(o =>
                     (
                         o.CompanyDetails?.Name?.Contains(term, StringComparison.OrdinalIgnoreCase)

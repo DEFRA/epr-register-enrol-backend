@@ -1,5 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -81,5 +83,64 @@ public class ReExApiAdapterRegistrationTests
 
         result.IsSuccess.Should().BeTrue();
         result.Value!.OrganisationName.Should().Be("E2E Organisation e2e-feedface");
+    }
+
+    // RA-425: org 50018 is the dedicated exporter DevExporterAccreditationSeedService accredits.
+    // Anywhere that seed does not run, the stub ReEx registry must not have it, as before RA-425.
+    private static async Task<bool> StubRegistryHasOrg50018(
+        string environmentName,
+        Dictionary<string, string?> settings,
+        bool testOrganisationsEnabled = false
+    )
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var environment = Substitute.For<IHostEnvironment>();
+        environment.EnvironmentName.Returns(environmentName);
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(Substitute.For<IReExClient>());
+        services.AddReExApiAdapter(configuration, environment, testOrganisationsEnabled);
+
+        var fakeOrgs = services
+            .BuildServiceProvider()
+            .GetRequiredService<FakeOrganisationPersistence>();
+        return await fakeOrgs.GetByOrgIdAsync(50018) is not null;
+    }
+
+    [Theory]
+    [InlineData(DevAccreditationHistorySeedService.ConfigKey)]
+    [InlineData(DevExporterAccreditationSeedService.ConfigKey)]
+    public async Task Development_WithTheExporterSeedOn_StubRegistryHasOrg50018(string seedFlag)
+    {
+        (await StubRegistryHasOrg50018(Environments.Development, new() { [seedFlag] = "true" }))
+            .Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public async Task Development_WithTheExporterSeedOff_StubRegistryHasNoOrg50018()
+    {
+        (await StubRegistryHasOrg50018(Environments.Development, [])).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task OutsideDevelopment_StubRegistryHasNoOrg50018_WhateverTheSeedFlags(
+        bool useStub,
+        bool testOrganisationsEnabled
+    )
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["ReExApi:UseStub"] = useStub.ToString(),
+            [DevAccreditationHistorySeedService.ConfigKey] = "true",
+            [DevExporterAccreditationSeedService.ConfigKey] = "true",
+        };
+
+        (await StubRegistryHasOrg50018(Environments.Production, settings, testOrganisationsEnabled))
+            .Should()
+            .BeFalse();
     }
 }

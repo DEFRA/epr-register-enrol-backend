@@ -14,6 +14,7 @@ using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
+using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.StubPersistence.Endpoints;
 using EprRegisterEnrolBackend.StubPersistence.Services;
 using EprRegisterEnrolBackend.Utils;
@@ -144,6 +145,9 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a
     // DomainModel:* flag, off by default; phase 1 "Expand" adds the domain-model-schema readiness check.
     builder.Services.AddDomainModel(builder.Configuration);
+    // RA-425: the domain model's registration versions, readable whatever the Expand flag, for the
+    // registration status endpoint and the dev seeds.
+    builder.Services.AddRegistrationVersionStore();
 
     // RA-448: registration/accreditation number generation
     builder.Services.AddSingleton<
@@ -312,8 +316,20 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
 
     // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
     // test hosts run as Development too; the local compose stack sets it.
+    // RA-425: the same flag gives Delta Green's registration an Approved domain model version.
     if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
+    {
         builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
+        builder.Services.AddHostedService<DevRegistrationSeedService>();
+    }
+
+    // RA-425: the dedicated exporter (org 50018). Also seedable on its own, for the fe-tests stack,
+    // whose other specs must not see the Delta Green data above. The same check decides whether
+    // the stub ReEx registry has the org (see ReExApiAdapterRegistration).
+    if (DevExporterAccreditationSeedService.IsEnabled(builder.Configuration, builder.Environment))
+    {
+        builder.Services.AddHostedService<DevExporterAccreditationSeedService>();
+    }
 }
 
 [ExcludeFromCodeCoverage]
@@ -451,6 +467,10 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseAccreditationApplicationEndpoints();
     // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
     app.UseAccreditationApiEndpoints();
+    // RA-425: the current registration status, for the frontend's material dashboard pages. Behind a
+    // flag, off by default, until the in-year changes journey ships.
+    if (app.Configuration.GetValue<bool>(RegistrationStatusEndpoints.FeatureFlagKey))
+        app.UseRegistrationStatusEndpoints();
 
     if (app.Environment.IsDevelopment())
     {

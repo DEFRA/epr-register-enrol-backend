@@ -350,20 +350,23 @@ public class StubReExApiAdapter(
         bool isExporter
     )
     {
-        var agencyLetter = RegulatoryReferenceCodes.AgencyLetterFor(nation);
-        var processTypeLetter = RegulatoryReferenceCodes.ProcessTypeLetterFor(isExporter);
-        // Real ReEx always reports a glass registration's recycling process; when the stub's
-        // fixture has none (or an unrecognised one), "other" is the honest fallback.
-        var materialCode = RegulatoryReferenceCodes.MaterialCodeFor(
-            materialType,
-            materialType == MaterialType.Glass
-                ? glassRecyclingProcess ?? GlassRecyclingProcess.Other
-                : glassRecyclingProcess
+        var format = RegulatoryNumberFormat.For(
+            new RegulatoryNumberSpec
+            {
+                Nation = nation,
+                IsExporter = isExporter,
+                OrgId = ReferenceOrganisationNumber(organisationId),
+                Material = materialType,
+                // Real ReEx always reports a glass registration's recycling process; when the
+                // stub's fixture has none (or an unrecognised one), "other" is the honest fallback.
+                GlassRecyclingProcess =
+                    materialType == MaterialType.Glass
+                        ? glassRecyclingProcess ?? GlassRecyclingProcess.Other
+                        : glassRecyclingProcess,
+                Year = year,
+            }
         );
-        var sequence = Fnv1a(registrationId) % RegistrationSequenceRange;
-
-        return $"R{year % 100:D2}{agencyLetter}{processTypeLetter}"
-            + $"{ReferenceOrganisationNumber(organisationId):D6}{sequence:D4}{materialCode}";
+        return format.RegistrationNumber((int)(Fnv1a(registrationId) % RegistrationSequenceRange));
     }
 
     // The stub's own organisation number when it has one that fits the 6-digit OrgId segment
