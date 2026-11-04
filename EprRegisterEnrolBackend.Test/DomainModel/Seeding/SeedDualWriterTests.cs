@@ -423,6 +423,49 @@ public sealed class SeedDualWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_ReExDiffersFromAnAccreditedSite_LogsTheConflictWithoutPersonalData()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+
+        var renamed = ReEx("Site One Renamed");
+        var seeded = await LegacyApplicationAsync(renamed);
+        await Writer().WriteAsync(Seed(renamed, seeded), Ct);
+
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.LogLevel);
+        Assert.Contains(nameof(MigrationConflictKind.ReExDetailsDiffer), entry.Message);
+        Assert.Contains(ReExRegistrationId, entry.Message);
+        Assert.Contains("001", entry.Message);
+        Assert.Contains(seeded.Id.ToString()!, entry.Message);
+        foreach (var personal in new[] { "Acme", "Site One", "France" })
+        {
+            Assert.DoesNotContain(personal, entry.Message);
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_RolledBackAfterAConflict_LogsOnlyTheFailure()
+    {
+        await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+        // The application is never inserted, so stamping it fails after the conflict was recorded.
+        var missing = new AccreditationApplicationModel
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = ReExOrganisationId,
+            RegistrationId = ReExRegistrationId,
+            MaterialType = MaterialType.Plastic,
+            Year = 2027,
+        };
+
+        await Writer().WriteAsync(Seed(ReEx("Site One Renamed"), missing), Ct);
+
+        Assert.Empty(await ConflictsAsync());
+        Assert.Equal(LogLevel.Error, Assert.Single(_logger.Entries).LogLevel);
+    }
+
+    [Fact]
     public async Task WriteAsync_GroupOverTheSizeLimit_RollsBackAndLeavesAnAccreditedSiteAlone()
     {
         var original = ReEx();

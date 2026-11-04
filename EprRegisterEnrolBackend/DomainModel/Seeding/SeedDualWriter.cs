@@ -48,8 +48,9 @@ public sealed class SeedDualWriter(
         }
     }
 
-    private Task WriteWithRetryAsync(SeedDualWrite seed, CancellationToken cancellationToken) =>
-        InsertRaceRetry.RunInTransactionAsync(
+    private async Task WriteWithRetryAsync(SeedDualWrite seed, CancellationToken cancellationToken)
+    {
+        var conflicts = await InsertRaceRetry.RunInTransactionAsync(
             clientFactory,
             (session, token) => WriteCoreAsync(session, seed, token),
             attempt =>
@@ -60,8 +61,10 @@ public sealed class SeedDualWriter(
                 ),
             cancellationToken
         );
+        logger.LogRecorded(conflicts);
+    }
 
-    private async Task<bool> WriteCoreAsync(
+    private async Task<List<MigrationConflict>> WriteCoreAsync(
         IClientSessionHandle session,
         SeedDualWrite seed,
         CancellationToken cancellationToken
@@ -85,6 +88,7 @@ public sealed class SeedDualWriter(
 
         var accredited = await AccreditedOrsIdsAsync(session, seed, cancellationToken);
         var siteIds = new Dictionary<string, ObjectId>();
+        var conflicts = new List<MigrationConflict>();
         foreach (var site in seed.ReEx.OverseasSites)
         {
             // ReEx keys its sites by orsId, so it is always set; a site without one has no key to upsert on.
@@ -99,8 +103,14 @@ public sealed class SeedDualWriter(
                 registration.EntityId,
                 site,
                 accredited,
+                conflicts,
                 cancellationToken
             );
+        }
+
+        if (conflicts.Count > 0)
+        {
+            await stores.Conflicts.InsertManyAsync(conflicts, session, cancellationToken);
         }
 
         await applications.StampDomainModelForeignKeysAsync(
@@ -111,7 +121,7 @@ public sealed class SeedDualWriter(
             session,
             cancellationToken
         );
-        return true;
+        return conflicts;
     }
 
     // The sites an approved application selected. The legacy applications are read rather than the Accreditations
@@ -194,6 +204,7 @@ public sealed class SeedDualWriter(
         ObjectId registrationId,
         OverseasSiteModel site,
         HashSet<string> accredited,
+        List<MigrationConflict> conflicts,
         CancellationToken cancellationToken
     )
     {
@@ -222,7 +233,7 @@ public sealed class SeedDualWriter(
         {
             if (!SeedEntityMapper.HasSameDetails(current, site))
             {
-                await RecordReExDifferenceAsync(session, seed, current, cancellationToken);
+                conflicts.Add(ReExDifference(seed, current));
             }
 
             return current.EntityId;
@@ -239,28 +250,17 @@ public sealed class SeedDualWriter(
         return result.Entity.EntityId;
     }
 
-    private Task RecordReExDifferenceAsync(
-        IClientSessionHandle session,
-        SeedDualWrite seed,
-        OverseasSiteEntity site,
-        CancellationToken cancellationToken
-    ) =>
-        stores.Conflicts.InsertManyAsync(
-            [
-                new MigrationConflict
-                {
-                    Id = ObjectId.GenerateNewId(),
-                    Kind = MigrationConflictKind.ReExDetailsDiffer,
-                    ReExRegistrationId = seed.ReExRegistrationId,
-                    RegistrationId = site.RegistrationId,
-                    OrsId = site.OrsId,
-                    ApplicationIds = [seed.Application.Id!.Value],
-                    RecordedAt = clock.GetUtcNow().UtcDateTime,
-                },
-            ],
-            session,
-            cancellationToken
-        );
+    private MigrationConflict ReExDifference(SeedDualWrite seed, OverseasSiteEntity site) =>
+        new()
+        {
+            Id = ObjectId.GenerateNewId(),
+            Kind = MigrationConflictKind.ReExDetailsDiffer,
+            ReExRegistrationId = seed.ReExRegistrationId,
+            RegistrationId = site.RegistrationId,
+            OrsId = site.OrsId,
+            ApplicationIds = [seed.Application.Id!.Value],
+            RecordedAt = clock.GetUtcNow().UtcDateTime,
+        };
 
     private static ChangeInfo Change(
         SeedDualWrite seed,
