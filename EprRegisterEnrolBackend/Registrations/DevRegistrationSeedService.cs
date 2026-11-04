@@ -3,7 +3,6 @@ using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.Organisation.Services;
-using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
@@ -20,13 +19,7 @@ public class DevRegistrationSeedService(
     ILogger<DevRegistrationSeedService> logger
 ) : DevSeedService(logger)
 {
-    // Fixed so the seeded version is recognisable. Nothing reads the Organisation itself yet.
-    internal static readonly ObjectId DeltaGreenOrganisationEntityId = ObjectId.Parse(
-        "0d0000000000000000050003"
-    );
-    internal static readonly ObjectId DeltaGreenRegistrationEntityId = ObjectId.Parse(
-        "0e0000000000000000050003"
-    );
+    private const int DeltaGreenOrgId = 50003;
 
     protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
     {
@@ -48,16 +41,11 @@ public class DevRegistrationSeedService(
     }
 
     internal static RegistrationEntity DeltaGreenRegistration() =>
-        new()
-        {
-            EntityId = DeltaGreenRegistrationEntityId,
-            OrganisationId = DeltaGreenOrganisationEntityId,
-            ReExRegistrationId = FakeOrganisationPersistence.Reg50003.ToString(),
-            RegistrationNumber = DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference,
-            Status = RegistrationStatus.Approved,
-            WasteProcessingType = WasteProcessingKind.Reprocessor,
-            Material = MaterialType.Plastic,
-            Nation = Nation.England,
-            Source = new EntitySource { System = SourceSystem.ReEx },
-        };
+        RegistrationVersionDevSeed.ApprovedRegistration(
+            DeltaGreenOrgId,
+            FakeOrganisationPersistence.Reg50003,
+            DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference,
+            WasteProcessingKind.Reprocessor,
+            MaterialType.Plastic
+        );
 }

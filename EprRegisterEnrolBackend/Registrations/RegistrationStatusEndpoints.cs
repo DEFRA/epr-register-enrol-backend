@@ -1,8 +1,5 @@
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DomainModel.Entities;
-using EprRegisterEnrolBackend.DomainModel.Persistence;
-using EprRegisterEnrolBackend.Utils.Mongo;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
@@ -21,18 +18,6 @@ public static class RegistrationStatusEndpoints
 {
     /// <summary>Maps the endpoint only when on; off by default, until the in-year changes journey ships.</summary>
     public const string FeatureFlagKey = "FeatureFlags:InYearChangesEnabled";
-
-    public static IServiceCollection AddRegistrationVersionStore(this IServiceCollection services)
-    {
-        services.TryAddSingleton(TimeProvider.System);
-        services.AddSingleton(sp => new RegistrationVersionStore(
-            // Resolved on first use, not here: see RegistrationVersionStore.
-            () => sp.GetService<IVersionedPersistence<RegistrationEntity>>(),
-            sp.GetRequiredService<IMongoDbClientFactory>(),
-            sp.GetRequiredService<TimeProvider>()
-        ));
-        return services;
-    }
 
     public static void UseRegistrationStatusEndpoints(this IEndpointRouteBuilder app) =>
         app.MapGet("api/v1/registrations/{registrationId}/status", GetStatus)

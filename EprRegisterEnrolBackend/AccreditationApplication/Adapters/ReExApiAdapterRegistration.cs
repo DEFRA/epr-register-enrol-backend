@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx.Config;
 
@@ -32,7 +33,7 @@ public static class ReExApiAdapterRegistration
             services.AddSingleton<IReExApiAdapter, StubReExApiAdapter>();
             // Fixtures for StubReExApiAdapter's responses — not tied to any persistence
             // interface, the stub is its only consumer.
-            services.AddSingleton<FakeOrganisationPersistence>();
+            AddFakeOrganisations(services, configuration, environment);
             return services;
         }
 
@@ -42,7 +43,7 @@ public static class ReExApiAdapterRegistration
             return services;
         }
 
-        services.AddSingleton<FakeOrganisationPersistence>();
+        AddFakeOrganisations(services, configuration, environment);
         services.AddSingleton<StubReExApiAdapter>();
         services.AddSingleton<HttpReExApiAdapter>();
         services.AddSingleton<IReExApiAdapter>(sp => new TestOrganisationReExApiAdapter(
@@ -50,5 +51,21 @@ public static class ReExApiAdapterRegistration
             sp.GetRequiredService<StubReExApiAdapter>()
         ));
         return services;
+    }
+
+    private static void AddFakeOrganisations(
+        IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment
+    )
+    {
+        var includeManageExporter = DevExporterAccreditationSeedService.IsEnabled(
+            configuration,
+            environment
+        );
+        services.AddSingleton(sp => new FakeOrganisationPersistence(
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            includeManageExporter
+        ));
     }
 }

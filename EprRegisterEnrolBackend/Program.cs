@@ -317,21 +317,16 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
     // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
     // test hosts run as Development too; the local compose stack sets it.
     // RA-425: the same flag gives Delta Green's registration an Approved domain model version.
-    var allDevSeedData = builder.Configuration.GetValue<bool>(
-        DevAccreditationHistorySeedService.ConfigKey
-    );
-    if (allDevSeedData)
+    if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
     {
         builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
         builder.Services.AddHostedService<DevRegistrationSeedService>();
     }
 
     // RA-425: the dedicated exporter (org 50018). Also seedable on its own, for the fe-tests stack,
-    // whose other specs must not see the Delta Green data above.
-    if (
-        allDevSeedData
-        || builder.Configuration.GetValue<bool>(DevExporterAccreditationSeedService.ConfigKey)
-    )
+    // whose other specs must not see the Delta Green data above. The same check decides whether
+    // the stub ReEx registry has the org (see ReExApiAdapterRegistration).
+    if (DevExporterAccreditationSeedService.IsEnabled(builder.Configuration, builder.Environment))
     {
         builder.Services.AddHostedService<DevExporterAccreditationSeedService>();
     }

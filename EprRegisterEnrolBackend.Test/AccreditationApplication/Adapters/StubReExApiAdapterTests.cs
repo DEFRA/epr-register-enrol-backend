@@ -681,6 +681,42 @@ public class StubReExApiAdapterTests
             .And.StartWith(expectedPrefix);
     }
 
+    // Pinned literals across every segment (nation, process type, org number, hashed sequence,
+    // material, a year whose YY is 00 or 09), so a change in how the reference is formatted
+    // shows here: deployed stub environments have applications holding these references.
+    [Theory]
+    [InlineData(
+        "50005",
+        "aaa000000000000000050005",
+        MaterialType.Plastic,
+        2026,
+        "R26EX0500051670PL"
+    )]
+    [InlineData("60002", "reg-1", MaterialType.Paper, 2026, "R26SR0600022731PA")]
+    [InlineData("60004", "reg-1", MaterialType.Aluminium, 2100, "R00NR0600042731AL")]
+    [InlineData("60003", "reg-1", MaterialType.Steel, 2009, "R09WR0600032731ST")]
+    [InlineData("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Glass, 2027, "R27ER9730739108GO")]
+    [InlineData(
+        "c14854d9-e20a-41b3-87d5-a1fd4bbe2153",
+        "reg-1",
+        MaterialType.Wood,
+        2026,
+        "R26ER0244512731WO"
+    )]
+    public async Task GetAccreditationAsync_GivesTheSameRegistrationReferenceAsEver(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        int year,
+        string expected
+    )
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync(organisationId, registrationId, materialType, year);
+
+        result.Value!.RegistrationReference.Should().Be(expected);
+    }
+
     [Fact]
     public void TestOrganisationNumber_DiffersBetweenTestOrganisations()
     {

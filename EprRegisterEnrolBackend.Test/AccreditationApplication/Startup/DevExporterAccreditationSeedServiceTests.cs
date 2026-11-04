@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
@@ -8,6 +9,7 @@ using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
+using MongoDB.Bson;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -21,7 +23,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
 {
     private const string ExporterOrg = "50018";
     private static readonly string ExporterRegistration =
-        FakeOrganisationPersistence.Reg50018.ToString();
+        ManageExporterOrg.RegistrationId.ToString();
 
     private static readonly TestClock Clock2026 = new(
         new DateTime(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc)
@@ -75,9 +77,10 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
     {
         var seeded = await SeedOnce();
 
+        seeded.Id.Should().Be(ObjectId.Parse("a20260000000000000050018"));
         seeded.Year.Should().Be(2026);
         seeded.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
-        seeded.RegistrationId.Should().Be(FakeOrganisationPersistence.Reg50018.ToString());
+        seeded.RegistrationId.Should().Be("aaa000000000000000050018");
         seeded.MaterialType.Should().Be(MaterialType.Plastic);
         seeded.IsExporter.Should().BeTrue();
         seeded.WasteProcessingType.Should().Be("exporter");
@@ -180,6 +183,8 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         seeded.Material.Should().Be(MaterialType.Plastic);
         seeded.WasteProcessingType.Should().Be(WasteProcessingKind.Exporter);
         seeded.RegistrationNumber.Should().Be("R26EX0500180001PL");
+        seeded.EntityId.Should().Be(ObjectId.Parse("0e0000000000000000050018"));
+        seeded.OrganisationId.Should().Be(ObjectId.Parse("0d0000000000000000050018"));
     }
 
     [Fact]
@@ -308,7 +313,10 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
     public async Task StubOrganisationStore_MatchesTheSeededExporter()
     {
         var seeded = await SeedOnce();
-        var org = await new FakeOrganisationPersistence(Clock2026).GetByOrgIdAsync(50018);
+        var org = await new FakeOrganisationPersistence(
+            Clock2026,
+            includeManageExporter: true
+        ).GetByOrgIdAsync(50018);
 
         org!.CompanyDetails!.Name.Should().Be(seeded.OrganisationName);
         org.CompanyDetails.RegistrationNumber.Should().Be(seeded.RegistrationReference);

@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
@@ -7,6 +8,7 @@ using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.Registrations;
@@ -57,6 +59,8 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
         seeded.WasteProcessingType.Should().Be(WasteProcessingKind.Reprocessor);
         seeded.RegistrationNumber.Should()
             .Be(DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference);
+        seeded.EntityId.Should().Be(ObjectId.Parse("0e0000000000000000050003"));
+        seeded.OrganisationId.Should().Be(ObjectId.Parse("0d0000000000000000050003"));
     }
 
     // The dedicated exporter is DevExporterAccreditationSeedService's, so the fe-tests stack can seed it alone.
@@ -67,7 +71,7 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
 
         (
             await _store.FindCurrentByReExRegistrationIdAsync(
-                FakeOrganisationPersistence.Reg50018.ToString(),
+                ManageExporterOrg.RegistrationId.ToString(),
                 Ct
             )
         )

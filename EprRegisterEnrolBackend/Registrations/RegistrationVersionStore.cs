@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Utils.Mongo;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Registrations;
@@ -49,4 +50,19 @@ public sealed class RegistrationVersionStore(
             Builders<RegistrationEntity>.Filter.Eq(x => x.ReExRegistrationId, reExRegistrationId),
             cancellationToken: cancellationToken
         );
+}
+
+public static class RegistrationVersionStoreServiceCollectionExtensions
+{
+    public static IServiceCollection AddRegistrationVersionStore(this IServiceCollection services)
+    {
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton(sp => new RegistrationVersionStore(
+            // Resolved on first use, not here: see RegistrationVersionStore.
+            () => sp.GetService<IVersionedPersistence<RegistrationEntity>>(),
+            sp.GetRequiredService<IMongoDbClientFactory>(),
+            sp.GetRequiredService<TimeProvider>()
+        ));
+        return services;
+    }
 }

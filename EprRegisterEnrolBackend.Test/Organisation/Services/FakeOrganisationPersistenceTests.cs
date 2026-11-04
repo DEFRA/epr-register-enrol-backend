@@ -86,23 +86,96 @@ public class FakeOrganisationPersistenceTests
         result.Should().BeNull();
     }
 
+    // RA-425's dedicated exporter, included only where its dev seed runs (see
+    // DevExporterAccreditationSeedService.IsEnabled).
+    private static FakeOrganisationPersistence WithManageExporter(TimeProvider clock) =>
+        new(clock, includeManageExporter: true);
+
+    private static readonly DateTime Late2026 = new(2026, 12, 31, 23, 59, 0, DateTimeKind.Utc);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExporterOrg50018_IsIncludedOnlyWhenAskedFor(bool includeManageExporter)
+    {
+        var sut = new FakeOrganisationPersistence(TimeProvider.System, includeManageExporter);
+
+        (await sut.GetByOrgIdAsync(50018) is not null).Should().Be(includeManageExporter);
+        (await sut.GetAllAsync()).Any(o => o.OrgId == 50018).Should().Be(includeManageExporter);
+    }
+
+    [Fact]
+    public async Task ExporterOrg50018_IsNotIncludedByDefault()
+    {
+        (await new FakeOrganisationPersistence().GetByOrgIdAsync(50018)).Should().BeNull();
+    }
+
     [Fact]
     public async Task ExporterOrg50018_RegistrationNumber_FollowsTheClockAcrossAYearBoundary()
     {
-        var clock = new TestClock(new DateTime(2026, 12, 31, 23, 59, 0, DateTimeKind.Utc));
-        var sut = new FakeOrganisationPersistence(clock);
+        var clock = new TestClock(Late2026);
+        var sut = WithManageExporter(clock);
 
-        (await sut.GetByOrgIdAsync(50018))!
-            .CompanyDetails!.RegistrationNumber.Should()
-            .Be("R26EX0500180001PL");
+        var before = await sut.GetByOrgIdAsync(50018);
+        before!.CompanyDetails!.RegistrationNumber.Should().Be("R26EX0500180001PL");
 
         clock.Advance(TimeSpan.FromMinutes(2));
 
         (await sut.GetByOrgIdAsync(50018))!
             .CompanyDetails!.RegistrationNumber.Should()
             .Be("R27EX0500180001PL");
+        (await sut.GetAllAsync()).Single(o => o.OrgId == 50018)
+            .CompanyDetails!.RegistrationNumber.Should()
+            .Be("R27EX0500180001PL");
         (await sut.SearchByValueAsync("R27EX0500180001PL")).Should()
             .ContainSingle(o => o.OrgId == 50018);
+        before
+            .CompanyDetails.RegistrationNumber.Should()
+            .Be("R26EX0500180001PL", because: "a read returns a copy, not the stored record");
+    }
+
+    [Fact]
+    public async Task ExporterOrg50018_RegistrationNumber_IsSetOnTheFirstRead_WhicheverReadItIs()
+    {
+        (await WithManageExporter(new TestClock(Late2026)).GetAllAsync())
+            .Single(o => o.OrgId == 50018)
+            .CompanyDetails!.RegistrationNumber.Should()
+            .Be("R26EX0500180001PL");
+        (
+            await WithManageExporter(new TestClock(Late2026))
+                .SearchByValueAsync("R26EX0500180001PL")
+        )
+            .Should()
+            .ContainSingle(o => o.OrgId == 50018);
+    }
+
+    [Fact]
+    public async Task ExporterOrg50018_AfterAnUpdate_RegistrationNumberStillFollowsTheClock()
+    {
+        var clock = new TestClock(Late2026);
+        var sut = WithManageExporter(clock);
+        var updated = NewOrg(50018, "Renamed Exporter");
+        updated.CompanyDetails!.RegistrationNumber = "R20EX0500180001PL";
+        (await sut.UpdateAsync(updated)).Should().BeTrue();
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        var org = (await sut.GetByOrgIdAsync(50018))!;
+        org.CompanyDetails!.Name.Should().Be("Renamed Exporter");
+        org.CompanyDetails.RegistrationNumber.Should().Be("R27EX0500180001PL");
+    }
+
+    [Fact]
+    public async Task ExporterOrg50018_UpsertedWithoutCompanyDetails_StillHasARegistrationNumber()
+    {
+        var sut = WithManageExporter(new TestClock(Late2026));
+        var upserted = NewOrg(50018);
+        upserted.CompanyDetails = null;
+        await sut.UpsertAsync(upserted);
+
+        (await sut.GetByOrgIdAsync(50018))!
+            .CompanyDetails!.RegistrationNumber.Should()
+            .Be("R26EX0500180001PL");
     }
 
     [Fact]

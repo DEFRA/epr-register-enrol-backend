@@ -1,9 +1,7 @@
-using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
-using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.Registrations;
 using MongoDB.Bson;
 
@@ -34,49 +32,16 @@ public class DevExporterAccreditationSeedService(
 {
     public const string ConfigKey = "DevSeedData:ManageExporterEnabled";
 
-    // The frontend stub (stub-manage-accreditations.js, stub-operator-orgs.js) mirrors this
-    // exporter's ids, names and numbers; keep the two in step.
-    internal const int ExporterOrgId = 50018;
-    internal static readonly string ExporterOrganisationId = ExporterOrgId.ToString(
-        CultureInfo.InvariantCulture
-    );
-    internal const string ExporterOrganisationName = "Manage Accreditation Test Ltd";
-    internal const string ExporterCompaniesHouseNumber = "12345018";
-
-    // Fixed so the seeded registration version is recognisable. Nothing reads the Organisation itself yet.
-    internal static readonly ObjectId ExporterOrganisationEntityId = ObjectId.Parse(
-        "0d0000000000000000050018"
-    );
-    internal static readonly ObjectId ExporterRegistrationEntityId = ObjectId.Parse(
-        "0e0000000000000000050018"
-    );
-
-    // Both numbers follow the clock, so the stub registry, the registration version and this
-    // accreditation agree in any year, e.g. R26EX0500180001PL.
-    internal static string ExporterRegistrationNumberFor(int year) =>
-        RegulatoryNumberFormat
-            .For(
-                new RegulatoryNumberSpec
-                {
-                    Nation = Nation.England,
-                    IsExporter = true,
-                    OrgId = ExporterOrgId,
-                    Material = MaterialType.Plastic,
-                    Year = year,
-                }
-            )
-            .RegistrationNumber(sequence: 1);
-
-    // Derived from the registration number, as a real accreditation number is,
-    // e.g. A26EX0500180001PL.
-    internal static string ExporterAccreditationNumberFor(int year) =>
-        AccreditationReferenceDerivation
-            .Derive(
-                ExporterRegistrationNumberFor(year),
-                AccreditationReferenceSourceKind.Registration,
-                year
-            )
-            .Reference!;
+    /// <summary>
+    /// Whether this seed runs, which is also whether the stub ReEx registry has org 50018 at all:
+    /// anywhere else it would be an exporter with no accreditation.
+    /// </summary>
+    public static bool IsEnabled(IConfiguration configuration, IHostEnvironment environment) =>
+        environment.IsDevelopment()
+        && (
+            configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey)
+            || configuration.GetValue<bool>(ConfigKey)
+        );
 
     protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
     {
@@ -88,7 +53,7 @@ public class DevExporterAccreditationSeedService(
     private async Task SeedAccreditationAsync(int year, CancellationToken cancellationToken)
     {
         var existing = await persistence
-            .GetByIdAsync(ExporterOrganisationId, ApplicationIdFor(year).ToString())
+            .GetByIdAsync(ManageExporterOrg.OrganisationId, ApplicationIdFor(year).ToString())
             .WaitAsync(cancellationToken);
         if (existing is not null)
         {
@@ -132,22 +97,17 @@ public class DevExporterAccreditationSeedService(
     }
 
     internal static RegistrationEntity ExporterRegistration(int year) =>
-        new()
-        {
-            EntityId = ExporterRegistrationEntityId,
-            OrganisationId = ExporterOrganisationEntityId,
-            ReExRegistrationId = FakeOrganisationPersistence.Reg50018.ToString(),
-            RegistrationNumber = ExporterRegistrationNumberFor(year),
-            Status = RegistrationStatus.Approved,
-            WasteProcessingType = WasteProcessingKind.Exporter,
-            Material = MaterialType.Plastic,
-            Nation = Nation.England,
-            Source = new EntitySource { System = SourceSystem.ReEx },
-        };
+        RegistrationVersionDevSeed.ApprovedRegistration(
+            ManageExporterOrg.OrgId,
+            ManageExporterOrg.RegistrationId,
+            ManageExporterOrg.RegistrationNumberFor(year),
+            WasteProcessingKind.Exporter,
+            ManageExporterOrg.Material
+        );
 
     // "a" + year + padding + org id, e.g. a20260000000000000050018.
     internal static ObjectId ApplicationIdFor(int year) =>
-        ObjectId.Parse($"a{year:D4}{ExporterOrgId:D19}");
+        ObjectId.Parse($"a{year:D4}{ManageExporterOrg.OrgId:D19}");
 
     internal static AccreditationApplicationModel ExporterAccreditation(int year)
     {
@@ -155,21 +115,21 @@ public class DevExporterAccreditationSeedService(
         return new AccreditationApplicationModel
         {
             Id = ApplicationIdFor(year),
-            OrganisationId = ExporterOrganisationId,
-            OrgId = ExporterOrgId,
-            OrganisationName = ExporterOrganisationName,
+            OrganisationId = ManageExporterOrg.OrganisationId,
+            OrgId = ManageExporterOrg.OrgId,
+            OrganisationName = ManageExporterOrg.Name,
             Year = year,
-            RegistrationId = FakeOrganisationPersistence.Reg50018.ToString(),
+            RegistrationId = ManageExporterOrg.RegistrationId.ToString(),
             IsExporter = true,
             Nation = Nation.England,
             CompanyRegisterAddressPostcode = "IP11 3AB",
             CompanyRegisteredAddress = "18 Harbour Road, Felixstowe, IP11 3AB",
-            CompaniesHouseNumber = ExporterCompaniesHouseNumber,
-            PermitNumbers = ["WML50018"],
+            CompaniesHouseNumber = ManageExporterOrg.CompaniesHouseNumber,
+            PermitNumbers = [ManageExporterOrg.PermitNumber],
             WasteProcessingType = "exporter",
-            RegistrationReference = ExporterRegistrationNumberFor(year),
-            AccreditationReference = ExporterAccreditationNumberFor(year),
-            MaterialType = MaterialType.Plastic,
+            RegistrationReference = ManageExporterOrg.RegistrationNumberFor(year),
+            AccreditationReference = ManageExporterOrg.AccreditationNumberFor(year),
+            MaterialType = ManageExporterOrg.Material,
             ApplicationStatus = ApplicationStatus.Approved,
             SourceYear = year - 1,
             CreatedAt = createdAt,
