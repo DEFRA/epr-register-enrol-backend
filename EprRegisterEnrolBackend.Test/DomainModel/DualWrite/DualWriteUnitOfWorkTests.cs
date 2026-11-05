@@ -462,6 +462,139 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         Assert.Equal([Operation], _failedOperations);
     }
 
+    private static GroupMigrationResult MigratedWithAConflict(ObjectId applicationId) =>
+        new(
+            GroupMigrationOutcome.Migrated,
+            1,
+            [
+                new MigrationConflict
+                {
+                    Kind = MigrationConflictKind.OrsDetailsDiffer,
+                    ReExRegistrationId = ReExRegistrationId,
+                    OrsId = "001",
+                    SiteNumber = "002",
+                    WinnerApplicationId = applicationId,
+                    ApplicationIds = [applicationId],
+                },
+            ]
+        );
+
+    [Fact]
+    public async Task RunAsync_MigrationRecordsAConflict_LogsItOnceCommitted()
+    {
+        var application = ObjectId.GenerateNewId();
+        _migrator.OnMigrate = (id, _) => MigratedWithAConflict(id);
+
+        await UnitOfWork()
+            .RunAsync(
+                Operation,
+                application.ToString(),
+                (_, _) => Task.FromResult(Results.NoContent()),
+                Ct
+            );
+
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.LogLevel);
+        Assert.Contains(nameof(MigrationConflictKind.OrsDetailsDiffer), entry.Message);
+        Assert.Contains(ReExRegistrationId, entry.Message);
+        Assert.Contains("001", entry.Message);
+        Assert.Contains("002", entry.Message);
+        Assert.Contains(application.ToString(), entry.Message);
+    }
+
+    [Fact]
+    public async Task RunAsync_WorkFailsAfterAConflict_LogsOnlyTheFailure()
+    {
+        _migrator.OnMigrate = (id, _) => MigratedWithAConflict(id);
+
+        await UnitOfWork()
+            .RunAsync(
+                Operation,
+                ObjectId.GenerateNewId().ToString(),
+                (_, _) => throw new InvalidOperationException("boom"),
+                Ct
+            );
+
+        Assert.Equal(LogLevel.Error, Assert.Single(_logger.Entries).LogLevel);
+    }
+
+    [Fact]
+    public async Task RunAsync_RetriedAfterAConflict_LogsItOnce()
+    {
+        var collection = _factory
+            .GetClient()
+            .GetDatabase(_databaseName)
+            .GetCollection<BsonDocument>("raceTarget");
+        var taken = ObjectId.GenerateNewId();
+        await collection.InsertOneAsync(new BsonDocument("_id", taken), cancellationToken: Ct);
+        _migrator.OnMigrate = (id, _) => MigratedWithAConflict(id);
+        var attempts = 0;
+
+        await UnitOfWork()
+            .RunAsync(
+                Operation,
+                ObjectId.GenerateNewId().ToString(),
+                async (session, token) =>
+                {
+                    attempts++;
+                    var id = attempts == 1 ? taken : ObjectId.GenerateNewId();
+                    await collection.InsertOneAsync(
+                        session!,
+                        new BsonDocument("_id", id),
+                        cancellationToken: token
+                    );
+                    return Results.NoContent();
+                },
+                Ct
+            );
+
+        Assert.Equal(2, attempts);
+        Assert.Single(
+            _logger.Entries,
+            e => e.Message.Contains(nameof(MigrationConflictKind.OrsDetailsDiffer))
+        );
+    }
+
+    [Fact]
+    public async Task RunAsync_RetryFindsTheGroupAlreadyMigrated_LogsNoConflict()
+    {
+        var collection = _factory
+            .GetClient()
+            .GetDatabase(_databaseName)
+            .GetCollection<BsonDocument>("raceTarget");
+        var taken = ObjectId.GenerateNewId();
+        await collection.InsertOneAsync(new BsonDocument("_id", taken), cancellationToken: Ct);
+        // A rival migrated the group: the first attempt's conflict rolled back, and the retry has nothing to do.
+        var migrations = 0;
+        _migrator.OnMigrate = (id, _) =>
+            ++migrations == 1 ? MigratedWithAConflict(id) : GroupMigrationResult.NothingToDo;
+        var attempts = 0;
+
+        await UnitOfWork()
+            .RunAsync(
+                Operation,
+                ObjectId.GenerateNewId().ToString(),
+                async (session, token) =>
+                {
+                    attempts++;
+                    var id = attempts == 1 ? taken : ObjectId.GenerateNewId();
+                    await collection.InsertOneAsync(
+                        session!,
+                        new BsonDocument("_id", id),
+                        cancellationToken: token
+                    );
+                    return Results.NoContent();
+                },
+                Ct
+            );
+
+        Assert.Equal(2, attempts);
+        Assert.DoesNotContain(
+            _logger.Entries,
+            e => e.Message.Contains(nameof(MigrationConflictKind.OrsDetailsDiffer))
+        );
+    }
+
     [Fact]
     public async Task RunAsync_MigrationFails_DoesNotRunTheWorkAndAnswers500()
     {

@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 
@@ -260,7 +261,7 @@ public class StubCaseWorkingApiAdapterTests
     [Fact]
     public async Task SubmitChangeRequestAsync_ReturnsAnApplicationFormatReferenceAndWorkItemId()
     {
-        var accreditation = DevInYearChangeSeedService.Accreditation();
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, 2026);
         var request = new AccreditationChangeRequest
         {
             OrganisationId = accreditation.OrganisationId,
@@ -275,8 +276,8 @@ public class StubCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        // Same AP format as SubmitApplicationAsync: year 26, EA, org 050018, no site postcode, plastic.
-        result.ApplicationReference.Should().Be("AP26EA050018PL");
+        // Same AP format as SubmitApplicationAsync: year 26, EA, org 050019, no site postcode, plastic.
+        result.ApplicationReference.Should().Be("AP26EA050019PL");
         result.WorkItemId.Should().NotBeNull();
     }
 }

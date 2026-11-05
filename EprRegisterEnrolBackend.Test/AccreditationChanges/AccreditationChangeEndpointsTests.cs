@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.CdpUploader.Models;
+using EprRegisterEnrolBackend.DevSeed;
 using FluentAssertions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -13,14 +14,16 @@ using NSubstitute.ExceptionExtensions;
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
 // RA-492: in-year change request to add existing registered ORSs to a granted accreditation.
-// The approved application is DevInYearChangeSeedService's org 50018 fixture: 900181 accredited,
-// 900182 registered and complete (France), 900183 registered with only a country (India, so BES
-// evidence is needed unless conditions of export are met), 900184 registered missing R code and
-// conditions of export (Turkey, OECD, so no BES).
+// The approved application is DevExporterAccreditationSeedService's org 50019 fixture: 901901
+// accredited, 901910 registered and complete (France), 901911 registered with only a country
+// (India, so BES evidence is needed unless conditions of export are met), 901912 registered
+// missing R code and conditions of export (Turkey, OECD, so no BES).
 public sealed class AccreditationChangeEndpointsTests : IDisposable
 {
-    private const string Org = DevInYearChangeSeedService.OrganisationId;
-    private static readonly string AppId = DevInYearChangeSeedService.ApplicationId.ToString();
+    private const int Year = 2026;
+    private static readonly string Org = DevExporterOrg.InYearChange.OrganisationId;
+    private static readonly string AppId = DevExporterAccreditationSeedService.ApplicationIdFor(DevExporterOrg.InYearChange, Year).ToString();
+    private static readonly string AccreditationReference = DevExporterOrg.InYearChange.AccreditationNumberFor(Year);
     private static readonly string Base = $"/api/v1/accreditation-changes/{Org}/{AppId}";
     private static readonly string Sites = $"{Base}/requests/current/sites";
     private static readonly string SubmitUrl = $"{Base}/requests/current/submit";
@@ -35,7 +38,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     public AccreditationChangeEndpointsTests()
     {
         _factory = new AccreditationChangeTestFactory(submitToCaseManagement: false);
-        _factory.FakePersistence.Seed(DevInYearChangeSeedService.Accreditation());
+        _factory.FakePersistence.Seed(DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year));
         _client = _factory.CreateClient();
     }
 
@@ -69,9 +72,9 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     private static List<string> Strings(JsonElement array) =>
         array.EnumerateArray().Select(e => e.GetString()!).ToList();
 
-    private async Task SubmitCompleteRequestFor900182()
+    private async Task SubmitCompleteRequestFor901910()
     {
-        (await AddSite(900182)).StatusCode.Should().Be(HttpStatusCode.Created);
+        (await AddSite(901910)).StatusCode.Should().Be(HttpStatusCode.Created);
         (await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
@@ -102,16 +105,16 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     {
         var view = await Get();
 
-        view.GetProperty("accreditationReference").GetString().Should().Be("A26ER0500180018PL");
+        view.GetProperty("accreditationReference").GetString().Should().Be(AccreditationReference);
         var sites = view.GetProperty("sites").EnumerateArray().ToList();
         sites.Select(s => s.GetProperty("accreditationStatus").GetString())
             .Should()
             .Equal("Accredited", "Registered", "Registered", "Registered");
-        Strings(sites[2].GetProperty("lockedFields")).Should().Equal("country");
-        Strings(sites[1].GetProperty("lockedFields"))
+        Strings(SiteIn(view, 901911).GetProperty("lockedFields")).Should().Equal("country");
+        Strings(SiteIn(view, 901910).GetProperty("lockedFields"))
             .Should()
             .Equal("country", "coordinates", "operationCodes", "conditionsOfExport");
-        sites[2].GetProperty("site").GetProperty("orsId").GetString().Should().Be("003");
+        SiteIn(view, 901911).GetProperty("site").GetProperty("orsId").GetString().Should().Be("006");
         view.GetProperty("activeRequest").ValueKind.Should().Be(JsonValueKind.Null);
         view.GetProperty("pendingOrsIds").GetArrayLength().Should().Be(0);
     }
@@ -138,7 +141,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         bool isExporter
     )
     {
-        var other = DevInYearChangeSeedService.Accreditation();
+        var other = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
         other.Id = MongoDB.Bson.ObjectId.GenerateNewId();
         other.ApplicationStatus = status;
         other.IsExporter = isExporter;
@@ -154,27 +157,27 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task AddSite_RegisteredSite_CreatesDraftThatReusesTheExistingOrsAndLeavesTheAccreditationUntouched()
     {
-        var response = await AddSite(900183);
+        var response = await AddSite(901911);
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
         var request = await ReadJson(response);
         request.GetProperty("status").GetString().Should().Be("InProgress");
         request.GetProperty("changeType").GetString().Should().Be("add-overseas-site");
-        var site = SiteIn(request, 900183);
-        site.GetProperty("orsId").GetString().Should().Be("003");
-        site.GetProperty("siteName").GetString().Should().Be("Chennai Plastic Works");
+        var site = SiteIn(request, 901911);
+        site.GetProperty("orsId").GetString().Should().Be("006");
+        site.GetProperty("siteName").GetString().Should().Be("Delhi Polymers Pvt");
 
         var stored = await _factory.FakePersistence.GetByIdAsync(Org, AppId);
         stored!.OverseasSites!.Sites.Should().HaveCount(4);
-        stored.OverseasSites.Sites.Select(s => s.OrsId).Should().Equal("001", "002", "003", "004");
-        stored.OverseasSites.Sites.Single(s => s.SiteId == 900183).Selected.Should().BeFalse();
+        stored.OverseasSites.Sites.Select(s => s.OrsId).Should().Equal("001", "005", "006", "007");
+        stored.OverseasSites.Sites.Single(s => s.SiteId == 901911).Selected.Should().BeFalse();
     }
 
     [Fact]
     public async Task AddSite_AnotherSite_AddsItToTheSameDraftAndChargesPerSite()
     {
-        var first = await ReadJson(await AddSite(900183));
-        var second = await ReadJson(await AddSite(900184));
+        var first = await ReadJson(await AddSite(901911));
+        var second = await ReadJson(await AddSite(901912));
 
         second.GetProperty("requestId").GetString().Should().Be(first.GetProperty("requestId").GetString());
         second.GetProperty("sites").GetArrayLength().Should().Be(2);
@@ -188,9 +191,9 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task AddSite_SiteAlreadyInDraft_Returns200WithoutDuplicatingIt()
     {
-        await AddSite(900183);
+        await AddSite(901911);
 
-        var response = await AddSite(900183);
+        var response = await AddSite(901911);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         (await ReadJson(response)).GetProperty("sites").GetArrayLength().Should().Be(1);
@@ -199,7 +202,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task AddSite_AccreditedSite_Returns409()
     {
-        (await AddSite(900181)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await AddSite(901901)).StatusCode.Should().Be(HttpStatusCode.Conflict);
         _factory.FakeChangeRequests.All.Should().BeEmpty();
     }
 
@@ -214,15 +217,15 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task Draft_IdentifiesEveryMissingFieldPerSite()
     {
-        await AddSite(900183);
-        await AddSite(900184);
+        await AddSite(901911);
+        await AddSite(901912);
 
         var draft = (await Get()).GetProperty("activeRequest");
 
-        Strings(SiteIn(draft, 900183).GetProperty("missingFields"))
+        Strings(SiteIn(draft, 901911).GetProperty("missingFields"))
             .Should()
             .Equal("coordinates", "operationCodes", "conditionsOfExport", "besEvidence");
-        Strings(SiteIn(draft, 900184).GetProperty("missingFields"))
+        Strings(SiteIn(draft, 901912).GetProperty("missingFields"))
             .Should()
             .Equal("operationCodes", "conditionsOfExport");
         draft.GetProperty("isComplete").GetBoolean().Should().BeFalse();
@@ -231,9 +234,9 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task PatchSite_LockedField_Returns400AndChangesNothing()
     {
-        await AddSite(900183);
+        await AddSite(901911);
 
-        var response = await Patch(900183, new { country = "Sri Lanka", coordinates = "13.0827, 80.2707" });
+        var response = await Patch(901911, new { country = "Sri Lanka", coordinates = "13.0827, 80.2707" });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var errors = (await ReadJson(response)).GetProperty("errors");
@@ -249,10 +252,10 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [InlineData("{\"country\":\"\"}", "country")]
     public async Task PatchSite_InvalidValue_Returns400(string body, string field)
     {
-        await AddSite(900183);
+        await AddSite(901911);
 
         var response = await _client.PatchAsync(
-            $"{Sites}/900183",
+            $"{Sites}/901911",
             new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
             Ct
         );
@@ -264,12 +267,12 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task PatchSite_SuppliesMissingFields_CompletesTheSite()
     {
-        await AddSite(900184);
+        await AddSite(901912);
 
-        var response = await Patch(900184, new { operationCodes = R3, conditionsOfExport = false });
+        var response = await Patch(901912, new { operationCodes = R3, conditionsOfExport = false });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var site = SiteIn(await ReadJson(response), 900184);
+        var site = SiteIn(await ReadJson(response), 901912);
         site.GetProperty("isComplete").GetBoolean().Should().BeTrue();
         site.GetProperty("besEvidenceRequired").GetBoolean().Should().BeFalse();
         site.GetProperty("effective").GetProperty("country").GetString().Should().Be("Turkey");
@@ -279,9 +282,9 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task PatchSite_NotInDraft_Returns404()
     {
-        (await Patch(900184, new { conditionsOfExport = true })).StatusCode.Should().Be(HttpStatusCode.NotFound);
-        await AddSite(900183);
-        (await Patch(900184, new { conditionsOfExport = true })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Patch(901912, new { conditionsOfExport = true })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        await AddSite(901911);
+        (await Patch(901912, new { conditionsOfExport = true })).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // ---------------------------------------------------------------- BES evidence
@@ -289,38 +292,38 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task BesEvidence_CleanUploadSatisfiesTheRequirementAndRemovingItRestoresIt()
     {
-        await AddSite(900183);
-        await Patch(900183, new { coordinates = "13.0827, 80.2707", operationCodes = R3, conditionsOfExport = false });
+        await AddSite(901911);
+        await Patch(901911, new { coordinates = "13.0827, 80.2707", operationCodes = R3, conditionsOfExport = false });
         var fileUploadId = await SeedCleanUpload("file-1", "bes.pdf");
 
         var added = await _client.PostAsJsonAsync(
-            $"{Sites}/900183/bes-evidence/files",
+            $"{Sites}/901911/bes-evidence/files",
             new { fileUploadId, besEvidenceExpiryDate = "2027-12-31" },
             Ct
         );
 
         added.StatusCode.Should().Be(HttpStatusCode.Created);
-        var site = SiteIn(await ReadJson(added), 900183);
+        var site = SiteIn(await ReadJson(added), 901911);
         site.GetProperty("isComplete").GetBoolean().Should().BeTrue();
         site.GetProperty("besEvidence").GetProperty("besEvidenceUploads")[0]
             .GetProperty("scanStatus").GetString().Should().Be("Clean");
 
-        var removed = await _client.DeleteAsync($"{Sites}/900183/bes-evidence/files/file-1", Ct);
+        var removed = await _client.DeleteAsync($"{Sites}/901911/bes-evidence/files/file-1", Ct);
 
         removed.StatusCode.Should().Be(HttpStatusCode.OK);
-        Strings(SiteIn(await ReadJson(removed), 900183).GetProperty("missingFields")).Should().Equal("besEvidence");
-        (await _client.DeleteAsync($"{Sites}/900183/bes-evidence/files/file-1", Ct))
+        Strings(SiteIn(await ReadJson(removed), 901911).GetProperty("missingFields")).Should().Equal("besEvidence");
+        (await _client.DeleteAsync($"{Sites}/901911/bes-evidence/files/file-1", Ct))
             .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
     public async Task BesEvidence_ConditionsOfExportMet_NoEvidenceNeeded()
     {
-        await AddSite(900183);
+        await AddSite(901911);
 
-        var response = await Patch(900183, new { coordinates = "13.0827, 80.2707", operationCodes = R3, conditionsOfExport = true });
+        var response = await Patch(901911, new { coordinates = "13.0827, 80.2707", operationCodes = R3, conditionsOfExport = true });
 
-        var site = SiteIn(await ReadJson(response), 900183);
+        var site = SiteIn(await ReadJson(response), 901911);
         site.GetProperty("besEvidenceRequired").GetBoolean().Should().BeFalse();
         site.GetProperty("isComplete").GetBoolean().Should().BeTrue();
     }
@@ -328,21 +331,21 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task BesEvidence_UnscannedUploadOrDuplicateFilename_Returns422()
     {
-        await AddSite(900183);
-        await AddSite(900184);
+        await AddSite(901911);
+        await AddSite(901912);
         var pending = Guid.NewGuid().ToString();
         await _factory.FakePendingUploadService.CreateAsync(pending, "http://cdp/status", ct: Ct);
 
-        (await _client.PostAsJsonAsync($"{Sites}/900183/bes-evidence/files", new { fileUploadId = pending }, Ct))
+        (await _client.PostAsJsonAsync($"{Sites}/901911/bes-evidence/files", new { fileUploadId = pending }, Ct))
             .StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
 
         await _client.PostAsJsonAsync(
-            $"{Sites}/900183/bes-evidence/files",
+            $"{Sites}/901911/bes-evidence/files",
             new { fileUploadId = await SeedCleanUpload("file-1", "same.pdf") },
             Ct
         );
         (await _client.PostAsJsonAsync(
-            $"{Sites}/900184/bes-evidence/files",
+            $"{Sites}/901912/bes-evidence/files",
             new { fileUploadId = await SeedCleanUpload("file-2", "SAME.pdf") },
             Ct
         )).StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
@@ -351,14 +354,14 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task InitiateBesEvidenceUpload_StartsACdpUploadInTheBesBucketForTheDraft()
     {
-        var body = new { redirectUrl = "http://frontend/back", s3Bucket = "bucket", s3Path = "ors/900183" };
+        var body = new { redirectUrl = "http://frontend/back", s3Bucket = "bucket", s3Path = "ors/901911" };
         (await _client.PostAsJsonAsync($"{Base}/requests/current/bes-evidence/initiate", body, Ct))
             .StatusCode.Should().Be(HttpStatusCode.NotFound);
 
         _factory
             .MockCdpUploaderService.InitiateAsync(Arg.Any<CdpInitiateRequest>(), Arg.Any<CancellationToken>())
             .Returns(new CdpInitiateResponse { UploadId = "u1", UploadUrl = "http://cdp/upload/u1", StatusUrl = "http://cdp/status/u1" });
-        await AddSite(900183);
+        await AddSite(901911);
 
         var response = await _client.PostAsJsonAsync($"{Base}/requests/current/bes-evidence/initiate", body, Ct);
 
@@ -367,7 +370,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         json.GetProperty("uploadUrl").GetString().Should().Be("http://cdp/upload/u1");
         json.GetProperty("statusUrl").GetString().Should().Contain($"/api/v1/accreditation-applications/{Org}/{AppId}/files/");
         await _factory.MockCdpUploaderService.Received(1).InitiateAsync(
-            Arg.Is<CdpInitiateRequest>(r => r.S3Path == "bes-evidence/ors/900183"),
+            Arg.Is<CdpInitiateRequest>(r => r.S3Path == "bes-evidence/ors/901911"),
             Arg.Any<CancellationToken>()
         );
     }
@@ -377,16 +380,16 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task RemoveSite_OneOfTwo_KeepsTheDraft_LastOne_DeletesIt()
     {
-        await AddSite(900183);
-        await AddSite(900184);
+        await AddSite(901911);
+        await AddSite(901912);
 
-        var first = await _client.DeleteAsync($"{Sites}/900183", Ct);
+        var first = await _client.DeleteAsync($"{Sites}/901911", Ct);
         first.StatusCode.Should().Be(HttpStatusCode.OK);
         (await ReadJson(first)).GetProperty("sites").GetArrayLength().Should().Be(1);
 
-        (await _client.DeleteAsync($"{Sites}/900184", Ct)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await _client.DeleteAsync($"{Sites}/901912", Ct)).StatusCode.Should().Be(HttpStatusCode.NoContent);
         _factory.FakeChangeRequests.All.Should().BeEmpty();
-        (await _client.DeleteAsync($"{Sites}/900184", Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.DeleteAsync($"{Sites}/901912", Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // ---------------------------------------------------------------- AC05 / AC07 / AC08 / AC09 submit
@@ -400,7 +403,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task Submit_MissingDeclarationDetails_Returns400()
     {
-        await AddSite(900182);
+        await AddSite(901910);
 
         var response = await _client.PostAsJsonAsync(SubmitUrl, new { fullName = "", jobTitle = "" }, Ct);
 
@@ -411,8 +414,8 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task Submit_IncompleteSite_Returns422NamingEachFieldAndStaysInProgress()
     {
-        await AddSite(900182);
-        await AddSite(900184);
+        await AddSite(901910);
+        await AddSite(901912);
 
         var response = await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct);
 
@@ -420,14 +423,14 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         var errors = (await ReadJson(response)).GetProperty("errors");
         errors.EnumerateObject().Select(p => p.Name)
             .Should()
-            .BeEquivalentTo("sites[900184].operationCodes", "sites[900184].conditionsOfExport");
+            .BeEquivalentTo("sites[901912].operationCodes", "sites[901912].conditionsOfExport");
         _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
     }
 
     [Fact]
     public async Task Submit_Complete_MarksSubmittedWithoutCaseManagementAndKeepsTheSitePending()
     {
-        await AddSite(900182);
+        await AddSite(901910);
 
         var response = await _client.PostAsJsonAsync(
             SubmitUrl,
@@ -449,33 +452,35 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
 
         // AC08: the existing registration association stays; the site is shown as pending.
         var view = await Get();
-        var site = view.GetProperty("sites").EnumerateArray().Single(s => s.GetProperty("siteId").GetInt32() == 900182);
+        var site = view.GetProperty("sites").EnumerateArray().Single(s => s.GetProperty("siteId").GetInt32() == 901910);
         site.GetProperty("accreditationStatus").GetString().Should().Be("Registered");
         site.GetProperty("pendingRequestStatus").GetString().Should().Be("Submitted");
         site.GetProperty("site").GetProperty("selected").GetBoolean().Should().BeFalse();
         view.GetProperty("activeRequest").ValueKind.Should().Be(JsonValueKind.Null);
-        Strings(view.GetProperty("pendingOrsIds")).Should().Equal("002");
+        Strings(view.GetProperty("pendingOrsIds")).Should().Equal("005");
     }
 
     [Fact]
     public async Task AddSite_SiteInASubmittedRequest_Returns409_ButOtherSitesStartANewDraft()
     {
-        await SubmitCompleteRequestFor900182();
+        await SubmitCompleteRequestFor901910();
 
-        (await AddSite(900182)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await AddSite(901910)).StatusCode.Should().Be(HttpStatusCode.Conflict);
 
-        var next = await AddSite(900184);
+        var next = await AddSite(901912);
         next.StatusCode.Should().Be(HttpStatusCode.Created);
         _factory.FakeChangeRequests.All.Should().HaveCount(2);
-        Strings((await Get()).GetProperty("pendingOrsIds")).Should().BeEquivalentTo("002", "004");
+        Strings((await Get()).GetProperty("pendingOrsIds")).Should().BeEquivalentTo("005", "007");
     }
 }
 
 // The hand-off flag switched on.
 public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
 {
-    private const string Org = DevInYearChangeSeedService.OrganisationId;
-    private static readonly string AppId = DevInYearChangeSeedService.ApplicationId.ToString();
+    private const int Year = 2026;
+    private static readonly string Org = DevExporterOrg.InYearChange.OrganisationId;
+    private static readonly string AppId = DevExporterAccreditationSeedService.ApplicationIdFor(DevExporterOrg.InYearChange, Year).ToString();
+    private static readonly string AccreditationReference = DevExporterOrg.InYearChange.AccreditationNumberFor(Year);
     private static readonly string Base = $"/api/v1/accreditation-changes/{Org}/{AppId}";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -485,7 +490,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
 
     public AccreditationChangeCaseManagementHandOffTests()
     {
-        _factory.FakePersistence.Seed(DevInYearChangeSeedService.Accreditation());
+        _factory.FakePersistence.Seed(DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year));
         _client = _factory.CreateClient();
     }
 
@@ -497,7 +502,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
 
     private async Task<HttpResponseMessage> AddAndSubmit()
     {
-        await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 900182 }, Ct);
+        await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
         return await _client.PostAsJsonAsync(
             $"{Base}/requests/current/submit",
             new { fullName = "Jane Smith", jobTitle = "Director" },
@@ -526,9 +531,9 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.CaseManagementWorkItemId.Should().Be(workItemId);
         await _factory.MockCaseWorkingAdapter.Received(1).SubmitChangeRequestAsync(
             Arg.Is<AccreditationChangeRequest>(r =>
-                r.Sites.Single().OrsId == "002" && r.ChargePence == 32800 && r.SubmittedBy!.FullName == "Jane Smith"
+                r.Sites.Single().OrsId == "005" && r.ChargePence == 32800 && r.SubmittedBy!.FullName == "Jane Smith"
             ),
-            Arg.Is<AccreditationApplicationModel>(a => a.AccreditationReference == "A26ER0500180018PL"),
+            Arg.Is<AccreditationApplicationModel>(a => a.AccreditationReference == AccreditationReference),
             Arg.Any<CancellationToken>()
         );
     }

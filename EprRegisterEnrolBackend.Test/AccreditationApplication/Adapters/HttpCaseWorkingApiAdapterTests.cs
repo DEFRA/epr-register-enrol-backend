@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -2219,7 +2220,7 @@ public class HttpCaseWorkingApiAdapterTests
 
     private static (AccreditationChangeRequest Request, AccreditationApplicationModel Accreditation) CreateChangeRequest()
     {
-        var accreditation = DevInYearChangeSeedService.Accreditation();
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, 2026);
         var request = new AccreditationChangeRequest
         {
             OrganisationId = accreditation.OrganisationId,
@@ -2239,8 +2240,8 @@ public class HttpCaseWorkingApiAdapterTests
             [
                 new ChangeRequestSite
                 {
-                    SiteId = 900184,
-                    OrsId = "004",
+                    SiteId = 901912,
+                    OrsId = "007",
                     SiteName = "Izmir Recycling AS",
                     Answers = new ChangeRequestSiteAnswers
                     {
@@ -2273,13 +2274,13 @@ public class HttpCaseWorkingApiAdapterTests
         body["typeId"]!.GetValue<string>().Should().Be("add-overseas-site");
         var payload = body["payload"]!;
         payload["operatorRequestId"]!.GetValue<string>().Should().Be(request.RequestId);
-        payload["accreditationReference"]!.GetValue<string>().Should().Be("A26ER0500180018PL");
+        payload["accreditationReference"]!.GetValue<string>().Should().Be("A26EX0500190001PL");
         payload["chargePence"]!.GetValue<int>().Should().Be(32800);
         payload["wasteProcessingType"]!.GetValue<string>().Should().Be("exporter");
         payload["companyRegisterAddressPostcode"]!.GetValue<string>().Should().Be("HU1 1AA");
-        payload["operatorOrgNumber"]!.GetValue<int>().Should().Be(50018);
+        payload["operatorOrgNumber"]!.GetValue<int>().Should().Be(50019);
         var site = payload["sites"]![0]!;
-        site["orsId"]!.GetValue<string>().Should().Be("004");
+        site["orsId"]!.GetValue<string>().Should().Be("007");
         site["country"]!.GetValue<string>().Should().Be("Turkey");
         site["coordinates"]!.GetValue<string>().Should().Be("38.4237, 27.1428");
         site["operationCodes"]![0]!.GetValue<string>().Should().Be("R3");

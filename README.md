@@ -70,7 +70,9 @@ and the credentials exposed as enviromment variables.
 #### Domain model flags
 
 The domain model (`docs/analysis/register-enrol-domain-model-design.md`) ships in phases, each behind a
-`DomainModel:*` flag that is off by default:
+`DomainModel:*` flag that is off by default. Phases 0 and 1 are released together, and so are phases 2 and 3:
+`DualWriteSeed` and `DualWrite` are switched on at the same time in each environment, though either can be turned off
+alone in a rollback. See §6 of the design doc for the release plan.
 
 - `DomainModel__ExpandEnabled=true` (phase 1) builds the empty versioned collections and their indexes at
   startup and adds the `domain-model-schema` check to `/health/ready`. If Mongo is unreachable at startup,
@@ -136,7 +138,6 @@ for why.
 | `CaseWorking__Url` | No | `http://localhost:8085` | Base URL of `epr-register-enrol-management-be` |
 | `CaseWorking__UseStub` | No | `false` (Development) | When `true`, submissions to management-be are stubbed instead of sent |
 | `AccreditationChanges__SubmitToCaseManagement` | No | `false` | RA-492: when `true`, submitting an in-year change request also creates an `add-overseas-site` work item in management-be. Deploy a management-be that registers that work-item type **before** switching this on — management-be on `main` rejects unknown types |
-| `DevSeedData__InYearChange` | No | `false` | Development only: seeds org 50018's Approved 2026 exporter accreditation (one accredited, three registered overseas sites) for the RA-492 journey |
 | `CASE_MANAGEMENT_API_SHARED_SECRET` | **Yes** | _(blank)_ | HMAC secret this service signs its outbound calls to management-be with — must match management-be's `AUTH_SHARED_SECRET__BACKEND` exactly |
 | `CaseManagementAuth__ExpectedClientId` | No | `epr-register-enrol-management-be` | Expected `x-cdp-client-id` on inbound calls from management-be |
 | `AUTH_SHARED_SECRET__MANAGEMENT_BE` | **Yes** | _(blank)_ | Verifies inbound calls from management-be — must match management-be's `OPERATOR_BACKEND_SHARED_SECRET` exactly |

@@ -98,8 +98,12 @@ public sealed class ServiceClientRegistry : IServiceClientRegistry
 
             if (secrets.Count == 0)
             {
-                logger.LogError(
-                    "Service client {ClientName} has no secret: AUTH_SHARED_SECRET__{SecretName} is not configured, so its requests will be rejected.",
+                // RA-733: Information, not Error. Clients are registered in config before anyone
+                // creates their secret, so a missing one is normal (ReEx has none in prod yet) and
+                // must not put an error line in the start-up log. The client is still left out, so
+                // its requests fail closed, and each rejected request logs a warning.
+                logger.LogInformation(
+                    "Service client {ClientName} has no secret configured yet; its requests will be rejected until AUTH_SHARED_SECRET__{SecretName} is provisioned.",
                     definition.Name,
                     secretName
                 );
