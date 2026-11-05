@@ -75,8 +75,8 @@ Accreditations for 2027 onwards are served.
 
 | Route | Returns |
 | --- | --- |
-| `GET /v1/accreditations?year=2027&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100; `year` optional) |
-| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the accreditation, with status and tonnage band history and signatories |
+| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100). `year`, `organisationNumber` and `registrationNumber` are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404 |
+| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}?includeWithdrawn=false` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20&includeWithdrawn=false` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}?includeWithdrawn=false` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
 
@@ -108,6 +108,20 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 
 401 troubleshooting: check clock skew first, then that the payload has exactly two empty lines
 and no trailing newline, then that you use the secret for this client and environment.
+
+## What's new
+
+- `GET /v1/accreditations` can be filtered by `organisationNumber` and `registrationNumber` as well
+  as `year`. The filters combine with AND.
+- Getting an accreditation now returns the complete accreditation: an exporter's accredited
+  overseas sites, with their interim sites and status history, are in the same response under
+  `overseasSites`, so one request is enough. `includeWithdrawn=true` includes withdrawn interim
+  sites. The separate overseas-site routes are unchanged.
+- A record that cannot be addressed by its organisation, registration and accreditation numbers is
+  left out of the response and logged by us, so one bad record does not fail a page.
+
+Existing calls keep working. If your client rejects fields it does not know, allow `overseasSites`
+on the accreditation.
 
 ## Test data
 

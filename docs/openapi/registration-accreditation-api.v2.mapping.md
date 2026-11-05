@@ -60,6 +60,16 @@ after the migration (domain model design, decision D3).
 
 `AccreditationSummary` is returned by search; `Accreditation` adds the two histories.
 
+Search (`GET /v1/accreditations`) filters on `year`, `organisationNumber` and `registrationNumber`.
+They map to App `year`, `orgId` and `registrationReference`, are covered by the
+`(orgId, registrationReference, year)` index, and combine with AND.
+
+`Accreditation` also carries `overseasSites[]` (exporters only, omitted for a reprocessor): every
+accredited overseas site, as described in [Accredited overseas sites](#accredited-overseas-sites),
+ordered by `orsId`, unpaged. `includeWithdrawn` applies to the interim sites inside them. A record
+with no organisation, registration or accreditation number is dropped from the response and logged,
+not served.
+
 | API field | Today: C# → Mongo | Target source | Notes |
 | --- | --- | --- | --- |
 | `organisationNumber` | App `OrgId` → `orgId` | Accreditation → Registration → Organisation | reached via the registration |
