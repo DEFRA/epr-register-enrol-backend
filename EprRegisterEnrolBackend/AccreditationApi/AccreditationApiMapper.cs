@@ -20,9 +20,16 @@ public static class AccreditationApiMapper
         DateTimeOffset now
     ) => Summary(application, now, StatusHistory(application, null));
 
+    // Only the sites included in the accreditation. A site the organisation registered but did
+    // not select for it is not on the accreditation, so it is not served.
+    public static IEnumerable<OverseasSiteModel> AccreditedSites(
+        AccreditationApplicationModel application
+    ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
+
     public static AccreditationDto ToAccreditation(
         AccreditationApplicationModel application,
-        DateTimeOffset now
+        DateTimeOffset now,
+        bool includeWithdrawn = false
     )
     {
         var history = StatusHistory(application, null);
@@ -48,6 +55,13 @@ public static class AccreditationApiMapper
                 })
                 .ToList(),
             StatusHistory = history,
+            OverseasSites = IsExporter(application)
+                ? AccreditedSites(application)
+                    .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+                    .ThenBy(site => site.SiteId)
+                    .Select(site => ToOverseasSite(application, site, includeWithdrawn, now))
+                    .ToList()
+                : null,
             TonnageBandHistory = summary.TonnageBand is null
                 ? []
                 :

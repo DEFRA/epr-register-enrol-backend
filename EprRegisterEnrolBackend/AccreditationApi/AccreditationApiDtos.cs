@@ -44,8 +44,10 @@ public record AccreditationSummaryDto
 }
 
 /// <summary>
-/// The v2 <c>Accreditation</c>: a summary plus its histories (oldest first) and PRN signatories.
-/// Returned only when getting one accreditation.
+/// The v2 <c>Accreditation</c>: a summary plus its histories (oldest first), PRN signatories and,
+/// for an exporter, every overseas site on the accreditation with its interim sites and status
+/// history (RA-647: one request returns the complete accreditation). Returned only when getting one
+/// accreditation.
 /// </summary>
 public sealed record AccreditationDto : AccreditationSummaryDto
 {
@@ -54,6 +56,13 @@ public sealed record AccreditationDto : AccreditationSummaryDto
     public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
 
     public required IReadOnlyList<TonnageBandHistoryEntryDto> TonnageBandHistory { get; init; }
+
+    /// <summary>
+    /// Exporters only, ordered by ORS id: a reprocessor has a site, not overseas sites, so for a
+    /// reprocessor the property is left out.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AccreditedOverseasSiteDto>? OverseasSites { get; init; }
 }
 
 public sealed record SignatoryDto

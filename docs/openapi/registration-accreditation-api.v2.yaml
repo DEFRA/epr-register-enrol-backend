@@ -89,12 +89,14 @@ paths:
     get:
       tags: [Accreditations]
       operationId: getAccreditation
-      summary: Get an accreditation, with its status and tonnage band history
+      summary: Get the complete accreditation, with its histories and overseas sites
       parameters:
         - $ref: '#/components/parameters/OrganisationNumber'
         - $ref: '#/components/parameters/RegistrationNumber'
         - $ref: '#/components/parameters/AccreditationYear'
+        - $ref: '#/components/parameters/IncludeWithdrawn'
       responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
         '200':
           description: The accreditation.
           content:
@@ -335,13 +337,22 @@ components:
           nullable: true
     Accreditation:
       description: |
-        An `AccreditationSummary` plus its full status and tonnage band history (oldest first)
-        and its PRN signatories. Returned only when getting one accreditation.
+        An `AccreditationSummary` plus its full status and tonnage band history (oldest first),
+        its PRN signatories and, for an exporter, every accredited overseas site with its interim
+        sites and status history, so one request returns the complete accreditation. Returned only
+        when getting one accreditation.
       allOf:
         - $ref: '#/components/schemas/AccreditationSummary'
         - type: object
           required: [statusHistory, tonnageBandHistory, signatories]
           properties:
+            overseasSites:
+              type: array
+              description: |
+                Exporters only, ordered by `orsId`, and unpaged. Omitted for a reprocessor, which
+                has a site, not overseas sites. Withdrawn interim sites are left out unless
+                `includeWithdrawn=true`.
+              items: { $ref: '#/components/schemas/AccreditedOverseasSite' }
             signatories:
               type: array
               items: { $ref: '#/components/schemas/Signatory' }

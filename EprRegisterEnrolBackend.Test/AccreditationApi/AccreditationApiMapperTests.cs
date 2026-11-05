@@ -99,7 +99,6 @@ public class AccreditationApiMapperTests
                 "prnIssuance",
                 "submitterContactDetails",
                 "siteAddress",
-                "overseasSites",
                 "accreditationReference",
                 "year",
             }
@@ -107,6 +106,9 @@ public class AccreditationApiMapperTests
         {
             json.TryGetProperty(name, out _).Should().BeFalse(name);
         }
+
+        // RA-647: an exporter carries its accredited overseas sites in the same response.
+        json.GetProperty("overseasSites").GetArrayLength().Should().Be(1);
     }
 
     [Theory]

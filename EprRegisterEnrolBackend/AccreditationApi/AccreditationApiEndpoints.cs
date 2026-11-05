@@ -133,10 +133,15 @@ public static partial class AccreditationApiEndpoints
         string organisationNumber,
         string registrationNumber,
         string year,
+        HttpContext http,
         IAccreditationApplicationPersistence persistence,
         IOptions<ServiceClientsConfig> config
     )
     {
+        var withdrawn = ParseIncludeWithdrawn(http.Request.Query["includeWithdrawn"]);
+        if (withdrawn.Problem is not null)
+            return withdrawn.Problem;
+
         var lookup = await Resolve(
             organisationNumber,
             registrationNumber,
@@ -145,7 +150,13 @@ public static partial class AccreditationApiEndpoints
             config
         );
         return lookup.Problem
-            ?? Results.Ok(AccreditationApiMapper.ToAccreditation(lookup.Application!, DateTimeOffset.UtcNow));
+            ?? Results.Ok(
+                AccreditationApiMapper.ToAccreditation(
+                    lookup.Application!,
+                    DateTimeOffset.UtcNow,
+                    withdrawn.Include
+                )
+            );
     }
 
     private static async Task<IResult> ListOverseasSites(
@@ -178,7 +189,8 @@ public static partial class AccreditationApiEndpoints
 
         var application = lookup.Application!;
         var now = DateTimeOffset.UtcNow;
-        var sites = AccreditedSites(application)
+        var sites = AccreditationApiMapper
+            .AccreditedSites(application)
             .OrderBy(site => site.OrsId, StringComparer.Ordinal)
             .ThenBy(site => site.SiteId)
             .ToList();
@@ -239,7 +251,7 @@ public static partial class AccreditationApiEndpoints
             return lookup.Problem;
 
         var application = lookup.Application!;
-        var site = AccreditedSites(application).FirstOrDefault(s =>
+        var site = AccreditationApiMapper.AccreditedSites(application).FirstOrDefault(s =>
             string.Equals(s.OrsId, orsId, StringComparison.Ordinal)
         );
 
@@ -258,12 +270,6 @@ public static partial class AccreditationApiEndpoints
                 )
             );
     }
-
-    // Only the sites included in the accreditation. A site the organisation registered but did
-    // not select for it is not on the accreditation, so it is not served.
-    private static IEnumerable<OverseasSiteModel> AccreditedSites(
-        AccreditationApplicationModel application
-    ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
 
     private sealed record Withdrawn(bool Include, IResult? Problem);
 
