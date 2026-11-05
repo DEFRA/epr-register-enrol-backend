@@ -3051,6 +3051,22 @@ public static class AccreditationApplicationEndpoints
         if (site is null)
             return Results.NotFound();
 
+        // RA-605: cap is per overseas site; infected files are not counted.
+        if (
+            (site.BesEvidence?.BesEvidenceUploads ?? []).Count(
+                f => f.ScanStatus != nameof(FileScanStatus.Infected)
+            ) >= MaxBesEvidenceFiles
+        )
+            return Results.Problem(
+                detail: MaxBesEvidenceFilesMessage,
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "Unprocessable Entity",
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = MaxSamplingPlanFilesErrorCode,
+                }
+            );
+
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
             return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
@@ -4101,7 +4117,10 @@ public static class AccreditationApplicationEndpoints
     private const int MaxSamplingPlanFiles = 10;
     internal const string MaxSamplingPlanFilesErrorCode = "MaxFilesExceeded";
     internal const string MaxSamplingPlanFilesMessage =
-        "The maximum number of files permitted to be uploaded is ten";
+        "You can only upload a maximum of 10 'sampling and inspection plan' and 'supporting information' files.";
+    private const int MaxBesEvidenceFiles = 10;
+    internal const string MaxBesEvidenceFilesMessage =
+        "You can only upload a maximum of 10 files as evidence of broadly equivalent standards.";
 
     // RA-644 B8g: bundles AddFile's services under one [AsParameters] argument (S107) once it takes the unit of
     // work.
