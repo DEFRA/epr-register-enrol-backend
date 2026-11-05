@@ -31,9 +31,12 @@ public static class ChangeRequestRules
     /// and never registered (<see cref="OverseasSiteModel.IsNewSite"/>), which is neither and cannot be added.
     /// </summary>
     public static SiteAccreditationStatus? AccreditationStatus(OverseasSiteModel site) =>
-        site.Selected ? SiteAccreditationStatus.Accredited
-        : site.IsNewSite ? null
-        : SiteAccreditationStatus.Registered;
+        site switch
+        {
+            { Selected: true } => SiteAccreditationStatus.Accredited,
+            { IsNewSite: true } => null,
+            _ => SiteAccreditationStatus.Registered,
+        };
 
     /// <summary>
     /// The four fields the ticket locks once the ORS holds a value for them; a field the ORS

@@ -113,9 +113,18 @@ public class ChangeRequestPersistence
             if (result.MatchedCount == 1)
                 return true;
         }
-        // Reopening a request as InProgress when another draft exists breaks the one-draft rule.
         catch (MongoWriteException ex)
-            when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey) { }
+            when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
+            // Reopening a request as InProgress when another draft exists breaks the one-draft rule:
+            // refused, like a lost version check.
+            return Refused(request, readVersion);
+        }
+        return Refused(request, readVersion);
+    }
+
+    private static bool Refused(AccreditationChangeRequest request, long readVersion)
+    {
         request.Version = readVersion;
         return false;
     }
