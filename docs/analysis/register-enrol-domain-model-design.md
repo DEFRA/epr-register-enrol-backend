@@ -1,6 +1,17 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.5, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.6, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05
+
+**Changes in v6.6 (2026-11-05): application types, option C1 (RA-744)**
+
+- **The Application is a common envelope with a per-type `details`** (§3.2, §3.3). Every field valid only for an
+  accreditation application moves under `details`, stored as `AccreditationDetails`. The design and the six
+  application types are in `register-enrol-application-types.md`.
+- **`applicationType` is stored at the top level** with five values, one per `details` class: `Accreditation`,
+  `OrsChange`, `TonnageChange`, `NewRegistration` and `AnnualCharge`. New and Reapply are both `Accreditation`,
+  told apart by `details.kind`. `details._t` holds the same string.
+- **Field paths in §5.1 that name accreditation fields on the Application now sit under `details`.** No production
+  data is affected: phases 2 and 3 ship with this change in one release.
 
 **Changes in v6.5 (2026-11-04): seed decisions and accepted risks, after the PR #228 review**
 
@@ -425,7 +436,7 @@ From read-only sweeps of the sibling repos. Each item affects facade fidelity or
 | **Registration** (`registrationVersions`) | `entityId` (stable; what other entities reference); `_id` per version; current-version unique `reExRegistrationId`; current-version unique sparse `registrationNumber` | `organisationId` → Organisation; `registrationNumber`, `previousRegistrationNumbers[]`; `status` (**ReEx's lifecycle**: created, approved, rejected, cancelled; §3.4); `wasteProcessingType` (reprocessor or exporter); `material`; `glassRecyclingProcess`; `nation` (from `submittedToRegulator`); `site{address, gridReference, siteId}`; `noticeAddress`; `wasteManagementPermits[]`; `recyclingProcess[]`; `exportPorts[]`; `yearlyMetrics[]`; `approvedPersons[]`; `contactDetails`; `submitterContactDetails`; `samplingInspectionPlan[]`; `suppliers`; `plantEquipmentDetails`; `formSubmissionTime` | n → 1 Organisation; 1 → n ORS; 1 → n Accreditation (one per year, see [A4](#assumptions)); 1 → n Application | Synced from ReEx **until** this service implements new registrations and registration fee payments (Q1). After that it is mastered here. Registration numbers are minted here (moved from Application) |
 | **OverseasSite / ORS** (`overseasSiteVersions`) | `entityId` (stable); `_id` per version; current-version unique (`registrationId`, `orsId`). **`orsId` is the stable, user-visible identity** (A22): 3 digits, allocated once per registration, kept across years and never reissued | `orsId` ("001"–"999"), `siteName`, `address{line1, line2, town, country}`, `formattedAddress`, `country`, `isEu`, `isOecd`, `coordinates`, `contact{fullName, email, phone}`, `operationCodes[]` (R-codes), `baselOecdCodes[]` (Basel/OECD waste codes, as an ordered list; a maximum of 3 is a validation rule, not the storage shape; empty for sites seeded from ReEx), `repatriatedLoads`, `conditionsOfExport`, `status` (Proposed, Active, Discarded), `origin` (ReEx or Operator), `proposedByApplicationId`, **`interimSites[]`** (embedded, v4; see the next row) | n → 1 Registration; embeds 0..n interim sites | Registration-scoped. Operator-proposed until its application is approved |
 | *Interim site* (**embedded** in `overseasSites.interimSites[]`; no collection of its own, v4 D1) | No `_id`. **`siteNumber` is the stable identity** (A22): 3 digits from its own per-registration pool, separate from ORS ids ([Q30](#q30)), kept across years. Uniqueness across the registration comes from a **multikey unique index** on the ORS collection (§4.2). Legacy `SN-000N` values are renumbered once if the survey finds any ([Q30](#q30)) | `siteNumber`; `previousSiteNumbers[]`; `siteName`; `address{line1, line2, town, region, country, postcode}`; `contact{…}`; `operationCodes[]` (R12/R13 mandatory); `status` (Proposed, Active, Withdrawn, Discarded); `proposedByApplicationId`; `createdAt`; `removedAt` | Part of its ORS | Same as ORS. **No suspension of its own (Q5).** It can only be removed from its ORS (`removedAt`, status Withdrawn) or restored (RA-603). **Every change is a new version of its ORS**, so its history is the ORS's history. It appears on every accreditation that covers its ORS, and is suspended implicitly when that ORS is (Q6) |
-| **Application** (`applicationVersions`; the legacy `accreditationApplications` stays the source of truth for writes until phase 6, §6) | `entityId` = the existing application `_id`, so the public `{applicationId}` is unchanged; `_id` per version; current-version unique sparse `applicationReference` | `registrationId` → Registration (new FK); `year` (accreditation year applied for); `sourceAccreditationId` → Accreditation (prior year); `status`; `paymentReference`; `caseManagementWorkItemId`; `caseManagementStatusUpdatedAt`; `submittedBy`; `withdrawalReason`; `dateSent`; `dateLastEdited`; `query`; sections (`prns`, `businessPlan`, `samplingPlan`, `besEvidence`, `overseasSites`), each with `sectionStatus` and submission `versions[]`; `applicationOverseasSites[]`; `reservedAccreditationNumber` | n → 1 Registration; 0..1 → 1 Accreditation (`accreditationId`, set on approval) | This service. Operator via frontend; case management via pushes |
+| **Application** (`applicationVersions`; the legacy `accreditationApplications` stays the source of truth for writes until phase 6, §6) | `entityId` = the existing application `_id`, so the public `{applicationId}` is unchanged; `_id` per version; current-version unique sparse `applicationReference` | Envelope (every type): `registrationId` → Registration (new FK); `applicationType` (`Accreditation`, `OrsChange`, `TonnageChange`, `NewRegistration`, `AnnualCharge`); `status`; `applicationReference`; `paymentReference`; `submissionReference`; `caseManagementWorkItemId`; `caseManagementStatusUpdatedAt`; `submittedBy`; `withdrawalReason`; `dateSent`; `dateLastEdited`; `query`. `details`, for `Accreditation` (`AccreditationDetails`): `kind` (`New`, `Reapply`); `year` (accreditation year applied for); `sourceAccreditationId` → Accreditation (prior year); sections (`prns`, `businessPlan`, `samplingPlan`, `besEvidence`, `overseasSitesSection`), each with `sectionStatus` and submission `versions[]`; `applicationOverseasSites[]`; `reservedAccreditationNumber`; `accreditationId`. Other types' `details` are in `register-enrol-application-types.md` | n → 1 Registration; for `Accreditation`, 0..1 → 1 Accreditation (`details.accreditationId`, set on approval) | This service. Operator via frontend; case management via pushes |
 | **Accreditation** (`accreditationVersions`) | `entityId` (stable); `_id` per version; current-version unique `applicationId`; current-version unique `accreditationNumber`, **globally unique** across organisations (v2 assumption, A20); current-version unique (`registrationId`, `year`) | `registrationId` → Registration (**only** link upward); `year` (the year the accreditation **applies to**, not the year it was created or approved; part of the API path, D5); `accreditationNumber` (**immutable once approved**, Q7); `status` (approved, suspended or cancelled; **stored, recorded-time only**, Q21; history via §4.2, with the API's `statusHistory[]` projected from it, §4.4); `periodStart`/`periodEnd` (business validity, **not** history); `signatories[]` {fullName, email, phone?} (was `prnIssuance.authorisers`); `businessPlan{…}` (**owned, not exposed**, v2); `samplingPlanFiles[]` (refs; **kept, not exposed**, Q11); `recyclingProcess[]` (**kept, not exposed**, Q11; source to be confirmed); `accreditationOverseasSites[]` (an **Accreditation Overseas Site**) = {`overseasSiteId`, `orsId`, `status` (approved or suspended; same rules), `besEvidence[]`}. The interim sites of an accredited ORS are **that ORS's embedded interim sites**, with no separate per-accreditation membership (Q24); `tonnageBand` (v4 D2: `up_to_500`, `up_to_5000`, `up_to_10000` or `over_10000`, which are ReEx's `TONNAGE_BAND` values; **stored, recorded-time only**, A19; each change is a new Accreditation version with `lastChange.reason = TonnageBandChanged`, and the API's `tonnageBandHistory[]` is projected from those versions, §4.4; it is on the public register) | n → 1 Registration; 1 → 1 approving Application; references ⊆ the registration's ORSs (and so their embedded interim sites) | This service. Created by the approval push only. ReEx already holds earlier accreditations and is the primary consumer of this API, so none are imported (D10). Suspended, cancelled and reinstated manually by the regulator (Q14). **Read by ReEx** through the v2 API (Q2). The first `tonnageBand` comes from the application's `prns.plannedTonnageBand`; later values come from in-year changes |
 
 **Versioned collections (v5, option B).** Registration, OverseasSite, Application and Accreditation each
@@ -549,11 +560,13 @@ erDiagram
     APPLICATION {
         ObjectId entityId "public applicationId; one doc per version"
         ObjectId registrationId FK
-        int year
+        string applicationType "Accreditation|OrsChange|TonnageChange|NewRegistration|AnnualCharge"
         string status
         string applicationReference UK
         uuid caseManagementWorkItemId UK
-        string reservedAccreditationNumber
+        object details "shape set by applicationType; _t = applicationType"
+        int details_year "Accreditation: details.year"
+        string details_reservedAccreditationNumber "Accreditation: details.reservedAccreditationNumber"
     }
     ACCREDITATION {
         ObjectId entityId "stable; one doc per version"
@@ -895,6 +908,10 @@ Legend:
 - **Flag**: ⚠ mismatch, ❓ no clear home, ✚ needs enriching.
 
 ### 5.1 `accreditationApplications` document: every field
+
+Since v6.6, a destination written as Application.`field` for an accreditation-only field (`year`, the sections,
+`applicationOverseasSites[]`, `reservedAccreditationNumber`, `accreditationId`) is stored at Application.`details.field`,
+in `AccreditationDetails`. Envelope fields such as `status` and `applicationReference` stay at the top level.
 
 | Current field (Mongo) | Dest | Facade | Flag / note |
 | --- | --- | --- | --- |
