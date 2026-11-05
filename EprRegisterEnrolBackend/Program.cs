@@ -471,14 +471,16 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseReExOrganisationEndpoints();
     // Accreditation application endpoints
     app.UseAccreditationApplicationEndpoints();
-    // RA-492: in-year change requests against a granted accreditation
-    app.UseAccreditationChangeEndpoints();
     // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
     app.UseAccreditationApiEndpoints();
-    // RA-425: the current registration status, for the frontend's material dashboard pages. Behind a
-    // flag, off by default, until the in-year changes journey ships.
-    if (app.Configuration.GetValue<bool>(RegistrationStatusEndpoints.FeatureFlagKey))
+    // The in-year changes journey, behind a flag, off by default, until it ships (unmapped, its routes
+    // return 404): RA-425's current registration status, for the frontend's material dashboard pages,
+    // and RA-492's change requests against a granted accreditation.
+    if (app.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
+    {
         app.UseRegistrationStatusEndpoints();
+        app.UseAccreditationChangeEndpoints();
+    }
 
     if (app.Environment.IsDevelopment())
     {

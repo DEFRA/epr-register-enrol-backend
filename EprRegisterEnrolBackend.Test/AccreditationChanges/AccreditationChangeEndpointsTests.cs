@@ -119,6 +119,20 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         view.GetProperty("pendingOrsIds").GetArrayLength().Should().Be(0);
     }
 
+    // Off, the routes are not mapped at all, as RA-425's registration status endpoint.
+    [Fact]
+    public async Task InYearChangesFlagOff_EveryRouteReturns404()
+    {
+        using var factory = new AccreditationChangeTestFactory(inYearChangesEnabled: false);
+        factory.FakePersistence.Seed(DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year));
+        using var client = factory.CreateClient();
+
+        (await client.GetAsync(Base, Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await client.PostAsJsonAsync(Sites, new { siteId = 901910 }, Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await client.PostAsJsonAsync(SubmitUrl, Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        factory.FakeChangeRequests.All.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Get_UnknownApplication_Returns404()
     {
