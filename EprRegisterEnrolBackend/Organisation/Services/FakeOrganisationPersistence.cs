@@ -786,7 +786,7 @@ public class FakeOrganisationPersistence
                     Id = org.RegistrationId,
                     SiteId = "REG018",
                     Status = RegistrationStatusCreated,
-                    Material = org.Material.ToString().ToLowerInvariant(),
+                    Material = DevExporterOrg.Material.ToString().ToLowerInvariant(),
                     WasteProcessingType = WasteProcessingTypeExporter,
                     OverseasSites = overseasSiteIds,
                     WasteManagementPermits =

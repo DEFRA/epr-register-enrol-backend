@@ -127,7 +127,7 @@ public class DevExporterAccreditationSeedService(
             org.RegistrationId,
             org.RegistrationNumberFor(year),
             WasteProcessingKind.Exporter,
-            org.Material
+            DevExporterOrg.Material
         );
 
     // "a" + year + padding + org id, e.g. a20260000000000000050018.
@@ -154,7 +154,7 @@ public class DevExporterAccreditationSeedService(
             WasteProcessingType = "exporter",
             RegistrationReference = org.RegistrationNumberFor(year),
             AccreditationReference = org.AccreditationNumberFor(year),
-            MaterialType = org.Material,
+            MaterialType = DevExporterOrg.Material,
             ApplicationStatus = ApplicationStatus.Approved,
             SourceYear = year - 1,
             CreatedAt = createdAt,

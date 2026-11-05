@@ -18,73 +18,53 @@ namespace EprRegisterEnrolBackend.DevSeed;
 internal sealed class DevExporterOrg
 {
     /// <summary>RA-425: the material dashboard pages (/manage) and their ra-425 e2e journey.</summary>
-    internal static readonly DevExporterOrg Manage = new(
-        orgId: 50018,
-        name: "Manage Accreditation Test Ltd",
-        tradingName: "Manage Accreditation Test",
-        email: "info@manageaccreditationtest.co.uk",
-        companiesHouseNumber: "12345018",
-        addressLine1: "18 Harbour Road",
-        town: "Felixstowe",
-        postcode: "IP11 3AB"
-    );
+    internal static readonly DevExporterOrg Manage = new()
+    {
+        OrgId = 50018,
+        Name = "Manage Accreditation Test Ltd",
+        TradingName = "Manage Accreditation Test",
+        Email = "info@manageaccreditationtest.co.uk",
+        CompaniesHouseNumber = "12345018",
+        AddressLine1 = "18 Harbour Road",
+        Town = "Felixstowe",
+        Postcode = "IP11 3AB",
+    };
 
     /// <summary>
     /// RA-492: the in-year "add a registered ORS to your accreditation" journey and its e2e spec. Its own org, so
     /// that journey's change requests never alter what RA-425's spec sees.
     /// </summary>
-    internal static readonly DevExporterOrg InYearChange = new(
-        orgId: 50019,
-        name: "In-Year Change Exports Ltd",
-        tradingName: "In-Year Change Exports",
-        email: "info@inyearchangeexports.co.uk",
-        companiesHouseNumber: "12345019",
-        addressLine1: "Change House",
-        town: "Hull",
-        postcode: "HU1 1AA"
-    );
+    internal static readonly DevExporterOrg InYearChange = new()
+    {
+        OrgId = 50019,
+        Name = "In-Year Change Exports Ltd",
+        TradingName = "In-Year Change Exports",
+        Email = "info@inyearchangeexports.co.uk",
+        CompaniesHouseNumber = "12345019",
+        AddressLine1 = "Change House",
+        Town = "Hull",
+        Postcode = "HU1 1AA",
+    };
 
     internal static readonly IReadOnlyList<DevExporterOrg> All = [Manage, InYearChange];
 
-    private DevExporterOrg(
-        int orgId,
-        string name,
-        string tradingName,
-        string email,
-        string companiesHouseNumber,
-        string addressLine1,
-        string town,
-        string postcode
-    )
-    {
-        OrgId = orgId;
-        OrganisationId = orgId.ToString(CultureInfo.InvariantCulture);
-        // The ReEx registration id, shaped like the stub registry's others, e.g. aaa000000000000000050018.
-        RegistrationId = ObjectId.Parse($"aaa{orgId:D21}");
-        Name = name;
-        TradingName = tradingName;
-        Email = email;
-        CompaniesHouseNumber = companiesHouseNumber;
-        PermitNumber = $"WML{orgId}";
-        AddressLine1 = addressLine1;
-        Town = town;
-        Postcode = postcode;
-        RegisteredAddress = $"{addressLine1}, {town}, {postcode}";
-    }
+    private DevExporterOrg() { }
 
-    internal int OrgId { get; }
-    internal string OrganisationId { get; }
-    internal ObjectId RegistrationId { get; }
-    internal string Name { get; }
-    internal string TradingName { get; }
-    internal string Email { get; }
-    internal string CompaniesHouseNumber { get; }
-    internal MaterialType Material => MaterialType.Plastic;
-    internal string PermitNumber { get; }
-    internal string AddressLine1 { get; }
-    internal string Town { get; }
-    internal string Postcode { get; }
-    internal string RegisteredAddress { get; }
+    internal required int OrgId { get; init; }
+    internal string OrganisationId => OrgId.ToString(CultureInfo.InvariantCulture);
+
+    // The ReEx registration id, shaped like the stub registry's others, e.g. aaa000000000000000050018.
+    internal ObjectId RegistrationId => ObjectId.Parse($"aaa{OrgId:D21}");
+    internal required string Name { get; init; }
+    internal required string TradingName { get; init; }
+    internal required string Email { get; init; }
+    internal required string CompaniesHouseNumber { get; init; }
+    internal const MaterialType Material = MaterialType.Plastic;
+    internal string PermitNumber => $"WML{OrgId}";
+    internal required string AddressLine1 { get; init; }
+    internal required string Town { get; init; }
+    internal required string Postcode { get; init; }
+    internal string RegisteredAddress => $"{AddressLine1}, {Town}, {Postcode}";
 
     internal static DevExporterOrg? Find(int orgId) => All.FirstOrDefault(o => o.OrgId == orgId);
 
