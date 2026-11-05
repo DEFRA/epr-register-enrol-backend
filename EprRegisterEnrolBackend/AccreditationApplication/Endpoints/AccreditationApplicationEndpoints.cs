@@ -854,13 +854,13 @@ public static class AccreditationApplicationEndpoints
         TimeSpan.FromMilliseconds(100)
     );
 
-    // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
-    // from the server-held PendingUploadService record, populated only by the real
-    // CDP-uploader webhook callback — never trusted verbatim from the client request body.
     // CDP's status for a scanned file: "complete" means it passed the virus scan.
     internal static FileScanStatus ScanStatusOf(CdpCallbackFile file) =>
         file.FileStatus == "complete" ? FileScanStatus.Clean : FileScanStatus.Infected;
 
+    // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
+    // from the server-held PendingUploadService record, populated only by the real
+    // CDP-uploader webhook callback — never trusted verbatim from the client request body.
     internal static async Task<(
         IResult? Error,
         CdpCallbackFile? ScannedFile
@@ -3055,21 +3055,9 @@ public static class AccreditationApplicationEndpoints
         if (site is null)
             return Results.NotFound();
 
-        // RA-605: cap is per overseas site; infected files are not counted.
-        if (
-            (site.BesEvidence?.BesEvidenceUploads ?? []).Count(
-                f => f.ScanStatus != nameof(FileScanStatus.Infected)
-            ) >= MaxBesEvidenceFiles
-        )
-            return Results.Problem(
-                detail: MaxBesEvidenceFilesMessage,
-                statusCode: StatusCodes.Status422UnprocessableEntity,
-                title: "Unprocessable Entity",
-                extensions: new Dictionary<string, object?>
-                {
-                    ["code"] = MaxSamplingPlanFilesErrorCode,
-                }
-            );
+        var overCap = BesEvidenceFileCapRejection(site.BesEvidence);
+        if (overCap is not null)
+            return overCap;
 
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
@@ -4125,6 +4113,26 @@ public static class AccreditationApplicationEndpoints
     private const int MaxBesEvidenceFiles = 10;
     internal const string MaxBesEvidenceFilesMessage =
         "You can only upload a maximum of 10 files as evidence of broadly equivalent standards.";
+
+    /// <summary>
+    /// RA-605: the 422 for one more BES evidence file on an overseas site that already has
+    /// MaxBesEvidenceFiles non-infected ones, or null under the cap. Shared by the application's
+    /// BES upload and RA-492's change-request one, so the frontend recognises both the same way.
+    /// </summary>
+    internal static IResult? BesEvidenceFileCapRejection(BesEvidenceModel? evidence) =>
+        (evidence?.BesEvidenceUploads ?? []).Count(f =>
+            f.ScanStatus != nameof(FileScanStatus.Infected)
+        ) >= MaxBesEvidenceFiles
+            ? Results.Problem(
+                detail: MaxBesEvidenceFilesMessage,
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "Unprocessable Entity",
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = MaxSamplingPlanFilesErrorCode,
+                }
+            )
+            : null;
 
     // RA-644 B8g: bundles AddFile's services under one [AsParameters] argument (S107) once it takes the unit of
     // work.

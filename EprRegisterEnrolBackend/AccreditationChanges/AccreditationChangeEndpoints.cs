@@ -407,6 +407,11 @@ public static class AccreditationChangeEndpoints
         if (uploadError is not null)
             return uploadError;
 
+        // Same cap as RA-605 on the application, at the same point.
+        var overCap = AccreditationApplicationEndpoints.BesEvidenceFileCapRejection(requestSite.BesEvidence);
+        if (overCap is not null)
+            return overCap;
+
         // Same rule as RA-571 on the application: no two files in the request share a name.
         if (
             draft

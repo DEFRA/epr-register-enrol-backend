@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
@@ -328,6 +329,55 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     }
 
     // ---------------------------------------------------------------- BES evidence
+
+    // RA-605's cap, as on the application: 10 non-infected files per site; an infected one doesn't
+    // count, so a user can replace it. The 422 is the application's, which the frontend recognises.
+    [Theory]
+    [InlineData(10, 0, HttpStatusCode.UnprocessableEntity)]
+    [InlineData(9, 1, HttpStatusCode.Created)]
+    [InlineData(9, 0, HttpStatusCode.Created)]
+    public async Task BesEvidence_TenFileCapCountsOnlyNonInfectedFiles(int clean, int infected, HttpStatusCode expected)
+    {
+        await AddSite(901911);
+        var draft = _factory.FakeChangeRequests.All.Single();
+        draft.Sites.Single().BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads = Enumerable
+                .Range(1, clean + infected)
+                .Select(i => new BesEvidenceFileModel
+                {
+                    FileId = $"existing-{i}",
+                    Filename = $"existing-{i}.pdf",
+                    ScanStatus = i <= clean ? "Clean" : "Infected",
+                    S3Key = $"bes-evidence/existing-{i}",
+                })
+                .ToList(),
+        };
+        (await _factory.FakeChangeRequests.UpdateAsync(draft, Ct)).Should().BeTrue();
+        var fileUploadId = await SeedCleanUpload("file-new", "bes.pdf");
+
+        var response = await _client.PostAsJsonAsync(
+            $"{Sites}/901911/bes-evidence/files",
+            new { fileUploadId, besEvidenceExpiryDate = "2027-12-31" },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(expected);
+        var uploads = _factory.FakeChangeRequests.All.Single().Sites.Single().BesEvidence!.BesEvidenceUploads;
+        if (expected == HttpStatusCode.UnprocessableEntity)
+        {
+            var problem = await ReadJson(response);
+            problem.GetProperty("detail").GetString()
+                .Should().Be(AccreditationApplicationEndpoints.MaxBesEvidenceFilesMessage);
+            problem.GetProperty("code").GetString()
+                .Should().Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesErrorCode);
+            uploads.Should().HaveCount(clean + infected);
+        }
+        else
+        {
+            uploads.Should().HaveCount(clean + infected + 1);
+        }
+    }
 
     // France is in the EU and OECD; India stops needing evidence once its conditions of export are
     // met, judged on the effective values (the ORS's own or the operator's answers).
