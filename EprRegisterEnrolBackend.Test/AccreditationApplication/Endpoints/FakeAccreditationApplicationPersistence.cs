@@ -217,6 +217,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         var matches = _store
             .Where(a =>
                 a.OrgId is not null
+                && !string.IsNullOrEmpty(a.RegistrationReference)
                 && a.Year >= firstYear
                 && (filter.Year is null || a.Year == filter.Year)
                 && (filter.OrganisationNumber is null || a.OrgId == filter.OrganisationNumber)

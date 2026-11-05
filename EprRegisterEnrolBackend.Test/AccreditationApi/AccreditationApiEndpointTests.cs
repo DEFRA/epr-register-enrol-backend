@@ -706,6 +706,26 @@ public class AccreditationApiEndpointTests : IDisposable
         body.GetProperty("totalItems").GetInt32().Should().Be(1);
     }
 
+    // RA-647: a record with no registration number cannot be addressed, so it is left out of the
+    // page and the total, and the rest is still served.
+    [Fact]
+    public async Task Search_LeavesOutARecordWithNoRegistrationNumber_AndStillServesTheRest()
+    {
+        await Seed(accreditation: "A27EX5000270012AL");
+        await Seed(accreditation: "A27EX5000270099AL", configure: a => a.RegistrationReference = null);
+
+        var response = await Get("/v1/accreditations");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("totalItems").GetInt32().Should().Be(1);
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("accreditationNumber").GetString())
+            .Should()
+            .Equal("A27EX5000270012AL");
+    }
+
     [Fact]
     public async Task Search_IsPaged()
     {

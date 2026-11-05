@@ -42,7 +42,8 @@ public static partial class AccreditationApiEndpoints
     private static async Task<IResult> SearchAccreditations(
         HttpContext http,
         IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        IOptions<ServiceClientsConfig> config,
+        ILoggerFactory loggerFactory
     )
     {
         var query = http.Request.Query;
@@ -124,7 +125,11 @@ public static partial class AccreditationApiEndpoints
                 PageNumber = paging.PageNumber,
                 Limit = paging.Limit,
                 TotalItems = (int)total,
-                Items = items.Select(a => AccreditationApiMapper.ToSummary(a, now)).ToList(),
+                Items = AccreditationApiMapper.ToSummaries(
+                    items,
+                    now,
+                    loggerFactory.CreateLogger("EprRegisterEnrolBackend.AccreditationApi")
+                ),
             }
         );
     }

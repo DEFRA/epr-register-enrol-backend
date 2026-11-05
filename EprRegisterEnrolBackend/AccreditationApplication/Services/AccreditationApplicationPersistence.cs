@@ -236,7 +236,9 @@ public class AccreditationApplicationPersistence(
             filters.Gte(a => a.Year, firstYear),
             filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
             filters.Ne(a => a.AccreditationReference, null),
-            filters.Ne(a => a.AccreditationReference, string.Empty)
+            filters.Ne(a => a.AccreditationReference, string.Empty),
+            filters.Ne(a => a.RegistrationReference, null),
+            filters.Ne(a => a.RegistrationReference, string.Empty)
         );
         if (search.Year is not null)
             filter = filters.And(filter, filters.Eq(a => a.Year, search.Year.Value));
