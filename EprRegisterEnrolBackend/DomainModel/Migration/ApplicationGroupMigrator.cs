@@ -634,7 +634,10 @@ public sealed class ApplicationGroupMigrator(
                 _registration?.EntityId,
                 entries
             );
-            entity.AccreditationId = _accreditations.TryGetValue(entity.EntityId, out var id)
+            entity.AsAccreditation().AccreditationId = _accreditations.TryGetValue(
+                entity.EntityId,
+                out var id
+            )
                 ? id
                 : null;
             await stores.Applications.Versions.InsertAsync(

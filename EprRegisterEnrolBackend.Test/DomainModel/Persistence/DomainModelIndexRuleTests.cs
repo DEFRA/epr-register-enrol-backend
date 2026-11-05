@@ -388,31 +388,29 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         var rawApplication = await Raw("applicationVersions", application.Id);
         rawApplication["status"].Should().Be((BsonValue)"Submitted");
         rawApplication["lastChange"]["reason"].Should().Be((BsonValue)"Migration");
-        // Enums nested in the sections are strings too, not the legacy int32s.
-        rawApplication["prns"]["plannedTonnageBand"].Should().Be((BsonValue)"up_to_10000");
-        rawApplication["prns"]["sectionStatus"].Should().Be((BsonValue)"Submitted");
-        rawApplication["prns"]
-            ["versions"][0]["plannedTonnageBand"]
-            .Should()
-            .Be((BsonValue)"up_to_500");
-        rawApplication["businessPlan"]["sectionStatus"].Should().Be((BsonValue)"Completed");
-        rawApplication["samplingPlan"]["sectionStatus"].Should().Be((BsonValue)"Queried");
-        rawApplication["samplingPlan"]["files"][0]["scanStatus"].Should().Be((BsonValue)"Clean");
-        rawApplication["samplingPlan"]
+        rawApplication["applicationType"].Should().Be((BsonValue)"Accreditation");
+        // The type's own fields sit under details, and their enums are strings too, not the legacy int32s.
+        var rawDetails = rawApplication["details"];
+        rawDetails["kind"].Should().Be((BsonValue)"Reapply");
+        rawDetails["prns"]["plannedTonnageBand"].Should().Be((BsonValue)"up_to_10000");
+        rawDetails["prns"]["sectionStatus"].Should().Be((BsonValue)"Submitted");
+        rawDetails["prns"]["versions"][0]["plannedTonnageBand"].Should().Be((BsonValue)"up_to_500");
+        rawDetails["businessPlan"]["sectionStatus"].Should().Be((BsonValue)"Completed");
+        rawDetails["samplingPlan"]["sectionStatus"].Should().Be((BsonValue)"Queried");
+        rawDetails["samplingPlan"]["files"][0]["scanStatus"].Should().Be((BsonValue)"Clean");
+        rawDetails["samplingPlan"]
             ["files"][0]["documentType"]
             .Should()
             .Be((BsonValue)"SamplingPlan");
-        rawApplication["besEvidence"]["sectionStatus"].Should().Be((BsonValue)"InProgress");
-        rawApplication["overseasSitesSection"]
-            ["sectionStatus"]
-            .Should()
-            .Be((BsonValue)"NotStarted");
+        rawDetails["besEvidence"]["sectionStatus"].Should().Be((BsonValue)"InProgress");
+        rawDetails["overseasSitesSection"]["sectionStatus"].Should().Be((BsonValue)"NotStarted");
         rawAccreditation["samplingPlanFiles"][0]["scanStatus"].Should().Be((BsonValue)"Clean");
 
         var readBack = await _sites.Versions.GetCurrentAsync(site.EntityId, cancellationToken: Ct);
         readBack!.InterimSites.Should().ContainSingle().Which.SiteNumber.Should().Be("001");
         readBack.BaselOecdCodes.Should().Equal("B3010", "B3020");
         (await _applications.Versions.GetCurrentAsync(application.EntityId, cancellationToken: Ct))!
+            .AsAccreditation()
             .ApplicationOverseasSites.Should()
             .ContainSingle()
             .Which.InterimSites.Should()
@@ -421,7 +419,10 @@ public sealed class DomainModelIndexRuleTests : IDisposable
             application.EntityId,
             cancellationToken: Ct
         );
-        readApplication!.Prns.PlannedTonnageBand.Should().Be(TonnageBand.UpTo10000);
+        readApplication!
+            .AsAccreditation()
+            .Prns.PlannedTonnageBand.Should()
+            .Be(TonnageBand.UpTo10000);
         (
             await _accreditations.Versions.GetCurrentAsync(
                 accreditation.EntityId,
@@ -520,7 +521,10 @@ public sealed class DomainModelIndexRuleTests : IDisposable
             return;
         }
 
-        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        foreach (
+            var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.GetCustomAttribute<BsonIgnoreAttribute>() is null)
+        )
         {
             var propertyType = ElementType(property.PropertyType);
             var underlying = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
@@ -529,6 +533,47 @@ public sealed class DomainModelIndexRuleTests : IDisposable
             {
                 CollectMembers(underlying, $"{path}.{property.Name}", visited, members);
             }
+        }
+
+        // A polymorphic member (the Application's details) declares its base type, but stores its subclasses:
+        // walk every type the driver is told about, or their fields would escape these rules.
+        foreach (var known in type.GetCustomAttributes<BsonKnownTypesAttribute>(false))
+        {
+            foreach (var subtype in known.KnownTypes)
+            {
+                CollectMembers(subtype, $"{path}<{subtype.Name}>", visited, members);
+            }
+        }
+    }
+
+    [Fact]
+    public void EntityTypes_PolymorphicDetails_AreWalkedByTheseRules()
+    {
+        StoredMembers()
+            .Select(m => m.Path)
+            .Should()
+            .Contain("ApplicationEntity.Details<AccreditationDetails>.Kind");
+    }
+
+    // Every details class stores the same discriminator string as the applicationType it reports, so a query on
+    // the top-level field and a read of details._t always agree (decision D1, RA-744).
+    [Fact]
+    public void ApplicationDetails_EveryKnownType_HasTheDiscriminatorOfItsApplicationType()
+    {
+        var knownTypes = typeof(ApplicationDetails)
+            .GetCustomAttributes<BsonKnownTypesAttribute>(false)
+            .SelectMany(a => a.KnownTypes)
+            .ToList();
+
+        knownTypes.Should().NotBeEmpty();
+        foreach (var type in knownTypes)
+        {
+            var instance = (ApplicationDetails)
+                System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type);
+            MongoDB
+                .Bson.Serialization.BsonClassMap.LookupClassMap(type)
+                .Discriminator.Should()
+                .Be(instance.ApplicationType.ToString(), type.Name);
         }
     }
 

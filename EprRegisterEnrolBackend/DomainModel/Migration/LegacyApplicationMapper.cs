@@ -25,7 +25,6 @@ public static class LegacyApplicationMapper
             RegistrationId = registrationId,
             ReExOrganisationId = legacy.OrganisationId,
             ReExRegistrationId = legacy.RegistrationId,
-            Year = legacy.Year,
             Status = legacy.ApplicationStatus,
             ApplicationReference = legacy.ApplicationReference,
             PaymentReference = legacy.PaymentReference,
@@ -34,8 +33,6 @@ public static class LegacyApplicationMapper
             WithdrawalReason = legacy.WithdrawalReason,
             DateSent = legacy.DateSent,
             DateLastEdited = legacy.DateLastEdited,
-            ReservedAccreditationNumber = legacy.AccreditationReference,
-            ApplicationOverseasSites = overseasSites,
             SubmittedBy = legacy.SubmittedBy is null
                 ? null
                 : new Submitter
@@ -45,6 +42,20 @@ public static class LegacyApplicationMapper
                     Email = legacy.SubmittedBy.Email,
                 },
             Query = legacy.Query is null ? null : ToQuery(legacy.Query),
+            Details = ToDetails(legacy, overseasSites),
+        };
+
+    // Every legacy application is a re-accreditation: New applications are only ever created in the model.
+    private static AccreditationDetails ToDetails(
+        AccreditationApplicationModel legacy,
+        List<ApplicationOverseasSiteEntry> overseasSites
+    ) =>
+        new()
+        {
+            Kind = AccreditationKind.Reapply,
+            Year = legacy.Year,
+            ReservedAccreditationNumber = legacy.AccreditationReference,
+            ApplicationOverseasSites = overseasSites,
             Prns = ToSection(legacy.Prns),
             BusinessPlan = ToSection(legacy.BusinessPlan),
             SamplingPlan = ToSection(legacy.SamplingPlan),

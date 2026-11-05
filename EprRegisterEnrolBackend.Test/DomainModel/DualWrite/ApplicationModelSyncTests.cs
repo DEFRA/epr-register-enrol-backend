@@ -213,7 +213,10 @@ public sealed class ApplicationModelSyncTests : IDisposable
     ) => _applications.GetByIdAsync(ReExOrganisationId, application.Id.ToString()!);
 
     private static ApplicationOverseasSiteEntry Entry(ApplicationEntity application, int siteId) =>
-        Assert.Single(application.ApplicationOverseasSites, e => e.SiteId == siteId);
+        Assert.Single(
+            application.AsAccreditation().ApplicationOverseasSites,
+            e => e.SiteId == siteId
+        );
 
     // --- tests ----------------------------------------------------------------------------------------------------
 
@@ -363,7 +366,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
         Assert.Equal(ChangeReason.ProposedSiteDiscarded, ors.LastChange.Reason);
         Assert.Equal(OverseasSiteStatus.Active, (await CurrentSiteAsync("001")).Status);
         Assert.DoesNotContain(
-            (await CurrentApplicationAsync(application)).ApplicationOverseasSites,
+            (await CurrentApplicationAsync(application)).AsAccreditation().ApplicationOverseasSites,
             e => e.SiteId == 2
         );
     }
@@ -899,7 +902,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
 
         var entity = await CurrentApplicationAsync(application);
         Assert.Equal(ApplicationStatus.Approved, entity.Status);
-        Assert.Equal(accreditation.EntityId, entity.AccreditationId);
+        Assert.Equal(accreditation.EntityId, entity.AsAccreditation().AccreditationId);
         Assert.Null(Entry(entity, 1).ProposedChanges);
         Assert.Null(InterimEntry(entity, 1, "001").ProposedChanges);
         Assert.Equal(
@@ -964,7 +967,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
         await SyncAsync(second);
 
         Assert.Single(await CurrentAccreditationsAsync());
-        Assert.Null((await CurrentApplicationAsync(second)).AccreditationId);
+        Assert.Null((await CurrentApplicationAsync(second)).AsAccreditation().AccreditationId);
     }
 
     [Fact]

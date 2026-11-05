@@ -64,8 +64,9 @@ public sealed class ApplicationModelSync(
         var entries = await run.SyncSitesAsync();
 
         var next = LegacyApplicationMapper.ToEntity(legacy, current.RegistrationId, entries);
-        next.AccreditationId =
-            await run.EnsureAccreditationAsync(entries) ?? current.AccreditationId;
+        next.AsAccreditation().AccreditationId =
+            await run.EnsureAccreditationAsync(entries)
+            ?? current.AsAccreditation().AccreditationId;
         await stores.Applications.Versions.UpdateAsync(
             next,
             current.Version,
@@ -171,6 +172,7 @@ public sealed class ApplicationModelSync(
             }
 
             var previous = current
+                .AsAccreditation()
                 .ApplicationOverseasSites.GroupBy(e => e.SiteId)
                 .ToDictionary(g => g.Key, g => g.First().OverseasSiteId);
             if (ApprovedByThisWrite)
@@ -605,7 +607,7 @@ public sealed class ApplicationModelSync(
             // later writes to it still succeed.
             if (current.Status == ApplicationStatus.Approved)
             {
-                return current.AccreditationId;
+                return current.AsAccreditation().AccreditationId;
             }
 
             if (found.NumberMissing)
@@ -760,7 +762,8 @@ public sealed class ApplicationModelSync(
                 session,
                 cancellationToken
             );
-            return Holdings(others.SelectMany(a => a.ApplicationOverseasSites));
+            // Every open application on the registration counts, whatever its type: each type says which sites it holds.
+            return Holdings(others.SelectMany(a => a.Details.HeldSites()));
         }
 
         // The ORSs, and the interim sites on them, that a set of Application entries holds.
