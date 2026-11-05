@@ -5621,6 +5621,95 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
+    private AccreditationApplicationModel SeedSiteWithBesFiles(int count, int infected = 0) =>
+        SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Test Site",
+                        BesEvidence = new BesEvidenceModel
+                        {
+                            BesEvidenceUploads = Enumerable
+                                .Range(0, count)
+                                .Select(i => new BesEvidenceFileModel
+                                {
+                                    FileId = $"existing-{i}",
+                                    Filename = $"existing{i}.pdf",
+                                    ScanStatus = i < infected ? "Infected" : "Clean",
+                                    S3Key = $"bes-evidence/existing-{i}",
+                                })
+                                .ToList(),
+                        },
+                    },
+                ],
+            }
+        );
+
+    private async Task<HttpResponseMessage> PostNewBesEvidenceFile(
+        AccreditationApplicationModel app
+    )
+    {
+        var fileUploadId = await SeedValidatedUpload(
+            "bes-new",
+            "new.pdf",
+            "bes-evidence/bes-new"
+        );
+        return await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            new AddBesEvidenceFileRequest { FileUploadId = fileUploadId },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+    }
+
+    // RA-605: the cap is 10 per overseas site.
+    [Fact]
+    public async Task AddBesEvidenceFile_TenthFile_Returns201()
+    {
+        Reset();
+        var app = SeedSiteWithBesFiles(9);
+
+        var response = await PostNewBesEvidenceFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_EleventhFile_Returns422WithMaxFilesExceeded()
+    {
+        Reset();
+        var app = SeedSiteWithBesFiles(10);
+
+        var response = await PostNewBesEvidenceFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        body.RootElement.GetProperty("code")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesErrorCode);
+        body.RootElement.GetProperty("detail")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxBesEvidenceFilesMessage);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_InfectedFilesNotCounted_Returns201()
+    {
+        Reset();
+        var app = SeedSiteWithBesFiles(10, infected: 1);
+
+        var response = await PostNewBesEvidenceFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
     [Fact]
     public async Task AddBesEvidenceFile_EmptyFileUploadId_Returns400()
     {
