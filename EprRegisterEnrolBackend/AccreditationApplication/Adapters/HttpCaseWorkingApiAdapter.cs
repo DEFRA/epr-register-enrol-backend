@@ -56,12 +56,7 @@ public class HttpCaseWorkingApiAdapter(
         CancellationToken cancellationToken = default
     )
     {
-        var url = _config.Url;
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            logger.LogError("CaseWorking API URL is not configured. Cannot submit work item.");
-            throw new InvalidOperationException("CaseWorking API URL is not configured.");
-        }
+        var url = RequireUrl("work item");
 
         // RA-318: ManagementBe owns applicationReference generation — it is never
         // supplied by the caller (ManagementBe ignores any value sent here) and is
@@ -93,6 +88,15 @@ public class HttpCaseWorkingApiAdapter(
         );
     }
 
+    private string RequireUrl(string submission)
+    {
+        var url = _config.Url;
+        if (!string.IsNullOrWhiteSpace(url))
+            return url;
+        logger.LogError("CaseWorking API URL is not configured. Cannot submit {Submission}.", submission);
+        throw new CaseWorkingNotConfiguredException();
+    }
+
     // RA-492: the in-year "add a registered ORS to an accreditation" change request. Only called
     // when AccreditationChanges:SubmitToCaseManagement is on - ManagementBe must register the
     // add-overseas-site work-item type before that flag is switched on.
@@ -102,12 +106,7 @@ public class HttpCaseWorkingApiAdapter(
         CancellationToken cancellationToken = default
     )
     {
-        var url = _config.Url;
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            logger.LogError("CaseWorking API URL is not configured. Cannot submit change request.");
-            throw new InvalidOperationException("CaseWorking API URL is not configured.");
-        }
+        var url = RequireUrl("change request");
 
         var body = new CreateWorkItemRequest
         {
@@ -165,9 +164,7 @@ public class HttpCaseWorkingApiAdapter(
             paymentReference = changeRequest.PaymentReference,
             sites = changeRequest.Sites.Select(site =>
             {
-                var ors = accreditation.OverseasSites?.Sites.FirstOrDefault(s =>
-                    s.SiteId == site.SiteId
-                );
+                var ors = ChangeRequestRules.FindSite(accreditation, site.SiteId);
                 var effective = ChangeRequestRules.Effective(ors, site.Answers);
                 return new
                 {

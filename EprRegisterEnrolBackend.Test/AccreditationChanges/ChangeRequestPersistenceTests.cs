@@ -45,6 +45,27 @@ public sealed class ChangeRequestPersistenceTests : IDisposable
         (await _persistence.InsertAsync(NewRequest("app-2"), Ct)).Should().BeTrue();
     }
 
+    // What Submit's reopen meets if another draft was started while the request was Submitted.
+    [Fact]
+    public async Task UpdateAsync_ReopeningWhileAnotherDraftExists_IsRefusedAndKeepsTheVersion()
+    {
+        var first = NewRequest();
+        await _persistence.InsertAsync(first, Ct);
+        first.Status = ChangeRequestStatus.Submitted;
+        await _persistence.UpdateAsync(first, Ct);
+        await _persistence.InsertAsync(NewRequest(), Ct);
+        var version = first.Version;
+
+        first.Status = ChangeRequestStatus.InProgress;
+        (await _persistence.UpdateAsync(first, Ct)).Should().BeFalse();
+
+        first.Version.Should().Be(version);
+        (await _persistence.ListAsync("org-1", "app-1", Ct))
+            .Single(r => r.RequestId == first.RequestId)
+            .Status.Should()
+            .Be(ChangeRequestStatus.Submitted);
+    }
+
     [Fact]
     public async Task InsertAsync_AfterTheDraftIsSubmitted_AllowsANewDraft()
     {

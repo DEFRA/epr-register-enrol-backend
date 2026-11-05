@@ -1367,7 +1367,8 @@ public class HttpCaseWorkingApiAdapterTests
         var (adapter, _) = CreateAdapter(url: "");
 
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*not configured*");
+        // The application submit's existing InvalidOperationException, now the specific subtype.
+        await act.Should().ThrowAsync<CaseWorkingNotConfiguredException>().WithMessage("*not configured*");
     }
 
     [Fact]
@@ -2296,7 +2297,7 @@ public class HttpCaseWorkingApiAdapterTests
 
         var act = () => adapter.SubmitChangeRequestAsync(request, accreditation);
 
-        await act.Should().ThrowAsync<InvalidOperationException>();
+        await act.Should().ThrowAsync<CaseWorkingNotConfiguredException>();
     }
 
     [Fact]

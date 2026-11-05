@@ -50,6 +50,26 @@ public class ChangeRequestRulesTests
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
+    // RA-425's partition: selected is Accredited whether or not it was a new site; an unselected
+    // site added on a reaccreditation application and never registered is neither.
+    [Theory]
+    [InlineData(true, false, SiteAccreditationStatus.Accredited)]
+    [InlineData(true, true, SiteAccreditationStatus.Accredited)]
+    [InlineData(false, false, SiteAccreditationStatus.Registered)]
+    [InlineData(false, true, null)]
+    public void AccreditationStatus_FollowsRa425sPartition(
+        bool selected,
+        bool isNewSite,
+        SiteAccreditationStatus? expected
+    )
+    {
+        var site = Site();
+        site.Selected = selected;
+        site.IsNewSite = isNewSite;
+
+        ChangeRequestRules.AccreditationStatus(site).Should().Be(expected);
+    }
+
     [Fact]
     public void LockedFields_AreTheFourTicketFieldsTheOrsAlreadyHolds()
     {

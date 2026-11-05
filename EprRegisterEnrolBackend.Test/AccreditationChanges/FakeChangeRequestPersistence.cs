@@ -76,14 +76,35 @@ public class FakeChangeRequestPersistence : IChangeRequestPersistence
         }
     }
 
+    /// <summary>
+    /// Makes an update fail as a lost race (another writer moved the version) when it returns true
+    /// for the request being saved.
+    /// </summary>
+    public Func<AccreditationChangeRequest, bool>? LoseUpdateWhen { get; set; }
+
+    public int UpdateCount { get; private set; }
+
     public Task<bool> UpdateAsync(AccreditationChangeRequest request, CancellationToken ct = default)
     {
         lock (_lock)
         {
+            UpdateCount++;
+            if (LoseUpdateWhen?.Invoke(request) == true)
+                return Task.FromResult(false);
             var index = _requests.FindIndex(r =>
                 r.RequestId == request.RequestId && r.Version == request.Version
             );
             if (index < 0)
+                return Task.FromResult(false);
+            if (
+                request.Status == ChangeRequestStatus.InProgress
+                && _requests.Exists(r =>
+                    r.RequestId != request.RequestId
+                    && r.OrganisationId == request.OrganisationId
+                    && r.ApplicationId == request.ApplicationId
+                    && r.Status == ChangeRequestStatus.InProgress
+                )
+            )
                 return Task.FromResult(false);
             request.Version++;
             request.UpdatedAt = DateTime.UtcNow;

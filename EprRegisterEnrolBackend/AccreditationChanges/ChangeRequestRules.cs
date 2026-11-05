@@ -25,8 +25,15 @@ public static class ChangeRequestRules
             [BesEvidence] = "Upload evidence of broadly equivalent standards for the overseas reprocessing site.",
         };
 
-    public static SiteAccreditationStatus AccreditationStatus(OverseasSiteModel site) =>
-        site.Selected ? SiteAccreditationStatus.Accredited : SiteAccreditationStatus.Registered;
+    /// <summary>
+    /// The site's status on the accreditation, partitioned as RA-425's Manage overseas sites page does: selected is
+    /// Accredited; otherwise an existing site is Registered. Null for a site added on a reaccreditation application
+    /// and never registered (<see cref="OverseasSiteModel.IsNewSite"/>), which is neither and cannot be added.
+    /// </summary>
+    public static SiteAccreditationStatus? AccreditationStatus(OverseasSiteModel site) =>
+        site.Selected ? SiteAccreditationStatus.Accredited
+        : site.IsNewSite ? null
+        : SiteAccreditationStatus.Registered;
 
     /// <summary>
     /// The four fields the ticket locks once the ORS holds a value for them; a field the ORS

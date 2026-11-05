@@ -68,6 +68,20 @@ public static class AccreditationChangeEndpoints
         ILoggerFactory LoggerFactory
     );
 
+    // Saves the request with its version check, then returns its view; 409 if someone else saved it first.
+    private static async Task<IResult> SaveAndViewAsync(
+        AccreditationChangeRequest request,
+        AccreditationApplicationModel accreditation,
+        ChangeServices services,
+        bool created = false
+    )
+    {
+        if (!await services.Requests.UpdateAsync(request, services.CancellationToken))
+            return Results.Conflict(ConcurrentEditMessage);
+        var view = ChangeRequestRules.ToView(request, accreditation);
+        return created ? Results.Created(string.Empty, view) : Results.Ok(view);
+    }
+
     private static async Task<(
         IResult? Error,
         AccreditationApplicationModel? Accreditation
@@ -132,18 +146,21 @@ public static class AccreditationChangeEndpoints
                 inFlightBySite.TryAdd(site.SiteId, request);
         }
 
+        // A never-registered site has no status and is left out, as RA-425's page shows it on neither tab.
         var sites = (accreditation!.OverseasSites?.Sites ?? [])
-            .Select(site =>
+            .Select(site => (Site: site, Status: ChangeRequestRules.AccreditationStatus(site)))
+            .Where(s => s.Status is not null)
+            .Select(s =>
             {
-                inFlightBySite.TryGetValue(site.SiteId, out var pending);
+                inFlightBySite.TryGetValue(s.Site.SiteId, out var pending);
                 return new AccreditationChangeSiteView(
-                    site.SiteId,
-                    site.OrsId,
-                    ChangeRequestRules.AccreditationStatus(site),
+                    s.Site.SiteId,
+                    s.Site.OrsId,
+                    s.Status!.Value,
                     pending?.RequestId,
                     pending?.Status,
-                    ChangeRequestRules.LockedFields(site),
-                    site
+                    ChangeRequestRules.LockedFields(s.Site),
+                    s.Site
                 );
             })
             .ToList();
@@ -183,10 +200,13 @@ public static class AccreditationChangeEndpoints
         if (error is not null)
             return error;
 
+        // 404 for a site the GET view does not list (unknown, or never registered), so a client
+        // cannot tell the two apart; 409 for a listed site that cannot be added in its state.
         var site = ChangeRequestRules.FindSite(accreditation!, body.SiteId);
-        if (site is null)
+        var status = site is null ? null : ChangeRequestRules.AccreditationStatus(site);
+        if (status is null)
             return Results.NotFound();
-        if (site.Selected)
+        if (status == SiteAccreditationStatus.Accredited)
             return Results.Conflict("This overseas site is already accredited.");
 
         var requests = await services.Requests.ListAsync(
@@ -210,7 +230,7 @@ public static class AccreditationChangeEndpoints
 
         var requestSite = new ChangeRequestSite
         {
-            SiteId = site.SiteId,
+            SiteId = site!.SiteId,
             OrsId = site.OrsId,
             SiteName = site.SiteName,
         };
@@ -262,9 +282,7 @@ public static class AccreditationChangeEndpoints
                 ? Results.NoContent()
                 : Results.Conflict(ConcurrentEditMessage);
 
-        return await services.Requests.UpdateAsync(draft, services.CancellationToken)
-            ? Results.Ok(ChangeRequestRules.ToView(draft, accreditation!))
-            : Results.Conflict(ConcurrentEditMessage);
+        return await SaveAndViewAsync(draft, accreditation!, services);
     }
 
     private static async Task<IResult> PatchSite(
@@ -322,9 +340,7 @@ public static class AccreditationChangeEndpoints
         answers.OperationCodes = body.OperationCodes ?? answers.OperationCodes;
         answers.ConditionsOfExport = body.ConditionsOfExport ?? answers.ConditionsOfExport;
 
-        return await services.Requests.UpdateAsync(draft, services.CancellationToken)
-            ? Results.Ok(ChangeRequestRules.ToView(draft, accreditation!))
-            : Results.Conflict(ConcurrentEditMessage);
+        return await SaveAndViewAsync(draft, accreditation!, services);
     }
 
     private static async Task<IResult> InitiateBesEvidenceUpload(
@@ -374,6 +390,14 @@ public static class AccreditationChangeEndpoints
         if (requestSite is null)
             return Results.NotFound();
 
+        // 422, as the other request rules here: a site inside the EU or OECD, or whose conditions
+        // of export are met, takes no BES evidence.
+        var ors = ChangeRequestRules.FindSite(accreditation!, siteId);
+        if (!ChangeRequestRules.IsBesEvidenceRequired(ors, ChangeRequestRules.Effective(ors, requestSite.Answers)))
+            return Results.UnprocessableEntity(
+                "This overseas site does not need evidence of broadly equivalent standards."
+            );
+
         var (uploadError, scannedFile) =
             await AccreditationApplicationEndpoints.TryResolveScannedFileAsync(
                 body.FileUploadId,
@@ -398,7 +422,7 @@ public static class AccreditationChangeEndpoints
                 FileId = scannedFile!.FileId!,
                 Filename = scannedFile.Filename!,
                 ContentType = scannedFile.ContentType ?? scannedFile.DetectedContentType,
-                ScanStatus = scannedFile.FileStatus == "complete" ? "Clean" : "Infected",
+                ScanStatus = AccreditationApplicationEndpoints.ScanStatusOf(scannedFile).ToString(),
                 BesEvidenceValidFromDate = body.BesEvidenceValidFromDate,
                 BesEvidenceExpiryDate = body.BesEvidenceExpiryDate,
                 S3Key = scannedFile.S3Key!,
@@ -406,9 +430,7 @@ public static class AccreditationChangeEndpoints
             }
         );
 
-        return await services.Requests.UpdateAsync(draft, services.CancellationToken)
-            ? Results.Created(string.Empty, ChangeRequestRules.ToView(draft, accreditation!))
-            : Results.Conflict(ConcurrentEditMessage);
+        return await SaveAndViewAsync(draft, accreditation!, services, created: true);
     }
 
     private static async Task<IResult> DeleteBesEvidenceFile(
@@ -430,9 +452,7 @@ public static class AccreditationChangeEndpoints
         if (uploads is null || uploads.RemoveAll(f => f.FileId == fileId) == 0)
             return Results.NotFound();
 
-        return await services.Requests.UpdateAsync(draft, services.CancellationToken)
-            ? Results.Ok(ChangeRequestRules.ToView(draft, accreditation!))
-            : Results.Conflict(ConcurrentEditMessage);
+        return await SaveAndViewAsync(draft, accreditation!, services);
     }
 
     private static async Task<IResult> Submit(
@@ -488,44 +508,88 @@ public static class AccreditationChangeEndpoints
         };
         draft.PaymentReference = body.PaymentReference;
         draft.ChargePence = ChangeRequestRules.Charge(draft.Sites.Count).TotalPence;
-
-        if (submit.Config.Value.SubmitToCaseManagement)
-        {
-            try
-            {
-                var result = await submit.CaseWorking.SubmitChangeRequestAsync(
-                    draft,
-                    accreditation!,
-                    services.CancellationToken
-                );
-                draft.CaseManagementReference = result.ApplicationReference;
-                draft.CaseManagementWorkItemId = result.WorkItemId;
-            }
-            catch (Exception ex)
-                when (ex
-                        is HttpRequestException
-                            or CaseWorkingApiTimeoutException
-                            or InvalidOperationException
-                )
-            {
-                submit
-                    .LoggerFactory.CreateLogger(typeof(AccreditationChangeEndpoints))
-                    .LogError(
-                        ex,
-                        "Case Management rejected change request {RequestId}; it stays InProgress",
-                        draft.RequestId
-                    );
-                return Results.Problem(
-                    detail: "The change request could not be sent to the regulator. Try again.",
-                    statusCode: StatusCodes.Status503ServiceUnavailable
-                );
-            }
-        }
-
         draft.Status = ChangeRequestStatus.Submitted;
         draft.SubmittedAt = DateTime.UtcNow;
-        return await services.Requests.UpdateAsync(draft, services.CancellationToken)
-            ? Results.Ok(ChangeRequestRules.ToView(draft, accreditation!))
-            : Results.Conflict(ConcurrentEditMessage);
+
+        // Saved, with its version check, before Case Management hears of it: of two concurrent
+        // submits only one gets past here, so a lost race never creates a work item.
+        if (!await services.Requests.UpdateAsync(draft, services.CancellationToken))
+            return Results.Conflict(ConcurrentEditMessage);
+
+        if (!submit.Config.Value.SubmitToCaseManagement)
+            return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
+
+        var logger = submit.LoggerFactory.CreateLogger(typeof(AccreditationChangeEndpoints));
+        CaseWorkingSubmissionResult result;
+        try
+        {
+            // The payload's operatorRequestId is this request's id, the same on every attempt, so
+            // Case Management can recognise a retry after a work item it created but whose response
+            // never arrived (a timeout).
+            result = await submit.CaseWorking.SubmitChangeRequestAsync(
+                draft,
+                accreditation!,
+                services.CancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            // Whatever went wrong, the request goes back to InProgress, so its sites are not held
+            // by a request the regulator never received. Only Case Management's own failures are
+            // a 503; anything else is a defect and goes to the exception handler.
+            await ReopenAsync(draft, services, logger);
+            if (
+                ex
+                is not (
+                    HttpRequestException
+                    or CaseWorkingApiTimeoutException
+                    or CaseWorkingNotConfiguredException
+                )
+            )
+                throw;
+            logger.LogError(
+                ex,
+                "Case Management did not accept change request {RequestId}; it is back InProgress",
+                draft.RequestId
+            );
+            return Results.Problem(
+                detail: "The change request could not be sent to the regulator. Try again.",
+                statusCode: StatusCodes.Status503ServiceUnavailable
+            );
+        }
+
+        draft.CaseManagementReference = result.ApplicationReference;
+        draft.CaseManagementWorkItemId = result.WorkItemId;
+        // Nothing else writes a Submitted request, so this only fails if the store does; the
+        // submission itself has succeeded either way.
+        if (!await services.Requests.UpdateAsync(draft, services.CancellationToken))
+            logger.LogError(
+                "Change request {RequestId} was sent to Case Management as {Reference} but the reference was not saved",
+                draft.RequestId,
+                result.ApplicationReference
+            );
+        return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
+    }
+
+    // Undoes Submit's save after Case Management failed. Not cancellable: the caller may have gone,
+    // and the request must not be left Submitted.
+    private static async Task ReopenAsync(
+        AccreditationChangeRequest draft,
+        ChangeServices services,
+        ILogger logger
+    )
+    {
+        draft.Status = ChangeRequestStatus.InProgress;
+        draft.SubmittedAt = null;
+        draft.SubmittedBy = null;
+        draft.PaymentReference = null;
+        draft.ChargePence = null;
+        // Fails only if another draft was started for the accreditation in the moment the request
+        // was Submitted, which the one-draft rule then refuses.
+        if (!await services.Requests.UpdateAsync(draft, CancellationToken.None))
+            logger.LogError(
+                "Change request {RequestId} could not be reopened after Case Management failed; it stays Submitted without a work item",
+                draft.RequestId
+            );
     }
 }

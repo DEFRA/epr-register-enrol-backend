@@ -9,6 +9,7 @@ using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.DevSeed;
 using FluentAssertions;
 using NSubstitute;
+using NSubstitute.ClearExtensions;
 using NSubstitute.ExceptionExtensions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -215,6 +216,29 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         (await ReadJson(response)).GetProperty("sites").GetArrayLength().Should().Be(1);
     }
 
+    // A site added on a reaccreditation application and never registered is on neither of RA-425's
+    // tabs: the view leaves it out and adding it is a 404, as for an unknown site.
+    [Fact]
+    public async Task NeverRegisteredSite_IsNotListedAndCannotBeAdded()
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
+        accreditation.Id = MongoDB.Bson.ObjectId.GenerateNewId();
+        accreditation.OverseasSites!.Sites.Add(
+            new OverseasSiteModel { SiteId = 901999, OrsId = "008", SiteName = "New Site", Country = "Spain", IsNewSite = true, Selected = false }
+        );
+        _factory.FakePersistence.Seed(accreditation);
+        var baseUrl = $"/api/v1/accreditation-changes/{Org}/{accreditation.Id}";
+
+        var view = await ReadJson(await _client.GetAsync(baseUrl, Ct));
+        view.GetProperty("sites").EnumerateArray().Select(s => s.GetProperty("siteId").GetInt32())
+            .Should()
+            .Equal(901901, 901910, 901911, 901912);
+        (await _client.PostAsJsonAsync($"{baseUrl}/requests/current/sites", new { siteId = 901999 }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.NotFound);
+        _factory.FakeChangeRequests.All.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task AddSite_AccreditedSite_Returns409()
     {
@@ -304,6 +328,28 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     }
 
     // ---------------------------------------------------------------- BES evidence
+
+    // France is in the EU and OECD; India stops needing evidence once its conditions of export are
+    // met, judged on the effective values (the ORS's own or the operator's answers).
+    [Theory]
+    [InlineData(901910, false)]
+    [InlineData(901911, true)]
+    public async Task BesEvidence_SiteThatDoesNotNeedIt_Returns422AndAttachesNothing(int siteId, bool conditionsMet)
+    {
+        await AddSite(siteId);
+        if (conditionsMet)
+            await Patch(siteId, new { conditionsOfExport = true });
+        var fileUploadId = await SeedCleanUpload("file-1", "bes.pdf");
+
+        var response = await _client.PostAsJsonAsync(
+            $"{Sites}/{siteId}/bes-evidence/files",
+            new { fileUploadId, besEvidenceExpiryDate = "2027-12-31" },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        _factory.FakeChangeRequests.All.Single().Sites.Single().BesEvidence.Should().BeNull();
+    }
 
     [Fact]
     public async Task BesEvidence_CleanUploadSatisfiesTheRequirementAndRemovingItRestoresIt()
@@ -414,6 +460,21 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     public async Task Submit_NoDraft_Returns404()
     {
         (await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Two submits race: the loser's save is refused before anything is sent anywhere.
+    [Fact]
+    public async Task Submit_LostRace_Returns409AndStaysInProgress()
+    {
+        await AddSite(901910);
+        _factory.FakeChangeRequests.LoseUpdateWhen = r => r.Status == ChangeRequestStatus.Submitted;
+
+        var response = await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        stored.SubmittedBy.Should().BeNull();
     }
 
     [Fact]
@@ -554,16 +615,80 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         );
     }
 
-    [Fact]
-    public async Task Submit_FlagOn_CaseManagementFails_Returns503AndStaysInProgress()
-    {
+    private void CaseManagementReturns(CaseWorkingSubmissionResult result) =>
         _factory
             .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
                 Arg.Any<AccreditationChangeRequest>(),
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .ThrowsAsync(new HttpRequestException("unknown work item type"));
+            .Returns(result);
+
+    private void CaseManagementThrows(Exception exception) =>
+        _factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .ThrowsAsync(exception);
+
+    // Save first: by the time Case Management is called the request is already Submitted, so a
+    // concurrent submit can no longer reach Case Management for it.
+    [Fact]
+    public async Task Submit_FlagOn_SavesTheRequestAsSubmittedBeforeCallingCaseManagement()
+    {
+        ChangeRequestStatus? storedWhenCalled = null;
+        _factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(_ =>
+            {
+                storedWhenCalled = _factory.FakeChangeRequests.All.Single().Status;
+                return new CaseWorkingSubmissionResult("CHG-1", Guid.NewGuid());
+            });
+
+        (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        storedWhenCalled.Should().Be(ChangeRequestStatus.Submitted);
+    }
+
+    [Fact]
+    public async Task Submit_FlagOn_LostRace_Returns409AndNeverCallsCaseManagement()
+    {
+        CaseManagementReturns(new CaseWorkingSubmissionResult("CHG-1", Guid.NewGuid()));
+        await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
+        _factory.FakeChangeRequests.LoseUpdateWhen = r => r.Status == ChangeRequestStatus.Submitted;
+
+        var response = await _client.PostAsJsonAsync(
+            $"{Base}/requests/current/submit",
+            new { fullName = "Jane Smith", jobTitle = "Director" },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        await _factory.MockCaseWorkingAdapter.DidNotReceiveWithAnyArgs()
+            .SubmitChangeRequestAsync(default!, default!, Ct);
+        _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
+    }
+
+    [Theory]
+    [InlineData("rejected")]
+    [InlineData("timeout")]
+    [InlineData("not-configured")]
+    public async Task Submit_FlagOn_CaseManagementFails_Returns503AndReopensTheRequest(string failure)
+    {
+        CaseManagementThrows(
+            failure switch
+            {
+                "rejected" => new HttpRequestException("unknown work item type"),
+                "timeout" => new CaseWorkingApiTimeoutException("timed out", new TaskCanceledException()),
+                _ => new CaseWorkingNotConfiguredException(),
+            }
+        );
 
         var response = await AddAndSubmit();
 
@@ -571,5 +696,76 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.InProgress);
         stored.SubmittedAt.Should().BeNull();
+        stored.SubmittedBy.Should().BeNull();
+        stored.PaymentReference.Should().BeNull();
+        stored.ChargePence.Should().BeNull();
+        stored.CaseManagementReference.Should().BeNull();
+    }
+
+    // Reopened, the request is the draft again: its site is not pending a regulator decision, more
+    // sites join it, and a retry submits it.
+    [Fact]
+    public async Task Submit_FlagOn_AfterACaseManagementFailure_TheDraftCanBeChangedAndResubmitted()
+    {
+        CaseManagementThrows(new HttpRequestException("unavailable"));
+        (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+
+        var view = await (await _client.GetAsync(Base, Ct)).Content.ReadFromJsonAsync<JsonElement>(Ct);
+        view.GetProperty("activeRequest").ValueKind.Should().Be(JsonValueKind.Object);
+        view.GetProperty("sites").EnumerateArray()
+            .Single(s => s.GetProperty("siteId").GetInt32() == 901910)
+            .GetProperty("pendingRequestStatus").GetString().Should().Be("InProgress");
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901912 }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Created);
+        await _client.PatchAsJsonAsync(
+            $"{Base}/requests/current/sites/901912",
+            new { operationCodes = new[] { "R3" }, conditionsOfExport = false },
+            Ct
+        );
+
+        _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
+        CaseManagementReturns(new CaseWorkingSubmissionResult("CHG-2", Guid.NewGuid()));
+        (await _client.PostAsJsonAsync(
+                $"{Base}/requests/current/submit",
+                new { fullName = "Jane Smith", jobTitle = "Director" },
+                Ct
+            ))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.Submitted);
+        stored.Sites.Should().HaveCount(2);
+        stored.ChargePence.Should().Be(65600);
+        stored.CaseManagementReference.Should().Be("CHG-2");
+    }
+
+    // Not a Case Management failure: the request is still reopened, but the error is not dressed up
+    // as "try again" and goes to the exception handler.
+    [Fact]
+    public async Task Submit_FlagOn_UnexpectedError_ReopensTheRequestAndIsNot503()
+    {
+        CaseManagementThrows(new InvalidOperationException("a defect"));
+
+        var response = await AddAndSubmit();
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
+    }
+
+    // Case Management has the work item, so the submission stands even if its reference can't be saved.
+    [Fact]
+    public async Task Submit_FlagOn_ReferenceNotSaved_StillSubmitted()
+    {
+        CaseManagementReturns(new CaseWorkingSubmissionResult("CHG-1", Guid.NewGuid()));
+        _factory.FakeChangeRequests.LoseUpdateWhen = r => r.CaseManagementReference is not null;
+
+        var response = await AddAndSubmit();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.Submitted);
+        stored.CaseManagementReference.Should().BeNull();
     }
 }

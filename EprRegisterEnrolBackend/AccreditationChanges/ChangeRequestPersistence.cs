@@ -102,13 +102,20 @@ public class ChangeRequestPersistence
         var readVersion = request.Version;
         request.Version = readVersion + 1;
         request.UpdatedAt = DateTime.UtcNow;
-        var result = await Collection.ReplaceOneAsync(
-            Filter.Eq(r => r.RequestId, request.RequestId) & Filter.Eq(r => r.Version, readVersion),
-            request,
-            cancellationToken: ct
-        );
-        if (result.MatchedCount == 1)
-            return true;
+        try
+        {
+            var result = await Collection.ReplaceOneAsync(
+                Filter.Eq(r => r.RequestId, request.RequestId)
+                    & Filter.Eq(r => r.Version, readVersion),
+                request,
+                cancellationToken: ct
+            );
+            if (result.MatchedCount == 1)
+                return true;
+        }
+        // Reopening a request as InProgress when another draft exists breaks the one-draft rule.
+        catch (MongoWriteException ex)
+            when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey) { }
         request.Version = readVersion;
         return false;
     }

@@ -857,6 +857,10 @@ public static class AccreditationApplicationEndpoints
     // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
     // from the server-held PendingUploadService record, populated only by the real
     // CDP-uploader webhook callback — never trusted verbatim from the client request body.
+    // CDP's status for a scanned file: "complete" means it passed the virus scan.
+    internal static FileScanStatus ScanStatusOf(CdpCallbackFile file) =>
+        file.FileStatus == "complete" ? FileScanStatus.Clean : FileScanStatus.Infected;
+
     internal static async Task<(
         IResult? Error,
         CdpCallbackFile? ScannedFile
@@ -3055,7 +3059,7 @@ public static class AccreditationApplicationEndpoints
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
             return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
 
-        var scanStatus = scannedFile.FileStatus == "complete" ? "Clean" : "Infected";
+        var scanStatus = ScanStatusOf(scannedFile).ToString();
 
         site.BesEvidence ??= new BesEvidenceModel();
         site.BesEvidence.BesEvidenceUploads.Add(
@@ -4197,10 +4201,7 @@ public static class AccreditationApplicationEndpoints
             Filename = scannedFile.Filename!,
             ContentType = contentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus =
-                scannedFile.FileStatus == "complete"
-                    ? FileScanStatus.Clean
-                    : FileScanStatus.Infected,
+            ScanStatus = ScanStatusOf(scannedFile),
             DocumentType = request.DocumentType,
             S3Key = scannedFile.S3Key!,
             S3Bucket = scannedFile.S3Bucket,
