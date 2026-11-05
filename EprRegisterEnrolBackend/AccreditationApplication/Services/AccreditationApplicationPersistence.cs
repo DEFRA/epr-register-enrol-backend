@@ -223,7 +223,12 @@ public class AccreditationApplicationPersistence(
     public async Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
-    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit)
+    )> SearchGrantedAccreditationsAsync(
+        GrantedAccreditationFilter search,
+        int firstYear,
+        int skip,
+        int limit
+    )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
         var filter = filters.And(
@@ -233,8 +238,16 @@ public class AccreditationApplicationPersistence(
             filters.Ne(a => a.AccreditationReference, null),
             filters.Ne(a => a.AccreditationReference, string.Empty)
         );
-        if (year is not null)
-            filter = filters.And(filter, filters.Eq(a => a.Year, year.Value));
+        if (search.Year is not null)
+            filter = filters.And(filter, filters.Eq(a => a.Year, search.Year.Value));
+        // Both are covered by the (OrgId, RegistrationReference, Year) index.
+        if (search.OrganisationNumber is not null)
+            filter = filters.And(filter, filters.Eq(a => a.OrgId, search.OrganisationNumber.Value));
+        if (search.RegistrationNumber is not null)
+            filter = filters.And(
+                filter,
+                filters.Eq(a => a.RegistrationReference, search.RegistrationNumber)
+            );
 
         var total = await Collection.CountDocumentsAsync(filter);
         var items = await Collection

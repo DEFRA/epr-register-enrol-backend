@@ -207,13 +207,23 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     public Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
-    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit)
+    )> SearchGrantedAccreditationsAsync(
+        GrantedAccreditationFilter filter,
+        int firstYear,
+        int skip,
+        int limit
+    )
     {
         var matches = _store
             .Where(a =>
                 a.OrgId is not null
                 && a.Year >= firstYear
-                && (year is null || a.Year == year)
+                && (filter.Year is null || a.Year == filter.Year)
+                && (filter.OrganisationNumber is null || a.OrgId == filter.OrganisationNumber)
+                && (
+                    filter.RegistrationNumber is null
+                    || a.RegistrationReference == filter.RegistrationNumber
+                )
                 && a.ApplicationStatus == ApplicationStatus.Approved
                 && !string.IsNullOrEmpty(a.AccreditationReference)
             )

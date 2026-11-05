@@ -558,6 +558,64 @@ public class AccreditationApiEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Search_FiltersByOrganisationNumber()
+    {
+        await Seed(orgId: 500027, accreditation: "A27EX5000270012AL");
+        await Seed(orgId: 500028, accreditation: "A27EX5000280012AL");
+
+        var body = await Json(await Get("/v1/accreditations?organisationNumber=500028"));
+
+        body.GetProperty("totalItems").GetInt32().Should().Be(1);
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("organisationNumber").GetInt32())
+            .Should()
+            .Equal(500028);
+    }
+
+    [Fact]
+    public async Task Search_FiltersByRegistrationNumber()
+    {
+        await Seed(registration: "R27EX5000270012AL", accreditation: "A27EX5000270012AL");
+        await Seed(registration: "R27EX5000270013AL", accreditation: "A27EX5000270013AL");
+
+        var body = await Json(await Get("/v1/accreditations?registrationNumber=R27EX5000270013AL"));
+
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("registrationNumber").GetString())
+            .Should()
+            .Equal("R27EX5000270013AL");
+    }
+
+    [Fact]
+    public async Task Search_CombinesFiltersWithAnd()
+    {
+        await Seed(orgId: 500027, year: 2027, accreditation: "A27EX5000270012AL");
+        await Seed(orgId: 500027, year: 2028, accreditation: "A28EX5000270012AL");
+        await Seed(orgId: 500028, year: 2028, accreditation: "A28EX5000280012AL");
+
+        var body = await Json(await Get("/v1/accreditations?organisationNumber=500027&year=2028"));
+
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("accreditationNumber").GetString())
+            .Should()
+            .Equal("A28EX5000270012AL");
+    }
+
+    [Fact]
+    public async Task Search_ForAnOrganisationWithNothingGranted_IsAnEmptyPage()
+    {
+        await Seed(orgId: 500027, accreditation: "A27EX5000270012AL");
+
+        var response = await Get("/v1/accreditations?organisationNumber=999999");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(response)).GetProperty("totalItems").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
     public async Task Search_OnlyServesGrantedAccreditations()
     {
         await Seed(accreditation: "A27EX5000270012AL");
@@ -610,6 +668,10 @@ public class AccreditationApiEndpointTests : IDisposable
     [InlineData("year=abc", "invalid_year")]
     [InlineData("year=1999", "invalid_year")]
     [InlineData("year=-2027", "invalid_year")]
+    [InlineData("organisationNumber=abc", "invalid_organisation_number")]
+    [InlineData("organisationNumber=0", "invalid_organisation_number")]
+    [InlineData("organisationNumber=-5", "invalid_organisation_number")]
+    [InlineData("registrationNumber=bad%20number", "invalid_registration_number")]
     [InlineData("pageNumber=0", "invalid_paging")]
     [InlineData("limit=101", "invalid_paging")]
     public async Task Search_InvalidQuery_Is400(string query, string code)

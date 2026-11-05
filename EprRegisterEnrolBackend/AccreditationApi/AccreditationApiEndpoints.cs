@@ -73,9 +73,46 @@ public static partial class AccreditationApiEndpoints
             year = parsedYear;
         }
 
+        int? organisationNumber = null;
+        if (query.TryGetValue("organisationNumber", out var organisationValue))
+        {
+            if (
+                !int.TryParse(
+                    organisationValue.ToString(),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var parsedOrganisation
+                )
+                || parsedOrganisation < 1
+            )
+            {
+                return new ServiceProblemResult(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_organisation_number",
+                    "organisationNumber must be a whole number, for example 500027."
+                );
+            }
+
+            organisationNumber = parsedOrganisation;
+        }
+
+        string? registrationNumber = null;
+        if (query.TryGetValue("registrationNumber", out var registrationValue))
+        {
+            registrationNumber = registrationValue.ToString();
+            if (!RegistrationNumberPattern().IsMatch(registrationNumber))
+            {
+                return new ServiceProblemResult(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_registration_number",
+                    "registrationNumber must be letters, digits, hyphens or underscores, up to 40 characters."
+                );
+            }
+        }
+
         var now = DateTimeOffset.UtcNow;
         var (items, total) = await persistence.SearchGrantedAccreditationsAsync(
-            year,
+            new GrantedAccreditationFilter(year, organisationNumber, registrationNumber),
             config.Value.FirstAccreditationYear,
             (paging.PageNumber - 1) * paging.Limit,
             paging.Limit

@@ -65,11 +65,13 @@ paths:
         but no history, so the response stays small.
       parameters:
         - $ref: '#/components/parameters/Year'
+        - $ref: '#/components/parameters/OrganisationNumberFilter'
+        - $ref: '#/components/parameters/RegistrationNumberFilter'
         - $ref: '#/components/parameters/PageNumber'
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: A page of accreditation summaries.
+          description: A page of accreditation summaries. Filters combine with AND, and a filter that matches nothing is an empty page, not a 404.
           content:
             application/json:
               schema:
@@ -191,6 +193,16 @@ components:
       in: query
       description: Accreditation year.
       schema: { type: integer, format: int32, minimum: 2000 }
+    OrganisationNumberFilter:
+      name: organisationNumber
+      in: query
+      description: Only accreditations of this organisation (the numeric ReEx organisation number), e.g. 500027.
+      schema: { type: integer, format: int32, minimum: 1 }
+    RegistrationNumberFilter:
+      name: registrationNumber
+      in: query
+      description: Only accreditations of this registration, e.g. `R27ER5000270036PL`.
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,40}$' }
     IncludeWithdrawn:
       name: includeWithdrawn
       in: query
