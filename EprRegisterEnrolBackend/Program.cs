@@ -133,11 +133,16 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
-    // RA-492: in-year change requests (add registered ORS to a granted accreditation).
-    builder.Services.AddSingleton<IChangeRequestPersistence, ChangeRequestPersistence>();
-    builder.Services.Configure<AccreditationChangesConfig>(
-        builder.Configuration.GetSection(AccreditationChangesConfig.SectionName)
-    );
+    // RA-492: in-year change requests (add registered ORS to a granted accreditation). Registered only
+    // with the in-year changes flag, like the routes that use them, so with it off the change-request
+    // collection and its indexes are never touched.
+    if (builder.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
+    {
+        builder.Services.AddSingleton<IChangeRequestPersistence, ChangeRequestPersistence>();
+        builder.Services.Configure<AccreditationChangesConfig>(
+            builder.Configuration.GetSection(AccreditationChangesConfig.SectionName)
+        );
+    }
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
     );

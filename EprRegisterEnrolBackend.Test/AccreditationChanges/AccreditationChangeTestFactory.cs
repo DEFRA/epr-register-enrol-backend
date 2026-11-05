@@ -24,8 +24,12 @@ public class AccreditationChangeTestFactory(
             "AccreditationChanges:SubmitToCaseManagement",
             submitToCaseManagement ? "true" : "false"
         );
-        builder.ConfigureServices(services =>
-            services.AddSingleton<IChangeRequestPersistence>(FakeChangeRequests)
-        );
+        // As in Program, the change-request store exists only with the flag on.
+        if (inYearChangesEnabled)
+        {
+            builder.ConfigureServices(services =>
+                services.AddSingleton<IChangeRequestPersistence>(FakeChangeRequests)
+            );
+        }
     }
 }

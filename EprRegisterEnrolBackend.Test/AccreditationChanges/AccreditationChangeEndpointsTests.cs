@@ -10,6 +10,7 @@ using EprRegisterEnrolBackend.DevSeed;
 using FluentAssertions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
@@ -131,6 +132,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         (await client.PostAsJsonAsync(Sites, new { siteId = 901910 }, Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await client.PostAsJsonAsync(SubmitUrl, Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         factory.FakeChangeRequests.All.Should().BeEmpty();
+        factory.Services.GetService<IChangeRequestPersistence>().Should().BeNull();
     }
 
     [Fact]
