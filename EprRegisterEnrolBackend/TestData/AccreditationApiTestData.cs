@@ -62,13 +62,85 @@ public static class AccreditationApiTestData
         InterimSitesPerSite: 0
     );
 
+    // RA-647: an exporter with three registered overseas sites, only two of them accredited, and a
+    // withdrawn interim site on the first. Shows that only accredited sites are served and that
+    // includeWithdrawn adds the withdrawn interim site.
+    public static readonly TestScenario ExporterWithdrawnAndUnaccredited = new(
+        Name: "exporter-withdrawn-and-unaccredited",
+        Id: ObjectId.Parse("7e57da7a0000000000000005"),
+        OrgId: 990005,
+        Material: MaterialType.Wood,
+        MaterialCode: "WD",
+        IsExporter: true,
+        OverseasSites: 2,
+        InterimSitesPerSite: 1,
+        UnaccreditedOverseasSites: 1,
+        WithdrawnInterimSite: true
+    );
+
+    // RA-647: one registration accredited in two years, for finding a registration's accreditations
+    // across years (and an organisation's, by organisation number).
+    public static readonly TestScenario ReprocessorAluminium2027 = new(
+        Name: "reprocessor-aluminium-2027",
+        Id: ObjectId.Parse("7e57da7a0000000000000006"),
+        OrgId: 990006,
+        Material: MaterialType.Aluminium,
+        MaterialCode: "AL",
+        IsExporter: false,
+        OverseasSites: 0,
+        InterimSitesPerSite: 0
+    );
+
+    public static readonly TestScenario ReprocessorAluminium2028 = ReprocessorAluminium2027 with
+    {
+        Name = "reprocessor-aluminium-2028",
+        Id = ObjectId.Parse("7e57da7a0000000000000007"),
+        AccreditationYear = 2028,
+    };
+
+    // RA-647: an application that was submitted but never granted. It has no accreditation number,
+    // so the API must not serve it: a lookup is a 404 and a search finds nothing.
+    public static readonly TestScenario ReprocessorNotGranted = new(
+        Name: "reprocessor-not-granted",
+        Id: ObjectId.Parse("7e57da7a0000000000000008"),
+        OrgId: 990007,
+        Material: MaterialType.Plastic,
+        MaterialCode: "PL",
+        IsExporter: false,
+        OverseasSites: 0,
+        InterimSitesPerSite: 0,
+        Status: ApplicationStatus.Submitted
+    );
+
+    // RA-647: approved, but for 2026, before the first scheme year the API serves. Asking for it is
+    // the documented 404.
+    public static readonly TestScenario ReprocessorBefore2027 = new(
+        Name: "reprocessor-2026",
+        Id: ObjectId.Parse("7e57da7a0000000000000009"),
+        OrgId: 990008,
+        Material: MaterialType.Steel,
+        MaterialCode: "ST",
+        IsExporter: false,
+        OverseasSites: 0,
+        InterimSitesPerSite: 0,
+        AccreditationYear: 2026
+    );
+
     public static readonly IReadOnlyList<TestScenario> All =
     [
         ExporterOneOrs,
         ExporterTenOrs,
         ReprocessorPlastic,
         ReprocessorMetal,
+        ExporterWithdrawnAndUnaccredited,
+        ReprocessorAluminium2027,
+        ReprocessorAluminium2028,
+        ReprocessorNotGranted,
+        ReprocessorBefore2027,
     ];
+
+    /// <summary>The scenarios the API serves; the others exist to show what it does not serve.</summary>
+    public static IEnumerable<TestScenario> Served => All.Where(s => s.IsServed);
 }
 
 public sealed record TestScenario(
@@ -79,7 +151,11 @@ public sealed record TestScenario(
     string MaterialCode,
     bool IsExporter,
     int OverseasSites,
-    int InterimSitesPerSite
+    int InterimSitesPerSite,
+    int UnaccreditedOverseasSites = 0,
+    bool WithdrawnInterimSite = false,
+    int AccreditationYear = AccreditationApiTestData.Year,
+    ApplicationStatus Status = ApplicationStatus.Approved
 )
 {
     private string Kind => IsExporter ? "EX" : "ER";
@@ -88,7 +164,14 @@ public sealed record TestScenario(
 
     public string RegistrationReference => $"R26{Kind}{Tail}";
 
-    public string AccreditationReference => $"A27{Kind}{Tail}";
+    /// <summary>Only a granted application has an accreditation number.</summary>
+    public string? AccreditationReference =>
+        IsGranted ? $"A{AccreditationYear % 100:D2}{Kind}{Tail}" : null;
+
+    public bool IsGranted => Status == ApplicationStatus.Approved;
+
+    /// <summary>Granted, and from the first scheme year the API serves.</summary>
+    public bool IsServed => IsGranted && AccreditationYear >= AccreditationApiTestData.Year;
 
     public string OrganisationName => $"Test Data {Name}";
 
@@ -96,7 +179,15 @@ public sealed record TestScenario(
     public AccreditationApplicationModel Build()
     {
         var fixedDate = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
-        var sites = Enumerable.Range(1, OverseasSites).Select(BuildOverseasSite).ToList();
+        var sites = Enumerable
+            .Range(1, OverseasSites)
+            .Select(number => BuildOverseasSite(number, accredited: true))
+            .Concat(
+                Enumerable
+                    .Range(OverseasSites + 1, UnaccreditedOverseasSites)
+                    .Select(number => BuildOverseasSite(number, accredited: false))
+            )
+            .ToList();
 
         return new AccreditationApplicationModel
         {
@@ -104,11 +195,11 @@ public sealed record TestScenario(
             OrganisationId = OrgId.ToString(),
             OrgId = OrgId,
             OrganisationName = OrganisationName,
-            Year = AccreditationApiTestData.Year,
+            Year = AccreditationYear,
             RegistrationId = $"7e57da7a{OrgId:D16}",
             RegistrationReference = RegistrationReference,
             AccreditationReference = AccreditationReference,
-            ApplicationStatus = ApplicationStatus.Approved,
+            ApplicationStatus = Status,
             MaterialType = Material,
             IsExporter = IsExporter,
             WasteProcessingType = IsExporter ? "exporter" : "reprocessor",
@@ -169,12 +260,12 @@ public sealed record TestScenario(
         };
     }
 
-    private OverseasSiteModel BuildOverseasSite(int number)
+    private OverseasSiteModel BuildOverseasSite(int number, bool accredited)
     {
         var orsId = number.ToString("D3");
         var siteId = (OrgId * 100) + number;
         var interim = Enumerable
-            .Range(1, InterimSitesPerSite)
+            .Range(1, accredited ? InterimSitesPerSite : 0)
             .Select(i => new InterimSiteModel
             {
                 SiteId = (siteId * 10) + i,
@@ -192,6 +283,30 @@ public sealed record TestScenario(
             })
             .ToList();
 
+        // A site's first interim site can be withdrawn, to show includeWithdrawn.
+        if (accredited && WithdrawnInterimSite && number == 1)
+        {
+            var withdrawnId = InterimSitesPerSite + 1;
+            interim.Add(
+                new InterimSiteModel
+                {
+                    SiteId = (siteId * 10) + withdrawnId,
+                    SiteNumber = $"TD-{OrgId}-{orsId}-{withdrawnId}",
+                    Country = "Netherlands",
+                    SiteName = $"Test Data Withdrawn Interim Site {orsId}-{withdrawnId}",
+                    AddressLine1 = $"{withdrawnId} Tussenstraat",
+                    TownOrCity = "Rotterdam",
+                    Postcode = "3011 AA",
+                    ContactName = "Test Data Interim Contact",
+                    ContactEmail = "test.interim@example.com",
+                    ContactPhone = "+31 10 000 0000",
+                    OperationCodes = ["R12"],
+                    CreatedAt = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc),
+                    RemovedAt = new DateTime(2026, 10, 15, 0, 0, 0, DateTimeKind.Utc),
+                }
+            );
+        }
+
         var site = new OverseasSiteModel
         {
             SiteId = siteId,
@@ -205,7 +320,7 @@ public sealed record TestScenario(
             IsEu = true,
             IsOecd = true,
             ValidFrom = "2027-01-01T00:00:00.000Z",
-            Selected = true,
+            Selected = accredited,
             ContactName = "Test Data Site Contact",
             ContactEmail = "test.site@example.com",
             ContactPhone = "+49 40 000000",

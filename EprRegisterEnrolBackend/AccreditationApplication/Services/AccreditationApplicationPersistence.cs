@@ -223,22 +223,37 @@ public class AccreditationApplicationPersistence(
     public async Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
-    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit)
+    )> SearchGrantedAccreditationsAsync(
+        GrantedAccreditationFilter filter,
+        int firstYear,
+        int skip,
+        int limit
+    )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
-        var filter = filters.And(
+        var granted = filters.And(
             filters.Ne(a => a.OrgId, null),
             filters.Gte(a => a.Year, firstYear),
             filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
             filters.Ne(a => a.AccreditationReference, null),
-            filters.Ne(a => a.AccreditationReference, string.Empty)
+            filters.Ne(a => a.AccreditationReference, string.Empty),
+            filters.Ne(a => a.RegistrationReference, null),
+            filters.Ne(a => a.RegistrationReference, string.Empty)
         );
-        if (year is not null)
-            filter = filters.And(filter, filters.Eq(a => a.Year, year.Value));
+        if (filter.Year is not null)
+            granted = filters.And(granted, filters.Eq(a => a.Year, filter.Year.Value));
+        // Both are covered by the (OrgId, RegistrationReference, Year) index.
+        if (filter.OrganisationNumber is not null)
+            granted = filters.And(granted, filters.Eq(a => a.OrgId, filter.OrganisationNumber.Value));
+        if (filter.RegistrationNumber is not null)
+            granted = filters.And(
+                granted,
+                filters.Eq(a => a.RegistrationReference, filter.RegistrationNumber)
+            );
 
-        var total = await Collection.CountDocumentsAsync(filter);
+        var total = await Collection.CountDocumentsAsync(granted);
         var items = await Collection
-            .Find(filter)
+            .Find(granted)
             .SortBy(a => a.AccreditationReference)
             .ThenBy(a => a.Id)
             .Skip(skip)

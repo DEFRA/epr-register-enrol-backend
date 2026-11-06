@@ -65,11 +65,13 @@ paths:
         but no history, so the response stays small.
       parameters:
         - $ref: '#/components/parameters/Year'
+        - $ref: '#/components/parameters/OrganisationNumberFilter'
+        - $ref: '#/components/parameters/RegistrationNumberFilter'
         - $ref: '#/components/parameters/PageNumber'
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: A page of accreditation summaries.
+          description: A page of accreditation summaries. Filters combine with AND, and a filter that matches nothing is an empty page, not a 404.
           content:
             application/json:
               schema:
@@ -87,12 +89,14 @@ paths:
     get:
       tags: [Accreditations]
       operationId: getAccreditation
-      summary: Get an accreditation, with its status and tonnage band history
+      summary: Get the complete accreditation, with its histories and overseas sites
       parameters:
         - $ref: '#/components/parameters/OrganisationNumber'
         - $ref: '#/components/parameters/RegistrationNumber'
         - $ref: '#/components/parameters/AccreditationYear'
+        - $ref: '#/components/parameters/IncludeWithdrawn'
       responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
         '200':
           description: The accreditation.
           content:
@@ -191,6 +195,16 @@ components:
       in: query
       description: Accreditation year.
       schema: { type: integer, format: int32, minimum: 2000 }
+    OrganisationNumberFilter:
+      name: organisationNumber
+      in: query
+      description: Only accreditations of this organisation (the numeric ReEx organisation number), e.g. 500027.
+      schema: { type: integer, format: int32, minimum: 1 }
+    RegistrationNumberFilter:
+      name: registrationNumber
+      in: query
+      description: Only accreditations of this registration, e.g. `R27ER5000270036PL`.
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,40}$' }
     IncludeWithdrawn:
       name: includeWithdrawn
       in: query
@@ -323,13 +337,22 @@ components:
           nullable: true
     Accreditation:
       description: |
-        An `AccreditationSummary` plus its full status and tonnage band history (oldest first)
-        and its PRN signatories. Returned only when getting one accreditation.
+        An `AccreditationSummary` plus its full status and tonnage band history (oldest first),
+        its PRN signatories and, for an exporter, every accredited overseas site with its interim
+        sites and status history, so one request returns the complete accreditation. Returned only
+        when getting one accreditation.
       allOf:
         - $ref: '#/components/schemas/AccreditationSummary'
         - type: object
           required: [statusHistory, tonnageBandHistory, signatories]
           properties:
+            overseasSites:
+              type: array
+              description: |
+                Exporters only, ordered by `orsId`, and unpaged. Omitted for a reprocessor, which
+                has a site, not overseas sites. Withdrawn interim sites are left out unless
+                `includeWithdrawn=true`.
+              items: { $ref: '#/components/schemas/AccreditedOverseasSite' }
             signatories:
               type: array
               items: { $ref: '#/components/schemas/Signatory' }
