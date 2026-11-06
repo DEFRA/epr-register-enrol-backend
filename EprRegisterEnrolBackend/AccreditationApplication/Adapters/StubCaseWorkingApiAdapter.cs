@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationChanges;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
@@ -64,6 +65,29 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         }
 
         return Task.FromResult(new CaseWorkingSubmissionResult(applicationReference, workItemId));
+    }
+
+    public Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+        AccreditationChangeRequest changeRequest,
+        AccreditationApplicationModel accreditation,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var workItemId = Guid.NewGuid();
+        var reference = GenerateReference(accreditation);
+
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.SubmitChangeRequestAsync called for requestId={RequestId} reference={Reference} workItemId={WorkItemId} org={OrganisationId}",
+                changeRequest.RequestId,
+                reference,
+                workItemId,
+                changeRequest.OrganisationId
+            );
+        }
+
+        return Task.FromResult(new CaseWorkingSubmissionResult(reference, workItemId));
     }
 
     public Task<NotificationStatusResult> GetNotificationStatusAsync(
