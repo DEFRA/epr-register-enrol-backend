@@ -15,7 +15,11 @@ public abstract class ApplicationDetails
     [BsonIgnore]
     public abstract ApplicationType ApplicationType { get; }
 
-    /// <summary>The version of this type's <c>details</c> shape, so it can change without touching the envelope or other types.</summary>
+    /// <summary>
+    /// The version of this type's <c>details</c> shape, so it can change without touching the envelope or other
+    /// types. Nothing reads it yet: it is stored now so documents written before a shape change can be told apart,
+    /// and so the <c>$jsonSchema</c> validator can require it.
+    /// </summary>
     public int SchemaVersion { get; set; } = 1;
 
     /// <summary>

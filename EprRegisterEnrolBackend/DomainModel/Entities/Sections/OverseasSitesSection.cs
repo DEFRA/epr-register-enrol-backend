@@ -7,7 +7,7 @@ namespace EprRegisterEnrolBackend.DomainModel.Entities.Sections;
 /// <summary>
 /// The status and submission history of the application's overseas sites section (legacy
 /// <see cref="AccreditationApplicationOverseasSites"/>). The sites themselves are not here: they are the
-/// application's <see cref="ApplicationEntity.ApplicationOverseasSites"/> and the OverseasSite entities.
+/// application's <see cref="AccreditationDetails.ApplicationOverseasSites"/> and the OverseasSite entities.
 /// </summary>
 public class OverseasSitesSection
 {

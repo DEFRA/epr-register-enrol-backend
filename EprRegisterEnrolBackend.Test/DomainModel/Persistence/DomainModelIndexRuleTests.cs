@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
@@ -556,7 +557,8 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     // Every details class stores the same discriminator string as the applicationType it reports, so a query on
-    // the top-level field and a read of details._t always agree (decision D1, RA-744).
+    // the top-level field and a read of details._t always agree ("Envelope rules" in
+    // register-enrol-application-types.md).
     [Fact]
     public void ApplicationDetails_EveryKnownType_HasTheDiscriminatorOfItsApplicationType()
     {
@@ -568,13 +570,28 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         knownTypes.Should().NotBeEmpty();
         foreach (var type in knownTypes)
         {
-            var instance = (ApplicationDetails)
-                System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type);
+            var instance = (ApplicationDetails)RuntimeHelpers.GetUninitializedObject(type);
             MongoDB
                 .Bson.Serialization.BsonClassMap.LookupClassMap(type)
                 .Discriminator.Should()
                 .Be(instance.ApplicationType.ToString(), type.Name);
         }
+    }
+
+    // BsonSerializer.LookupActualType throws on a _t it has not been told about, so a details class missing from
+    // [BsonKnownTypes] would fail every read and every update of it. Catch the omission here, not at runtime.
+    [Fact]
+    public void ApplicationDetails_EveryConcreteSubclass_IsListedAsAKnownType()
+    {
+        var known = typeof(ApplicationDetails)
+            .GetCustomAttributes<BsonKnownTypesAttribute>(false)
+            .SelectMany(a => a.KnownTypes)
+            .ToHashSet();
+        var concrete = typeof(ApplicationDetails)
+            .Assembly.GetTypes()
+            .Where(t => t.IsClass && !t.IsAbstract && t.IsSubclassOf(typeof(ApplicationDetails)));
+
+        known.Should().BeEquivalentTo(concrete);
     }
 
     private static bool IsOurs(Type type) =>

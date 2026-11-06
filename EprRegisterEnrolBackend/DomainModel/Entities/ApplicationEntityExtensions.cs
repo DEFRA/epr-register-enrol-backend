@@ -1,5 +1,6 @@
 namespace EprRegisterEnrolBackend.DomainModel.Entities;
 
+/// <summary>Typed access to an <see cref="ApplicationEntity"/>'s <see cref="ApplicationDetails"/>.</summary>
 public static class ApplicationEntityExtensions
 {
     /// <summary>

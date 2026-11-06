@@ -10,7 +10,7 @@ namespace EprRegisterEnrolBackend.DomainModel.Entities;
 /// fields stay on a shared shape?").
 /// </summary>
 [BsonDiscriminator(nameof(ApplicationType.Accreditation))]
-public class AccreditationDetails : ApplicationDetails
+public sealed class AccreditationDetails : ApplicationDetails
 {
     public override ApplicationType ApplicationType => ApplicationType.Accreditation;
 

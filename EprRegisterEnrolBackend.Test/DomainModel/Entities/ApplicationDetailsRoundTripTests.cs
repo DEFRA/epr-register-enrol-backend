@@ -97,7 +97,7 @@ public sealed class ApplicationDetailsRoundTripTests : IDisposable
             Change(),
             cancellationToken: Ct
         );
-        ((AccreditationDetails)created.Details).BusinessPlan.NewInfrastructurePercent = 40;
+        created.AsAccreditation().BusinessPlan.NewInfrastructurePercent = 40;
 
         var result = await _applications.Versions.UpdateAsync(
             created,
@@ -113,7 +113,7 @@ public sealed class ApplicationDetailsRoundTripTests : IDisposable
         );
         versions.Select(v => v.Details).Should().AllBeOfType<AccreditationDetails>();
         versions
-            .Select(v => ((AccreditationDetails)v.Details).BusinessPlan.NewInfrastructurePercent)
+            .Select(v => v.AsAccreditation().BusinessPlan.NewInfrastructurePercent)
             .Should()
             .Equal(100, 40);
     }

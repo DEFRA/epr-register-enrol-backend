@@ -1,4 +1,4 @@
-Shape chosen: C1. Docs, tests and implementation to follow
+Shape chosen: C1. First slice built in RA-744 PR 1 (envelope, `details`, `AccreditationDetails`, round-trip and guard tests, design doc v6.6). The other four details types, the `applicationType` index, the validator and the guard key follow in RA-744 PRs 2 to 4.
 
 # Register & Enrol application types
 
@@ -95,7 +95,7 @@ Field names are still open. The shared flow and `ChangeReason` stay in their exi
 - **Type-specific IDs stay in `details`,** such as the ORS ID, because other types don't have them.
 - **Each details type carries a `schemaVersion`** so its shape can change without touching the envelope or other types.
 
-Assumption The Mongo driver round-trips a polymorphic `Details` property through `VersionedMongoRepository<T>`. This has not been run. **Test it as part of next week's change.** No production data exists in this shape yet, so any test or development data that fails to read can be re-derived. Also add each details class to the schema guard tests, because they walk declared types and would otherwise silently skip fields under `details`. Verified `DomainModelIndexRuleTests.cs:447-541`
+Assumption The Mongo driver round-trips a polymorphic `Details` property through `VersionedMongoRepository<T>`. **Run in RA-744 PR 1:** `ApplicationDetailsRoundTripTests` round-trip an accreditation `Details` through `VersionedMongoRepository<T>` on a replica set, with `_t` equal to `applicationType`. The other four types are tested as they gain a details class (PR 2). No production data exists in this shape yet, so any test or development data that fails to read can be re-derived. Each details class is also walked by the schema guard tests, which now follow `[BsonKnownTypes]`: they walk declared types and would otherwise silently skip fields under `details`. Verified `DomainModelIndexRuleTests.cs:447-541`
 
 ### Can the accreditation-shaped fields stay on a shared shape?
 
@@ -113,7 +113,7 @@ No. Each one is valid only for New and Reapply, so each moves into `Accreditatio
 | Type | Specific data | Invariants | What approval does | What rejection does | Work item type |
 | --- | --- | --- | --- | --- | --- |
 | New Accreditation | As Reapply, plus a section for a couple of extra pages. Not seeded. Assumption Fields not yet listed. | One live or approved per registration and year (§9.7). Registration must be approved. Assumption | Creates the Accreditation, activates Proposed sites, applies site edits (§3.4). | Proposed sites become Discarded. | `re-accreditation` with the kind shown on the case |
-| Reapply | Current fields. Seeded from the previous Accreditation, or from ReEx data for 2027. | As above. `kind` must be explicit, because `sourceAccreditationId` is also null for migrated 2027 reapplications. Verified §3.2 | As above. | As above. | `re-accreditation` |
+| Reapply | Current fields. Seeded from the previous Accreditation, or from ReEx data for 2027. Every application in the legacy collection is stored as `kind = Reapply` (**Assumption** in RA-744: New applications are only ever created in the model, never in legacy). | As above. `kind` must be explicit, because `sourceAccreditationId` is also null for migrated 2027 reapplications. Verified §3.2 | As above. | As above. | `re-accreditation` |
 | In-year ORS change | Target Accreditation, batch, kind of change, one ORS entry with `proposedChanges`, BES evidence and interim sites. | 2027+ accreditations only. One application per ORS. One open change per ORS (James: confirmed). | By kind: adds the ORS to the Accreditation as a new version; activates a Proposed ORS; applies edits as a new ORS version; applies interim site changes as a new ORS version. | Registration and Accreditation unchanged. Proposed sites Discarded. Charge kept. Assumption | New: `in-year-ors-change` |
 | In-year tonnage change | Target Accreditation, from band, to band, charge. | Increase only (James; not yet in the design doc). One open per accreditation. Assumption Checked at submission and approval. Assumption Can run alongside ORS changes (James). | New Accreditation version with reason `TonnageBandChanged`, effective from approval. Assumption | No change to the band. **The charge is taken** (James). | New: `in-year-tonnage-change` |
 | New Registration | Journey section statuses. The data sits on a Registration created when the journey starts (James). | No registration number until approval (James). Hidden from ReEx and the public register until approved. One live per organisation, material, and site or exporter. Assumption | Registration moves from `created` to `approved`, its number is minted, and Proposed sites activate. | Registration moves to `rejected`. A new application reuses it through `rejected → created`. Assumption | New: `registration-application` (name already in management-fe's stub) |
@@ -137,7 +137,7 @@ Phase 1 creates five indexes on this collection, and all of them use fields that
 | `registrationId_asof` | `registrationId`, `validFrom`, `validTo` | Stays top-level |
 | `applicationReference_current_u` | `applicationReference`, where current and present | Stays top-level |
 
-The other model collections have their own indexes, but C1 doesn't change their shape. For example, `year` is indexed on accreditations, not applications. The `applicationType` index and the optional guard key aren't in phase 1. They can be added next week, and the startup schema check will then expect them. An index that is no longer defined isn't removed automatically: the reconciler only drops one whose key matches a new index but whose options differ. Verified `VersionedIndexes.cs`, `MongoIndexReconciler.cs`, `DomainModelSchemaCheck.cs`
+The other model collections have their own indexes, but C1 doesn't change their shape. For example, `year` is indexed on accreditations, not applications. The `applicationType` index and the optional guard key aren't in phase 1. The `applicationType` index is added in RA-744 PR 2 and the guard key in PR 4 (no writer until the one-live-application rule is built), and the startup schema check will then expect them. An index that is no longer defined isn't removed automatically: the reconciler only drops one whose key matches a new index but whose options differ. Verified `VersionedIndexes.cs`, `MongoIndexReconciler.cs`, `DomainModelSchemaCheck.cs`
 
 **Rules live in application code (agreed with Adam).** `applicationType` decides which rules apply. For example, for an ORS change the application refuses a new open application for an ORS ID that already has one, even though the ORS ID sits in `details`. This keeps the database model simple and the rules flexible. Using a different rule per type also resolves the conflict where in-year changes arrive in the same year as an approved application.
 
@@ -329,7 +329,7 @@ The end shape doesn't depend on timing, but the work to reach it does. **Timing 
 
 ## Design doc sections that would change
 
-Listed only; nothing has been edited yet. To be updated next week, with the tests and implementation, to match C1.
+RA-744 PR 1 has edited §3.2, §3.3 and §5.1 (design doc v6.6). The rest are still to update, with the PR that builds each part: §4.2 and §10 with PR 2, and §6.2, §6.3 and §7 R12 with PR 4.
 
 | Section | Change |
 | --- | --- |
@@ -400,4 +400,4 @@ Listed only; nothing has been edited yet. To be updated next week, with the test
 - **A payment needs its own lifecycle,** such as a recorded amount received, part payments, refunds or provider reconciliation: add a `payments` collection in management-be, keeping `submissionReference`.
 - **The validator causes more trouble than it catches in `warn` mode:** keep the details classes and application rules, and drop it. The rest of the design doesn't depend on it.
 
-Sources: `epr-register-enrol-backend` `main` 765631c, PR #229 598fdc5, spike e6de0f8; `epr-register-enrol-management-be` `main` ea89833, spike a7b1731; `epr-register-enrol-management-fe` `main` 2d304f2, spike 09dfd57; design doc `docs/analysis/register-enrol-domain-model-design.md` at backend `main`; `cdp-app-config` `main` 8088876f for environment flags. The proposed design has not been built or run. Nothing in any repo was changed for this analysis. Answers from James Atherton, 5 November 2026. Choice of C1 and the release position: James Atherton and Adam Slack, review comments, 5 November 2026. Online payment route: James Atherton, 5 November 2026.
+Sources: `epr-register-enrol-backend` `main` 765631c, PR #229 598fdc5, spike e6de0f8; `epr-register-enrol-management-be` `main` ea89833, spike a7b1731; `epr-register-enrol-management-fe` `main` 2d304f2, spike 09dfd57; design doc `docs/analysis/register-enrol-domain-model-design.md` at backend `main`; `cdp-app-config` `main` 8088876f for environment flags. Only the first slice of the design is built (RA-744 PR 1: the envelope, `details` and `AccreditationDetails`); the rest has not been built or run. Nothing in any repo was changed for this analysis. Answers from James Atherton, 5 November 2026. Choice of C1 and the release position: James Atherton and Adam Slack, review comments, 5 November 2026. Online payment route: James Atherton, 5 November 2026.

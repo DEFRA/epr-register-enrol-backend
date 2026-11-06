@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.Versioning;
@@ -433,7 +434,7 @@ public class WidgetVersion : VersionedEntityBase
     public WidgetPart? Part { get; set; }
 }
 
-[MongoDB.Bson.Serialization.Attributes.BsonKnownTypes(typeof(StampedPart))]
+[BsonKnownTypes(typeof(StampedPart))]
 public abstract class WidgetPart
 {
     public string? Label { get; set; }

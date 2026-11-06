@@ -565,6 +565,7 @@ erDiagram
         string applicationReference UK
         uuid caseManagementWorkItemId UK
         object details "shape set by applicationType; _t = applicationType"
+        string details_kind "Accreditation: details.kind, New|Reapply, always set"
         int details_year "Accreditation: details.year"
         string details_reservedAccreditationNumber "Accreditation: details.reservedAccreditationNumber"
     }
@@ -909,8 +910,8 @@ Legend:
 
 ### 5.1 `accreditationApplications` document: every field
 
-Since v6.6, a destination written as Application.`field` for an accreditation-only field (`year`, the sections,
-`applicationOverseasSites[]`, `reservedAccreditationNumber`, `accreditationId`) is stored at Application.`details.field`,
+Since v6.6, a destination written as Application.`field` for an accreditation-only field (`year`, `sourceAccreditationId`, the
+sections, `applicationOverseasSites[]`, `reservedAccreditationNumber`, `accreditationId`) is stored at Application.`details.field`,
 in `AccreditationDetails`. Envelope fields such as `status` and `applicationReference` stay at the top level.
 
 | Current field (Mongo) | Dest | Facade | Flag / note |

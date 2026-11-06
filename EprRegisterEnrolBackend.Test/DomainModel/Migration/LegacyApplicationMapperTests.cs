@@ -165,15 +165,13 @@ public class LegacyApplicationMapperTests
 
         var entity = LegacyApplicationMapper.ToEntity(legacy, RegistrationId, []);
 
-        Assert.Equal(40, entity.AsAccreditation().BusinessPlan.NewInfrastructurePercent);
-        Assert.Equal("x", entity.AsAccreditation().BusinessPlan.OtherDetail);
-        Assert.Equal(SectionStatus.InProgress, entity.AsAccreditation().BusinessPlan.SectionStatus);
-        Assert.Equal(
-            10,
-            Assert.Single(entity.AsAccreditation().BusinessPlan.Versions).NewUsesPercent
-        );
+        var details = entity.AsAccreditation();
+        Assert.Equal(40, details.BusinessPlan.NewInfrastructurePercent);
+        Assert.Equal("x", details.BusinessPlan.OtherDetail);
+        Assert.Equal(SectionStatus.InProgress, details.BusinessPlan.SectionStatus);
+        Assert.Equal(10, Assert.Single(details.BusinessPlan.Versions).NewUsesPercent);
 
-        var mapped = Assert.Single(entity.AsAccreditation().SamplingPlan.Files);
+        var mapped = Assert.Single(details.SamplingPlan.Files);
         Assert.Equal("f1", mapped.FileId);
         Assert.Equal("plan.pdf", mapped.Filename);
         Assert.Equal("application/pdf", mapped.ContentType);
@@ -181,7 +179,7 @@ public class LegacyApplicationMapperTests
         Assert.Equal(FileScanStatus.Clean, mapped.ScanStatus);
         Assert.Equal(AccreditationFileDocumentType.SamplingPlan, mapped.DocumentType);
         Assert.Equal("k1", mapped.S3Key);
-        var snapshot = Assert.Single(entity.AsAccreditation().SamplingPlan.Versions);
+        var snapshot = Assert.Single(details.SamplingPlan.Versions);
         Assert.Equal("f1", Assert.Single(snapshot.Files).FileId);
         Assert.Equal(FixedDate, snapshot.VersionedAt);
     }
