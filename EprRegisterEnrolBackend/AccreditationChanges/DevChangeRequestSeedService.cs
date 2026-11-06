@@ -54,13 +54,14 @@ public class DevChangeRequestSeedService(
         (int, int)? validFrom = null
     ) => new(null, band, status, validFrom, null);
 
-    // Oldest first. ValidFrom is when a granted change took effect; a withdrawn one was granted first.
+    // Oldest first. ValidFrom is when a granted change took effect; a withdrawn update was granted first, but
+    // Dragon's withdrawn New ORS accreditation never was (RA-697: its site is registered only).
     private static readonly RequestSeed[] ExporterRequests =
     [
         new(Update, 2, 3, [Ors("001", ChangeItemStatus.Approved, (3, 2)), Ors("002", ChangeItemStatus.Approved, (3, 2))]),
         new(Add, 2, 20, [Ors("004", ChangeItemStatus.Rejected)]),
         new(Tonnage, 3, 10, [Band(PlannedTonnageBand.UpTo5000, ChangeItemStatus.Approved, (4, 1))]),
-        new(Add, 4, 6, [Ors("004", ChangeItemStatus.Withdrawn, (5, 4), (6, 15))]),
+        new(Add, 4, 6, [Ors("004", ChangeItemStatus.Withdrawn, withdrawnAt: (6, 15))]),
         new(Update, 5, 12, [Ors("003", ChangeItemStatus.Rejected)]),
         new(Update, 6, 2, [Ors("001", ChangeItemStatus.Withdrawn, (6, 22), (7, 10))]),
         new(Tonnage, 6, 25, [Band(PlannedTonnageBand.Over10000, ChangeItemStatus.Rejected)]),

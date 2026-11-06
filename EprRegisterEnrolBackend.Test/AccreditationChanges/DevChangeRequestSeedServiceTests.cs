@@ -172,16 +172,31 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
     {
         var items = ItemsOf(await SeedAndList(ExporterApp));
 
-        items.Where(i => i.Status is ChangeItemStatus.Approved or ChangeItemStatus.Withdrawn)
+        items.Where(i => i.Status == ChangeItemStatus.Approved)
             .Should()
             .OnlyContain(i => i.ValidFrom != null && i.ValidFrom.Value.Year == Year);
         items.Where(i => i.Status == ChangeItemStatus.Withdrawn)
             .Should()
-            .OnlyContain(i => i.WithdrawnAt > i.ValidFrom);
+            .OnlyContain(i => i.WithdrawnAt != null && i.WithdrawnAt.Value.Year == Year)
+            .And.OnlyContain(i => i.ValidFrom == null || i.WithdrawnAt > i.ValidFrom);
         items.Where(i => i.Status != ChangeItemStatus.Withdrawn).Should().OnlyContain(i => i.WithdrawnAt == null);
         items.Where(i => i.Status is not (ChangeItemStatus.Approved or ChangeItemStatus.Withdrawn))
             .Should()
             .OnlyContain(i => i.ValidFrom == null);
+    }
+
+    // RA-697: Dragon's site is registered only, so its withdrawn New ORS accreditation was never granted.
+    [Fact]
+    public async Task SeedAsync_DragonsWithdrawnNewOrsAccreditationHasNoValidFrom()
+    {
+        var items = ItemsOf(await SeedAndList(ExporterApp));
+
+        items.OfType<ChangeRequestSite>()
+            .Where(i => i.OrsId == "004" && i.Status == ChangeItemStatus.Withdrawn)
+            .Should()
+            .ContainSingle()
+            .Which.ValidFrom.Should()
+            .BeNull();
     }
 
     [Fact]
