@@ -224,14 +224,14 @@ public class AccreditationApplicationPersistence(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
     )> SearchGrantedAccreditationsAsync(
-        GrantedAccreditationFilter search,
+        GrantedAccreditationFilter filter,
         int firstYear,
         int skip,
         int limit
     )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
-        var filter = filters.And(
+        var granted = filters.And(
             filters.Ne(a => a.OrgId, null),
             filters.Gte(a => a.Year, firstYear),
             filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
@@ -240,20 +240,20 @@ public class AccreditationApplicationPersistence(
             filters.Ne(a => a.RegistrationReference, null),
             filters.Ne(a => a.RegistrationReference, string.Empty)
         );
-        if (search.Year is not null)
-            filter = filters.And(filter, filters.Eq(a => a.Year, search.Year.Value));
+        if (filter.Year is not null)
+            granted = filters.And(granted, filters.Eq(a => a.Year, filter.Year.Value));
         // Both are covered by the (OrgId, RegistrationReference, Year) index.
-        if (search.OrganisationNumber is not null)
-            filter = filters.And(filter, filters.Eq(a => a.OrgId, search.OrganisationNumber.Value));
-        if (search.RegistrationNumber is not null)
-            filter = filters.And(
-                filter,
-                filters.Eq(a => a.RegistrationReference, search.RegistrationNumber)
+        if (filter.OrganisationNumber is not null)
+            granted = filters.And(granted, filters.Eq(a => a.OrgId, filter.OrganisationNumber.Value));
+        if (filter.RegistrationNumber is not null)
+            granted = filters.And(
+                granted,
+                filters.Eq(a => a.RegistrationReference, filter.RegistrationNumber)
             );
 
-        var total = await Collection.CountDocumentsAsync(filter);
+        var total = await Collection.CountDocumentsAsync(granted);
         var items = await Collection
-            .Find(filter)
+            .Find(granted)
             .SortBy(a => a.AccreditationReference)
             .ThenBy(a => a.Id)
             .Skip(skip)
