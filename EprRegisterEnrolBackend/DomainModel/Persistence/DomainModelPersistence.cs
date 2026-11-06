@@ -1,20 +1,36 @@
 using EprRegisterEnrolBackend.Utils.Mongo;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.DomainModel.Persistence;
 
 /// <summary>
 /// Creates a domain model collection's indexes when it is constructed (the base <see cref="MongoService{T}"/>
-/// behaviour, which is why these classes derive from it) and reports them for the schema check. Registering the
-/// persistence classes is therefore what "expands" the schema in each environment.
+/// behaviour, which is why these classes derive from it), applies its <c>$jsonSchema</c> validator if it has one, and
+/// reports both for the schema check. Registering the persistence classes is therefore what "expands" the schema in
+/// each environment.
 /// </summary>
-public abstract class DomainModelPersistence<T>(
-    IMongoDbClientFactory connectionFactory,
-    string collectionName,
-    ILoggerFactory loggerFactory
-) : MongoService<T>(connectionFactory, collectionName, loggerFactory), IDomainModelCollection
+public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelCollection
 {
     private const int NamespaceNotFound = 26;
+
+    /// <summary>
+    /// <c>moderate</c>, so closing an old version (a <c>$set</c> on a document written under an older schema) is never
+    /// re-checked; <c>warn</c>, so a bad rule logs instead of failing a dual-write request (RA-746).
+    /// </summary>
+    public const string ValidationLevel = "moderate";
+
+    public const string ValidationAction = "warn";
+
+    protected DomainModelPersistence(
+        IMongoDbClientFactory connectionFactory,
+        string collectionName,
+        ILoggerFactory loggerFactory
+    )
+        : base(connectionFactory, collectionName, loggerFactory)
+    {
+        EnsureValidator();
+    }
 
     public string CollectionName => Collection.CollectionNamespace.CollectionName;
 
@@ -32,6 +48,90 @@ public abstract class DomainModelPersistence<T>(
         catch (MongoCommandException ex) when (ex.Code == NamespaceNotFound)
         {
             return [];
+        }
+    }
+
+    public BsonDocument? GetExpectedValidation() =>
+        DefineValidator() is { } validator ? Validation(validator) : null;
+
+    public async Task<BsonDocument?> GetValidationAsync(CancellationToken cancellationToken)
+    {
+        using var cursor = await Collection.Database.ListCollectionsAsync(
+            new ListCollectionsOptions { Filter = new BsonDocument("name", CollectionName) },
+            cancellationToken
+        );
+        var collection = await cursor.FirstOrDefaultAsync(cancellationToken);
+        if (
+            collection?.GetValue("options", null) is not BsonDocument options
+            || options.GetValue("validator", null) is not BsonDocument validator
+            || validator.ElementCount == 0
+        )
+        {
+            return null;
+        }
+
+        return new BsonDocument
+        {
+            { "validator", validator },
+            { "validationLevel", options.GetValue("validationLevel", BsonNull.Value) },
+            { "validationAction", options.GetValue("validationAction", BsonNull.Value) },
+        };
+    }
+
+    /// <summary>
+    /// The collection's <c>$jsonSchema</c> validator, or null for none (the default). A backstop only: the C# classes
+    /// are the main protection.
+    /// </summary>
+    protected virtual BsonDocument? DefineValidator() => null;
+
+    private static BsonDocument Validation(BsonDocument validator) =>
+        new()
+        {
+            { "validator", validator },
+            { "validationLevel", ValidationLevel },
+            { "validationAction", ValidationAction },
+        };
+
+    // collMod works on a collection that already exists, whatever it holds, and changes none of its documents. The
+    // index build normally creates the collection first; if it didn't, the validator is set on a new one. A failure,
+    // such as a database user that may not run collMod, is logged and left for the schema check to report as
+    // Degraded: it must never stop the service starting. It is tried again at the next startup.
+    private void EnsureValidator()
+    {
+        if (DefineValidator() is not { } validator)
+        {
+            return;
+        }
+
+        try
+        {
+            var command = new BsonDocument("collMod", CollectionName).AddRange(
+                Validation(validator)
+            );
+            try
+            {
+                Collection.Database.RunCommand<BsonDocument>(command);
+            }
+            catch (MongoCommandException ex) when (ex.Code == NamespaceNotFound)
+            {
+                Collection.Database.CreateCollection(
+                    CollectionName,
+                    new CreateCollectionOptions<BsonDocument>
+                    {
+                        Validator = validator,
+                        ValidationLevel = DocumentValidationLevel.Moderate,
+                        ValidationAction = DocumentValidationAction.Warn,
+                    }
+                );
+            }
+        }
+        catch (Exception ex) when (ex is MongoException or TimeoutException)
+        {
+            Logger.LogWarning(
+                ex,
+                "The $jsonSchema validator could not be applied to {Collection}; the schema check reports it as Degraded",
+                CollectionName
+            );
         }
     }
 }

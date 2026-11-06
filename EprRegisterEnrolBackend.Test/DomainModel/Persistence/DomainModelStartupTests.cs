@@ -125,6 +125,33 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
         status.Result.Status.Should().Be(HealthStatus.Healthy);
     }
 
+    // A validator that couldn't be applied (for example, a database user that may not run collMod) won't appear on a
+    // retry, so it is reported as Degraded and the startup loop stops, instead of retrying with backoff forever.
+    [Fact]
+    public async Task InitializeAsync_OnlyTheValidatorIsMissing_RecordsDegradedAndDoesNotRetry()
+    {
+        var status = new DomainModelSchemaStatus();
+        var withoutValidator = Collection("applicationVersions", ["entityId_version_u"]);
+        withoutValidator
+            .GetExpectedValidation()
+            .Returns(new MongoDB.Bson.BsonDocument("validator", new MongoDB.Bson.BsonDocument()));
+        withoutValidator
+            .GetValidationAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<MongoDB.Bson.BsonDocument?>(null));
+        var services = LegacyPersistences()
+            .AddSingleton<IDomainModelSchemaStatus>(status)
+            .AddSingleton(_ => withoutValidator)
+            .BuildServiceProvider();
+
+        var ready = await new MongoIndexInitializerService(
+            services,
+            new CapturingLogger<MongoIndexInitializerService>()
+        ).InitializeAsync(Ct);
+
+        ready.Should().BeTrue();
+        status.Result.Status.Should().Be(HealthStatus.Degraded);
+    }
+
     [Fact]
     public async Task InitializeAsync_BuildingACollectionFails_LeavesReadinessUnhealthy()
     {

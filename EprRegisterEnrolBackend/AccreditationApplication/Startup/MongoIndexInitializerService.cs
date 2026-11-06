@@ -69,8 +69,10 @@ public class MongoIndexInitializerService(
                     {
                         // Resolving each singleton runs its MongoService<T>
                         // constructor, which is where EnsureIndexes lives.
-                        _ = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
-                        _ = serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
+                        _ =
+                            serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
+                        _ =
+                            serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
                         _ = serviceProvider.GetRequiredService<IPendingUploadService>();
                         _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
                     },
@@ -148,7 +150,9 @@ public class MongoIndexInitializerService(
 
             var result = await DomainModelSchemaCheck.RunAsync(collections, cancellationToken);
             serviceProvider.GetRequiredService<IDomainModelSchemaStatus>().Record(result);
-            return result.Status == HealthStatus.Healthy;
+            // Only missing indexes are worth retrying for. A missing or different validator is Degraded: it won't
+            // change between retries (a collMod permission doesn't appear), so it is reported and left (RA-746).
+            return result.Status != HealthStatus.Unhealthy;
         }
         catch (OperationCanceledException)
         {

@@ -1,6 +1,12 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.8, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.9, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06, v6.9 2026-11-06
+
+**Changes in v6.9 (2026-11-06): a `$jsonSchema` validator on `applicationVersions`, in warn mode (RA-746)**
+
+- **A small validator backs up the C# classes** against any writer, such as a script, saving an unknown type or
+  another type's fields (§4.2). It runs in `warn` and `moderate`, is applied at startup, and a missing or different
+  validator makes the schema check Degraded, never unready.
 
 **Changes in v6.8 (2026-11-06): the exclusivity key, with no writer yet (RA-747)**
 
@@ -866,6 +872,33 @@ db.accreditationVersions.find({ entityId: id }).sort({ version: 1 })
   backstop for rules chosen by type in application code, such as one open change per ORS: it catches only two
   simultaneous writers that both passed the check, and it never looks at an application's status, so a rejected or
   withdrawn application frees its key only because application code clears it. Nothing writes the key yet (§6.2).
+
+#### Validator on `applicationVersions` (v6.9)
+
+The C# classes are the main protection. A `$jsonSchema` validator is a cheap backstop against any other writer, such as
+a script, saving an unknown type or another type's fields.
+
+- **What it checks** (`ApplicationVersionSchema`): the envelope's required fields and their BSON types (`entityId`,
+  `version`, `validFrom`, `validTo`, `isCurrent`, `lastChange`, `reExOrganisationId`, `applicationType`, `status`,
+  `dateLastEdited`, `details`); `applicationType` and `status` limited to their C# enum values; `details` with `_t`
+  and `schemaVersion`; and one `oneOf` branch per type, pairing an `applicationType` with its `details._t` and its
+  required `details` fields (Accreditation: `kind`, `year`; ORS change: `targetAccreditationId`, `overseasSiteId`,
+  `changeKinds`, `site`; tonnage: `targetAccreditationId`, `fromBand`, `toBand`; New Registration: `sections`; annual
+  charge: `chargeYear`). Element names come from the driver's class maps, so they can't drift from what is stored. It
+  does not copy every field of the classes.
+- **`moderate` level:** closing a version is a `$set` on the old document. Under `strict` that update re-checks the old
+  document against today's validator, so a tightened schema would refuse the close and fail every later write to that
+  application. `moderate` doesn't re-check documents that were already invalid.
+- **`warn` action:** under dual-write a failed model write fails the operator's request, so a bad rule must log, not
+  refuse. Moving to `error` is a separate, later change, once someone with production log access has reviewed the
+  warnings (the team can't read production data, R15).
+- **Applied at startup** with `collMod` by the persistence class (`DomainModelPersistence.DefineValidator`), which works
+  on a new or an existing collection and changes no documents. If it can't be applied, for example because the
+  service's database user may not run `collMod`, that is logged and tried again at the next startup; it never stops
+  the service starting.
+- **Reported, not gating:** the schema check reports a missing or different validator, or one in another mode, as
+  **Degraded**. `/health/ready` still returns 200, and the startup retry loop only retries for missing indexes, which
+  stay Unhealthy.
 
 #### How suspend and unsuspend appear
 
