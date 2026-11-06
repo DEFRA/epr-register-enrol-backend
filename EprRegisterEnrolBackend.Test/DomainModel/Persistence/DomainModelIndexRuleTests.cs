@@ -346,6 +346,68 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         await _applications.Versions.InsertAsync(draftB, Change(), cancellationToken: Ct);
     }
 
+    // The backstop for rules such as one open change per ORS: application code decides the key, and the index only
+    // catches two simultaneous writers that both passed the check (RA-747). The index never looks at an
+    // application's status: a rejected or withdrawn application frees its key only because the application clears
+    // it (ExclusivityKeys.HoldsKey says when), which this test does by hand. What the index itself ignores is a
+    // superseded version of the same application, and an application with no key.
+    [Fact]
+    public async Task ApplicationIndexes_ExclusivityKey_IsUniqueAmongCurrentVersionsWhenPresent()
+    {
+        ApplicationEntity Keyed(string? key)
+        {
+            var application = DomainModelBuilders.Application();
+            application.ApplicationReference = null;
+            application.ExclusivityKey = key;
+            return application;
+        }
+
+        var holder = await _applications.Versions.InsertAsync(
+            Keyed("ors-change|1"),
+            Change(),
+            cancellationToken: Ct
+        );
+
+        // A second current application with the same key is refused.
+        await ShouldBeRejectedAsDuplicate(() =>
+            _applications.Versions.InsertAsync(
+                Keyed("ors-change|1"),
+                Change(),
+                cancellationToken: Ct
+            )
+        );
+
+        // The holder's own next version keeps the key: the version it closes no longer counts.
+        holder.ApplicationReference = "APP-NEXT";
+        var next = await _applications.Versions.UpdateAsync(
+            holder,
+            holder.Version,
+            Change(),
+            cancellationToken: Ct
+        );
+        next.Changed.Should().BeTrue();
+
+        // Once the holder clears the key (as application code will on rejection, withdrawal or an in-year approval),
+        // another application can take it.
+        var released = next.Entity;
+        released.ExclusivityKey = null;
+        await _applications.Versions.UpdateAsync(
+            released,
+            released.Version,
+            Change(),
+            cancellationToken: Ct
+        );
+        await _applications.Versions.InsertAsync(
+            Keyed("ors-change|1"),
+            Change(),
+            cancellationToken: Ct
+        );
+
+        // Applications with no key never collide.
+        await _applications.Versions.InsertAsync(Keyed(null), Change(), cancellationToken: Ct);
+        await _applications.Versions.InsertAsync(Keyed(null), Change(), cancellationToken: Ct);
+    }
+
     [Fact]
     public async Task InsertAsync_EveryEntity_StoresEnumsAsStringsAndRoundTrips()
     {

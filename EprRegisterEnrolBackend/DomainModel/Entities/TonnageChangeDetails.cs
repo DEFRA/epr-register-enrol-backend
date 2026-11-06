@@ -21,4 +21,11 @@ public sealed class TonnageChangeDetails : ApplicationDetails
 
     [BsonSerializer(typeof(TonnageBandSerializer))]
     public TonnageBand? ToBand { get; set; }
+
+    /// <summary>One open change per Accreditation.</summary>
+    public override string? ExclusivityKey(ApplicationEntity application) =>
+        TargetAccreditationId != ObjectId.Empty ? $"tonnage-change|{TargetAccreditationId}" : null;
+
+    /// <summary>The next change to the same Accreditation is a new application.</summary>
+    public override bool ReleasesExclusivityKeyOnApproval() => true;
 }

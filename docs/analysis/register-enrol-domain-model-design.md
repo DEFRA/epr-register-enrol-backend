@@ -1,6 +1,15 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.7, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.8, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06
+
+**Changes in v6.8 (2026-11-06): the exclusivity key, with no writer yet (RA-747)**
+
+- **`applicationVersions` gets a top-level `exclusivityKey`** under a partial unique index over current versions that
+  carry one (`exclusivityKey_current_u`). Application code decides the key and the rule by type; the index only
+  catches two simultaneous writers that both passed the check (§6.2, R12).
+- **Nothing writes it yet.** Writing it on accreditation applications would refuse a second live application that
+  legacy allows today, so it waits for the one-live-application rule. Known duplicate legacy applications hold no key
+  until repaired (§6.3).
 
 **Changes in v6.7 (2026-11-06): the other four application types (RA-745)**
 
@@ -851,6 +860,12 @@ db.accreditationVersions.find({ entityId: id }).sort({ version: 1 })
   (`registrationId_applicationType_current`), for listing a registration's applications, optionally of one type.
   It is not unique: rules such as one open change per ORS are chosen by `applicationType` in application code.
   Fields inside `details` are not indexed until a rule needs to query them.
+- **Exclusivity key (v6.8).** `applicationVersions` also gets a **unique, partial** index on `{exclusivityKey: 1}`
+  (`exclusivityKey_current_u`) with `partialFilterExpression: {isCurrent: true, exclusivityKey: {$type: "string"}}`,
+  so applications with no key never collide and a closed version never collides with the current one. It is the
+  backstop for rules chosen by type in application code, such as one open change per ORS: it catches only two
+  simultaneous writers that both passed the check, and it never looks at an application's status, so a rejected or
+  withdrawn application frees its key only because application code clears it. Nothing writes the key yet (§6.2).
 
 #### How suspend and unsuspend appear
 
@@ -1332,6 +1347,14 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   site the application holds, unless another in-flight application of the registration also holds it; then it
   stays Proposed, and is discarded when the last holder closes, whichever application proposed it. A
   withdrawn interim site stays Withdrawn.
+- **Exclusivity key (v6.8): defined, not yet written.** Each application type has a key it holds while open, built by
+  its `ApplicationDetails` class in the formats of `register-enrol-application-types.md` (asked through `ExclusivityKeys`), for example `ors-change|{overseasSiteId}`
+  and `accreditation|{registrationId}|{year}`. Every type releases it when rejected or withdrawn, and in-year changes
+  also on approval. New Registration has no key until its journey decides how a site is identified. A key is never
+  built when a part is missing (an unset id, or a year of 0), so such applications can't collide. **No write path sets the key in this
+  release:** under dual-write a duplicate key would fail the operator's request, and legacy allows duplicates today.
+  When the one-live-application rule (R12) starts writing it, the sync must set it in the same transaction as the
+  rest of the version.
 - **Case Management calls during a write.** Submit, Resubmit and Withdraw call the Case Management service
   before the transaction opens, so a transaction never waits on it. If the model write then fails, the case has
   changed there but not here. The service's submit, resume and withdraw are idempotent (a repeat replays as
@@ -1387,7 +1410,7 @@ status, where ReEx's own status was the truth before.
 | Submitted, DulyMade, Queried, Updated, AwaitingDecision | As above. The management-be snapshot is untouched (it owns its copy). Pushes still find the application by `caseManagementWorkItemId`. Under dual-write a later approval runs the approval transaction normally |
 | Approved | Not in flight, but still live: no new application for the same key, unless its Accreditation is cancelled ([Q36](#q36)). Linked, and its Accreditation is created (§6.1) |
 | Rejected, Withdrawn | Not live: a new application can be started for the same key. Linked. Their Proposed sites become Discarded. A rejected application still blocks a new seed today (§2) |
-| Duplicate live applications for one key (a defect: at most one may be live, see Seed comment `:703-714`) | Both linked to the same Registration and recorded as a `DuplicateLiveApplications` conflict for manual repair. No automatic merge |
+| Duplicate live applications for one key (a defect: at most one may be live, see Seed comment `:703-714`) | Both linked to the same Registration and recorded as a `DuplicateLiveApplications` conflict for manual repair. No automatic merge. **Neither holds an `exclusivityKey` until repaired** (v6.8): both would claim the same key, and the unique index would fail the migration's write |
 
 There is no row for Approved applications: approvals in this service go live after the migration, so
 none exist when it runs (v4, D4).
@@ -1409,7 +1432,7 @@ none exist when it runs (v4, D4).
 | R9 | The management-be payload snapshot and migrations depend on the legacy shape (M3) | The legacy shape is kept for the whole programme. The submission payload is still built from the facade's legacy model, so it stays byte-compatible |
 | R10 | The missing operator identity makes `changedBy` weak | Recorded as the service identity until bead `b3n` lands |
 | R11 | Flag-combination complexity | Flags are ordered and validated at startup (for example `ReadFromModel` requires `DualWrite`, and `LegacyWrites` off requires the soak to be recorded) |
-| R12 | Seed idempotency is best-effort, so a race can create a duplicate live application (a defect) | Unchanged by this plan. Enforcing one live application per key (a unique partial index) is a separate follow-up, made easier once the survey shows the duplicates. The index would exclude rejected and withdrawn applications. The legacy document can't show that an approved application's Accreditation is cancelled, so that case needs a new field or an index on the model's collections ([Q36](#q36)) |
+| R12 | Seed idempotency is best-effort, so a race can create a duplicate live application (a defect) | The index now exists on the model (v6.8): `exclusivityKey_current_u`, a partial unique index over current versions that carry an `exclusivityKey`, with the key per type and its release rules in `ExclusivityKeys` (rejected and withdrawn release it; an approved accreditation application keeps it, because a cancelled Accreditation is reinstated as a new version of itself, [Q36](#q36)). **Nothing writes the key yet**, so the rule is not enforced: writing it is the follow-up, made easier once the survey shows the duplicates, and known duplicates hold no key until repaired (§6.3) |
 | R13 | **Two sources of accreditation status during the transition.** ReEx has its own status; we become the truth for PRN validity (Q2). A suspension recorded only here would not stop PRNs until ReEx calls our validity API | A sequenced cutover with the ReEx team ([Q19](#q19)). Until then, either regulator suspensions continue in ReEx, or we sync ours to ReEx. Don't expose our lifecycle actions in production before that is agreed |
 | R14 | **Reports expect non-status history from before the migration** (Q22) | History starts at migration time for every entity (§4.3). Earlier business dates are kept as attributes (`approvedAt`, `periodStart`) |
 | R15 | **Test-environment results do not prove production data shapes (accepted, Q34).** We have no access to production data because of data-protection rules. A clean survey, migration or reconciliation in test environments proves the code on test data only. This has caused production surprises before, and there is currently nothing we can do to remove it | Accepted, and reduced rather than removed: (1) dual-write is **fatal** (D9), so a surprising production document fails and rolls back that one write instead of silently corrupting the model; (2) phases 3 and 4 run in production with reads still on legacy, so the first production exposure costs a rolled-back write, not wrong data served; (3) the known legacy shapes are **required fixtures** in B7 and B10; (4) the reconciliation job reports any document it cannot project as a conflict and never skips it; (5) a data-shape surprise can reach users from phase 3 as a failed write, because first touch runs the migration routine (§6.2), and turning `DualWrite` off is the rollback; (6) phase 5, the first point where one could reach users as wrong data, goes live per route group with the flag-off rollback rehearsed |

@@ -41,4 +41,16 @@ public sealed class AccreditationDetails : ApplicationDetails
 
     public override IEnumerable<ApplicationOverseasSiteEntry> HeldSites() =>
         ApplicationOverseasSites;
+
+    /// <summary>One accreditation application per registration and year, whether New or Reapply.</summary>
+    public override string? ExclusivityKey(ApplicationEntity application) =>
+        application.RegistrationId is { } registrationId && Year > 0
+            ? $"accreditation|{registrationId}|{Year}"
+            : null;
+
+    /// <summary>
+    /// An approved accreditation application keeps its key: a cancelled Accreditation is reinstated as a new version
+    /// of itself, never replaced by a new application for the same registration and year (Q36).
+    /// </summary>
+    public override bool ReleasesExclusivityKeyOnApproval() => false;
 }

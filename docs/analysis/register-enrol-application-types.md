@@ -137,7 +137,7 @@ Phase 1 creates five indexes on this collection, and all of them use fields that
 | `registrationId_asof` | `registrationId`, `validFrom`, `validTo` | Stays top-level |
 | `applicationReference_current_u` | `applicationReference`, where current and present | Stays top-level |
 
-The other model collections have their own indexes, but C1 doesn't change their shape. For example, `year` is indexed on accreditations, not applications. The `applicationType` index and the optional guard key aren't in phase 1. The `applicationType` index is added in RA-745 as `registrationId_applicationType_current` and the guard key in PR 4 (no writer until the one-live-application rule is built), and the startup schema check will then expect them. An index that is no longer defined isn't removed automatically: the reconciler only drops one whose key matches a new index but whose options differ. Verified `VersionedIndexes.cs`, `MongoIndexReconciler.cs`, `DomainModelSchemaCheck.cs`
+The other model collections have their own indexes, but C1 doesn't change their shape. For example, `year` is indexed on accreditations, not applications. The `applicationType` index and the optional guard key aren't in phase 1. The `applicationType` index is added in RA-745 as `registrationId_applicationType_current` and the guard key in RA-747 as `exclusivityKey_current_u` (no writer until the one-live-application rule is built), and the startup schema check will then expect them. An index that is no longer defined isn't removed automatically: the reconciler only drops one whose key matches a new index but whose options differ. Verified `VersionedIndexes.cs`, `MongoIndexReconciler.cs`, `DomainModelSchemaCheck.cs`
 
 **Rules live in application code (agreed with Adam).** `applicationType` decides which rules apply. For example, for an ORS change the application refuses a new open application for an ORS ID that already has one, even though the ORS ID sits in `details`. This keeps the database model simple and the rules flexible. Using a different rule per type also resolves the conflict where in-year changes arrive in the same year as an approved application.
 
@@ -147,8 +147,8 @@ The other model collections have their own indexes, but C1 doesn't change their 
 | --- | --- | --- |
 | New, Reapply | `accreditation\|{registrationId}\|{year}` | Rejected or withdrawn. Not released when the Accreditation is cancelled: cancellation and reinstatement are new versions of the same Accreditation, so there is no replacement application for the same registration and year (Q36, James's working view). |
 | In-year ORS | `ors-change\|{overseasSiteId}` | Approved, rejected or withdrawn |
-| In-year tonnage | `tonnage-change\|{accreditationId}` | Approved, rejected or withdrawn |
-| New Registration | `registration\|{org}\|{material}\|{site or exporter}` | Rejected or withdrawn |
+| In-year tonnage | `tonnage-change\|{targetAccreditationId}` | Approved, rejected or withdrawn |
+| New Registration | `registration\|{org}\|{material}\|{site or exporter}`. **Not built in RA-747** (James, 6 November 2026): no key until the journey decides how a site is identified | Rejected or withdrawn |
 | Annual charge | `annual-charge\|{registrationId}\|{chargeYear}` | Rejected or withdrawn |
 
 **Limit:** a new ORS entity gets its id when it is proposed, so the ORS key always has a value. But an accreditation application holds a list of sites, so it can't take a per-site key (`OverseasSiteIndexes_RepeatInsideOneOrsDocument_IsNotCaught`). The check between an in-year ORS change and an open reapplication stays in code (`HeldInFlightElsewhereAsync`), and it must run in both directions.

@@ -35,6 +35,15 @@ public class ApplicationVersionPersistence(
                 builder.Ascending(x => x.RegistrationId).Ascending(x => x.ApplicationType)
             )
         );
+        // The backstop for rules chosen by type, such as one open change per ORS: only documents carrying a key take
+        // part, so a missing key never collides (RA-747).
+        indexes.Add(
+            VersionedIndexes.CurrentUnique(
+                "exclusivityKey_current_u",
+                builder.Ascending(x => x.ExclusivityKey),
+                VersionedIndexes.StringPresent<ApplicationEntity>(x => x.ExclusivityKey)
+            )
+        );
         indexes.Add(
             VersionedIndexes.CurrentUnique(
                 "applicationReference_current_u",

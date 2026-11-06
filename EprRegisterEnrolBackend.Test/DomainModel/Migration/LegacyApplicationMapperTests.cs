@@ -63,6 +63,9 @@ public class LegacyApplicationMapperTests
         Assert.Equal("org-1", entity.ReExOrganisationId);
         Assert.Equal("reg-1", entity.ReExRegistrationId);
         Assert.Equal(ApplicationType.Accreditation, entity.ApplicationType);
+        // Nothing writes the exclusivity key yet (RA-747): writing it on accreditation applications would refuse a
+        // second live application that legacy allows today. The mapper feeds both the sync and the migrator.
+        Assert.Null(entity.ExclusivityKey);
         // Every legacy application is a re-accreditation; sourceAccreditationId can't say so for migrated 2027 ones.
         Assert.Equal(AccreditationKind.Reapply, entity.AsAccreditation().Kind);
         Assert.Equal(2027, entity.AsAccreditation().Year);
