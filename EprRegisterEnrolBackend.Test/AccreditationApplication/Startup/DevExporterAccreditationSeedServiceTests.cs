@@ -194,6 +194,48 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         registration!.Status.Should().Be(RegistrationStatus.Approved);
     }
 
+    // RA-697: org 50021, an Approved exporter registration with no accreditation in any year, for the
+    // registration-only manage pages.
+    [Fact]
+    public async Task SeedAsync_GivesTheRegistrationOnlyExporterAnApprovedRegistrationAndNoAccreditation()
+    {
+        (await SeedApplications(organisationId: "50021")).Should().BeEmpty();
+
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050021",
+            Ct
+        );
+        registration!.Status.Should().Be(RegistrationStatus.Approved);
+        registration.WasteProcessingType.Should().Be(WasteProcessingKind.Exporter);
+        registration.Material.Should().Be(MaterialType.Plastic);
+        registration.RegistrationNumber.Should().Be("R26EX0500210001PL");
+        registration.EntityId.Should().Be(ObjectId.Parse("0e0000000000000000050021"));
+    }
+
+    // Guards drift: the stub ReEx registry's org 50021 is the registration the seed writes.
+    [Fact]
+    public async Task StubOrganisationStore_MatchesTheSeededRegistrationOnlyExporter()
+    {
+        await SeedApplications(organisationId: "50021");
+        var seeded = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050021",
+            Ct
+        );
+        var org = await new FakeOrganisationPersistence(
+            Clock2026,
+            includeDevExporters: true
+        ).GetByOrgIdAsync(50021);
+
+        org!.CompanyDetails!.Name.Should().Be("Registration Only Exports Ltd");
+        org.CompanyDetails.TradingName.Should().Be("Registration Only Exports");
+        org.CompanyDetails.RegistrationNumber.Should().Be(seeded!.RegistrationNumber);
+        org.WasteProcessingTypes.Should().Equal("exporter");
+        var registration = org.Registrations!.Should().ContainSingle().Subject;
+        registration.Id.ToString().Should().Be(seeded.ReExRegistrationId);
+        registration.Material.Should().Be("plastic");
+        registration.WasteProcessingType.Should().Be("exporter");
+    }
+
     // RA-492: org 50019, for the in-year "add a registered ORS to your accreditation" journey.
     [Fact]
     public async Task SeedAsync_SeedsTheInYearChangeExporterForTheClocksYear()
@@ -413,6 +455,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50018 && !a.IsExporter));
         await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50019));
         await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50020));
+        await persistence.DidNotReceive().CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50021));
         (await ExporterRegistrationVersion()).Should().NotBeNull();
     }
 

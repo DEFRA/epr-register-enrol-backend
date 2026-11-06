@@ -447,6 +447,40 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         return ReExResult<int?>.Success(orgNumber, 200);
     }
 
+    public async Task<ReExResult<string?>> GetRegistrationHolderNameAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var orgResult = await reExClient.GetOrganisationsAsync(organisationId, cancellationToken);
+        if (!orgResult.IsSuccess)
+        {
+            logger.LogWarning(
+                "ReEx GetOrganisations failed for organisationId={OrganisationId}: {Error}",
+                organisationId,
+                orgResult.Error?.Message
+            );
+            return ReExResult<string?>.Fail(orgResult.Error!, orgResult.StatusCode);
+        }
+
+        var org = orgResult.Value!;
+        if (!org.Registrations.Any(r => r.Id == registrationId))
+        {
+            logger.LogWarning(
+                "ReEx organisation {OrganisationId} does not hold registration {RegistrationId}",
+                organisationId,
+                registrationId
+            );
+            return ReExResult<string?>.Fail(
+                new ReExError(ReExErrorKind.NotFound, $"Registration {registrationId} not found"),
+                404
+            );
+        }
+
+        return ReExResult<string?>.Success(org.CompanyDetails?.Name, 200);
+    }
+
     public async Task<ReExResult<Nation>> GetNationAsync(
         string organisationId,
         string registrationId,

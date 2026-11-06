@@ -9,7 +9,7 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
 // RA-425: local manual testing and the fe-tests stack only. Gives each dedicated exporter
-// (DevExporterOrg: stub orgs 50018, 50019 for RA-492 and 50020 for RA-697, Plastic) an Approved accreditation for
+// (DevExporterOrg: stub orgs 50018, 50019 for RA-492 and 50020 and 50021 for RA-697, Plastic) an Approved accreditation for
 // the current calendar year, and its registration an Approved current version in the domain model,
 // so the frontend's material dashboard, manage page and overseas-sites page show content. Development-only, registered with DevSeedData:Enabled
 // (the local compose stack, alongside the RA-690 Delta Green seeds) or with ConfigKey alone (the
@@ -26,7 +26,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 //
 // RA-697: org 50018 also has a glass reprocessor registration and accreditation (its Reprocessor),
 // matching the frontend stub's, and org 50020 is an exporter that DevChangeRequestSeedService gives no
-// change requests. That seed writes only change requests: it never changes these accreditations.
+// change requests. That seed writes only change requests: it never changes these accreditations. Org 50021
+// (DevExporterOrg.RegistrationOnly) gets only its Approved registration, for the registration-only manage pages.
 //
 // The year comes from the clock at startup. Idempotent: the accreditation's id is fixed for each
 // year, so it is inserted once per year and left alone after that, including any changes a tester
@@ -65,7 +66,8 @@ public class DevExporterAccreditationSeedService(
         var year = clock.GetUtcNow().Year;
         foreach (var org in DevExporterOrg.All)
         {
-            await SeedAccreditationAsync(ExporterAccreditation(org, year), cancellationToken);
+            if (org.IsAccredited)
+                await SeedAccreditationAsync(ExporterAccreditation(org, year), cancellationToken);
             await SeedRegistrationAsync(ExporterRegistration(org, year), cancellationToken);
             if (org.Reprocessor is null)
                 continue;

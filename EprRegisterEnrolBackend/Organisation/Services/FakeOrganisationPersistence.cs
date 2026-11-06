@@ -70,7 +70,7 @@ public class FakeOrganisationPersistence
         : this(TimeProvider.System, includeDevExporters: false) { }
 
     /// <param name="includeDevExporters">
-    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018, 50019 and 50020), which only
+    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018 to 50021), which only
     /// DevExporterAccreditationSeedService accredits.
     /// </param>
     public FakeOrganisationPersistence(TimeProvider clock, bool includeDevExporters)
@@ -711,6 +711,7 @@ public class FakeOrganisationPersistence
                 )
             );
             _store.Add(DevExporterOrganisation(DevExporterOrg.NoChangeRequests, ["902001", "902002"]));
+            _store.Add(DevExporterOrganisation(DevExporterOrg.RegistrationOnly, []));
         }
 
         // RA-512: perftest fixtures, generated (not hand-written) because 200
@@ -743,7 +744,8 @@ public class FakeOrganisationPersistence
 
     // RA-425 orgs: a dedicated exporter, 50018 for the material dashboard pages (/manage) and
     // their ra-425 e2e journey (also a glass reprocessor for RA-697), 50019 for RA-492's in-year
-    // add-ORS journey, 50020 for RA-697's empty change-request pages.
+    // add-ORS journey, 50020 for RA-697's empty change-request pages, 50021 for RA-697's registration-only
+    // manage pages (registered, never accredited).
     // DevExporterAccreditationSeedService gives each registration an Approved current-year
     // accreditation with ORSs. Each is its own org because many specs change the shared exporter
     // orgs, and an Approved current-year application on one of them would change its 2027

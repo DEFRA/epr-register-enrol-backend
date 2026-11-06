@@ -9,8 +9,8 @@ namespace EprRegisterEnrolBackend.DevSeed;
 /// A dedicated dev and e2e exporter: an org in the stub ReEx registry
 /// (<see cref="Organisation.Services.FakeOrganisationPersistence"/>) that
 /// <see cref="AccreditationApplication.Startup.DevExporterAccreditationSeedService"/> gives an Approved current-year
-/// registration and plastic accreditation, plus the same for its <see cref="Reprocessor"/> if it has one. Both use
-/// these values, so the two agree.
+/// registration and, unless it is not <see cref="IsAccredited"/>, plastic accreditation, plus the same for its
+/// <see cref="Reprocessor"/> if it has one. Both use these values, so the two agree.
 /// </summary>
 /// <remarks>
 /// The frontend mirrors these ids and names in src/server/common/constants/test-orgs.js, and the numbers in its
@@ -74,7 +74,30 @@ internal sealed class DevExporterOrg
         Postcode = "DN31 3AA",
     };
 
-    internal static readonly IReadOnlyList<DevExporterOrg> All = [Manage, InYearChange, NoChangeRequests];
+    /// <summary>
+    /// RA-697: an Approved exporter registration with no accreditation in any year, for the registration-only
+    /// manage pages.
+    /// </summary>
+    internal static readonly DevExporterOrg RegistrationOnly = new()
+    {
+        OrgId = 50021,
+        Name = "Registration Only Exports Ltd",
+        TradingName = "Registration Only Exports",
+        Email = "info@registrationonlyexports.co.uk",
+        CompaniesHouseNumber = "12345021",
+        AddressLine1 = "21 Quay Road",
+        Town = "Southampton",
+        Postcode = "SO14 3AA",
+        IsAccredited = false,
+    };
+
+    internal static readonly IReadOnlyList<DevExporterOrg> All =
+    [
+        Manage,
+        InYearChange,
+        NoChangeRequests,
+        RegistrationOnly,
+    ];
 
     private DevExporterOrg() { }
 
@@ -93,6 +116,9 @@ internal sealed class DevExporterOrg
     internal required string Town { get; init; }
     internal required string Postcode { get; init; }
     internal string RegisteredAddress => $"{AddressLine1}, {Town}, {Postcode}";
+
+    /// <summary>RA-697: false for an org the seed gives a registration but no accreditation.</summary>
+    internal bool IsAccredited { get; init; } = true;
 
     /// <summary>The org's reprocessor registration, if it has one besides its exporter registration.</summary>
     internal DevReprocessorRegistration? Reprocessor { get; init; }

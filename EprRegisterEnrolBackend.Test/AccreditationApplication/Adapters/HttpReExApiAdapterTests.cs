@@ -1463,6 +1463,52 @@ public class HttpReExApiAdapterTests
         result.StatusCode.Should().Be(500);
     }
 
+    // ---------------- RA-697: GetRegistrationHolderNameAsync ----------------
+
+    [Fact]
+    public async Task GetRegistrationHolderNameAsync_Success_ReturnsTheCompanyName()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetRegistrationHolderNameAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be("Test Recycling Solutions Ltd");
+    }
+
+    [Fact]
+    public async Task GetRegistrationHolderNameAsync_RegistrationNotTheOrganisations_ReturnsNotFound()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetRegistrationHolderNameAsync(
+            "6a2fcd74e16883c137d01188",
+            "not-this-organisations-registration",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsNotFound.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetRegistrationHolderNameAsync_OrganisationServerError_ReturnsFailure()
+    {
+        var sut = BuildSut("{}", organisationStatusCode: HttpStatusCode.InternalServerError);
+
+        var result = await sut.GetRegistrationHolderNameAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        result.StatusCode.Should().Be(500);
+    }
+
     // ---------------- RA-526: GetNationAsync ----------------
 
     [Fact]

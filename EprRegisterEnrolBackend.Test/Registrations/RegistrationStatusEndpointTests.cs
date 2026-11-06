@@ -38,6 +38,8 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 ["AUTH_SHARED_SECRET:FRONTEND"] = FrontendSecret,
                 ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-management-be-secret",
                 ["CaseWorking:UseStub"] = "true",
+                // RA-697: the organisation name comes from the stub ReEx registry's org 50003.
+                ["ReExApi:UseStub"] = "true",
                 ["DomainModel:ExpandEnabled"] = expandEnabled ? "true" : "false",
                 [FeatureFlags.InYearChangesEnabledKey] = inYearChangesEnabled ? "true" : "false",
             }
@@ -98,6 +100,147 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
         body.GetProperty("registrationId").GetString().Should().Be(ReExRegistrationId);
         body.GetProperty("registrationNumber").GetString().Should().Be("R25ER0500036908PL");
         body.GetProperty("status").GetString().Should().Be("Approved");
+    }
+
+    // RA-697: a registration-only operator's manage dashboard is built from these, as there is no
+    // accreditation to read them from.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ForAnExporter_ReturnsTheOrganisationNameMaterialAndNoSiteAddress(
+        bool expandEnabled
+    )
+    {
+        using var factory = Factory(expandEnabled);
+        using var client = FrontendClient(factory);
+        var exporter = Registration(RegistrationStatus.Approved);
+        exporter.WasteProcessingType = WasteProcessingKind.Exporter;
+        await Versions(factory)
+            .InsertAsync(
+                exporter,
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+
+        var response = await client.GetAsync($"{StatusPath}?organisationId=50003", Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("organisationName").GetString().Should().Be("Delta Green Ltd");
+        body.GetProperty("materialType").GetString().Should().Be("Plastic");
+        body.GetProperty("glassRecyclingProcess").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("isExporter").GetBoolean().Should().BeTrue();
+        body.GetProperty("siteAddress").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("registrationNumber").GetString().Should().Be("R25ER0500036908PL");
+        body.GetProperty("status").GetString().Should().Be("Approved");
+    }
+
+    [Fact]
+    public async Task ForAReprocessor_ReturnsItsMaterialAndSiteAddress()
+    {
+        using var factory = Factory(expandEnabled: true);
+        using var client = FrontendClient(factory);
+        var reprocessor = Registration(RegistrationStatus.Approved);
+        reprocessor.Material = MaterialType.Glass;
+        reprocessor.GlassRecyclingProcess = GlassRecyclingProcess.Remelt;
+        reprocessor.Site = new RegistrationSite
+        {
+            Address = new PostalAddress
+            {
+                Line1 = "Green Works",
+                TownOrCity = "Leeds",
+                Postcode = "LS10 1AB",
+            },
+        };
+        await Versions(factory)
+            .InsertAsync(
+                reprocessor,
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+
+        var response = await client.GetAsync($"{StatusPath}?organisationId=50003", Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("organisationName").GetString().Should().Be("Delta Green Ltd");
+        body.GetProperty("materialType").GetString().Should().Be("Glass");
+        body.GetProperty("glassRecyclingProcess").GetString().Should().Be("glass_re_melt");
+        body.GetProperty("isExporter").GetBoolean().Should().BeFalse();
+        body.GetProperty("siteAddress").GetString().Should().Be("Green Works, Leeds, LS10 1AB");
+    }
+
+    // A registration-only page shows these under the URL's organisation, so it must hold the registration.
+    [Theory]
+    [InlineData("50011")]
+    [InlineData("99999")]
+    public async Task ForAnOrganisationThatDoesNotHoldTheRegistration_ReturnsNotFound(
+        string organisationId
+    )
+    {
+        using var factory = Factory(expandEnabled: true);
+        using var client = FrontendClient(factory);
+        await Versions(factory)
+            .InsertAsync(
+                Registration(RegistrationStatus.Approved),
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+
+        var response = await client.GetAsync($"{StatusPath}?organisationId={organisationId}", Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // As an accreditation application's site address, which has no Line2 or Region.
+    [Fact]
+    public async Task SiteAddress_IsLine1TownAndPostcode()
+    {
+        using var factory = Factory(expandEnabled: true);
+        using var client = FrontendClient(factory);
+        var reprocessor = Registration(RegistrationStatus.Approved);
+        reprocessor.Site = new RegistrationSite
+        {
+            Address = new PostalAddress
+            {
+                Line1 = "Green Works",
+                Line2 = "Unit 4",
+                TownOrCity = "Leeds",
+                Region = "West Yorkshire",
+                Postcode = "LS10 1AB",
+            },
+        };
+        await Versions(factory)
+            .InsertAsync(
+                reprocessor,
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+
+        var response = await client.GetAsync($"{StatusPath}?organisationId=50003", Ct);
+
+        (await Json(response)).GetProperty("siteAddress").GetString()
+            .Should()
+            .Be("Green Works, Leeds, LS10 1AB");
+    }
+
+    // The organisation is ReEx's, which the registration's own record does not name.
+    [Fact]
+    public async Task WithoutAnOrganisationId_ReturnsNoOrganisationName()
+    {
+        using var factory = Factory(expandEnabled: true);
+        using var client = FrontendClient(factory);
+        await Versions(factory)
+            .InsertAsync(
+                Registration(RegistrationStatus.Approved),
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+
+        var response = await client.GetAsync(StatusPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(response)).GetProperty("organisationName").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Theory]
