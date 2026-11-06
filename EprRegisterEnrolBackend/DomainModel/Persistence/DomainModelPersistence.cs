@@ -13,6 +13,7 @@ namespace EprRegisterEnrolBackend.DomainModel.Persistence;
 public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelCollection
 {
     private const int NamespaceNotFound = 26;
+    private const int NamespaceExists = 48;
 
     /// <summary>
     /// <c>moderate</c>, so closing an old version (a <c>$set</c> on a document written under an older schema) is never
@@ -93,7 +94,8 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
         };
 
     // collMod works on a collection that already exists, whatever it holds, and changes none of its documents. The
-    // index build normally creates the collection first; if it didn't, the validator is set on a new one. A failure,
+    // index build normally creates the collection first; if it didn't, it is created with the validator, using the same
+    // settings. If another instance creates it in between (NamespaceExists), collMod is simply run again. A failure,
     // such as a database user that may not run collMod, is logged and left for the schema check to report as
     // Degraded: it must never stop the service starting. It is tried again at the next startup.
     private void EnsureValidator()
@@ -105,24 +107,20 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
 
         try
         {
-            var command = new BsonDocument("collMod", CollectionName).AddRange(
-                Validation(validator)
-            );
             try
             {
-                Collection.Database.RunCommand<BsonDocument>(command);
+                RunWithValidation("collMod", validator);
             }
             catch (MongoCommandException ex) when (ex.Code == NamespaceNotFound)
             {
-                Collection.Database.CreateCollection(
-                    CollectionName,
-                    new CreateCollectionOptions<BsonDocument>
-                    {
-                        Validator = validator,
-                        ValidationLevel = DocumentValidationLevel.Moderate,
-                        ValidationAction = DocumentValidationAction.Warn,
-                    }
-                );
+                try
+                {
+                    RunWithValidation("create", validator);
+                }
+                catch (MongoCommandException created) when (created.Code == NamespaceExists)
+                {
+                    RunWithValidation("collMod", validator);
+                }
             }
         }
         catch (Exception ex) when (ex is MongoException or TimeoutException)
@@ -134,4 +132,9 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
             );
         }
     }
+
+    private void RunWithValidation(string command, BsonDocument validator) =>
+        Collection.Database.RunCommand<BsonDocument>(
+            new BsonDocument(command, CollectionName).AddRange(Validation(validator))
+        );
 }

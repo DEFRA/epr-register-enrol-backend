@@ -11,6 +11,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.Persistence;
@@ -134,10 +135,10 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
         var withoutValidator = Collection("applicationVersions", ["entityId_version_u"]);
         withoutValidator
             .GetExpectedValidation()
-            .Returns(new MongoDB.Bson.BsonDocument("validator", new MongoDB.Bson.BsonDocument()));
+            .Returns(new BsonDocument("validator", new BsonDocument()));
         withoutValidator
             .GetValidationAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<MongoDB.Bson.BsonDocument?>(null));
+            .Returns(Task.FromResult<BsonDocument?>(null));
         var services = LegacyPersistences()
             .AddSingleton<IDomainModelSchemaStatus>(status)
             .AddSingleton(_ => withoutValidator)

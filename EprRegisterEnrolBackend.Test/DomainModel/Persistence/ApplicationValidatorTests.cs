@@ -124,6 +124,20 @@ public sealed class ApplicationValidatorTests : IDisposable
             .Be(1, "applying a validator never touches the documents already there");
     }
 
+    // With no indexes there is nothing to create the collection first, so collMod finds none (NamespaceNotFound) and
+    // the collection is created with the validator, in the same warn and moderate mode as collMod would set.
+    [Fact]
+    public async Task Startup_CollectionNotYetCreated_IsCreatedWithTheSameValidatorAndMode()
+    {
+        _ = new ValidatorOnlyPersistence(_factory);
+
+        var options = await CollectionOptionsAsync(ValidatorOnlyPersistence.Name);
+
+        options["validator"].Should().Be(ValidatorOnlyPersistence.Schema());
+        options["validationLevel"].AsString.Should().Be("moderate");
+        options["validationAction"].AsString.Should().Be("warn");
+    }
+
     [Fact]
     public async Task Startup_ValidatorCannotBeApplied_IsNotFatal_AndTheCheckReportsDegraded()
     {
@@ -187,6 +201,32 @@ public sealed class ApplicationValidatorTests : IDisposable
         );
 
         (await CountFailingAsync(DomainModelCollections.ApplicationVersions)).Should().Be(5);
+    }
+
+    // IgnoreIfNull leaves a null field out of the stored document, so a nullable band that is null is simply absent.
+    // A tonnage change always names the band it asks for, so ToBand is required; FromBand may be absent.
+    [Fact]
+    public async Task TonnageChange_WithNoFromBand_Passes_ButWithNoToBandIsFlagged()
+    {
+        var persistence = Persistence();
+        var noFrom = DomainModelBuilders.TonnageChangeDetails();
+        noFrom.FromBand = null;
+        var noTo = DomainModelBuilders.TonnageChangeDetails();
+        noTo.ToBand = null;
+        await persistence.Versions.InsertAsync(
+            DomainModelBuilders.Application(ObjectId.GenerateNewId(), noFrom),
+            Change(),
+            cancellationToken: Ct
+        );
+        (await CountFailingAsync(DomainModelCollections.ApplicationVersions)).Should().Be(0);
+
+        await persistence.Versions.InsertAsync(
+            DomainModelBuilders.Application(ObjectId.GenerateNewId(), noTo),
+            Change(),
+            cancellationToken: Ct
+        );
+
+        (await CountFailingAsync(DomainModelCollections.ApplicationVersions)).Should().Be(1);
     }
 
     [Fact]
@@ -322,7 +362,9 @@ public sealed class ApplicationValidatorTests : IDisposable
     }
 
     // A validator Mongo refuses ($where is not allowed in one), standing in for a database user that may not run
-    // collMod: applying it fails, and that must not stop the service starting.
+    // collMod: applying it fails with a MongoCommandException, as a permission failure (code 13) does, and that must
+    // not stop the service starting. The real permission case needs a server with authentication on, which the test
+    // Mongo doesn't run.
     private sealed class UnappliableValidatorPersistence(
         IMongoDbClientFactory factory,
         TimeProvider clock
@@ -330,5 +372,21 @@ public sealed class ApplicationValidatorTests : IDisposable
     {
         protected override BsonDocument? DefineValidator() =>
             new("$where", "function() { return true; }");
+    }
+
+    // A collection with a validator and no indexes, so nothing creates it before the validator is applied.
+    private sealed class ValidatorOnlyPersistence(IMongoDbClientFactory factory)
+        : DomainModelPersistence<BsonDocument>(factory, Name, NullLoggerFactory.Instance)
+    {
+        public const string Name = "validatorOnly";
+
+        public static BsonDocument Schema() =>
+            new("$jsonSchema", new BsonDocument("required", new BsonArray { "name" }));
+
+        protected override List<CreateIndexModel<BsonDocument>> DefineIndexes(
+            IndexKeysDefinitionBuilder<BsonDocument> builder
+        ) => [];
+
+        protected override BsonDocument? DefineValidator() => Schema();
     }
 }

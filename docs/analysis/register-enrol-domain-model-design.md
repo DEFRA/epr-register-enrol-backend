@@ -883,7 +883,7 @@ a script, saving an unknown type or another type's fields.
   `dateLastEdited`, `details`); `applicationType` and `status` limited to their C# enum values; `details` with `_t`
   and `schemaVersion`; and one `oneOf` branch per type, pairing an `applicationType` with its `details._t` and its
   required `details` fields (Accreditation: `kind`, `year`; ORS change: `targetAccreditationId`, `overseasSiteId`,
-  `changeKinds`, `site`; tonnage: `targetAccreditationId`, `fromBand`, `toBand`; New Registration: `sections`; annual
+  `changeKinds`, `site`; tonnage: `targetAccreditationId`, `toBand`, with `fromBand` a string when present, because a null band isn't stored; New Registration: `sections`; annual
   charge: `chargeYear`). Element names come from the driver's class maps, so they can't drift from what is stored. It
   does not copy every field of the classes.
 - **`moderate` level:** closing a version is a `$set` on the old document. Under `strict` that update re-checks the old

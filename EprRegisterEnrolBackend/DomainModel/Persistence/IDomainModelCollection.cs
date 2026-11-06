@@ -17,9 +17,8 @@ public interface IDomainModelCollection
     /// The <c>validator</c>, <c>validationLevel</c> and <c>validationAction</c> this collection is meant to have, or
     /// null when it has no validator.
     /// </summary>
-    BsonDocument? GetExpectedValidation() => null;
+    BsonDocument? GetExpectedValidation();
 
     /// <summary>The same three settings as the server has them now, or null when it has no validator.</summary>
-    Task<BsonDocument?> GetValidationAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<BsonDocument?>(null);
+    Task<BsonDocument?> GetValidationAsync(CancellationToken cancellationToken);
 }
