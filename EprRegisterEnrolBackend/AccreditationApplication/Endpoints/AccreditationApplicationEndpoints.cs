@@ -854,10 +854,14 @@ public static class AccreditationApplicationEndpoints
         TimeSpan.FromMilliseconds(100)
     );
 
+    // CDP's status for a scanned file: "complete" means it passed the virus scan.
+    internal static FileScanStatus ScanStatusOf(CdpCallbackFile file) =>
+        file.FileStatus == "complete" ? FileScanStatus.Clean : FileScanStatus.Infected;
+
     // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
     // from the server-held PendingUploadService record, populated only by the real
     // CDP-uploader webhook callback — never trusted verbatim from the client request body.
-    private static async Task<(
+    internal static async Task<(
         IResult? Error,
         CdpCallbackFile? ScannedFile
     )> TryResolveScannedFileAsync(
@@ -3051,11 +3055,15 @@ public static class AccreditationApplicationEndpoints
         if (site is null)
             return Results.NotFound();
 
+        var overCap = BesEvidenceFileCapRejection(site.BesEvidence);
+        if (overCap is not null)
+            return overCap;
+
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
             return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
 
-        var scanStatus = scannedFile.FileStatus == "complete" ? "Clean" : "Infected";
+        var scanStatus = ScanStatusOf(scannedFile).ToString();
 
         site.BesEvidence ??= new BesEvidenceModel();
         site.BesEvidence.BesEvidenceUploads.Add(
@@ -4101,7 +4109,30 @@ public static class AccreditationApplicationEndpoints
     private const int MaxSamplingPlanFiles = 10;
     internal const string MaxSamplingPlanFilesErrorCode = "MaxFilesExceeded";
     internal const string MaxSamplingPlanFilesMessage =
-        "The maximum number of files permitted to be uploaded is ten";
+        "You can only upload a maximum of 10 'sampling and inspection plan' and 'supporting information' files.";
+    private const int MaxBesEvidenceFiles = 10;
+    internal const string MaxBesEvidenceFilesMessage =
+        "You can only upload a maximum of 10 files as evidence of broadly equivalent standards.";
+
+    /// <summary>
+    /// RA-605: the 422 for one more BES evidence file on an overseas site that already has
+    /// MaxBesEvidenceFiles non-infected ones, or null under the cap. Shared by the application's
+    /// BES upload and RA-492's change-request one, so the frontend recognises both the same way.
+    /// </summary>
+    internal static IResult? BesEvidenceFileCapRejection(BesEvidenceModel? evidence) =>
+        (evidence?.BesEvidenceUploads ?? []).Count(f =>
+            f.ScanStatus != nameof(FileScanStatus.Infected)
+        ) >= MaxBesEvidenceFiles
+            ? Results.Problem(
+                detail: MaxBesEvidenceFilesMessage,
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "Unprocessable Entity",
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = MaxSamplingPlanFilesErrorCode,
+                }
+            )
+            : null;
 
     // RA-644 B8g: bundles AddFile's services under one [AsParameters] argument (S107) once it takes the unit of
     // work.
@@ -4197,10 +4228,7 @@ public static class AccreditationApplicationEndpoints
             Filename = scannedFile.Filename!,
             ContentType = contentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus =
-                scannedFile.FileStatus == "complete"
-                    ? FileScanStatus.Clean
-                    : FileScanStatus.Infected,
+            ScanStatus = ScanStatusOf(scannedFile),
             DocumentType = request.DocumentType,
             S3Key = scannedFile.S3Key!,
             S3Bucket = scannedFile.S3Bucket,
@@ -4836,7 +4864,6 @@ public static class AccreditationApplicationEndpoints
             persistence,
             cdpUploaderService,
             pendingUploadService,
-            cdpConfig,
             appConfig,
             cancellationToken,
             cdpConfig.Value.SamplingPlanBucket,
@@ -4861,7 +4888,6 @@ public static class AccreditationApplicationEndpoints
             persistence,
             cdpUploaderService,
             pendingUploadService,
-            cdpConfig,
             appConfig,
             cancellationToken,
             cdpConfig.Value.BesEvidenceBucket,
@@ -4875,7 +4901,6 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         ICdpUploaderService cdpUploaderService,
         IPendingUploadService pendingUploadService,
-        IOptions<CdpUploaderConfig> cdpConfig,
         IOptions<AppConfig> appConfig,
         CancellationToken cancellationToken,
         string bucketPrefix,
@@ -4896,8 +4921,35 @@ public static class AccreditationApplicationEndpoints
         )
             return Results.Conflict("Section is not editable in the application's current status.");
 
+        return await StartCdpUploadAsync(
+            organisationId,
+            applicationId,
+            request,
+            bucketPrefix,
+            new(cdpUploaderService, pendingUploadService, appConfig.Value),
+            cancellationToken
+        );
+    }
+
+    internal sealed record CdpUploadServices(
+        ICdpUploaderService CdpUploader,
+        IPendingUploadService PendingUploads,
+        AppConfig AppConfig
+    );
+
+    // Shared with the RA-492 change-request BES upload, whose guards differ (it uploads against
+    // an Approved application, which InitiateUploadInternal rejects as terminal).
+    internal static async Task<IResult> StartCdpUploadAsync(
+        string organisationId,
+        string applicationId,
+        InitiateUploadRequest request,
+        string bucketPrefix,
+        CdpUploadServices services,
+        CancellationToken cancellationToken
+    )
+    {
         var fileUploadId = Guid.NewGuid().ToString();
-        var baseUrl = appConfig.Value.BaseUrl.TrimEnd('/');
+        var baseUrl = services.AppConfig.BaseUrl.TrimEnd('/');
         var callbackUrl = $"{baseUrl}/api/v1/accreditation-applications/files/upload-completed";
         var statusUrl =
             $"{baseUrl}/api/v1/accreditation-applications/{organisationId}/{applicationId}/files/{fileUploadId}/status";
@@ -4918,8 +4970,8 @@ public static class AccreditationApplicationEndpoints
             Metadata = metadata,
         };
 
-        var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
-        await pendingUploadService.CreateAsync(
+        var cdpResponse = await services.CdpUploader.InitiateAsync(cdpRequest, cancellationToken);
+        await services.PendingUploads.CreateAsync(
             fileUploadId,
             cdpResponse.StatusUrl,
             cdpResponse.UploadId,

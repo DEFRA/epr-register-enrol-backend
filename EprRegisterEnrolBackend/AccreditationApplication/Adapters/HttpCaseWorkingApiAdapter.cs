@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.AccreditationChanges;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
@@ -55,12 +56,7 @@ public class HttpCaseWorkingApiAdapter(
         CancellationToken cancellationToken = default
     )
     {
-        var url = _config.Url;
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            logger.LogError("CaseWorking API URL is not configured. Cannot submit work item.");
-            throw new InvalidOperationException("CaseWorking API URL is not configured.");
-        }
+        var url = RequireUrl("work item");
 
         // RA-318: ManagementBe owns applicationReference generation — it is never
         // supplied by the caller (ManagementBe ignores any value sent here) and is
@@ -83,8 +79,124 @@ public class HttpCaseWorkingApiAdapter(
             );
         }
 
-        var userId = application.SubmittedBy?.Email ?? application.OrganisationId;
-        var userName = application.SubmittedBy?.FullName;
+        return await CreateWorkItemAsync(
+            endpoint,
+            body,
+            application.SubmittedBy?.Email ?? application.OrganisationId,
+            application.SubmittedBy?.FullName,
+            cancellationToken
+        );
+    }
+
+    private string RequireUrl(string submission)
+    {
+        var url = _config.Url;
+        if (!string.IsNullOrWhiteSpace(url))
+            return url;
+        logger.LogError("CaseWorking API URL is not configured. Cannot submit {Submission}.", submission);
+        throw new CaseWorkingNotConfiguredException();
+    }
+
+    // RA-492: the in-year "add a registered ORS to an accreditation" change request. Only called
+    // when AccreditationChanges:SubmitToCaseManagement is on - ManagementBe must register the
+    // add-overseas-site work-item type before that flag is switched on.
+    public async Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+        AccreditationChangeRequest changeRequest,
+        AccreditationApplicationModel accreditation,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var url = RequireUrl("change request");
+
+        var body = new CreateWorkItemRequest
+        {
+            TypeId = AccreditationChangeRequest.AddOverseasSiteChangeType,
+            Source = "operator-fe",
+            Payload = BuildChangeRequestPayload(changeRequest, accreditation),
+        };
+
+        var endpoint = $"{url.TrimEnd('/')}/work-items";
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Submitting change request {RequestId} to ManagementBe at {Endpoint} org={OrganisationId}",
+                changeRequest.RequestId,
+                endpoint,
+                changeRequest.OrganisationId
+            );
+        }
+
+        return await CreateWorkItemAsync(
+            endpoint,
+            body,
+            changeRequest.SubmittedBy?.Email ?? changeRequest.OrganisationId,
+            changeRequest.SubmittedBy?.FullName,
+            cancellationToken
+        );
+    }
+
+    internal static object BuildChangeRequestPayload(
+        AccreditationChangeRequest changeRequest,
+        AccreditationApplicationModel accreditation
+    ) =>
+        new
+        {
+            operatorRequestId = changeRequest.RequestId,
+            changeType = changeRequest.ChangeType,
+            operatorOrganisationId = changeRequest.OrganisationId,
+            accreditationApplicationId = changeRequest.ApplicationId,
+            organisationName = accreditation.OrganisationName,
+            registrationId = changeRequest.RegistrationId,
+            registrationReference = accreditation.RegistrationReference,
+            accreditationReference = changeRequest.AccreditationReference,
+            material = changeRequest.MaterialType.ToString(),
+            accreditationYear = changeRequest.Year,
+            nation = accreditation.Nation?.ToString(),
+            // The fields management-be's ApplicationReferenceGenerator reads, sent as BuildPayload
+            // sends them, so a change request's applicationReference has the same shape as an
+            // application's.
+            wasteProcessingType = accreditation.WasteProcessingType,
+            companyRegisterAddressPostcode = accreditation.CompanyRegisterAddressPostcode,
+            siteAddressPostcode = ExtractPostcode(accreditation.SiteAddress),
+            operatorOrgNumber = accreditation.OrgId,
+            chargePence = changeRequest.ChargePence,
+            submittedBy = changeRequest.SubmittedBy,
+            paymentReference = changeRequest.PaymentReference,
+            sites = changeRequest.Sites.Select(site =>
+            {
+                var ors = ChangeRequestRules.FindSite(accreditation, site.SiteId);
+                var effective = ChangeRequestRules.Effective(ors, site.Answers);
+                return new
+                {
+                    siteId = site.SiteId,
+                    orsId = site.OrsId,
+                    siteName = site.SiteName,
+                    country = effective.Country,
+                    coordinates = effective.Coordinates,
+                    operationCodes = effective.OperationCodes,
+                    conditionsOfExport = effective.ConditionsOfExport,
+                    suppliedFields = ChangeRequestRules.SuppliedFields(site.Answers),
+                    besEvidence = site.BesEvidence?.BesEvidenceUploads.Select(f => new
+                    {
+                        f.FileId,
+                        f.Filename,
+                        f.S3Bucket,
+                        f.S3Key,
+                        f.BesEvidenceValidFromDate,
+                        f.BesEvidenceExpiryDate,
+                    }),
+                };
+            }),
+        };
+
+    private async Task<CaseWorkingSubmissionResult> CreateWorkItemAsync(
+        string endpoint,
+        CreateWorkItemRequest body,
+        string userId,
+        string? userName,
+        CancellationToken cancellationToken
+    )
+    {
         using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
         var client = httpClientFactory.CreateClient(DefaultHttpClientName);
 

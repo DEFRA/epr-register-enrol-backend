@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.Versioning;
@@ -361,6 +362,47 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
         Assert.False(proposed.IsCurrent);
     }
 
+    // A polymorphic member (like the Application's details) declares its base type; an excluded field on the
+    // stored subclass must still be ignored, or every refresh of it would write a version.
+    [Fact]
+    public async Task UpdateAsync_OnlyAnExcludedFieldOfAPolymorphicMemberChanged_WritesNoVersion()
+    {
+        var first = Widget("first");
+        first.Part = new StampedPart
+        {
+            Label = "a",
+            StampedAt = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+        var v1 = await _sut.InsertAsync(first, Change(), cancellationToken: Ct);
+        _clock.Advance(TimeSpan.FromMinutes(1));
+
+        var again = Widget("first", v1.EntityId);
+        again.Part = new StampedPart
+        {
+            Label = "a",
+            StampedAt = new DateTime(2027, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+        var result = await _sut.UpdateAsync(again, 1, Change(), cancellationToken: Ct);
+
+        Assert.False(result.Changed);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_AnIncludedFieldOfAPolymorphicMemberChanged_WritesAVersion()
+    {
+        var first = Widget("first");
+        first.Part = new StampedPart { Label = "a" };
+        var v1 = await _sut.InsertAsync(first, Change(), cancellationToken: Ct);
+        _clock.Advance(TimeSpan.FromMinutes(1));
+
+        var again = Widget("first", v1.EntityId);
+        again.Part = new StampedPart { Label = "b" };
+        var result = await _sut.UpdateAsync(again, 1, Change(), cancellationToken: Ct);
+
+        Assert.True(result.Changed);
+        Assert.Equal("b", Assert.IsType<StampedPart>(result.Entity.Part).Label);
+    }
+
     [Fact]
     public async Task UpdateAsync_SessionWithoutATransaction_ThrowsAndWritesNothing()
     {
@@ -388,4 +430,18 @@ public class WidgetVersion : VersionedEntityBase
     public EntitySource? Source { get; set; }
 
     public List<EntitySource> Sources { get; set; } = [];
+
+    public WidgetPart? Part { get; set; }
+}
+
+[BsonKnownTypes(typeof(StampedPart))]
+public abstract class WidgetPart
+{
+    public string? Label { get; set; }
+}
+
+public class StampedPart : WidgetPart
+{
+    [ExcludedFromChangeDetection]
+    public DateTime? StampedAt { get; set; }
 }

@@ -3,23 +3,26 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.Registrations;
+using EprRegisterEnrolBackend.Utils;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
-// RA-425: local manual testing and the fe-tests stack only. Gives the dedicated exporter (stub org
-// 50018, Plastic) an Approved accreditation for the current calendar year, and its registration an
-// Approved current version in the domain model, so the frontend's material dashboard, manage page
-// and overseas-sites page show content. Development-only, registered with DevSeedData:Enabled
+// RA-425: local manual testing and the fe-tests stack only. Gives each dedicated exporter
+// (DevExporterOrg: stub orgs 50018 and, for RA-492, 50019, Plastic) an Approved accreditation for
+// the current calendar year, and its registration an Approved current version in the domain model,
+// so the frontend's material dashboard, manage page and overseas-sites page show content. Development-only, registered with DevSeedData:Enabled
 // (the local compose stack, alongside the RA-690 Delta Green seeds) or with ConfigKey alone (the
 // fe-tests stack, whose other specs must not see the Delta Green data).
 //
-// The data matches the frontend stub's exporter (stub-manage-accreditations.js): three accredited
-// ORSs and one registered only. ORS 001 has a withdrawn interim site, and ORSs 001 and 002 both use
+// Org 50018's data matches the frontend stub's exporter (stub-manage-accreditations.js): three
+// accredited ORSs and one registered only. ORS 001 has a withdrawn interim site, and ORSs 001 and 002 both use
 // the same physical site, so the overseas-sites page's per-ORS filtering shows locally. The
 // registered-only ORS 004 has an interim site too, which the page must not show. Each copy
 // has its own id and number: interim site ids key the edit routes and test ids application-wide,
-// and the number allocator keeps numbers unique within an application.
+// and the number allocator keeps numbers unique within an application. Org 50019 (RA-492) has one
+// accredited ORS and three registered only, each lacking a different set of the fields the in-year
+// "add a registered ORS to your accreditation" journey asks for.
 //
 // The year comes from the clock at startup. Idempotent: the accreditation's id is fixed for each
 // year, so it is inserted once per year and left alone after that, including any changes a tester
@@ -34,8 +37,8 @@ public class DevExporterAccreditationSeedService(
     public const string ConfigKey = "DevSeedData:ManageExporterEnabled";
 
     /// <summary>
-    /// Whether this seed runs, which is also whether the stub ReEx registry has org 50018 at all:
-    /// anywhere else it would be an exporter with no accreditation.
+    /// Whether this seed runs, which is also whether the stub ReEx registry has the dedicated exporters at all:
+    /// anywhere else they would be exporters with no accreditation.
     /// </summary>
     public static bool IsEnabled(IConfiguration configuration, IHostEnvironment environment) =>
         environment.IsDevelopment()
@@ -44,35 +47,52 @@ public class DevExporterAccreditationSeedService(
             || configuration.GetValue<bool>(ConfigKey)
         );
 
+    // Each dedicated exporter's ORSs, by the year they are accredited from.
+    private static readonly Dictionary<DevExporterOrg, Func<int, List<OverseasSiteModel>>> SitesFor =
+        new()
+        {
+            [DevExporterOrg.Manage] = OverseasSites,
+            [DevExporterOrg.InYearChange] = InYearChangeOverseasSites,
+        };
+
     protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
     {
         var year = clock.GetUtcNow().Year;
-        await SeedAccreditationAsync(year, cancellationToken);
-        await SeedRegistrationAsync(year, cancellationToken);
+        foreach (var org in DevExporterOrg.All)
+        {
+            await SeedAccreditationAsync(org, year, cancellationToken);
+            await SeedRegistrationAsync(org, year, cancellationToken);
+        }
     }
 
-    private async Task SeedAccreditationAsync(int year, CancellationToken cancellationToken)
+    private async Task SeedAccreditationAsync(
+        DevExporterOrg org,
+        int year,
+        CancellationToken cancellationToken
+    )
     {
         var existing = await persistence
-            .GetByIdAsync(ManageExporterOrg.OrganisationId, ApplicationIdFor(year).ToString())
+            .GetByIdAsync(org.OrganisationId, ApplicationIdFor(org, year).ToString())
             .WaitAsync(cancellationToken);
         if (existing is not null)
         {
             Logger.LogInformation(
-                "DevExporterAccreditationSeedService: {Year} exporter accreditation already present",
-                year
+                "DevExporterAccreditationSeedService: {Year} exporter accreditation for org {OrgId} already present",
+                year,
+                org.OrgId
             );
             return;
         }
 
         var created = await persistence
-            .CreateAsync(ExporterAccreditation(year))
+            .CreateAsync(ExporterAccreditation(org, year))
             .WaitAsync(cancellationToken);
         if (created is null)
         {
             Logger.LogWarning(
-                "DevExporterAccreditationSeedService: failed to seed the {Year} exporter accreditation",
-                year
+                "DevExporterAccreditationSeedService: failed to seed the {Year} exporter accreditation for org {OrgId}",
+                year,
+                org.OrgId
             );
             return;
         }
@@ -84,53 +104,62 @@ public class DevExporterAccreditationSeedService(
         );
     }
 
-    private async Task SeedRegistrationAsync(int year, CancellationToken cancellationToken)
+    private async Task SeedRegistrationAsync(
+        DevExporterOrg org,
+        int year,
+        CancellationToken cancellationToken
+    )
     {
         var seeded = await registrations.SeedIfAbsentAsync(
-            ExporterRegistration(year),
+            ExporterRegistration(org, year),
             cancellationToken
         );
-        Logger.LogInformation(
-            seeded
-                ? "DevExporterAccreditationSeedService: seeded the exporter's Approved registration version"
-                : "DevExporterAccreditationSeedService: exporter registration version already present"
-        );
+        if (seeded)
+            Logger.LogInformation(
+                "DevExporterAccreditationSeedService: seeded org {OrgId}'s Approved registration version",
+                org.OrgId
+            );
+        else
+            Logger.LogInformation(
+                "DevExporterAccreditationSeedService: org {OrgId}'s registration version already present",
+                org.OrgId
+            );
     }
 
-    internal static RegistrationEntity ExporterRegistration(int year) =>
+    internal static RegistrationEntity ExporterRegistration(DevExporterOrg org, int year) =>
         RegistrationVersionDevSeed.ApprovedRegistration(
-            ManageExporterOrg.OrgId,
-            ManageExporterOrg.RegistrationId,
-            ManageExporterOrg.RegistrationNumberFor(year),
+            org.OrgId,
+            org.RegistrationId,
+            org.RegistrationNumberFor(year),
             WasteProcessingKind.Exporter,
-            ManageExporterOrg.Material
+            DevExporterOrg.Material
         );
 
     // "a" + year + padding + org id, e.g. a20260000000000000050018.
-    internal static ObjectId ApplicationIdFor(int year) =>
-        ObjectId.Parse($"a{year:D4}{ManageExporterOrg.OrgId:D19}");
+    internal static ObjectId ApplicationIdFor(DevExporterOrg org, int year) =>
+        ObjectId.Parse($"a{year:D4}{org.OrgId:D19}");
 
-    internal static AccreditationApplicationModel ExporterAccreditation(int year)
+    internal static AccreditationApplicationModel ExporterAccreditation(DevExporterOrg org, int year)
     {
         var createdAt = new DateTime(year - 1, 9, 1, 0, 0, 0, DateTimeKind.Utc);
         return new AccreditationApplicationModel
         {
-            Id = ApplicationIdFor(year),
-            OrganisationId = ManageExporterOrg.OrganisationId,
-            OrgId = ManageExporterOrg.OrgId,
-            OrganisationName = ManageExporterOrg.Name,
+            Id = ApplicationIdFor(org, year),
+            OrganisationId = org.OrganisationId,
+            OrgId = org.OrgId,
+            OrganisationName = org.Name,
             Year = year,
-            RegistrationId = ManageExporterOrg.RegistrationId.ToString(),
+            RegistrationId = org.RegistrationId.ToString(),
             IsExporter = true,
             Nation = Nation.England,
-            CompanyRegisterAddressPostcode = ManageExporterOrg.Postcode,
-            CompanyRegisteredAddress = ManageExporterOrg.RegisteredAddress,
-            CompaniesHouseNumber = ManageExporterOrg.CompaniesHouseNumber,
-            PermitNumbers = [ManageExporterOrg.PermitNumber],
+            CompanyRegisterAddressPostcode = org.Postcode,
+            CompanyRegisteredAddress = org.RegisteredAddress,
+            CompaniesHouseNumber = org.CompaniesHouseNumber,
+            PermitNumbers = [org.PermitNumber],
             WasteProcessingType = "exporter",
-            RegistrationReference = ManageExporterOrg.RegistrationNumberFor(year),
-            AccreditationReference = ManageExporterOrg.AccreditationNumberFor(year),
-            MaterialType = ManageExporterOrg.Material,
+            RegistrationReference = org.RegistrationNumberFor(year),
+            AccreditationReference = org.AccreditationNumberFor(year),
+            MaterialType = DevExporterOrg.Material,
             ApplicationStatus = ApplicationStatus.Approved,
             SourceYear = year - 1,
             CreatedAt = createdAt,
@@ -139,7 +168,7 @@ public class DevExporterAccreditationSeedService(
             OverseasSites = new AccreditationApplicationOverseasSites
             {
                 SectionStatus = SectionStatus.Completed,
-                Sites = OverseasSites(year),
+                Sites = SitesFor[org](year),
             },
         };
     }
@@ -223,6 +252,95 @@ public class DevExporterAccreditationSeedService(
             IsNewSite = false,
             InterimSites = interimSites,
         };
+
+    // RA-492 (org 50019): one accredited ORS with every field the in-year add journey asks for,
+    // and three registered only: complete (France: EU and OECD, so no BES evidence), country only
+    // (India: outside the EU and OECD, so BES evidence unless the conditions of export are met), and
+    // coordinates only (Turkey: OECD, so no BES evidence). Plus one never registered (see
+    // NeverRegisteredOrs), which neither tab lists and which cannot be added to a change request.
+    private static List<OverseasSiteModel> InYearChangeOverseasSites(int year) =>
+        [
+            InYearChangeOrs(
+                Ors(901901, "001", "Hamburg Kunststoff GmbH", "901901 Industrial Estate", "Germany", $"{year}-01-01T00:00:00Z", []),
+                isEu: true,
+                isOecd: true,
+                coordinates: "53.5511, 9.9937",
+                operationCodes: ["R3"],
+                conditionsOfExport: true
+            ),
+            InYearChangeOrs(
+                Ors(901910, "005", "Lyon Plastiques SA", "901910 Industrial Estate", "France", null, []),
+                isEu: true,
+                isOecd: true,
+                coordinates: "45.7640, 4.8357",
+                operationCodes: ["R3"],
+                conditionsOfExport: true
+            ),
+            InYearChangeOrs(
+                Ors(901911, "006", "Delhi Polymers Pvt", "901911 Industrial Estate", "India", null, []),
+                isEu: false,
+                isOecd: false
+            ),
+            InYearChangeOrs(
+                Ors(901912, "007", "Izmir Recycling AS", "901912 Industrial Estate", "Turkey", null, []),
+                isEu: false,
+                isOecd: true,
+                coordinates: "38.4237, 27.1428"
+            ),
+            NeverRegisteredOrs(),
+        ];
+
+    // An ORS the operator added on the accreditation application and then deselected before it was
+    // granted: built as AddOverseasSite builds one (IsNewSite set, EU/OECD from the country) and
+    // stored unselected, as the overseas-sites PATCH leaves a deselected site. So it was never on
+    // the registration, which is why the stub registry's registration does not list it.
+    private static OverseasSiteModel NeverRegisteredOrs() =>
+        new()
+        {
+            SiteId = 901913,
+            OrsId = "008",
+            SiteName = "Valencia Reciclaje SL",
+            AddressLine1 = "901913 Industrial Estate",
+            TownOrCity = "Valencia",
+            Country = "Spain",
+            SiteAddress = "901913 Industrial Estate, Valencia, Spain",
+            Coordinates = "39.4699, -0.3763",
+            ContactName = "Site Manager",
+            ContactEmail = "site901913@example.com",
+            ContactPhone = "+44 1234 567890",
+            OperationCodes = ["R3"],
+            Code1 = "B3011",
+            RepatriatedLoads = "Rejected loads are returned to the UK exporter.",
+            ConditionsOfExport = true,
+            IsEu = CountryClassifications.IsEu("Spain"),
+            IsOecd = CountryClassifications.IsOecd("Spain"),
+            IsNewSite = true,
+            Selected = false,
+        };
+
+    // The contact and waste details a registration holds, and only the given coordinates, R codes
+    // and conditions of export.
+    private static OverseasSiteModel InYearChangeOrs(
+        OverseasSiteModel site,
+        bool isEu,
+        bool isOecd,
+        string? coordinates = null,
+        List<string>? operationCodes = null,
+        bool? conditionsOfExport = null
+    )
+    {
+        site.IsEu = isEu;
+        site.IsOecd = isOecd;
+        site.Coordinates = coordinates;
+        site.OperationCodes = operationCodes ?? [];
+        site.ConditionsOfExport = conditionsOfExport;
+        site.ContactName = "Site Manager";
+        site.ContactEmail = $"site{site.SiteId}@example.com";
+        site.ContactPhone = "+44 1234 567890";
+        site.Code1 = "B3011";
+        site.RepatriatedLoads = "Rejected loads are returned to the UK exporter.";
+        return site;
+    }
 
     // One physical site serving two ORSs: a separate copy under each, so withdrawing it from one ORS
     // leaves the other untouched.

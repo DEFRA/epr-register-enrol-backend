@@ -63,20 +63,23 @@ public sealed class DevRegistrationSeedServiceTests : IDisposable
         seeded.OrganisationId.Should().Be(ObjectId.Parse("0d0000000000000000050003"));
     }
 
-    // The dedicated exporter is DevExporterAccreditationSeedService's, so the fe-tests stack can seed it alone.
+    // The dedicated exporters are DevExporterAccreditationSeedService's, so the fe-tests stack can seed them alone.
     [Fact]
-    public async Task SeedAsync_DoesNotSeedTheManageExportersRegistration()
+    public async Task SeedAsync_DoesNotSeedTheDedicatedExportersRegistrations()
     {
         await CreateSut().SeedAsync(Ct);
 
-        (
-            await _store.FindCurrentByReExRegistrationIdAsync(
-                ManageExporterOrg.RegistrationId.ToString(),
-                Ct
+        foreach (var exporter in DevExporterOrg.All)
+        {
+            (
+                await _store.FindCurrentByReExRegistrationIdAsync(
+                    exporter.RegistrationId.ToString(),
+                    Ct
+                )
             )
-        )
-            .Should()
-            .BeNull();
+                .Should()
+                .BeNull();
+        }
     }
 
     [Fact]

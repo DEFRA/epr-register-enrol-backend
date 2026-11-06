@@ -60,22 +60,23 @@ public class FakeOrganisationPersistence
     private readonly List<OrganisationModel> _store = new();
     private readonly object _lock = new();
 
-    // The clock only dates org 50018's registration number, so it matches the RA-425 dev seeds. It
+    // The clock only dates the dedicated exporters' registration numbers, so they match the RA-425 dev seeds. It
     // is dated as each read returns it, not at construction, so a process running across 1 January
     // reports the new year's number.
     private readonly TimeProvider _clock;
-    private readonly bool _includeManageExporter;
+    private readonly bool _includeDevExporters;
 
     public FakeOrganisationPersistence()
-        : this(TimeProvider.System, includeManageExporter: false) { }
+        : this(TimeProvider.System, includeDevExporters: false) { }
 
-    /// <param name="includeManageExporter">
-    /// Whether to include org 50018, which only DevExporterAccreditationSeedService accredits.
+    /// <param name="includeDevExporters">
+    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018 and 50019), which only
+    /// DevExporterAccreditationSeedService accredits.
     /// </param>
-    public FakeOrganisationPersistence(TimeProvider clock, bool includeManageExporter)
+    public FakeOrganisationPersistence(TimeProvider clock, bool includeDevExporters)
     {
         _clock = clock;
-        _includeManageExporter = includeManageExporter;
+        _includeDevExporters = includeDevExporters;
 
         _store.Add(
             new OrganisationModel
@@ -695,8 +696,21 @@ public class FakeOrganisationPersistence
             }
         );
 
-        if (includeManageExporter)
-            _store.Add(ManageExporterOrganisation());
+        if (includeDevExporters)
+        {
+            _store.Add(
+                DevExporterOrganisation(
+                    DevExporterOrg.Manage,
+                    ["901801", "901805", "901806", "901807"]
+                )
+            );
+            _store.Add(
+                DevExporterOrganisation(
+                    DevExporterOrg.InYearChange,
+                    ["901901", "901910", "901911", "901912"]
+                )
+            );
+        }
 
         // RA-512: perftest fixtures, generated (not hand-written) because 200
         // near-identical literals would be unreviewable. See Impl-RA-512.md.
@@ -726,17 +740,21 @@ public class FakeOrganisationPersistence
         );
     }
 
-    // RA-425 org: dedicated to the material dashboard pages (/manage) and their ra-425 e2e
-    // journey. DevExporterAccreditationSeedService gives this registration an Approved
-    // current-year accreditation with ORSs and interim sites. It is its own org because many
-    // specs change the shared exporter orgs, and an Approved current-year application on one
-    // of them would change its 2027 reference behaviour (RA-690). OverseasSites lists the
-    // seeded ORSs' SiteIds, so a fresh application for this registration has the same four.
+    // RA-425 orgs: a dedicated exporter, 50018 for the material dashboard pages (/manage) and
+    // their ra-425 e2e journey, 50019 for RA-492's in-year add-ORS journey.
+    // DevExporterAccreditationSeedService gives each registration an Approved current-year
+    // accreditation with ORSs. Each is its own org because many specs change the shared exporter
+    // orgs, and an Approved current-year application on one of them would change its 2027
+    // reference behaviour (RA-690). overseasSiteIds lists the seeded ORSs' SiteIds, so a fresh
+    // application for the registration has the same ones.
     // No registration number here: WithDatedRegistrationNumber adds it on read.
-    private static OrganisationModel ManageExporterOrganisation() =>
+    private static OrganisationModel DevExporterOrganisation(
+        DevExporterOrg org,
+        List<string> overseasSiteIds
+    ) =>
         new()
         {
-            OrgId = ManageExporterOrg.OrgId,
+            OrgId = org.OrgId,
             SchemaVersion = 1,
             Version = 1,
             BusinessType = BusinessTypeUnincorporated,
@@ -744,20 +762,20 @@ public class FakeOrganisationPersistence
             ReprocessingNations = [NationEngland],
             CompanyDetails = new CompanyDetailsModel
             {
-                Name = ManageExporterOrg.Name,
-                TradingName = "Manage Accreditation Test",
-                CompaniesHouseNumber = ManageExporterOrg.CompaniesHouseNumber,
+                Name = org.Name,
+                TradingName = org.TradingName,
+                CompaniesHouseNumber = org.CompaniesHouseNumber,
                 RegisteredAddress = new RegisteredAddressModel
                 {
-                    Line1 = ManageExporterOrg.AddressLine1,
-                    Town = ManageExporterOrg.Town,
-                    Postcode = ManageExporterOrg.Postcode,
+                    Line1 = org.AddressLine1,
+                    Town = org.Town,
+                    Postcode = org.Postcode,
                 },
             },
             ContactDetails = new ContactDetailsModel
             {
                 FullName = "Export Manager",
-                Email = "info@manageaccreditationtest.co.uk",
+                Email = org.Email,
             },
             Users = [],
             Accreditations = [],
@@ -765,17 +783,17 @@ public class FakeOrganisationPersistence
             [
                 new RegistrationModel
                 {
-                    Id = ManageExporterOrg.RegistrationId,
+                    Id = org.RegistrationId,
                     SiteId = "REG018",
                     Status = RegistrationStatusCreated,
-                    Material = ManageExporterOrg.Material.ToString().ToLowerInvariant(),
+                    Material = DevExporterOrg.Material.ToString().ToLowerInvariant(),
                     WasteProcessingType = WasteProcessingTypeExporter,
-                    OverseasSites = ["901801", "901805", "901806", "901807"],
+                    OverseasSites = overseasSiteIds,
                     WasteManagementPermits =
                     [
                         new WasteManagementPermitModel
                         {
-                            PermitNumber = ManageExporterOrg.PermitNumber,
+                            PermitNumber = org.PermitNumber,
                         },
                     ],
                 },
@@ -975,16 +993,16 @@ public class FakeOrganisationPersistence
         }
     }
 
-    // A copy, so a read never changes the store. Org 50018's number is always the clock's, even
-    // after an Update replaced its record, so it keeps matching what the dev seed wrote.
+    // A copy, so a read never changes the store. A dedicated exporter's number is always the
+    // clock's, even after an Update replaced its record, so it keeps matching what the dev seed wrote.
     private OrganisationModel WithDatedRegistrationNumber(OrganisationModel organisation)
     {
-        if (!_includeManageExporter || organisation.OrgId != ManageExporterOrg.OrgId)
+        if (!_includeDevExporters || DevExporterOrg.Find(organisation.OrgId) is not { } exporter)
             return organisation;
 
         var dated = organisation.ShallowCopy();
         dated.CompanyDetails = organisation.CompanyDetails?.ShallowCopy() ?? new();
-        dated.CompanyDetails.RegistrationNumber = ManageExporterOrg.RegistrationNumberFor(
+        dated.CompanyDetails.RegistrationNumber = exporter.RegistrationNumberFor(
             _clock.GetUtcNow().Year
         );
         return dated;

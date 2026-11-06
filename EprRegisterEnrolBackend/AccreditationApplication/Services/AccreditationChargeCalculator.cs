@@ -78,6 +78,19 @@ internal static class AccreditationChargeCalculator
     }
 
     /// <summary>
+    /// RA-492 AC04: the in-year charge for adding registered overseas sites to a granted
+    /// accreditation - <see cref="OverseasSiteFeePounds"/> per site and no tonnage fee, in pence.
+    /// </summary>
+    internal static int CalculateInYearOverseasSitesChargePence(int sitesAdded)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(sitesAdded);
+        return OverseasSiteFeePencePerSite * sitesAdded;
+    }
+
+    /// <summary><see cref="OverseasSiteFeePounds"/> in pence.</summary>
+    internal const int OverseasSiteFeePencePerSite = OverseasSiteFeePounds * PencePerPound;
+
+    /// <summary>
     /// Counts overseas sites that count towards the charge.
     /// </summary>
     /// <remarks>

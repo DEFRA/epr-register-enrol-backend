@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
@@ -38,7 +39,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-management-be-secret",
                 ["CaseWorking:UseStub"] = "true",
                 ["DomainModel:ExpandEnabled"] = expandEnabled ? "true" : "false",
-                [RegistrationStatusEndpoints.FeatureFlagKey] = inYearChangesEnabled ? "true" : "false",
+                [FeatureFlags.InYearChangesEnabledKey] = inYearChangesEnabled ? "true" : "false",
             }
         );
 

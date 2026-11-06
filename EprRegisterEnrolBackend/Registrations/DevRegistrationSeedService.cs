@@ -10,7 +10,7 @@ namespace EprRegisterEnrolBackend.Registrations;
 // DevAccreditationHistorySeedService's organisation) an Approved current version in the domain model, so the
 // frontend's material dashboard pages, which show only Approved registrations, have something to show.
 // Registered alongside DevAccreditationHistorySeedService, under the same Development-only DevSeedData:Enabled
-// flag. The dedicated exporter's (org 50018) registration is seeded by DevExporterAccreditationSeedService.
+// flag. The dedicated exporters' (orgs 50018 and 50019) registrations are seeded by DevExporterAccreditationSeedService.
 //
 // Idempotent: a registration that already has a current version (seeded earlier, written by the seed
 // dual-write, or changed by a tester) is left alone.

@@ -1,6 +1,36 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.5, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.8, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06
+
+**Changes in v6.8 (2026-11-06): the exclusivity key, with no writer yet (RA-747)**
+
+- **`applicationVersions` gets a top-level `exclusivityKey`** under a partial unique index over current versions that
+  carry one (`exclusivityKey_current_u`). Application code decides the key and the rule by type; the index only
+  catches two simultaneous writers that both passed the check (§6.2, R12).
+- **Nothing writes it yet.** Writing it on accreditation applications would refuse a second live application that
+  legacy allows today, so it waits for the one-live-application rule. Known duplicate legacy applications hold no key
+  until repaired (§6.3).
+
+**Changes in v6.7 (2026-11-06): the other four application types (RA-745)**
+
+- **`details` now has a class for every type:** `OrsChangeDetails`, `TonnageChangeDetails`,
+  `NewRegistrationDetails` and `AnnualChargeDetails` join `AccreditationDetails`. Their fields are in
+  `register-enrol-application-types.md`, "The shape". An ORS change records a set of change kinds, because an edit
+  and interim site changes to the same ORS travel in one application.
+- **New index `registrationId_applicationType_current`** (§4.2), for listing a registration's applications by type.
+- **The open-site check sees every type, in both directions** (§3.2): an open in-year ORS change holds its site
+  against a reapplication, and an open reapplication holds its sites against an ORS change.
+
+**Changes in v6.6 (2026-11-05): application types, option C1 (RA-744)**
+
+- **The Application is a common envelope with a per-type `details`** (§3.2, §3.3). Every field valid only for an
+  accreditation application moves under `details`, stored as `AccreditationDetails`. The design and the six
+  application types are in `register-enrol-application-types.md`.
+- **`applicationType` is stored at the top level** with five values, one per `details` class: `Accreditation`,
+  `OrsChange`, `TonnageChange`, `NewRegistration` and `AnnualCharge`. New and Reapply are both `Accreditation`,
+  told apart by `details.kind`. `details._t` holds the same string.
+- **Field paths in §5.1 that name accreditation fields on the Application now sit under `details`.** No production
+  data is affected: phases 2 and 3 ship with this change in one release.
 
 **Changes in v6.5 (2026-11-04): seed decisions and accepted risks, after the PR #228 review**
 
@@ -425,7 +455,7 @@ From read-only sweeps of the sibling repos. Each item affects facade fidelity or
 | **Registration** (`registrationVersions`) | `entityId` (stable; what other entities reference); `_id` per version; current-version unique `reExRegistrationId`; current-version unique sparse `registrationNumber` | `organisationId` → Organisation; `registrationNumber`, `previousRegistrationNumbers[]`; `status` (**ReEx's lifecycle**: created, approved, rejected, cancelled; §3.4); `wasteProcessingType` (reprocessor or exporter); `material`; `glassRecyclingProcess`; `nation` (from `submittedToRegulator`); `site{address, gridReference, siteId}`; `noticeAddress`; `wasteManagementPermits[]`; `recyclingProcess[]`; `exportPorts[]`; `yearlyMetrics[]`; `approvedPersons[]`; `contactDetails`; `submitterContactDetails`; `samplingInspectionPlan[]`; `suppliers`; `plantEquipmentDetails`; `formSubmissionTime` | n → 1 Organisation; 1 → n ORS; 1 → n Accreditation (one per year, see [A4](#assumptions)); 1 → n Application | Synced from ReEx **until** this service implements new registrations and registration fee payments (Q1). After that it is mastered here. Registration numbers are minted here (moved from Application) |
 | **OverseasSite / ORS** (`overseasSiteVersions`) | `entityId` (stable); `_id` per version; current-version unique (`registrationId`, `orsId`). **`orsId` is the stable, user-visible identity** (A22): 3 digits, allocated once per registration, kept across years and never reissued | `orsId` ("001"–"999"), `siteName`, `address{line1, line2, town, country}`, `formattedAddress`, `country`, `isEu`, `isOecd`, `coordinates`, `contact{fullName, email, phone}`, `operationCodes[]` (R-codes), `baselOecdCodes[]` (Basel/OECD waste codes, as an ordered list; a maximum of 3 is a validation rule, not the storage shape; empty for sites seeded from ReEx), `repatriatedLoads`, `conditionsOfExport`, `status` (Proposed, Active, Discarded), `origin` (ReEx or Operator), `proposedByApplicationId`, **`interimSites[]`** (embedded, v4; see the next row) | n → 1 Registration; embeds 0..n interim sites | Registration-scoped. Operator-proposed until its application is approved |
 | *Interim site* (**embedded** in `overseasSites.interimSites[]`; no collection of its own, v4 D1) | No `_id`. **`siteNumber` is the stable identity** (A22): 3 digits from its own per-registration pool, separate from ORS ids ([Q30](#q30)), kept across years. Uniqueness across the registration comes from a **multikey unique index** on the ORS collection (§4.2). Legacy `SN-000N` values are renumbered once if the survey finds any ([Q30](#q30)) | `siteNumber`; `previousSiteNumbers[]`; `siteName`; `address{line1, line2, town, region, country, postcode}`; `contact{…}`; `operationCodes[]` (R12/R13 mandatory); `status` (Proposed, Active, Withdrawn, Discarded); `proposedByApplicationId`; `createdAt`; `removedAt` | Part of its ORS | Same as ORS. **No suspension of its own (Q5).** It can only be removed from its ORS (`removedAt`, status Withdrawn) or restored (RA-603). **Every change is a new version of its ORS**, so its history is the ORS's history. It appears on every accreditation that covers its ORS, and is suspended implicitly when that ORS is (Q6) |
-| **Application** (`applicationVersions`; the legacy `accreditationApplications` stays the source of truth for writes until phase 6, §6) | `entityId` = the existing application `_id`, so the public `{applicationId}` is unchanged; `_id` per version; current-version unique sparse `applicationReference` | `registrationId` → Registration (new FK); `year` (accreditation year applied for); `sourceAccreditationId` → Accreditation (prior year); `status`; `paymentReference`; `caseManagementWorkItemId`; `caseManagementStatusUpdatedAt`; `submittedBy`; `withdrawalReason`; `dateSent`; `dateLastEdited`; `query`; sections (`prns`, `businessPlan`, `samplingPlan`, `besEvidence`, `overseasSites`), each with `sectionStatus` and submission `versions[]`; `applicationOverseasSites[]`; `reservedAccreditationNumber` | n → 1 Registration; 0..1 → 1 Accreditation (`accreditationId`, set on approval) | This service. Operator via frontend; case management via pushes |
+| **Application** (`applicationVersions`; the legacy `accreditationApplications` stays the source of truth for writes until phase 6, §6) | `entityId` = the existing application `_id`, so the public `{applicationId}` is unchanged; `_id` per version; current-version unique sparse `applicationReference` | Envelope (every type): `registrationId` → Registration (new FK); `applicationType` (`Accreditation`, `OrsChange`, `TonnageChange`, `NewRegistration`, `AnnualCharge`); `status`; `applicationReference`; `paymentReference`; `submissionReference`; `caseManagementWorkItemId`; `caseManagementStatusUpdatedAt`; `submittedBy`; `withdrawalReason`; `dateSent`; `dateLastEdited`; `query`. `details`, for `Accreditation` (`AccreditationDetails`): `kind` (`New`, `Reapply`); `year` (accreditation year applied for); `sourceAccreditationId` → Accreditation (prior year); sections (`prns`, `businessPlan`, `samplingPlan`, `besEvidence`, `overseasSitesSection`), each with `sectionStatus` and submission `versions[]`; `applicationOverseasSites[]`; `reservedAccreditationNumber`; `accreditationId`. Other types' `details` are in `register-enrol-application-types.md` | n → 1 Registration; for `Accreditation`, 0..1 → 1 Accreditation (`details.accreditationId`, set on approval) | This service. Operator via frontend; case management via pushes |
 | **Accreditation** (`accreditationVersions`) | `entityId` (stable); `_id` per version; current-version unique `applicationId`; current-version unique `accreditationNumber`, **globally unique** across organisations (v2 assumption, A20); current-version unique (`registrationId`, `year`) | `registrationId` → Registration (**only** link upward); `year` (the year the accreditation **applies to**, not the year it was created or approved; part of the API path, D5); `accreditationNumber` (**immutable once approved**, Q7); `status` (approved, suspended or cancelled; **stored, recorded-time only**, Q21; history via §4.2, with the API's `statusHistory[]` projected from it, §4.4); `periodStart`/`periodEnd` (business validity, **not** history); `signatories[]` {fullName, email, phone?} (was `prnIssuance.authorisers`); `businessPlan{…}` (**owned, not exposed**, v2); `samplingPlanFiles[]` (refs; **kept, not exposed**, Q11); `recyclingProcess[]` (**kept, not exposed**, Q11; source to be confirmed); `accreditationOverseasSites[]` (an **Accreditation Overseas Site**) = {`overseasSiteId`, `orsId`, `status` (approved or suspended; same rules), `besEvidence[]`}. The interim sites of an accredited ORS are **that ORS's embedded interim sites**, with no separate per-accreditation membership (Q24); `tonnageBand` (v4 D2: `up_to_500`, `up_to_5000`, `up_to_10000` or `over_10000`, which are ReEx's `TONNAGE_BAND` values; **stored, recorded-time only**, A19; each change is a new Accreditation version with `lastChange.reason = TonnageBandChanged`, and the API's `tonnageBandHistory[]` is projected from those versions, §4.4; it is on the public register) | n → 1 Registration; 1 → 1 approving Application; references ⊆ the registration's ORSs (and so their embedded interim sites) | This service. Created by the approval push only. ReEx already holds earlier accreditations and is the primary consumer of this API, so none are imported (D10). Suspended, cancelled and reinstated manually by the regulator (Q14). **Read by ReEx** through the v2 API (Q2). The first `tonnageBand` comes from the application's `prns.plannedTonnageBand`; later values come from in-year changes |
 
 **Versioned collections (v5, option B).** Registration, OverseasSite, Application and Accreditation each
@@ -549,11 +579,14 @@ erDiagram
     APPLICATION {
         ObjectId entityId "public applicationId; one doc per version"
         ObjectId registrationId FK
-        int year
+        string applicationType "Accreditation|OrsChange|TonnageChange|NewRegistration|AnnualCharge"
         string status
         string applicationReference UK
         uuid caseManagementWorkItemId UK
-        string reservedAccreditationNumber
+        object details "shape set by applicationType; _t = applicationType"
+        string details_kind "Accreditation: details.kind, New|Reapply, always set"
+        int details_year "Accreditation: details.year"
+        string details_reservedAccreditationNumber "Accreditation: details.reservedAccreditationNumber"
     }
     ACCREDITATION {
         ObjectId entityId "stable; one doc per version"
@@ -822,6 +855,17 @@ db.accreditationVersions.find({ entityId: id }).sort({ version: 1 })
   current one. This keeps `siteNumber` unique across all the registration's current ORSs. A multikey
   unique index does **not** stop the same value appearing twice inside **one** document, so the write path
   also checks the ORS's own array before adding an entry.
+- **Application types (v6.7).** `applicationVersions` holds every application type, so it gets a lookup index
+  `{registrationId: 1, applicationType: 1}` with `partialFilterExpression: {isCurrent: true}`
+  (`registrationId_applicationType_current`), for listing a registration's applications, optionally of one type.
+  It is not unique: rules such as one open change per ORS are chosen by `applicationType` in application code.
+  Fields inside `details` are not indexed until a rule needs to query them.
+- **Exclusivity key (v6.8).** `applicationVersions` also gets a **unique, partial** index on `{exclusivityKey: 1}`
+  (`exclusivityKey_current_u`) with `partialFilterExpression: {isCurrent: true, exclusivityKey: {$type: "string"}}`,
+  so applications with no key never collide and a closed version never collides with the current one. It is the
+  backstop for rules chosen by type in application code, such as one open change per ORS: it catches only two
+  simultaneous writers that both passed the check, and it never looks at an application's status, so a rejected or
+  withdrawn application frees its key only because application code clears it. Nothing writes the key yet (§6.2).
 
 #### How suspend and unsuspend appear
 
@@ -895,6 +939,10 @@ Legend:
 - **Flag**: ⚠ mismatch, ❓ no clear home, ✚ needs enriching.
 
 ### 5.1 `accreditationApplications` document: every field
+
+Since v6.6, a destination written as Application.`field` for an accreditation-only field (`year`, `sourceAccreditationId`, the
+sections, `applicationOverseasSites[]`, `reservedAccreditationNumber`, `accreditationId`) is stored at Application.`details.field`,
+in `AccreditationDetails`. Envelope fields such as `status` and `applicationReference` stay at the top level.
 
 | Current field (Mongo) | Dest | Facade | Flag / note |
 | --- | --- | --- | --- |
@@ -1299,6 +1347,14 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   site the application holds, unless another in-flight application of the registration also holds it; then it
   stays Proposed, and is discarded when the last holder closes, whichever application proposed it. A
   withdrawn interim site stays Withdrawn.
+- **Exclusivity key (v6.8): defined, not yet written.** Each application type has a key it holds while open, built by
+  its `ApplicationDetails` class in the formats of `register-enrol-application-types.md` (asked through `ExclusivityKeys`), for example `ors-change|{overseasSiteId}`
+  and `accreditation|{registrationId}|{year}`. Every type releases it when rejected or withdrawn, and in-year changes
+  also on approval. New Registration has no key until its journey decides how a site is identified. A key is never
+  built when a part is missing (an unset id, or a year of 0), so such applications can't collide. **No write path sets the key in this
+  release:** under dual-write a duplicate key would fail the operator's request, and legacy allows duplicates today.
+  When the one-live-application rule (R12) starts writing it, the sync must set it in the same transaction as the
+  rest of the version.
 - **Case Management calls during a write.** Submit, Resubmit and Withdraw call the Case Management service
   before the transaction opens, so a transaction never waits on it. If the model write then fails, the case has
   changed there but not here. The service's submit, resume and withdraw are idempotent (a repeat replays as
@@ -1354,7 +1410,7 @@ status, where ReEx's own status was the truth before.
 | Submitted, DulyMade, Queried, Updated, AwaitingDecision | As above. The management-be snapshot is untouched (it owns its copy). Pushes still find the application by `caseManagementWorkItemId`. Under dual-write a later approval runs the approval transaction normally |
 | Approved | Not in flight, but still live: no new application for the same key, unless its Accreditation is cancelled ([Q36](#q36)). Linked, and its Accreditation is created (§6.1) |
 | Rejected, Withdrawn | Not live: a new application can be started for the same key. Linked. Their Proposed sites become Discarded. A rejected application still blocks a new seed today (§2) |
-| Duplicate live applications for one key (a defect: at most one may be live, see Seed comment `:703-714`) | Both linked to the same Registration and recorded as a `DuplicateLiveApplications` conflict for manual repair. No automatic merge |
+| Duplicate live applications for one key (a defect: at most one may be live, see Seed comment `:703-714`) | Both linked to the same Registration and recorded as a `DuplicateLiveApplications` conflict for manual repair. No automatic merge. **Neither holds an `exclusivityKey` until repaired** (v6.8): both would claim the same key, and the unique index would fail the migration's write |
 
 There is no row for Approved applications: approvals in this service go live after the migration, so
 none exist when it runs (v4, D4).
@@ -1376,7 +1432,7 @@ none exist when it runs (v4, D4).
 | R9 | The management-be payload snapshot and migrations depend on the legacy shape (M3) | The legacy shape is kept for the whole programme. The submission payload is still built from the facade's legacy model, so it stays byte-compatible |
 | R10 | The missing operator identity makes `changedBy` weak | Recorded as the service identity until bead `b3n` lands |
 | R11 | Flag-combination complexity | Flags are ordered and validated at startup (for example `ReadFromModel` requires `DualWrite`, and `LegacyWrites` off requires the soak to be recorded) |
-| R12 | Seed idempotency is best-effort, so a race can create a duplicate live application (a defect) | Unchanged by this plan. Enforcing one live application per key (a unique partial index) is a separate follow-up, made easier once the survey shows the duplicates. The index would exclude rejected and withdrawn applications. The legacy document can't show that an approved application's Accreditation is cancelled, so that case needs a new field or an index on the model's collections ([Q36](#q36)) |
+| R12 | Seed idempotency is best-effort, so a race can create a duplicate live application (a defect) | The index now exists on the model (v6.8): `exclusivityKey_current_u`, a partial unique index over current versions that carry an `exclusivityKey`, with the key per type and its release rules in `ExclusivityKeys` (rejected and withdrawn release it; an approved accreditation application keeps it, because a cancelled Accreditation is reinstated as a new version of itself, [Q36](#q36)). **Nothing writes the key yet**, so the rule is not enforced: writing it is the follow-up, made easier once the survey shows the duplicates, and known duplicates hold no key until repaired (§6.3) |
 | R13 | **Two sources of accreditation status during the transition.** ReEx has its own status; we become the truth for PRN validity (Q2). A suspension recorded only here would not stop PRNs until ReEx calls our validity API | A sequenced cutover with the ReEx team ([Q19](#q19)). Until then, either regulator suspensions continue in ReEx, or we sync ours to ReEx. Don't expose our lifecycle actions in production before that is agreed |
 | R14 | **Reports expect non-status history from before the migration** (Q22) | History starts at migration time for every entity (§4.3). Earlier business dates are kept as attributes (`approvedAt`, `periodStart`) |
 | R15 | **Test-environment results do not prove production data shapes (accepted, Q34).** We have no access to production data because of data-protection rules. A clean survey, migration or reconciliation in test environments proves the code on test data only. This has caused production surprises before, and there is currently nothing we can do to remove it | Accepted, and reduced rather than removed: (1) dual-write is **fatal** (D9), so a surprising production document fails and rolls back that one write instead of silently corrupting the model; (2) phases 3 and 4 run in production with reads still on legacy, so the first production exposure costs a rolled-back write, not wrong data served; (3) the known legacy shapes are **required fixtures** in B7 and B10; (4) the reconciliation job reports any document it cannot project as a conflict and never skips it; (5) a data-shape surprise can reach users from phase 3 as a failed write, because first touch runs the migration routine (§6.2), and turning `DualWrite` off is the rollback; (6) phase 5, the first point where one could reach users as wrong data, goes live per route group with the flag-off rollback rehearsed |
@@ -1676,6 +1732,10 @@ Priority runs from 0 (critical) to 4 (backlog).
 | B21 | Next-year accreditation number (Q18): reserve **YY+1 of the previous year's number** on the new application (from `sourceAccreditationId`), falling back to the counter when there is no previous-year accreditation; remove the in-place YY+1 "reapply" branch | feature | 2 | B9 | `accreditation-number` with `regenerate:false` returns YY+1 when a source accreditation exists, otherwise the counter; an approved accreditation's number can never change |
 | B17 | Archive: rename the frozen legacy collection to `accreditationApplications_legacyArchive`; remove legacy paths, lazy backfills and flags | task | 3 | B14 + consumer moves (MF2, frontend fallback, T1) | Archive count matches; rename-back and projection script tested |
 | B18 | Consumer change list handed to the frontend, management-be, management-fe and test owners (reference naming F3 and `SubmitResponse`, singular `interimSite` reads, MF3 schema) | task | 3 | — | Tickets raised in the owning repos; not implemented here |
+| B26 | Application envelope plus polymorphic `details` (option C1), with `AccreditationDetails`; legacy applications map to `kind: Reapply` (RA-744) | task | 1 | B8 | Built (PR #237). Round-trip and guard tests on the replica set; dual-write endpoint tests unchanged |
+| B27 | The other four `details` types, typed CRUD helpers, `registrationId_applicationType_current`, and the open-site check across types in both directions (RA-745) | task | 2 | B26 | Each type round-trips with `_t` = `applicationType`; a read of the wrong type returns null and a change of type is refused; an open ORS change holds its site against a reapplication and the reverse |
+| B28 | `$jsonSchema` validator on `applicationVersions` in `warn` and `moderate`; a missing validator reports Degraded | task | 2 | B27 | Each details builder passes; another type's details are flagged; closing an old version still works |
+| B29 | `exclusivityKey` field, key builder and partial unique index, with no writer until the one-live-application rule (R12) | task | 2 | B26 | Index tests; no production path sets the key |
 | B25 | v2 YAML changes from this review, for the YAML owner: remove `effectiveDate` (Q21); full ReEx transitions (Q28); `baselOecdCodes[]` (Q29); optional `asAt` on site paths (Q27); site ids are `orsId`/`siteNumber`, with the int `siteId` removed (Q26); correct the `code1`–`code3` reason in the mapping. *(v4: the descriptive wording for D1 and D2 has already been updated in the YAML and mapping.)* | task | 1 | — | YAML and mapping updated and agreed with Adam and Fran; the endpoint developer told |
 
 Dependency spine: B0 + B2 → B3 → B4 → B5/B6 → B8 (dual-write) → B7 (migration) → B9 → B10 + B11 → B12 → B14 → B17.
