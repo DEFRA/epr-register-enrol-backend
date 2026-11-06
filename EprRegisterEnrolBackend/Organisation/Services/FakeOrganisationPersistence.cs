@@ -70,7 +70,7 @@ public class FakeOrganisationPersistence
         : this(TimeProvider.System, includeDevExporters: false) { }
 
     /// <param name="includeDevExporters">
-    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018 and 50019), which only
+    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018, 50019 and 50020), which only
     /// DevExporterAccreditationSeedService accredits.
     /// </param>
     public FakeOrganisationPersistence(TimeProvider clock, bool includeDevExporters)
@@ -710,6 +710,7 @@ public class FakeOrganisationPersistence
                     ["901901", "901910", "901911", "901912"]
                 )
             );
+            _store.Add(DevExporterOrganisation(DevExporterOrg.NoChangeRequests, ["902001", "902002"]));
         }
 
         // RA-512: perftest fixtures, generated (not hand-written) because 200
@@ -741,7 +742,8 @@ public class FakeOrganisationPersistence
     }
 
     // RA-425 orgs: a dedicated exporter, 50018 for the material dashboard pages (/manage) and
-    // their ra-425 e2e journey, 50019 for RA-492's in-year add-ORS journey.
+    // their ra-425 e2e journey (also a glass reprocessor for RA-697), 50019 for RA-492's in-year
+    // add-ORS journey, 50020 for RA-697's empty change-request pages.
     // DevExporterAccreditationSeedService gives each registration an Approved current-year
     // accreditation with ORSs. Each is its own org because many specs change the shared exporter
     // orgs, and an Approved current-year application on one of them would change its 2027
@@ -758,7 +760,9 @@ public class FakeOrganisationPersistence
             SchemaVersion = 1,
             Version = 1,
             BusinessType = BusinessTypeUnincorporated,
-            WasteProcessingTypes = [WasteProcessingTypeExporter],
+            WasteProcessingTypes = org.Reprocessor is null
+                ? [WasteProcessingTypeExporter]
+                : [WasteProcessingTypeExporter, WasteProcessingTypeReprocessor],
             ReprocessingNations = [NationEngland],
             CompanyDetails = new CompanyDetailsModel
             {
@@ -797,8 +801,35 @@ public class FakeOrganisationPersistence
                         },
                     ],
                 },
+                .. DevReprocessorRegistrations(org),
             ],
         };
+
+    // RA-697: org 50018's glass reprocessor registration, which the dev seed also accredits.
+    private static IEnumerable<RegistrationModel> DevReprocessorRegistrations(DevExporterOrg org) =>
+        org.Reprocessor is not { } reprocessor
+            ? []
+            :
+            [
+                new RegistrationModel
+                {
+                    Id = reprocessor.RegistrationId,
+                    SiteId = $"REG{org.OrgId % 1000:D3}R",
+                    Status = RegistrationStatusCreated,
+                    Material = reprocessor.Material.ToString().ToLowerInvariant(),
+                    WasteProcessingType = WasteProcessingTypeReprocessor,
+                    SiteAddress = new SiteAddressModel
+                    {
+                        Line1 = reprocessor.AddressLine1,
+                        Town = reprocessor.Town,
+                        Postcode = reprocessor.Postcode,
+                    },
+                    WasteManagementPermits =
+                    [
+                        new WasteManagementPermitModel { PermitNumber = org.PermitNumber },
+                    ],
+                },
+            ];
 
     private void AddPlasticReprocessor(
         int orgId,

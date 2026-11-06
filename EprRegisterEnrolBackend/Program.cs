@@ -334,12 +334,15 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
         builder.Services.AddHostedService<DevRegistrationSeedService>();
     }
 
-    // RA-425: the dedicated exporters (orgs 50018 and, for RA-492, 50019). Also seedable on their own,
+    // RA-425: the dedicated exporters (orgs 50018, 50019 for RA-492 and 50020 for RA-697). Also seedable on their own,
     // for the fe-tests stack, whose other specs must not see the Delta Green data above. The same check
     // decides whether the stub ReEx registry has the orgs (see ReExApiAdapterRegistration).
     if (DevExporterAccreditationSeedService.IsEnabled(builder.Configuration, builder.Environment))
     {
         builder.Services.AddHostedService<DevExporterAccreditationSeedService>();
+        // RA-697: their change requests, which need the in-year change store registered above.
+        if (builder.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
+            builder.Services.AddHostedService<DevChangeRequestSeedService>();
     }
 }
 
