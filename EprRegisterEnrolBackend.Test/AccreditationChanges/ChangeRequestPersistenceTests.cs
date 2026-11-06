@@ -126,4 +126,42 @@ public sealed class ChangeRequestPersistenceTests : IDisposable
 
         raw["status"].AsString.Should().Be("InProgress");
     }
+
+    // RA-697: the items round-trip, with their statuses and the requested band stored by name.
+    [Fact]
+    public async Task ItemsRoundTripWithStatusesAndBandStoredByName()
+    {
+        var validFrom = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+        var sites = NewRequest();
+        sites.Sites[0].Status = ChangeItemStatus.Approved;
+        sites.Sites[0].ValidFrom = validFrom;
+        var tonnage = NewRequest("app-2");
+        tonnage.ChangeType = AccreditationChangeRequest.UpgradeTonnageBandChangeType;
+        tonnage.Sites = [];
+        tonnage.TonnageBandUpgrade = new TonnageBandUpgradeItem
+        {
+            Status = ChangeItemStatus.DulyMade,
+            RequestedBand = PlannedTonnageBand.Over10000,
+        };
+        await _persistence.InsertAsync(sites, Ct);
+        await _persistence.InsertAsync(tonnage, Ct);
+
+        var storedSite = (await _persistence.GetDraftAsync("org-1", "app-1", Ct))!.Sites.Single();
+        storedSite.ItemId.Should().Be(sites.Sites[0].ItemId);
+        storedSite.ChangeType.Should().Be(AccreditationChangeRequest.AddOverseasSiteChangeType);
+        storedSite.Status.Should().Be(ChangeItemStatus.Approved);
+        storedSite.ValidFrom.Should().Be(validFrom);
+        storedSite.WithdrawnAt.Should().BeNull();
+        var storedTonnage = (await _persistence.GetDraftAsync("org-1", "app-2", Ct))!;
+        storedTonnage.Sites.Should().BeEmpty();
+        storedTonnage.TonnageBandUpgrade.Should().BeEquivalentTo(tonnage.TonnageBandUpgrade);
+
+        var raw = await _factory
+            .GetCollection<MongoDB.Bson.BsonDocument>(ChangeRequestPersistence.CollectionName)
+            .Find(Builders<MongoDB.Bson.BsonDocument>.Filter.Eq("applicationId", "app-2"))
+            .SingleAsync(Ct);
+        raw["tonnageBandUpgrade"]["status"].AsString.Should().Be("DulyMade");
+        raw["tonnageBandUpgrade"]["requestedBand"].AsString.Should().Be("Over10000");
+        raw["tonnageBandUpgrade"]["changeType"].AsString.Should().Be("upgrade-tonnage-band");
+    }
 }

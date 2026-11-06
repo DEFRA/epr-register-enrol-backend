@@ -150,7 +150,12 @@ public static class ChangeRequestRules
                     IsBesEvidenceRequired(site, effective),
                     requestSite.BesEvidence,
                     missing,
-                    missing.Count == 0
+                    missing.Count == 0,
+                    requestSite.ItemId,
+                    requestSite.ChangeType,
+                    requestSite.Status,
+                    requestSite.ValidFrom,
+                    requestSite.WithdrawnAt
                 );
             })
             .ToList();
@@ -166,7 +171,8 @@ public static class ChangeRequestRules
             request.CaseManagementReference,
             sites,
             sites.Count > 0 && sites.All(s => s.IsComplete),
-            Charge(request.Sites.Count)
+            Charge(request.Sites.Count),
+            request.TonnageBandUpgrade
         );
     }
 }
@@ -182,7 +188,12 @@ public sealed record ChangeRequestSiteView(
     bool BesEvidenceRequired,
     BesEvidenceModel? BesEvidence,
     List<string> MissingFields,
-    bool IsComplete
+    bool IsComplete,
+    Guid ItemId,
+    string ChangeType,
+    ChangeItemStatus Status,
+    DateTime? ValidFrom,
+    DateTime? WithdrawnAt
 );
 
 public sealed record ChangeRequestView(
@@ -196,7 +207,8 @@ public sealed record ChangeRequestView(
     string? CaseManagementReference,
     List<ChangeRequestSiteView> Sites,
     bool IsComplete,
-    ChargeView Charge
+    ChargeView Charge,
+    TonnageBandUpgradeItem? TonnageBandUpgrade
 );
 
 public sealed record AccreditationChangeSiteView(

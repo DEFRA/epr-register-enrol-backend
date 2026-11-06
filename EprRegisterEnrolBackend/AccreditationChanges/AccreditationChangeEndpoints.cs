@@ -85,7 +85,12 @@ public static class AccreditationChangeEndpoints
     private static async Task<(
         IResult? Error,
         AccreditationApplicationModel? Accreditation
-    )> LoadGrantedAsync(string organisationId, string applicationId, ChangeServices services)
+    )> LoadGrantedAsync(
+        string organisationId,
+        string applicationId,
+        ChangeServices services,
+        bool exporterOnly = true
+    )
     {
         if (!ObjectId.TryParse(applicationId, out _))
             return (Results.NotFound(), null);
@@ -95,7 +100,12 @@ public static class AccreditationChangeEndpoints
         );
         if (accreditation is null)
             return (Results.NotFound(), null);
-        if (accreditation.ApplicationStatus != ApplicationStatus.Approved || !accreditation.IsExporter)
+        if (accreditation.ApplicationStatus != ApplicationStatus.Approved)
+            return (
+                Results.Conflict("Change requests can only be made to a granted (Approved) accreditation."),
+                null
+            );
+        if (exporterOnly && !accreditation.IsExporter)
             return (
                 Results.Conflict(
                     "Overseas sites can only be added in-year to a granted (Approved) exporter accreditation."
@@ -128,7 +138,13 @@ public static class AccreditationChangeEndpoints
         [AsParameters] ChangeServices services
     )
     {
-        var (error, accreditation) = await LoadGrantedAsync(organisationId, applicationId, services);
+        // RA-697: a reprocessor reads its (tonnage) requests too; it has no overseas sites.
+        var (error, accreditation) = await LoadGrantedAsync(
+            organisationId,
+            applicationId,
+            services,
+            exporterOnly: false
+        );
         if (error is not null)
             return error;
 
@@ -137,17 +153,17 @@ public static class AccreditationChangeEndpoints
             applicationId,
             services.CancellationToken
         );
-        // Every InProgress or Submitted request is in flight: no regulator decision flows back
-        // to this service yet, so a Submitted request stays pending (AC09).
+        // RA-697: a site is in flight while a request holds an active item for it (AC09: a Submitted
+        // one stays pending); a granted, refused or withdrawn item no longer holds it. Newest first.
         var inFlightBySite = new Dictionary<int, AccreditationChangeRequest>();
         foreach (var request in requests)
         {
-            foreach (var site in request.Sites)
+            foreach (var site in request.Sites.Where(s => s.Status.IsActive()))
                 inFlightBySite.TryAdd(site.SiteId, request);
         }
 
         // A never-registered site has no status and is left out, as RA-425's page shows it on neither tab.
-        var sites = (accreditation!.OverseasSites?.Sites ?? [])
+        var sites = (accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
             .Select(site => (Site: site, Status: ChangeRequestRules.AccreditationStatus(site)))
             .Where(s => s.Status is not null)
             .Select(s =>
@@ -181,6 +197,7 @@ public static class AccreditationChangeEndpoints
                 requests.Select(r => ChangeRequestRules.ToView(r, accreditation)).ToList(),
                 requests
                     .SelectMany(r => r.Sites)
+                    .Where(s => s.Status.IsActive())
                     .Select(s => s.OrsId)
                     .OfType<string>()
                     .Distinct()
@@ -217,7 +234,7 @@ public static class AccreditationChangeEndpoints
         if (
             requests.Any(r =>
                 r.Status == ChangeRequestStatus.Submitted
-                && r.Sites.Exists(s => s.SiteId == body.SiteId)
+                && r.Sites.Exists(s => s.SiteId == body.SiteId && s.Status.IsActive())
             )
         )
             return Results.Conflict(
@@ -514,6 +531,7 @@ public static class AccreditationChangeEndpoints
         draft.PaymentReference = body.PaymentReference;
         draft.ChargePence = ChangeRequestRules.Charge(draft.Sites.Count).TotalPence;
         draft.Status = ChangeRequestStatus.Submitted;
+        draft.SetItemStatuses(ChangeItemStatus.Submitted);
         draft.SubmittedAt = DateTime.UtcNow;
 
         // Saved, with its version check, before Case Management hears of it: of two concurrent
@@ -585,6 +603,7 @@ public static class AccreditationChangeEndpoints
     )
     {
         draft.Status = ChangeRequestStatus.InProgress;
+        draft.SetItemStatuses(ChangeItemStatus.InProgress);
         draft.SubmittedAt = null;
         draft.SubmittedBy = null;
         draft.PaymentReference = null;
