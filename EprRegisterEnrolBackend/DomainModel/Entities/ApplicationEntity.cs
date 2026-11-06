@@ -50,6 +50,13 @@ public class ApplicationEntity : VersionedEntityBase
     public Guid? CaseManagementWorkItemId { get; set; }
 
     public DateTime? CaseManagementStatusUpdatedAt { get; set; }
+
+    /// <summary>
+    /// Held while the application is open, so a second open application with the same key is refused by the
+    /// <c>exclusivityKey_current_u</c> index; see <see cref="ExclusivityKeys"/>. Nothing writes it yet, and known
+    /// duplicate legacy applications hold none until they are repaired (design doc §6.3).
+    /// </summary>
+    public string? ExclusivityKey { get; set; }
     public Submitter? SubmittedBy { get; set; }
     public string? WithdrawalReason { get; set; }
     public DateTime? DateSent { get; set; }
