@@ -883,9 +883,10 @@ a script, saving an unknown type or another type's fields.
   `dateLastEdited`, `details`); `applicationType` and `status` limited to their C# enum values; `details` with `_t`
   and `schemaVersion`; and one `oneOf` branch per type, pairing an `applicationType` with its `details._t` and its
   required `details` fields (Accreditation: `kind`, `year`; ORS change: `targetAccreditationId`, `overseasSiteId`,
-  `changeKinds`, `site`; tonnage: `targetAccreditationId`, `toBand`, with `fromBand` a string when present, because a null band isn't stored; New Registration: `sections`; annual
-  charge: `chargeYear`). Element names come from the driver's class maps, so they can't drift from what is stored. It
-  does not copy every field of the classes.
+  `changeKinds`, `site`; tonnage: `targetAccreditationId`, `toBand`, with `fromBand` a string when present, because a
+  null band isn't stored and `toBand` is non-nullable in C#; New Registration: `sections`; annual charge:
+  `chargeYear`). Element names come from the driver's class maps, so they can't drift from what is stored. It does not
+  copy every field of the classes.
 - **`moderate` level:** closing a version is a `$set` on the old document. Under `strict` that update re-checks the old
   document against today's validator, so a tightened schema would refuse the close and fail every later write to that
   application. `moderate` doesn't re-check documents that were already invalid.

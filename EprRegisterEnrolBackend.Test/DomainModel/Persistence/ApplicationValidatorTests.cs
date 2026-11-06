@@ -203,28 +203,29 @@ public sealed class ApplicationValidatorTests : IDisposable
         (await CountFailingAsync(DomainModelCollections.ApplicationVersions)).Should().Be(5);
     }
 
-    // IgnoreIfNull leaves a null field out of the stored document, so a nullable band that is null is simply absent.
-    // A tonnage change always names the band it asks for, so ToBand is required; FromBand may be absent.
+    // IgnoreIfNull leaves a null field out of the stored document, so a FromBand that is null is simply absent, and
+    // the validator allows that. ToBand is required by both the type (non-nullable) and the validator; a document
+    // written without one by anything other than the C# code is flagged.
     [Fact]
     public async Task TonnageChange_WithNoFromBand_Passes_ButWithNoToBandIsFlagged()
     {
         var persistence = Persistence();
         var noFrom = DomainModelBuilders.TonnageChangeDetails();
         noFrom.FromBand = null;
-        var noTo = DomainModelBuilders.TonnageChangeDetails();
-        noTo.ToBand = null;
-        await persistence.Versions.InsertAsync(
+        var stored = await persistence.Versions.InsertAsync(
             DomainModelBuilders.Application(ObjectId.GenerateNewId(), noFrom),
             Change(),
             cancellationToken: Ct
         );
         (await CountFailingAsync(DomainModelCollections.ApplicationVersions)).Should().Be(0);
 
-        await persistence.Versions.InsertAsync(
-            DomainModelBuilders.Application(ObjectId.GenerateNewId(), noTo),
-            Change(),
-            cancellationToken: Ct
-        );
+        var raw = _database.GetCollection<BsonDocument>(DomainModelCollections.ApplicationVersions);
+        var noTo = await raw.Find(new BsonDocument("_id", stored.Id)).SingleAsync(Ct);
+        noTo["_id"] = ObjectId.GenerateNewId();
+        noTo["entityId"] = ObjectId.GenerateNewId();
+        noTo.Remove("applicationReference"); // unique among current versions
+        noTo["details"].AsBsonDocument.Remove("toBand");
+        await raw.InsertOneAsync(noTo, cancellationToken: Ct);
 
         (await CountFailingAsync(DomainModelCollections.ApplicationVersions)).Should().Be(1);
     }
