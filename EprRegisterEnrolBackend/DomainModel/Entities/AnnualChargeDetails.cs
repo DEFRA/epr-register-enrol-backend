@@ -10,4 +10,12 @@ public sealed class AnnualChargeDetails : ApplicationDetails
 
     /// <summary>The year the charge is for.</summary>
     public int ChargeYear { get; set; }
+
+    /// <summary>One annual charge application per registration and charge year.</summary>
+    public override string? ExclusivityKey(ApplicationEntity application) =>
+        application.RegistrationId is { } registrationId && ChargeYear > 0
+            ? $"annual-charge|{registrationId}|{ChargeYear}"
+            : null;
+
+    public override bool ReleasesExclusivityKeyOnApproval() => false;
 }

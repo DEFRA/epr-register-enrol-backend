@@ -11,15 +11,30 @@ namespace EprRegisterEnrolBackend.Test.DomainModel.Entities;
 /// </summary>
 public class ExclusivityKeysTests
 {
-    private static readonly ObjectId RegistrationId = ObjectId.Parse("6512a0f0c0ffee0000000001");
-    private static readonly ObjectId SiteId = ObjectId.Parse("6512a0f0c0ffee0000000002");
-    private static readonly ObjectId AccreditationId = ObjectId.Parse("6512a0f0c0ffee0000000003");
+    private static readonly ObjectId s_registrationId = ObjectId.Parse("6512a0f0c0ffee0000000001");
+    private static readonly ObjectId s_siteId = ObjectId.Parse("6512a0f0c0ffee0000000002");
+    private static readonly ObjectId s_accreditationId = ObjectId.Parse("6512a0f0c0ffee0000000003");
 
     private static ApplicationEntity Application(
         ApplicationDetails details,
         ObjectId? registrationId = null,
         ApplicationStatus status = ApplicationStatus.Submitted
-    ) => DomainModelBuilders.Application(registrationId ?? RegistrationId, details, status);
+    ) => DomainModelBuilders.Application(registrationId ?? s_registrationId, details, status);
+
+    // One details instance per type, so a test can run for every ApplicationType. A new type fails here until it is
+    // added, which is the point.
+    private static ApplicationDetails DetailsOf(ApplicationType type) =>
+        type switch
+        {
+            ApplicationType.Accreditation => DomainModelBuilders.AccreditationDetails(),
+            ApplicationType.OrsChange => DomainModelBuilders.OrsChangeDetails(s_siteId),
+            ApplicationType.TonnageChange => DomainModelBuilders.TonnageChangeDetails(
+                s_accreditationId
+            ),
+            ApplicationType.NewRegistration => DomainModelBuilders.NewRegistrationDetails(),
+            ApplicationType.AnnualCharge => DomainModelBuilders.AnnualChargeDetails(),
+            _ => throw new ArgumentOutOfRangeException(nameof(type), type, null),
+        };
 
     // --- formats --------------------------------------------------------------------------------------------------
 
@@ -41,7 +56,7 @@ public class ExclusivityKeysTests
     public void Build_OrsChange_IsTheOverseasSite()
     {
         ExclusivityKeys
-            .Build(Application(DomainModelBuilders.OrsChangeDetails(SiteId)))
+            .Build(Application(DomainModelBuilders.OrsChangeDetails(s_siteId)))
             .Should()
             .Be("ors-change|6512a0f0c0ffee0000000002");
     }
@@ -50,7 +65,7 @@ public class ExclusivityKeysTests
     public void Build_TonnageChange_IsTheTargetAccreditation()
     {
         ExclusivityKeys
-            .Build(Application(DomainModelBuilders.TonnageChangeDetails(AccreditationId)))
+            .Build(Application(DomainModelBuilders.TonnageChangeDetails(s_accreditationId)))
             .Should()
             .Be("tonnage-change|6512a0f0c0ffee0000000003");
     }
@@ -75,7 +90,7 @@ public class ExclusivityKeysTests
 
     // A missing part would otherwise build the same key for every application missing it, and they would collide.
     [Fact]
-    public void Build_AnyPartMissing_HasNoKey()
+    public void Build_AnyIdMissing_HasNoKey()
     {
         var unlinked = Application(DomainModelBuilders.AccreditationDetails());
         unlinked.RegistrationId = null;
@@ -90,6 +105,21 @@ public class ExclusivityKeysTests
             .BeNull();
         ExclusivityKeys
             .Build(Application(DomainModelBuilders.TonnageChangeDetails(ObjectId.Empty)))
+            .Should()
+            .BeNull();
+    }
+
+    // The years are plain ints, so an unset one is 0. It is a missing part like an unset id, or every application
+    // with no year would share the key for year 0.
+    [Fact]
+    public void Build_YearNotSet_HasNoKey()
+    {
+        var accreditation = DomainModelBuilders.AccreditationDetails();
+        accreditation.Year = 0;
+
+        ExclusivityKeys.Build(Application(accreditation)).Should().BeNull();
+        ExclusivityKeys
+            .Build(Application(DomainModelBuilders.AnnualChargeDetails(0)))
             .Should()
             .BeNull();
     }
@@ -118,7 +148,7 @@ public class ExclusivityKeysTests
         bool holds
     )
     {
-        ExclusivityKeys.HoldsKey(type, status).Should().Be(holds);
+        ExclusivityKeys.HoldsKey(DetailsOf(type), status).Should().Be(holds);
     }
 
     [Fact]
@@ -130,7 +160,10 @@ public class ExclusivityKeysTests
         {
             foreach (var status in open)
             {
-                ExclusivityKeys.HoldsKey(type, status).Should().BeTrue($"{type} at {status}");
+                ExclusivityKeys
+                    .HoldsKey(DetailsOf(type), status)
+                    .Should()
+                    .BeTrue($"{type} at {status}");
             }
         }
     }
@@ -138,9 +171,9 @@ public class ExclusivityKeysTests
     [Fact]
     public void For_ReleasedApplication_HasNoKey_ButAnOpenOneDoes()
     {
-        var open = Application(DomainModelBuilders.OrsChangeDetails(SiteId));
+        var open = Application(DomainModelBuilders.OrsChangeDetails(s_siteId));
         var approved = Application(
-            DomainModelBuilders.OrsChangeDetails(SiteId),
+            DomainModelBuilders.OrsChangeDetails(s_siteId),
             status: ApplicationStatus.Approved
         );
 

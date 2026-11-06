@@ -860,6 +860,12 @@ db.accreditationVersions.find({ entityId: id }).sort({ version: 1 })
   (`registrationId_applicationType_current`), for listing a registration's applications, optionally of one type.
   It is not unique: rules such as one open change per ORS are chosen by `applicationType` in application code.
   Fields inside `details` are not indexed until a rule needs to query them.
+- **Exclusivity key (v6.8).** `applicationVersions` also gets a **unique, partial** index on `{exclusivityKey: 1}`
+  (`exclusivityKey_current_u`) with `partialFilterExpression: {isCurrent: true, exclusivityKey: {$type: "string"}}`,
+  so applications with no key never collide and a closed version never collides with the current one. It is the
+  backstop for rules chosen by type in application code, such as one open change per ORS: it catches only two
+  simultaneous writers that both passed the check, and it never looks at an application's status, so a rejected or
+  withdrawn application frees its key only because application code clears it. Nothing writes the key yet (§6.2).
 
 #### How suspend and unsuspend appear
 
@@ -1342,10 +1348,10 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   stays Proposed, and is discarded when the last holder closes, whichever application proposed it. A
   withdrawn interim site stays Withdrawn.
 - **Exclusivity key (v6.8): defined, not yet written.** Each application type has a key it holds while open, built by
-  `ExclusivityKeys` in the formats of `register-enrol-application-types.md`, for example `ors-change|{overseasSiteId}`
+  its `ApplicationDetails` class in the formats of `register-enrol-application-types.md` (asked through `ExclusivityKeys`), for example `ors-change|{overseasSiteId}`
   and `accreditation|{registrationId}|{year}`. Every type releases it when rejected or withdrawn, and in-year changes
   also on approval. New Registration has no key until its journey decides how a site is identified. A key is never
-  built when a part is missing, so unlinked applications can't collide. **No write path sets the key in this
+  built when a part is missing (an unset id, or a year of 0), so such applications can't collide. **No write path sets the key in this
   release:** under dual-write a duplicate key would fail the operator's request, and legacy allows duplicates today.
   When the one-live-application rule (R12) starts writing it, the sync must set it in the same transaction as the
   rest of the version.

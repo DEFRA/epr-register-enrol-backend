@@ -147,7 +147,7 @@ The other model collections have their own indexes, but C1 doesn't change their 
 | --- | --- | --- |
 | New, Reapply | `accreditation\|{registrationId}\|{year}` | Rejected or withdrawn. Not released when the Accreditation is cancelled: cancellation and reinstatement are new versions of the same Accreditation, so there is no replacement application for the same registration and year (Q36, James's working view). |
 | In-year ORS | `ors-change\|{overseasSiteId}` | Approved, rejected or withdrawn |
-| In-year tonnage | `tonnage-change\|{accreditationId}` | Approved, rejected or withdrawn |
+| In-year tonnage | `tonnage-change\|{targetAccreditationId}` | Approved, rejected or withdrawn |
 | New Registration | `registration\|{org}\|{material}\|{site or exporter}`. **Not built in RA-747** (James, 6 November 2026): no key until the journey decides how a site is identified | Rejected or withdrawn |
 | Annual charge | `annual-charge\|{registrationId}\|{chargeYear}` | Rejected or withdrawn |
 

@@ -13,4 +13,12 @@ public sealed class NewRegistrationDetails : ApplicationDetails
     public override ApplicationType ApplicationType => ApplicationType.NewRegistration;
 
     public List<RegistrationJourneySection> Sections { get; set; } = [];
+
+    /// <summary>
+    /// No key until the journey decides how a site is identified: a key built from less would let duplicates through
+    /// or block valid applications (RA-747).
+    /// </summary>
+    public override string? ExclusivityKey(ApplicationEntity application) => null;
+
+    public override bool ReleasesExclusivityKeyOnApproval() => false;
 }

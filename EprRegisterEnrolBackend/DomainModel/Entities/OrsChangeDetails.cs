@@ -33,4 +33,11 @@ public sealed class OrsChangeDetails : ApplicationDetails
     public required ApplicationOverseasSiteEntry Site { get; set; }
 
     public override IEnumerable<ApplicationOverseasSiteEntry> HeldSites() => [Site];
+
+    /// <summary>One open change per ORS.</summary>
+    public override string? ExclusivityKey(ApplicationEntity application) =>
+        OverseasSiteId != ObjectId.Empty ? $"ors-change|{OverseasSiteId}" : null;
+
+    /// <summary>The next change to the same ORS is a new application.</summary>
+    public override bool ReleasesExclusivityKeyOnApproval() => true;
 }

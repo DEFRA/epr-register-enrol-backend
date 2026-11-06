@@ -33,4 +33,18 @@ public abstract class ApplicationDetails
     /// (<c>HeldInFlightElsewhereAsync</c>). Types that touch no overseas site hold none.
     /// </summary>
     public virtual IEnumerable<ApplicationOverseasSiteEntry> HeldSites() => [];
+
+    /// <summary>
+    /// The <see cref="ApplicationEntity.ExclusivityKey"/> an application with these details holds while it is open,
+    /// or null when this type has none or a part of it is missing. A missing part never builds a key, or every
+    /// application missing it would share one and collide. Abstract, so a new type must decide; see
+    /// <see cref="ExclusivityKeys"/>.
+    /// </summary>
+    public abstract string? ExclusivityKey(ApplicationEntity application);
+
+    /// <summary>
+    /// Whether an approved application of this type frees its key. Rejected and withdrawn applications always do;
+    /// see <see cref="ExclusivityKeys.HoldsKey"/>. Abstract, so a new type must decide.
+    /// </summary>
+    public abstract bool ReleasesExclusivityKeyOnApproval();
 }

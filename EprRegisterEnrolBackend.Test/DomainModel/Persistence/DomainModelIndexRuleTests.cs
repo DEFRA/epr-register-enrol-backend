@@ -347,7 +347,10 @@ public sealed class DomainModelIndexRuleTests : IDisposable
     }
 
     // The backstop for rules such as one open change per ORS: application code decides the key, and the index only
-    // catches two simultaneous writers that both passed the check (RA-747).
+    // catches two simultaneous writers that both passed the check (RA-747). The index never looks at an
+    // application's status: a rejected or withdrawn application frees its key only because the application clears
+    // it (ExclusivityKeys.HoldsKey says when), which this test does by hand. What the index itself ignores is a
+    // superseded version of the same application, and an application with no key.
     [Fact]
     public async Task ApplicationIndexes_ExclusivityKey_IsUniqueAmongCurrentVersionsWhenPresent()
     {
@@ -384,7 +387,8 @@ public sealed class DomainModelIndexRuleTests : IDisposable
         );
         next.Changed.Should().BeTrue();
 
-        // Once the holder releases the key, another application can take it.
+        // Once the holder clears the key (as application code will on rejection, withdrawal or an in-year approval),
+        // another application can take it.
         var released = next.Entity;
         released.ExclusivityKey = null;
         await _applications.Versions.UpdateAsync(
