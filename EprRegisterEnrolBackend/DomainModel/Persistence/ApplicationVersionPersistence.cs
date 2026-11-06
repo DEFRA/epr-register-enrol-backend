@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Utils.Mongo;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.DomainModel.Persistence;
@@ -53,4 +54,7 @@ public class ApplicationVersionPersistence(
         );
         return indexes;
     }
+
+    // A backstop against any writer saving an unknown type or another type's fields (RA-746).
+    protected override BsonDocument? DefineValidator() => ApplicationVersionSchema.Validator();
 }

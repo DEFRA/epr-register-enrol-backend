@@ -19,8 +19,12 @@ public sealed class TonnageChangeDetails : ApplicationDetails
     [BsonSerializer(typeof(TonnageBandSerializer))]
     public TonnageBand? FromBand { get; set; }
 
-    [BsonSerializer(typeof(TonnageBandSerializer))]
-    public TonnageBand? ToBand { get; set; }
+    /// <summary>
+    /// The band the change asks for. Always set, so the type agrees with the <c>applicationVersions</c> validator,
+    /// which requires it: a null band would not be stored at all (RA-746).
+    /// </summary>
+    [BsonSerializer(typeof(RequiredTonnageBandSerializer))]
+    public required TonnageBand ToBand { get; set; }
 
     /// <summary>One open change per Accreditation.</summary>
     public override string? ExclusivityKey(ApplicationEntity application) =>
