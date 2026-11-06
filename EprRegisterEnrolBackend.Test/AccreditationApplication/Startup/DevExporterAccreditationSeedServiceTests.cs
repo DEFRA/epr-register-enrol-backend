@@ -144,7 +144,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task SeedAsync_InYearChangeExporterHasOneAccreditedOrsAndThreeRegisteredOnlyLackingDifferentFields()
+    public async Task SeedAsync_InYearChangeExporterHasOneAccreditedThreeRegisteredOnlyAndOneNeverRegisteredOrs()
     {
         var seeded = await SeedOnce(organisationId: "50019");
         var sites = seeded.OverseasSites!.Sites;
@@ -155,7 +155,8 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
                 (901901, "001", "Hamburg Kunststoff GmbH", "Germany", true),
                 (901910, "005", "Lyon Plastiques SA", "France", false),
                 (901911, "006", "Delhi Polymers Pvt", "India", false),
-                (901912, "007", "Izmir Recycling AS", "Turkey", false)
+                (901912, "007", "Izmir Recycling AS", "Turkey", false),
+                (901913, "008", "Valencia Reciclaje SL", "Spain", false)
             );
         sites.Select(s => (s.Coordinates, string.Join(",", s.OperationCodes), s.ConditionsOfExport, s.IsEu, s.IsOecd))
             .Should()
@@ -163,8 +164,11 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
                 ("53.5511, 9.9937", "R3", true, true, true),
                 ("45.7640, 4.8357", "R3", true, true, true),
                 (null, "", null, false, false),
-                ("38.4237, 27.1428", "", null, false, true)
+                ("38.4237, 27.1428", "", null, false, true),
+                ("39.4699, -0.3763", "R3", true, true, true)
             );
+        // Added by the operator and deselected: never registered, so on neither tab.
+        sites.Where(s => s.IsNewSite).Select(s => s.SiteId).Should().Equal(901913);
         sites[0].ValidFrom.Should().Be("2026-01-01T00:00:00Z");
         sites.Should().OnlyContain(s => s.ContactName != null && s.Code1 != null && s.InterimSites.Count == 0);
     }
@@ -396,8 +400,9 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         registration.Id.ToString().Should().Be(seeded.RegistrationId);
         registration.Material.Should().Be("plastic");
         registration.WasteProcessingType.Should().Be("exporter");
+        // The registration lists every seeded ORS but a never-registered one (org 50019's 901913).
         registration.OverseasSites.Should()
-            .Equal(seeded.OverseasSites!.Sites.Select(s => s.SiteId.ToString()));
+            .Equal(seeded.OverseasSites!.Sites.Where(s => !s.IsNewSite).Select(s => s.SiteId.ToString()));
         registration.WasteManagementPermits!.Select(p => p.PermitNumber)
             .Should()
             .Equal(seeded.PermitNumbers);

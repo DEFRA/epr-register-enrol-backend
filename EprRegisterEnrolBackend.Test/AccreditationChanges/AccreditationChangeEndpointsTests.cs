@@ -20,7 +20,8 @@ namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 // The approved application is DevExporterAccreditationSeedService's org 50019 fixture: 901901
 // accredited, 901910 registered and complete (France), 901911 registered with only a country
 // (India, so BES evidence is needed unless conditions of export are met), 901912 registered
-// missing R code and conditions of export (Turkey, OECD, so no BES).
+// missing R code and conditions of export (Turkey, OECD, so no BES), and 901913 never registered
+// (added on the application and deselected).
 public sealed class AccreditationChangeEndpointsTests : IDisposable
 {
     private const int Year = 2026;
@@ -186,8 +187,8 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         site.GetProperty("siteName").GetString().Should().Be("Delhi Polymers Pvt");
 
         var stored = await _factory.FakePersistence.GetByIdAsync(Org, AppId);
-        stored!.OverseasSites!.Sites.Should().HaveCount(4);
-        stored.OverseasSites.Sites.Select(s => s.OrsId).Should().Equal("001", "005", "006", "007");
+        stored!.OverseasSites!.Sites.Should().HaveCount(5);
+        stored.OverseasSites.Sites.Select(s => s.OrsId).Should().Equal("001", "005", "006", "007", "008");
         stored.OverseasSites.Sites.Single(s => s.SiteId == 901911).Selected.Should().BeFalse();
     }
 
@@ -222,21 +223,12 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     [Fact]
     public async Task NeverRegisteredSite_IsNotListedAndCannotBeAdded()
     {
-        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
-        accreditation.Id = MongoDB.Bson.ObjectId.GenerateNewId();
-        accreditation.OverseasSites!.Sites.Add(
-            new OverseasSiteModel { SiteId = 901999, OrsId = "008", SiteName = "New Site", Country = "Spain", IsNewSite = true, Selected = false }
-        );
-        _factory.FakePersistence.Seed(accreditation);
-        var baseUrl = $"/api/v1/accreditation-changes/{Org}/{accreditation.Id}";
-
-        var view = await ReadJson(await _client.GetAsync(baseUrl, Ct));
+        var view = await Get();
         view.GetProperty("sites").EnumerateArray().Select(s => s.GetProperty("siteId").GetInt32())
             .Should()
             .Equal(901901, 901910, 901911, 901912);
-        (await _client.PostAsJsonAsync($"{baseUrl}/requests/current/sites", new { siteId = 901999 }, Ct))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.NotFound);
+
+        (await AddSite(901913)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         _factory.FakeChangeRequests.All.Should().BeEmpty();
     }
 
@@ -610,6 +602,8 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     private static readonly string AccreditationReference = DevExporterOrg.InYearChange.AccreditationNumberFor(Year);
     private static readonly string Base = $"/api/v1/accreditation-changes/{Org}/{AppId}";
 
+    private static readonly string[] R3 = ["R3"];
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private readonly AccreditationChangeTestFactory _factory = new(submitToCaseManagement: true);
@@ -770,7 +764,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
             .Be(HttpStatusCode.Created);
         await _client.PatchAsJsonAsync(
             $"{Base}/requests/current/sites/901912",
-            new { operationCodes = new[] { "R3" }, conditionsOfExport = false },
+            new { operationCodes = R3, conditionsOfExport = false },
             Ct
         );
 

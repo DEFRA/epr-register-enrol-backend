@@ -3,6 +3,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.Registrations;
+using EprRegisterEnrolBackend.Utils;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
@@ -113,12 +114,16 @@ public class DevExporterAccreditationSeedService(
             ExporterRegistration(org, year),
             cancellationToken
         );
-        Logger.LogInformation(
-            seeded
-                ? "DevExporterAccreditationSeedService: seeded org {OrgId}'s Approved registration version"
-                : "DevExporterAccreditationSeedService: org {OrgId}'s registration version already present",
-            org.OrgId
-        );
+        if (seeded)
+            Logger.LogInformation(
+                "DevExporterAccreditationSeedService: seeded org {OrgId}'s Approved registration version",
+                org.OrgId
+            );
+        else
+            Logger.LogInformation(
+                "DevExporterAccreditationSeedService: org {OrgId}'s registration version already present",
+                org.OrgId
+            );
     }
 
     internal static RegistrationEntity ExporterRegistration(DevExporterOrg org, int year) =>
@@ -251,7 +256,8 @@ public class DevExporterAccreditationSeedService(
     // RA-492 (org 50019): one accredited ORS with every field the in-year add journey asks for,
     // and three registered only: complete (France: EU and OECD, so no BES evidence), country only
     // (India: outside the EU and OECD, so BES evidence unless the conditions of export are met), and
-    // coordinates only (Turkey: OECD, so no BES evidence).
+    // coordinates only (Turkey: OECD, so no BES evidence). Plus one never registered (see
+    // NeverRegisteredOrs), which neither tab lists and which cannot be added to a change request.
     private static List<OverseasSiteModel> InYearChangeOverseasSites(int year) =>
         [
             InYearChangeOrs(
@@ -281,7 +287,36 @@ public class DevExporterAccreditationSeedService(
                 isOecd: true,
                 coordinates: "38.4237, 27.1428"
             ),
+            NeverRegisteredOrs(),
         ];
+
+    // An ORS the operator added on the accreditation application and then deselected before it was
+    // granted: built as AddOverseasSite builds one (IsNewSite set, EU/OECD from the country) and
+    // stored unselected, as the overseas-sites PATCH leaves a deselected site. So it was never on
+    // the registration, which is why the stub registry's registration does not list it.
+    private static OverseasSiteModel NeverRegisteredOrs() =>
+        new()
+        {
+            SiteId = 901913,
+            OrsId = "008",
+            SiteName = "Valencia Reciclaje SL",
+            AddressLine1 = "901913 Industrial Estate",
+            TownOrCity = "Valencia",
+            Country = "Spain",
+            SiteAddress = "901913 Industrial Estate, Valencia, Spain",
+            Coordinates = "39.4699, -0.3763",
+            ContactName = "Site Manager",
+            ContactEmail = "site901913@example.com",
+            ContactPhone = "+44 1234 567890",
+            OperationCodes = ["R3"],
+            Code1 = "B3011",
+            RepatriatedLoads = "Rejected loads are returned to the UK exporter.",
+            ConditionsOfExport = true,
+            IsEu = CountryClassifications.IsEu("Spain"),
+            IsOecd = CountryClassifications.IsOecd("Spain"),
+            IsNewSite = true,
+            Selected = false,
+        };
 
     // The contact and waste details a registration holds, and only the given coordinates, R codes
     // and conditions of export.
