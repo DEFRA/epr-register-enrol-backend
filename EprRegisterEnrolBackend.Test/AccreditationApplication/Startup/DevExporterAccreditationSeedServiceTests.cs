@@ -32,12 +32,14 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
     private readonly TestMongoDbClientFactory _mongo;
     private readonly string _databaseName;
     private readonly RegistrationVersionStore _registrations;
+    private readonly OverseasSiteVersionStore _overseasSites;
 
     public DevExporterAccreditationSeedServiceTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("dev_exporter_seed");
         _mongo = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _registrations = new RegistrationVersionStore(() => null, _mongo, Clock2026);
+        _overseasSites = new OverseasSiteVersionStore(() => null, _mongo, Clock2026);
     }
 
     public void Dispose() => _mongo.GetClient().DropDatabase(_databaseName);
@@ -51,6 +53,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         new(
             persistence,
             _registrations,
+            _overseasSites,
             clock ?? Clock2026,
             NullLogger<DevExporterAccreditationSeedService>.Instance
         );
@@ -210,6 +213,60 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         registration.Material.Should().Be(MaterialType.Plastic);
         registration.RegistrationNumber.Should().Be("R26EX0500210001PL");
         registration.EntityId.Should().Be(ObjectId.Parse("0e0000000000000000050021"));
+    }
+
+    // RA-697 task 011: org 50021's registered ORSs, which its registration-only change requests view lists.
+    [Fact]
+    public async Task SeedAsync_GivesTheRegistrationOnlyExporterFourActiveOrsRecordsWithInterimSites()
+    {
+        await SeedApplications(organisationId: "50021");
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050021",
+            Ct
+        );
+
+        var sites = await _overseasSites.FindActiveByRegistrationAsync(registration!.EntityId, Ct);
+
+        sites.OrderBy(s => s.OrsId)
+            .Select(s => (s.OrsId, s.SiteName, s.Country, s.InterimSites.Count))
+            .Should()
+            .Equal(
+                ("001", "Porto Plasticos Lda", "Portugal", 2),
+                ("002", "Milano Riciclo SpA", "Italy", 1),
+                ("003", "Penang Polymers Sdn Bhd", "Malaysia", 0),
+                ("004", "Jakarta Daur Ulang PT", "Indonesia", 0)
+            );
+        sites.Should().OnlyContain(s => s.Status == OverseasSiteStatus.Active);
+        sites.SelectMany(s => s.InterimSites).Should().OnlyContain(i => i.Status == InterimSiteStatus.Active);
+        sites.SelectMany(s => s.InterimSites).Select(i => i.SiteNumber).Should().OnlyHaveUniqueItems();
+        sites.Should().OnlyContain(s => s.Contact != null && s.Coordinates != null && s.OperationCodes.Count > 0);
+    }
+
+    [Fact]
+    public async Task SeedAsync_RunTwice_SeedsTheRegistrationOnlyExportersOrsRecordsOnce()
+    {
+        await SeedApplications(organisationId: "50021");
+        await SeedApplications(organisationId: "50021");
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050021",
+            Ct
+        );
+
+        (await _overseasSites.FindActiveByRegistrationAsync(registration!.EntityId, Ct))
+            .Should()
+            .HaveCount(4);
+    }
+
+    // The accredited orgs' ORSs come from their accreditations, as before; only 50021's are domain-model records.
+    [Fact]
+    public async Task SeedAsync_GivesTheAccreditedExportersNoOrsRecords()
+    {
+        await SeedApplications();
+        var registration = await ExporterRegistrationVersion();
+
+        (await _overseasSites.FindActiveByRegistrationAsync(registration!.EntityId, Ct))
+            .Should()
+            .BeEmpty();
     }
 
     // Guards drift: the stub ReEx registry's org 50021 is the registration the seed writes.

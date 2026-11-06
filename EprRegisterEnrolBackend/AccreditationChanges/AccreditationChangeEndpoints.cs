@@ -6,6 +6,8 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.Registrations;
 using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -22,6 +24,10 @@ public static class AccreditationChangeEndpoints
 {
     internal const string RoutePrefix =
         "api/v1/accreditation-changes/{organisationId}/{applicationId}";
+
+    /// <summary>RA-697: a registration-only operator's change requests, which have no accreditation.</summary>
+    internal const string RegistrationRoute =
+        "api/v1/accreditation-changes/{organisationId}/registrations/{registrationId}/{materialType}";
 
     private const string ConcurrentEditMessage =
         "The change request was changed by someone else. Reload it and try again.";
@@ -46,7 +52,21 @@ public static class AccreditationChangeEndpoints
             DeleteBesEvidenceFile
         );
         group.MapPost("requests/current/submit", Submit);
+
+        app.MapGet(RegistrationRoute, GetForRegistration)
+            .RequireAuthorization(policy =>
+                policy
+                    .AddAuthenticationSchemes(FrontendAuthenticationHandler.SchemeName)
+                    .RequireAuthenticatedUser()
+            );
     }
+
+    internal sealed record RegistrationServices(
+        RegistrationVersionStore Registrations,
+        OverseasSiteVersionStore OverseasSites,
+        IReExApiAdapter ReEx,
+        TimeProvider Clock
+    );
 
     internal sealed record ChangeServices(
         IAccreditationApplicationPersistence Applications,
@@ -153,6 +173,118 @@ public static class AccreditationChangeEndpoints
             applicationId,
             services.CancellationToken
         );
+        // A never-registered site has no status and is left out, as RA-425's page shows it on neither tab.
+        var sites = (accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
+            .Select(site => (Site: site, Status: ChangeRequestRules.AccreditationStatus(site)))
+            .Where(s => s.Status is not null)
+            .Select(s => (s.Site, s.Status!.Value))
+            .ToList();
+
+        return Results.Ok(
+            ChangesView(
+                new AccreditationChangesView(
+                    organisationId,
+                    applicationId,
+                    accreditation.OrganisationName,
+                    accreditation.RegistrationId,
+                    accreditation.MaterialType,
+                    accreditation.Year,
+                    accreditation.AccreditationReference,
+                    accreditation.RegistrationReference,
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+                sites,
+                requests
+            )
+        );
+    }
+
+    // RA-697: the registration's current version, its Active domain-model ORSs as Registered sites (an exporter's
+    // only), and its registration-only requests for the backend clock's year. 404 for an unknown registration,
+    // another material, or an organisation ReEx says does not hold it; 409 if it is not Approved.
+    private static async Task<IResult> GetForRegistration(
+        string organisationId,
+        string registrationId,
+        string materialType,
+        IChangeRequestPersistence requestStore,
+        [AsParameters] RegistrationServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        var registration = await services.Registrations.FindCurrentByReExRegistrationIdAsync(
+            registrationId,
+            cancellationToken
+        );
+        // By name only: Enum.TryParse would also take a number, which no URL means as a material.
+        var materialMatches = string.Equals(
+            registration?.Material.ToString(),
+            materialType,
+            StringComparison.OrdinalIgnoreCase
+        );
+        if (registration is null || !materialMatches)
+            return Results.NotFound();
+
+        var holder = await services.ReEx.GetRegistrationHolderNameAsync(
+            organisationId,
+            registrationId,
+            cancellationToken
+        );
+        if (holder.IsNotFound)
+            return Results.NotFound();
+        if (registration.Status != RegistrationStatus.Approved)
+            return Results.Conflict("Change requests can only be read for an Approved registration.");
+
+        var sites =
+            registration.WasteProcessingType == WasteProcessingKind.Exporter
+                ? RegisteredSiteMapper.ToSites(
+                    await services.OverseasSites.FindActiveByRegistrationAsync(
+                        registration.EntityId,
+                        cancellationToken
+                    )
+                )
+                : [];
+        var year = services.Clock.GetUtcNow().Year;
+        var requests = await requestStore.ListForRegistrationAsync(
+            organisationId,
+            registrationId,
+            registration.Material,
+            year,
+            cancellationToken
+        );
+
+        return Results.Ok(
+            ChangesView(
+                new AccreditationChangesView(
+                    organisationId,
+                    null,
+                    // Any other ReEx failure leaves the name out, as the registration status endpoint does.
+                    holder.IsSuccess ? holder.Value : null,
+                    registrationId,
+                    registration.Material,
+                    year,
+                    null,
+                    registration.RegistrationNumber,
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+                sites.Select(site => (site, SiteAccreditationStatus.Registered)).ToList(),
+                requests
+            )
+        );
+    }
+
+    // The header with its sites, active request, requests and pending ORS ids, from the requests (newest first).
+    private static AccreditationChangesView ChangesView(
+        AccreditationChangesView header,
+        List<(OverseasSiteModel Site, SiteAccreditationStatus Status)> sites,
+        List<AccreditationChangeRequest> requests
+    )
+    {
         // RA-697: a site is in flight while a request holds an active item for it (AC09: a Submitted
         // one stays pending); a granted, refused or withdrawn item no longer holds it. Newest first.
         var inFlightBySite = new Dictionary<int, AccreditationChangeRequest>();
@@ -162,48 +294,35 @@ public static class AccreditationChangeEndpoints
                 inFlightBySite.TryAdd(site.SiteId, request);
         }
 
-        // A never-registered site has no status and is left out, as RA-425's page shows it on neither tab.
-        var sites = (accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
-            .Select(site => (Site: site, Status: ChangeRequestRules.AccreditationStatus(site)))
-            .Where(s => s.Status is not null)
-            .Select(s =>
-            {
-                inFlightBySite.TryGetValue(s.Site.SiteId, out var pending);
-                return new AccreditationChangeSiteView(
-                    s.Site.SiteId,
-                    s.Site.OrsId,
-                    s.Status!.Value,
-                    pending?.RequestId,
-                    pending?.Status,
-                    ChangeRequestRules.LockedFields(s.Site),
-                    s.Site
-                );
-            })
-            .ToList();
-
+        var orsSites = sites.Select(s => s.Site).ToList();
         var draft = requests.FirstOrDefault(r => r.Status == ChangeRequestStatus.InProgress);
-        return Results.Ok(
-            new AccreditationChangesView(
-                organisationId,
-                applicationId,
-                accreditation.OrganisationName,
-                accreditation.RegistrationId,
-                accreditation.MaterialType,
-                accreditation.Year,
-                accreditation.AccreditationReference,
-                accreditation.RegistrationReference,
-                sites,
-                draft is null ? null : ChangeRequestRules.ToView(draft, accreditation),
-                requests.Select(r => ChangeRequestRules.ToView(r, accreditation)).ToList(),
-                requests
-                    .SelectMany(r => r.Sites)
-                    .Where(s => s.Status.IsActive())
-                    .Select(s => s.OrsId)
-                    .OfType<string>()
-                    .Distinct()
-                    .ToList()
-            )
-        );
+        return header with
+        {
+            Sites = sites
+                .Select(s =>
+                {
+                    inFlightBySite.TryGetValue(s.Site.SiteId, out var pending);
+                    return new AccreditationChangeSiteView(
+                        s.Site.SiteId,
+                        s.Site.OrsId,
+                        s.Status,
+                        pending?.RequestId,
+                        pending?.Status,
+                        ChangeRequestRules.LockedFields(s.Site),
+                        s.Site
+                    );
+                })
+                .ToList(),
+            ActiveRequest = draft is null ? null : ChangeRequestRules.ToView(draft, orsSites),
+            Requests = requests.Select(r => ChangeRequestRules.ToView(r, orsSites)).ToList(),
+            PendingOrsIds = requests
+                .SelectMany(r => r.Sites)
+                .Where(s => s.Status.IsActive())
+                .Select(s => s.OrsId)
+                .OfType<string>()
+                .Distinct()
+                .ToList(),
+        };
     }
 
     private static async Task<IResult> AddSite(

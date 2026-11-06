@@ -2,9 +2,11 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Utils;
 using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
@@ -27,7 +29,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // RA-697: org 50018 also has a glass reprocessor registration and accreditation (its Reprocessor),
 // matching the frontend stub's, and org 50020 is an exporter that DevChangeRequestSeedService gives no
 // change requests. That seed writes only change requests: it never changes these accreditations. Org 50021
-// (DevExporterOrg.RegistrationOnly) gets only its Approved registration, for the registration-only manage pages.
+// (DevExporterOrg.RegistrationOnly) gets only its Approved registration and four Active domain-model ORS records
+// (RegisteredOverseasSites), for the registration-only manage pages; the frontend stub mirrors them.
 //
 // The year comes from the clock at startup. Idempotent: the accreditation's id is fixed for each
 // year, so it is inserted once per year and left alone after that, including any changes a tester
@@ -35,6 +38,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 public class DevExporterAccreditationSeedService(
     IAccreditationApplicationPersistence persistence,
     RegistrationVersionStore registrations,
+    OverseasSiteVersionStore overseasSites,
     TimeProvider clock,
     ILogger<DevExporterAccreditationSeedService> logger
 ) : DevSeedService(logger)
@@ -69,6 +73,7 @@ public class DevExporterAccreditationSeedService(
             if (org.IsAccredited)
                 await SeedAccreditationAsync(ExporterAccreditation(org, year), cancellationToken);
             await SeedRegistrationAsync(ExporterRegistration(org, year), cancellationToken);
+            await SeedOverseasSitesAsync(org, cancellationToken);
             if (org.Reprocessor is null)
                 continue;
             await SeedAccreditationAsync(ReprocessorAccreditation(org, year), cancellationToken);
@@ -131,6 +136,126 @@ public class DevExporterAccreditationSeedService(
                 "DevExporterAccreditationSeedService: registration {ReExRegistrationId}'s version already present",
                 registration.ReExRegistrationId
             );
+    }
+
+    // RA-697: by ORS id, each left alone once it has a current version. Under the registration's current version,
+    // which may not be the seeded one's entity.
+    private async Task SeedOverseasSitesAsync(DevExporterOrg org, CancellationToken cancellationToken)
+    {
+        if (!RegisteredOverseasSitesFor.ContainsKey(org))
+            return;
+        var registration = await registrations.FindCurrentByReExRegistrationIdAsync(
+            org.RegistrationId.ToString(),
+            cancellationToken
+        );
+        if (registration is null)
+            return;
+        var seeded = 0;
+        foreach (var site in RegisteredOverseasSites(org, registration.EntityId))
+        {
+            var existing = await overseasSites.Versions.FindCurrentAsync(
+                Builders<OverseasSiteEntity>.Filter.Eq(x => x.RegistrationId, registration.EntityId)
+                    & Builders<OverseasSiteEntity>.Filter.Eq(x => x.OrsId, site.OrsId),
+                cancellationToken: cancellationToken
+            );
+            if (existing is not null)
+                continue;
+            await overseasSites.Versions.InsertAsync(
+                site,
+                new ChangeInfo { Reason = ChangeReason.ReExImport, ChangedBy = "dev-seed" },
+                cancellationToken: cancellationToken
+            );
+            seeded++;
+        }
+        Logger.LogInformation(
+            "DevExporterAccreditationSeedService: seeded {Seeded} ORS records for registration {ReExRegistrationId}",
+            seeded,
+            registration.ReExRegistrationId
+        );
+    }
+
+    // RA-697: the registered ORSs of an org with no accreditation, which are domain-model records rather than an
+    // accreditation's sites.
+    private static readonly Dictionary<DevExporterOrg, Func<ObjectId, List<OverseasSiteEntity>>> RegisteredOverseasSitesFor =
+        new() { [DevExporterOrg.RegistrationOnly] = RegistrationOnlyOverseasSites };
+
+    /// <summary>
+    /// RA-697: the org's Active domain-model ORSs under <paramref name="registrationEntityId"/>; none for an org
+    /// whose ORSs come from its accreditation.
+    /// </summary>
+    internal static List<OverseasSiteEntity> RegisteredOverseasSites(DevExporterOrg org, ObjectId registrationEntityId) =>
+        RegisteredOverseasSitesFor.TryGetValue(org, out var sites) ? sites(registrationEntityId) : [];
+
+    // Org 50021: four ORSs, two with interim sites and one of those with two. Fixed entity ids: 0f + org id + ORS id.
+    private static List<OverseasSiteEntity> RegistrationOnlyOverseasSites(ObjectId registrationEntityId)
+    {
+        var orgId = DevExporterOrg.RegistrationOnly.OrgId;
+        OverseasSiteEntity Site(string orsId, string siteName, string line1, string town, string country, string coordinates, params InterimSiteEntry[] interimSites) =>
+            new()
+            {
+                EntityId = ObjectId.Parse($"0f{orgId:D19}{orsId}"),
+                RegistrationId = registrationEntityId,
+                OrsId = orsId,
+                SiteName = siteName,
+                Address = new PostalAddress { Line1 = line1, TownOrCity = town, Country = country },
+                FormattedAddress = $"{line1}, {town}, {country}",
+                Country = country,
+                IsEu = CountryClassifications.IsEu(country),
+                IsOecd = CountryClassifications.IsOecd(country),
+                Coordinates = coordinates,
+                Contact = new ContactPerson
+                {
+                    FullName = "Site Manager",
+                    Email = $"ors{orsId}@registrationonlyexports.example.com",
+                    Phone = "+44 1234 567021",
+                },
+                OperationCodes = ["R3"],
+                BaselOecdCodes = ["B3011"],
+                RepatriatedLoads = "Rejected loads are returned to the UK exporter.",
+                ConditionsOfExport = true,
+                Status = OverseasSiteStatus.Active,
+                Origin = SiteOrigin.ReEx,
+                InterimSites = [.. interimSites],
+            };
+        InterimSiteEntry Interim(string siteNumber, string siteName, string line1, string town, string country) =>
+            new()
+            {
+                SiteNumber = siteNumber,
+                SiteName = siteName,
+                Address = new PostalAddress { Line1 = line1, TownOrCity = town, Country = country },
+                Contact = new ContactPerson
+                {
+                    FullName = "Alex Morgan",
+                    Email = "alex.morgan@example.com",
+                    Phone = "0123456789",
+                },
+                OperationCodes = ["R13"],
+                Status = InterimSiteStatus.Active,
+            };
+        return
+        [
+            Site(
+                "001",
+                "Porto Plasticos Lda",
+                "Rua do Porto 21",
+                "Porto",
+                "Portugal",
+                "41.1579, -8.6291",
+                Interim("001", "Leixoes Port Storage", "Doca 4", "Matosinhos", "Portugal"),
+                Interim("002", "Aveiro Transfer Hub", "Cais 9", "Aveiro", "Portugal")
+            ),
+            Site(
+                "002",
+                "Milano Riciclo SpA",
+                "Via Industriale 7",
+                "Milan",
+                "Italy",
+                "45.4642, 9.1900",
+                Interim("003", "Genoa Dock Store", "Molo 2", "Genoa", "Italy")
+            ),
+            Site("003", "Penang Polymers Sdn Bhd", "Jalan Pelabuhan 3", "George Town", "Malaysia", "5.4141, 100.3288"),
+            Site("004", "Jakarta Daur Ulang PT", "Jalan Pelabuhan 12", "Jakarta", "Indonesia", "-6.2088, 106.8456"),
+        ];
     }
 
     internal static RegistrationEntity ExporterRegistration(DevExporterOrg org, int year) =>

@@ -29,9 +29,13 @@ public class AccreditationChangeRequest
 
     public required string OrganisationId { get; set; }
 
-    /// <summary>The Approved accreditation application this request changes.</summary>
-    public required string ApplicationId { get; set; }
+    /// <summary>
+    /// The Approved accreditation application this request changes. RA-697: null for a registration-only request,
+    /// which is read by organisation, registration, material and year instead.
+    /// </summary>
+    public string? ApplicationId { get; set; }
 
+    /// <summary>The ReEx registration id; what a registration-only request is keyed by.</summary>
     public string? RegistrationId { get; set; }
 
     [BsonRepresentation(BsonType.String)]

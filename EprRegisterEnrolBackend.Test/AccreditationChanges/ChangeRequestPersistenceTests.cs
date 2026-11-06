@@ -26,7 +26,7 @@ public sealed class ChangeRequestPersistenceTests : IDisposable
 
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
 
-    private static AccreditationChangeRequest NewRequest(string applicationId = "app-1") =>
+    private static AccreditationChangeRequest NewRequest(string? applicationId = "app-1") =>
         new()
         {
             OrganisationId = "org-1",
@@ -43,6 +43,64 @@ public sealed class ChangeRequestPersistenceTests : IDisposable
 
         (await _persistence.InsertAsync(NewRequest(), Ct)).Should().BeFalse();
         (await _persistence.InsertAsync(NewRequest("app-2"), Ct)).Should().BeTrue();
+    }
+
+    // RA-697: a registration-only request has no accreditation, so the one-draft index must not make
+    // two of them collide on a null ApplicationId. The one-draft rule for them is left to their journey.
+    [Fact]
+    public async Task InsertAsync_TwoRegistrationOnlyDrafts_Coexist()
+    {
+        (await _persistence.InsertAsync(NewRequest(applicationId: null), Ct)).Should().BeTrue();
+
+        (await _persistence.InsertAsync(NewRequest(applicationId: null), Ct)).Should().BeTrue();
+        (await _persistence.InsertAsync(NewRequest(), Ct)).Should().BeTrue();
+        (await _persistence.InsertAsync(NewRequest(), Ct)).Should().BeFalse();
+    }
+
+    // RA-697: by organisation, registration, material and year, without an accreditation's requests.
+    [Fact]
+    public async Task ListForRegistrationAsync_ListsOnlyThatRegistrationsRegistrationOnlyRequestsForTheYear_NewestFirst()
+    {
+        AccreditationChangeRequest Request(
+            string? applicationId = null,
+            string organisationId = "org-1",
+            string registrationId = "reg-1",
+            MaterialType material = MaterialType.Plastic,
+            int year = 2026,
+            int day = 1
+        )
+        {
+            var request = NewRequest(applicationId);
+            request.OrganisationId = organisationId;
+            request.RegistrationId = registrationId;
+            request.MaterialType = material;
+            request.Year = year;
+            request.Status = ChangeRequestStatus.Submitted;
+            request.CreatedAt = new DateTime(2026, 3, day, 9, 0, 0, DateTimeKind.Utc);
+            return request;
+        }
+        var older = Request(day: 1);
+        var newer = Request(day: 2);
+        AccreditationChangeRequest[] others =
+        [
+            Request(applicationId: "app-1", day: 3),
+            Request(organisationId: "org-2", day: 4),
+            Request(registrationId: "reg-2", day: 5),
+            Request(material: MaterialType.Glass, day: 6),
+            Request(year: 2025, day: 7),
+        ];
+        foreach (var request in others.Append(older).Append(newer))
+            (await _persistence.InsertAsync(request, Ct)).Should().BeTrue();
+
+        var listed = await _persistence.ListForRegistrationAsync(
+            "org-1",
+            "reg-1",
+            MaterialType.Plastic,
+            2026,
+            Ct
+        );
+
+        listed.Select(r => r.RequestId).Should().Equal(newer.RequestId, older.RequestId);
     }
 
     // What Submit's reopen meets if another draft was started while the request was Submitted.

@@ -159,6 +159,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // RA-425: the domain model's registration versions, readable whatever the Expand flag, for the
     // registration status endpoint and the dev seeds.
     builder.Services.AddRegistrationVersionStore();
+    // RA-697: and their ORS versions, for the registration-only change requests view and the dev seed.
+    builder.Services.AddOverseasSiteVersionStore();
 
     // RA-448: registration/accreditation number generation
     builder.Services.AddSingleton<

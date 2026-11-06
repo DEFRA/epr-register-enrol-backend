@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.DevSeed;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.AccreditationChanges;
 
@@ -13,8 +14,10 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 // has the one InProgress item, a New ORS accreditation in the only draft, as RA-492's journey would make; the
 // accredited ORSs 001-003 have one ORS update each, Queried, Submitted and Updated, and the tonnage band upgrade
 // is Duly made. Granted, refused and withdrawn items make up the history. Reprocessor: tonnage band upgrades only.
-// Orgs 50019 (RA-492's) and 50020 (the empty states') get none. Only change requests are written: the
-// accreditations' site data is not changed to match the items' outcomes.
+// Orgs 50019 (RA-492's) and 50020 (the empty states') get none. Org 50021 (registration only) gets five
+// registration-only ORS updates (no accreditation), one item each across its seeded ORS records, none In
+// progress. Only change requests are written: the accreditations' site data is not changed to match the items'
+// outcomes.
 //
 // The frontend stub (src/server/common/stub-change-request-seed.js) mirrors these requests; keep the two in step.
 //
@@ -78,6 +81,16 @@ public class DevChangeRequestSeedService(
         new(Tonnage, 8, 4, [Band(PlannedTonnageBand.UpTo10000, ChangeItemStatus.Submitted)]),
     ];
 
+    // RA-697: org 50021's, on DevExporterAccreditationSeedService's registered ORS records.
+    private static readonly RequestSeed[] RegistrationOnlyRequests =
+    [
+        new(Update, 2, 10, [Ors("001", ChangeItemStatus.Rejected)]),
+        new(Update, 3, 15, [Ors("004", ChangeItemStatus.Approved, (4, 20))]),
+        new(Update, 5, 6, [Ors("003", ChangeItemStatus.DulyMade)]),
+        new(Update, 6, 18, [Ors("002", ChangeItemStatus.Queried)]),
+        new(Update, 8, 25, [Ors("001", ChangeItemStatus.Submitted)]),
+    ];
+
     private static readonly SubmittedByModel Submitter = new()
     {
         FullName = "Sam Patel",
@@ -103,35 +116,63 @@ public class DevChangeRequestSeedService(
         );
     }
 
-    /// <summary>Every seeded change request for the given year's accreditations, oldest first per accreditation.</summary>
+    // What a seeded request is made against: an accreditation, or (RA-697) a registration with no accreditation.
+    private sealed record Target(
+        int Year,
+        int OrgId,
+        string? ApplicationId,
+        string? RegistrationId,
+        MaterialType MaterialType,
+        string? AccreditationReference,
+        List<OverseasSiteModel> Sites
+    );
+
+    private static Target Accredited(AccreditationApplicationModel accreditation) =>
+        new(
+            accreditation.Year,
+            accreditation.OrgId!.Value,
+            accreditation.ApplicationId,
+            accreditation.RegistrationId,
+            accreditation.MaterialType,
+            accreditation.AccreditationReference,
+            accreditation.OverseasSites?.Sites ?? []
+        );
+
+    // The registration-only view keys sites as the seeded ORS records map; the registration's entity id is not needed.
+    private static Target RegistrationOnly(DevExporterOrg org, int year) =>
+        new(
+            year,
+            org.OrgId,
+            null,
+            org.RegistrationId.ToString(),
+            DevExporterOrg.Material,
+            null,
+            RegisteredSiteMapper.ToSites(
+                DevExporterAccreditationSeedService.RegisteredOverseasSites(org, ObjectId.Empty)
+            )
+        );
+
+    /// <summary>Every seeded change request for the given year, oldest first per accreditation or registration.</summary>
     internal static List<AccreditationChangeRequest> Requests(int year)
     {
         var org = DevExporterOrg.Manage;
         return
         [
-            .. Build(DevExporterAccreditationSeedService.ExporterAccreditation(org, year), 'a', ExporterRequests),
-            .. Build(DevExporterAccreditationSeedService.ReprocessorAccreditation(org, year), 'b', ReprocessorRequests),
+            .. Build(Accredited(DevExporterAccreditationSeedService.ExporterAccreditation(org, year)), 'a', ExporterRequests),
+            .. Build(Accredited(DevExporterAccreditationSeedService.ReprocessorAccreditation(org, year)), 'b', ReprocessorRequests),
+            .. Build(RegistrationOnly(DevExporterOrg.RegistrationOnly, year), 'a', RegistrationOnlyRequests),
         ];
     }
 
     // side: "a" for the exporter and "b" for the reprocessor, as their registration ids start.
-    private static IEnumerable<AccreditationChangeRequest> Build(
-        AccreditationApplicationModel accreditation,
-        char side,
-        RequestSeed[] seeds
-    ) =>
-        seeds.Select((seed, index) => Request(accreditation, side, index + 1, seed));
+    private static IEnumerable<AccreditationChangeRequest> Build(Target target, char side, RequestSeed[] seeds) =>
+        seeds.Select((seed, index) => Request(target, side, index + 1, seed));
 
-    private static AccreditationChangeRequest Request(
-        AccreditationApplicationModel accreditation,
-        char side,
-        int number,
-        RequestSeed seed
-    )
+    private static AccreditationChangeRequest Request(Target target, char side, int number, RequestSeed seed)
     {
-        var year = accreditation.Year;
+        var year = target.Year;
         DateTime On((int Month, int Day) date) => new(year, date.Month, date.Day, 9, 0, 0, DateTimeKind.Utc);
-        var orgId = accreditation.OrgId!.Value;
+        var orgId = target.OrgId;
         var items = seed
             .Items.Select<ItemSeed, ChangeRequestItem>(
                 (item, index) =>
@@ -146,7 +187,7 @@ public class DevChangeRequestSeedService(
                             Status = item.Status,
                             ValidFrom = validFrom,
                         };
-                    var site = accreditation.OverseasSites!.Sites.Single(s => s.OrsId == item.OrsId);
+                    var site = target.Sites.Single(s => s.OrsId == item.OrsId);
                     return new ChangeRequestSite
                     {
                         ItemId = itemId,
@@ -173,12 +214,12 @@ public class DevChangeRequestSeedService(
         {
             RequestId = FixedId(year, orgId, side, number, 0),
             ChangeType = seed.ChangeType,
-            OrganisationId = accreditation.OrganisationId,
-            ApplicationId = accreditation.ApplicationId!,
-            RegistrationId = accreditation.RegistrationId,
-            MaterialType = accreditation.MaterialType,
+            OrganisationId = orgId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ApplicationId = target.ApplicationId,
+            RegistrationId = target.RegistrationId,
+            MaterialType = target.MaterialType,
             Year = year,
-            AccreditationReference = accreditation.AccreditationReference,
+            AccreditationReference = target.AccreditationReference,
             Status = draft ? ChangeRequestStatus.InProgress : ChangeRequestStatus.Submitted,
             Sites = [.. items.OfType<ChangeRequestSite>()],
             TonnageBandUpgrade = items.OfType<TonnageBandUpgradeItem>().SingleOrDefault(),

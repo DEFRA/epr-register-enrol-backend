@@ -133,12 +133,18 @@ public static class ChangeRequestRules
     public static ChangeRequestView ToView(
         AccreditationChangeRequest request,
         AccreditationApplicationModel accreditation
+    ) => ToView(request, accreditation.OverseasSites?.Sites ?? []);
+
+    /// <summary>RA-697: against a registration's sites, for a registration-only request.</summary>
+    public static ChangeRequestView ToView(
+        AccreditationChangeRequest request,
+        IReadOnlyList<OverseasSiteModel> orsSites
     )
     {
         var sites = request
             .Sites.Select(requestSite =>
             {
-                var site = FindSite(accreditation, requestSite.SiteId);
+                var site = orsSites.FirstOrDefault(s => s.SiteId == requestSite.SiteId);
                 var effective = Effective(site, requestSite.Answers);
                 var missing = MissingFields(site, requestSite);
                 return new ChangeRequestSiteView(
@@ -221,9 +227,10 @@ public sealed record AccreditationChangeSiteView(
     OverseasSiteModel Site
 );
 
+/// <summary>RA-697: <see cref="ApplicationId"/> and <see cref="AccreditationReference"/> are null for a registration-only view.</summary>
 public sealed record AccreditationChangesView(
     string OrganisationId,
-    string ApplicationId,
+    string? ApplicationId,
     string? OrganisationName,
     string? RegistrationId,
     MaterialType MaterialType,

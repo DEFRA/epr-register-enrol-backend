@@ -231,6 +231,68 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
             .BeEmpty();
     }
 
+    private Task<List<AccreditationChangeRequest>> RegistrationOnlyRequests(int year = Year) =>
+        _requests.ListForRegistrationAsync(
+            DevExporterOrg.RegistrationOnly.OrganisationId,
+            DevExporterOrg.RegistrationOnly.RegistrationId.ToString(),
+            MaterialType.Plastic,
+            year,
+            Ct
+        );
+
+    // RA-697 task 011: org 50021's registration-only ORS updates, one item each, across the statuses the list and
+    // its filters show, and none In progress, so RA-492's draft links never appear for it.
+    [Fact]
+    public async Task SeedAsync_GivesTheRegistrationOnlyExporterFiveRegistrationOnlyOrsUpdates()
+    {
+        await CreateSut().SeedAsync(Ct);
+
+        var requests = await RegistrationOnlyRequests();
+
+        requests.Should().HaveCount(5);
+        requests.Should().OnlyContain(r => r.ApplicationId == null && r.AccreditationReference == null);
+        requests.Should().OnlyContain(r => r.ChangeType == AccreditationChangeRequest.UpdateOverseasSiteChangeType);
+        requests.Should().OnlyContain(r => r.Sites.Count == 1 && r.TonnageBandUpgrade == null);
+        requests.Should().OnlyContain(r => r.Status == ChangeRequestStatus.Submitted && r.SubmittedBy != null);
+        requests.Select(r => r.CaseManagementReference).Should().OnlyHaveUniqueItems().And.NotContainNulls();
+        requests.Should().OnlyContain(r => r.CaseManagementReference!.StartsWith("CR26050021A"));
+        var items = ItemsOf(requests).OfType<ChangeRequestSite>().ToList();
+        items.Select(i => i.Status)
+            .Should()
+            .BeEquivalentTo(
+                [
+                    ChangeItemStatus.Submitted,
+                    ChangeItemStatus.Queried,
+                    ChangeItemStatus.DulyMade,
+                    ChangeItemStatus.Approved,
+                    ChangeItemStatus.Rejected,
+                ]
+            );
+        items.Should().OnlyContain(i => i.ChangeType == AccreditationChangeRequest.UpdateOverseasSiteChangeType);
+        items.Should().OnlyContain(i => (i.ValidFrom != null) == (i.Status == ChangeItemStatus.Approved));
+        items.Where(i => i.Status.IsActive()).Select(i => i.OrsId).Should().OnlyHaveUniqueItems();
+        requests.Select(r => r.RequestId).Should().Contain("00002026-0000-0000-a000-050021000001");
+    }
+
+    // The items name the seeded ORS records, keyed by the ORS id's integer value as the registration view keys them.
+    [Fact]
+    public async Task SeedAsync_RegistrationOnlyItemsNameTheSeededOrsRecords()
+    {
+        await CreateSut().SeedAsync(Ct);
+        var sites = RegisteredSiteMapper.ToSites(
+            DevExporterAccreditationSeedService.RegisteredOverseasSites(
+                DevExporterOrg.RegistrationOnly,
+                MongoDB.Bson.ObjectId.Empty
+            )
+        );
+
+        var items = ItemsOf(await RegistrationOnlyRequests()).OfType<ChangeRequestSite>().ToList();
+
+        items.Should()
+            .OnlyContain(i => sites.Any(s => s.SiteId == i.SiteId && s.OrsId == i.OrsId && s.SiteName == i.SiteName));
+        items.Select(i => i.OrsId).Distinct().Should().HaveCount(4);
+    }
+
     // Keyed to that year's accreditation: after New Year a running stack keeps last year's requests on
     // last year's accreditation and seeds the new year's afresh.
     [Fact]
