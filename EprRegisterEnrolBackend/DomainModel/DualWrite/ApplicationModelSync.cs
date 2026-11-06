@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Status;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using MongoDB.Bson;
@@ -42,6 +43,9 @@ public sealed class ApplicationModelSync(
             return;
         }
 
+        // The legacy application's own _id: only the accreditation application projected from it carries that
+        // entityId, so current (and the mapper's next) is always an accreditation application. Other types share the
+        // collection but never this id, which is why this sync and SyncRun may use AsAccreditation().
         var current = await stores.Applications.Versions.FindCurrentAsync(
             Builders<ApplicationEntity>.Filter.Eq(a => a.EntityId, applicationId),
             session,
@@ -706,8 +710,17 @@ public sealed class ApplicationModelSync(
             List<ApplicationOverseasSiteEntry> entries
         )
         {
-            var (heldSites, heldInterims) = await HeldInFlightElsewhereAsync(registrationId);
-            var (ownSites, ownInterims) = Holdings(entries);
+            // Every open application on the registration counts, whatever its type: an in-year ORS change holds its
+            // site against this application just as another reapplication would. This application is left out by
+            // id: its current version still has the status it had before this write.
+            var (heldSites, heldInterims) =
+                await stores.Applications.SitesHeldByOtherOpenApplicationsAsync(
+                    registrationId,
+                    _applicationId,
+                    session,
+                    cancellationToken
+                );
+            var (ownSites, ownInterims) = SiteHoldings.Of(entries);
             foreach (var ors in _byEntityId.Values.ToList())
             {
                 var discardSite =
@@ -745,41 +758,6 @@ public sealed class ApplicationModelSync(
                     );
                 await UpdateOrsAsync(ors, ors.Version, change);
             }
-        }
-
-        // The ORSs, and the interim sites on them, that the registration's other in-flight applications hold. This
-        // application is left out by id: its current version still has the status it had before this write.
-        private async Task<(
-            HashSet<ObjectId> Sites,
-            HashSet<(ObjectId OrsEntityId, string SiteNumber)> Interims
-        )> HeldInFlightElsewhereAsync(ObjectId registrationId)
-        {
-            var filter = Builders<ApplicationEntity>.Filter;
-            var others = await stores.Applications.Versions.FindAllCurrentAsync(
-                filter.Eq(a => a.RegistrationId, registrationId)
-                    & filter.Ne(a => a.EntityId, _applicationId)
-                    & filter.Nin(a => a.Status, ApplicationStatusExtensions.Closed),
-                session,
-                cancellationToken
-            );
-            // Every open application on the registration counts, whatever its type: each type says which sites it holds.
-            return Holdings(others.SelectMany(a => a.Details.HeldSites()));
-        }
-
-        // The ORSs, and the interim sites on them, that a set of Application entries holds.
-        private static (
-            HashSet<ObjectId> Sites,
-            HashSet<(ObjectId OrsEntityId, string SiteNumber)> Interims
-        ) Holdings(IEnumerable<ApplicationOverseasSiteEntry> entries)
-        {
-            var held = entries.Where(e => e.OverseasSiteId is not null).ToList();
-            return (
-                held.Select(e => e.OverseasSiteId!.Value).ToHashSet(),
-                held.SelectMany(e =>
-                        e.InterimSites.Select(i => (e.OverseasSiteId!.Value, i.SiteNumber))
-                    )
-                    .ToHashSet()
-            );
         }
 
         // Withdrawn counts: a proposal this application withdrew is still its own to restore.

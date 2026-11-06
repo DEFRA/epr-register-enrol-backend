@@ -73,6 +73,14 @@ public static class VersionedIndexes
             }
         );
 
+    /// <summary>A lookup index over current versions only, for queries that always ask for the current version.</summary>
+    public static CreateIndexModel<T> Current<T>(string name, IndexKeysDefinition<T> keys)
+        where T : VersionedEntityBase =>
+        new(
+            keys,
+            new CreateIndexOptions<T> { Name = name, PartialFilterExpression = CurrentOnly<T>() }
+        );
+
     /// <summary>Filter fragment: the field is present as a string.</summary>
     public static FilterDefinition<T> StringPresent<T>(Expression<Func<T, object?>> field) =>
         Builders<T>.Filter.Type(field!, BsonType.String);

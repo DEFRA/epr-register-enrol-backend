@@ -8,7 +8,13 @@ namespace EprRegisterEnrolBackend.DomainModel.Entities;
 /// <see cref="ApplicationType"/>, so a reader can tell the shape without the envelope. Every subclass must be listed
 /// in <see cref="BsonKnownTypesAttribute"/>: the driver can only read back a type it has been told about.
 /// </summary>
-[BsonKnownTypes(typeof(AccreditationDetails))]
+[BsonKnownTypes(
+    typeof(AccreditationDetails),
+    typeof(OrsChangeDetails),
+    typeof(TonnageChangeDetails),
+    typeof(NewRegistrationDetails),
+    typeof(AnnualChargeDetails)
+)]
 public abstract class ApplicationDetails
 {
     /// <summary>The type this shape belongs to. Stored once, as the discriminator, so it is not a stored field here.</summary>

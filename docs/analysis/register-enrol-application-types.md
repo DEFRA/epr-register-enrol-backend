@@ -1,4 +1,4 @@
-Shape chosen: C1. First slice built in RA-744 PR 1 (envelope, `details`, `AccreditationDetails`, round-trip and guard tests, design doc v6.6). The other four details types, the `applicationType` index, the validator and the guard key follow in RA-744 PRs 2 to 4.
+Shape chosen: C1. First slice built in RA-744 PR 1 (envelope, `details`, `AccreditationDetails`, round-trip and guard tests, design doc v6.6). The other four details types, typed CRUD and the `applicationType` index follow in RA-745; the validator and the guard key follow after.
 
 # Register & Enrol application types
 
@@ -86,7 +86,7 @@ PaymentCheck { Scope (Submission | Application), Method (Online | Offline), Paym
                CheckedBy?, CheckedAt? }             // possible later additions; not needed yet
 ```
 
-Field names are still open. The shared flow and `ChangeReason` stay in their existing places. Each approval effect runs in a transaction, as the current write paths do.
+Field names are still open, except where RA-745 settled them (James, 6 November 2026): an ORS change's `Declaration` records who declared and when; it records a set of `ChangeKinds` (`AddRegisteredSite`, `AddNewSite`, `EditSite`, `ChangeInterimSites`), because an edit and interim site changes to one ORS travel in one application; and New Registration's section statuses are a list of named sections until the journey's sections are agreed. The shared flow and `ChangeReason` stay in their existing places. Each approval effect runs in a transaction, as the current write paths do.
 
 ### Envelope rules (agreed with Adam)
 
@@ -137,7 +137,7 @@ Phase 1 creates five indexes on this collection, and all of them use fields that
 | `registrationId_asof` | `registrationId`, `validFrom`, `validTo` | Stays top-level |
 | `applicationReference_current_u` | `applicationReference`, where current and present | Stays top-level |
 
-The other model collections have their own indexes, but C1 doesn't change their shape. For example, `year` is indexed on accreditations, not applications. The `applicationType` index and the optional guard key aren't in phase 1. The `applicationType` index is added in RA-744 PR 2 and the guard key in PR 4 (no writer until the one-live-application rule is built), and the startup schema check will then expect them. An index that is no longer defined isn't removed automatically: the reconciler only drops one whose key matches a new index but whose options differ. Verified `VersionedIndexes.cs`, `MongoIndexReconciler.cs`, `DomainModelSchemaCheck.cs`
+The other model collections have their own indexes, but C1 doesn't change their shape. For example, `year` is indexed on accreditations, not applications. The `applicationType` index and the optional guard key aren't in phase 1. The `applicationType` index is added in RA-745 as `registrationId_applicationType_current` and the guard key in PR 4 (no writer until the one-live-application rule is built), and the startup schema check will then expect them. An index that is no longer defined isn't removed automatically: the reconciler only drops one whose key matches a new index but whose options differ. Verified `VersionedIndexes.cs`, `MongoIndexReconciler.cs`, `DomainModelSchemaCheck.cs`
 
 **Rules live in application code (agreed with Adam).** `applicationType` decides which rules apply. For example, for an ORS change the application refuses a new open application for an ORS ID that already has one, even though the ORS ID sits in `details`. This keeps the database model simple and the rules flexible. Using a different rule per type also resolves the conflict where in-year changes arrive in the same year as an approved application.
 

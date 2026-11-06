@@ -28,6 +28,13 @@ public class ApplicationVersionPersistence(
                 builder.Ascending(x => x.RegistrationId)
             )
         );
+        // Every type shares the collection, so a registration's applications are listed by type (RA-745).
+        indexes.Add(
+            VersionedIndexes.Current(
+                "registrationId_applicationType_current",
+                builder.Ascending(x => x.RegistrationId).Ascending(x => x.ApplicationType)
+            )
+        );
         indexes.Add(
             VersionedIndexes.CurrentUnique(
                 "applicationReference_current_u",
