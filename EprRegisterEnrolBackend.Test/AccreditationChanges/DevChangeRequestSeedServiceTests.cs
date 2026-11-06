@@ -293,6 +293,35 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
         items.Select(i => i.OrsId).Distinct().Should().HaveCount(4);
     }
 
+    // RA-697 task 014: 50018's exporter also has one registration-only ORS update (no accreditation), Submitted, on
+    // Dragon - registered only, and in the accreditation's site list with the same site id and ORS id.
+    [Fact]
+    public async Task SeedAsync_GivesTheAccreditedExporterOneRegistrationOnlyOrsUpdateOnDragon()
+    {
+        await CreateSut().SeedAsync(Ct);
+
+        var requests = await _requests.ListForRegistrationAsync(
+            Org,
+            DevExporterOrg.Manage.RegistrationId.ToString(),
+            MaterialType.Plastic,
+            Year,
+            Ct
+        );
+
+        var request = requests.Should().ContainSingle().Subject;
+        request.RequestId.Should().Be("00002026-0000-0000-a000-050018000012");
+        (request.ApplicationId, request.AccreditationReference).Should().Be((null, null));
+        request.ChangeType.Should().Be(AccreditationChangeRequest.UpdateOverseasSiteChangeType);
+        request.Status.Should().Be(ChangeRequestStatus.Submitted);
+        request.CaseManagementReference.Should().Be("CR26050018A012");
+        var item = request.Sites.Should().ContainSingle().Subject;
+        var dragon = ExporterSites.Single(s => s.OrsId == "004");
+        (item.SiteId, item.OrsId, item.SiteName, item.Status)
+            .Should()
+            .Be((dragon.SiteId, "004", "Dragon Recyclers", ChangeItemStatus.Submitted));
+        (await _requests.ListAsync(Org, ExporterApp, Ct)).Should().NotContain(r => r.RequestId == request.RequestId);
+    }
+
     // Keyed to that year's accreditation: after New Year a running stack keeps last year's requests on
     // last year's accreditation and seeds the new year's afresh.
     [Fact]
@@ -404,6 +433,18 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
             .Should()
             .BeEquivalentTo("001", "002", "003", "004");
         view.GetProperty("activeRequest").GetProperty("sites")[0].GetProperty("orsId").GetString().Should().Be("004");
+        // RA-697 task 014: the registration-only ORS update is merged in: 14 items.
+        var requests = view.GetProperty("requests").EnumerateArray().ToList();
+        requests
+            .Sum(r =>
+                r.GetProperty("sites").GetArrayLength()
+                + (r.GetProperty("tonnageBandUpgrade").ValueKind == JsonValueKind.Null ? 0 : 1)
+            )
+            .Should()
+            .Be(14);
+        requests.Select(r => r.GetProperty("requestId").GetString())
+            .Should()
+            .Contain("00002026-0000-0000-a000-050018000012");
         (await factory.FakePersistence.GetByIdAsync(Org, ExporterApp))!.OverseasSites!.Sites
             .Select(s => (s.SiteId, s.Selected, s.ValidFrom))
             .Should()

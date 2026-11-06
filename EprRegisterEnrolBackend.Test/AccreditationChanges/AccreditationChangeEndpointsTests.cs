@@ -805,6 +805,98 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         Strings(view.GetProperty("pendingOrsIds")).Should().Equal("005");
         (await AddSite(901910)).StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
+
+    // ---------------------------------------------------------------- RA-697 registration-only requests
+
+    private static readonly string RegistrationId = DevExporterOrg.InYearChange.RegistrationId.ToString();
+
+    private AccreditationChangeRequest SeedRegistrationOnly(
+        DateTime createdAt,
+        List<ChangeRequestSite> sites,
+        ChangeRequestStatus status = ChangeRequestStatus.Submitted,
+        string? registrationId = null,
+        MaterialType material = MaterialType.Plastic,
+        int year = Year,
+        string? organisationId = null
+    )
+    {
+        var request = new AccreditationChangeRequest
+        {
+            OrganisationId = organisationId ?? Org,
+            ApplicationId = null,
+            RegistrationId = registrationId ?? RegistrationId,
+            MaterialType = material,
+            Year = year,
+            ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,
+            Status = status,
+            Sites = sites,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            SubmittedAt = status == ChangeRequestStatus.Submitted ? createdAt : null,
+        };
+        _factory.FakeChangeRequests.Seed(request);
+        return request;
+    }
+
+    private static ChangeRequestSite SubmittedIndiaItem() => Item(901911, "006", ChangeItemStatus.Submitted);
+
+    private static List<string> RequestIds(JsonElement view) =>
+        view.GetProperty("requests").EnumerateArray().Select(r => r.GetProperty("requestId").GetString()!).ToList();
+
+    [Fact]
+    public async Task Get_MergesThisRegistrationsCurrentYearRegistrationOnlyRequests_NewestFirst()
+    {
+        var oldest = SeedSubmitted(GrantedOn, [Item(901912, "007", ChangeItemStatus.Approved)]);
+        var registrationOnly = SeedRegistrationOnly(GrantedOn.AddDays(10), [SubmittedIndiaItem()]);
+        var newest = SeedSubmitted(WithdrawnOn, [Item(901912, "007", ChangeItemStatus.Rejected)]);
+        // Not this accreditation's registration, material, year or organisation.
+        SeedRegistrationOnly(GrantedOn, [SubmittedIndiaItem()], registrationId: "aaa000000000000000099999");
+        SeedRegistrationOnly(GrantedOn, [SubmittedIndiaItem()], material: MaterialType.Glass);
+        SeedRegistrationOnly(GrantedOn, [SubmittedIndiaItem()], year: Year - 1);
+        SeedRegistrationOnly(GrantedOn, [SubmittedIndiaItem()], organisationId: "99999");
+
+        var view = await Get();
+
+        RequestIds(view).Should().Equal(newest.RequestId, registrationOnly.RequestId, oldest.RequestId);
+        var merged = RequestIn(view, registrationOnly.RequestId);
+        merged.GetProperty("changeType").GetString().Should().Be("update-overseas-site");
+        SiteIn(merged, 901911).GetProperty("status").GetString().Should().Be("Submitted");
+    }
+
+    [Fact]
+    public async Task Get_RegistrationOnlyRequestCountsTowardsPendingStatus()
+    {
+        var registrationOnly = SeedRegistrationOnly(GrantedOn, [Item(901911, "006", ChangeItemStatus.Queried)]);
+
+        var view = await Get();
+
+        var site = SiteIn(view, 901911);
+        site.GetProperty("pendingRequestId").GetString().Should().Be(registrationOnly.RequestId);
+        site.GetProperty("pendingRequestStatus").GetString().Should().Be("Submitted");
+        Strings(view.GetProperty("pendingOrsIds")).Should().Equal("006");
+    }
+
+    // RA-492's journey and payment page act only on the accreditation's own draft.
+    [Fact]
+    public async Task Get_RegistrationOnlyDraft_NeverBecomesTheActiveRequest()
+    {
+        var registrationDraft = SeedRegistrationOnly(
+            WithdrawnOn,
+            [Item(901911, "006", ChangeItemStatus.InProgress)],
+            ChangeRequestStatus.InProgress
+        );
+
+        var before = await Get();
+        before.GetProperty("activeRequest").ValueKind.Should().Be(JsonValueKind.Null);
+        RequestIds(before).Should().Contain(registrationDraft.RequestId);
+
+        var added = await AddSite(901910);
+        added.StatusCode.Should().Be(HttpStatusCode.Created);
+        var draftId = (await ReadJson(added)).GetProperty("requestId").GetString();
+        draftId.Should().NotBe(registrationDraft.RequestId);
+        var after = await Get();
+        after.GetProperty("activeRequest").GetProperty("requestId").GetString().Should().Be(draftId);
+    }
 }
 
 // The hand-off flag switched on.

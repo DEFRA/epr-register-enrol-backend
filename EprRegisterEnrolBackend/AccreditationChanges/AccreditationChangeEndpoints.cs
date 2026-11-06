@@ -168,13 +168,25 @@ public static class AccreditationChangeEndpoints
         if (error is not null)
             return error;
 
-        var requests = await services.Requests.ListAsync(
+        var ownRequests = await services.Requests.ListAsync(
             organisationId,
             applicationId,
             services.CancellationToken
         );
+        // RA-697: the registration's registration-only requests for the accreditation's material and year show too,
+        // so nothing disappears when an accreditation is granted mid-year.
+        var registrationOnly = accreditation!.RegistrationId is { } registrationId
+            ? await services.Requests.ListForRegistrationAsync(
+                organisationId,
+                registrationId,
+                accreditation.MaterialType,
+                accreditation.Year,
+                services.CancellationToken
+            )
+            : [];
+        var requests = ownRequests.Concat(registrationOnly).OrderByDescending(r => r.CreatedAt).ToList();
         // A never-registered site has no status and is left out, as RA-425's page shows it on neither tab.
-        var sites = (accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
+        var sites = (accreditation.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
             .Select(site => (Site: site, Status: ChangeRequestRules.AccreditationStatus(site)))
             .Where(s => s.Status is not null)
             .Select(s => (s.Site, s.Status!.Value))
@@ -295,7 +307,11 @@ public static class AccreditationChangeEndpoints
         }
 
         var orsSites = sites.Select(s => s.Site).ToList();
-        var draft = requests.FirstOrDefault(r => r.Status == ChangeRequestStatus.InProgress);
+        // RA-697: only the view's own draft is active - an accreditation's, or a registration-only one on the
+        // registration view. A merged registration-only draft never becomes an accreditation's active request.
+        var draft = requests.FirstOrDefault(r =>
+            r.Status == ChangeRequestStatus.InProgress && r.ApplicationId == header.ApplicationId
+        );
         return header with
         {
             Sites = sites

@@ -10,10 +10,12 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 // request pages show content before Case Management can move an item past Submitted. Registered alongside that
 // seed, under the same switch, and only with the in-year changes flag on, as the change-request store is.
 //
-// Exporter: more than a page of items. Each ORS has at most one active item: ORS 004 Dragon (registered only)
-// has the one InProgress item, a New ORS accreditation in the only draft, as RA-492's journey would make; the
-// accredited ORSs 001-003 have one ORS update each, Queried, Submitted and Updated, and the tonnage band upgrade
-// is Duly made. Granted, refused and withdrawn items make up the history. Reprocessor: tonnage band upgrades only.
+// Exporter: more than a page of items. Each ORS has at most one active accreditation item: ORS 004 Dragon
+// (registered only) has the one InProgress item, a New ORS accreditation in the only draft, as RA-492's journey
+// would make; the accredited ORSs 001-003 have one ORS update each, Queried, Submitted and Updated, and the tonnage
+// band upgrade is Duly made. Granted, refused and withdrawn items make up the history. The exporter registration
+// also has one registration-only ORS update (Submitted, on Dragon), which its accreditation view merges in: 14
+// items. Reprocessor: tonnage band upgrades only.
 // Orgs 50019 (RA-492's) and 50020 (the empty states') get none. Org 50021 (registration only) gets five
 // registration-only ORS updates (no accreditation), one item each across its seeded ORS records, none In
 // progress. Only change requests are written: the accreditations' site data is not changed to match the items'
@@ -79,6 +81,14 @@ public class DevChangeRequestSeedService(
         new(Tonnage, 3, 3, [Band(PlannedTonnageBand.UpTo5000, ChangeItemStatus.Approved, (4, 1))]),
         new(Tonnage, 5, 19, [Band(PlannedTonnageBand.Over10000, ChangeItemStatus.Rejected)]),
         new(Tonnage, 8, 4, [Band(PlannedTonnageBand.UpTo10000, ChangeItemStatus.Submitted)]),
+    ];
+
+    // RA-697 task 014: org 50018's exporter registration also has a registration-only request (no accreditation):
+    // an ORS update on Dragon, registered only, keyed by the accreditation's site id and ORS id. Older than Dragon's
+    // draft, so the overseas-sites page still shows Dragon In progress. Numbered after the exporter's requests.
+    private static readonly RequestSeed[] ExporterRegistrationOnlyRequests =
+    [
+        new(Update, 9, 15, [Ors("004", ChangeItemStatus.Submitted)]),
     ];
 
     // RA-697: org 50021's, on DevExporterAccreditationSeedService's registered ORS records.
@@ -156,17 +166,29 @@ public class DevChangeRequestSeedService(
     internal static List<AccreditationChangeRequest> Requests(int year)
     {
         var org = DevExporterOrg.Manage;
+        var exporter = DevExporterAccreditationSeedService.ExporterAccreditation(org, year);
         return
         [
-            .. Build(Accredited(DevExporterAccreditationSeedService.ExporterAccreditation(org, year)), 'a', ExporterRequests),
+            .. Build(Accredited(exporter), 'a', ExporterRequests),
+            .. Build(
+                Accredited(exporter) with { ApplicationId = null, AccreditationReference = null },
+                'a',
+                ExporterRegistrationOnlyRequests,
+                firstNumber: ExporterRequests.Length + 1
+            ),
             .. Build(Accredited(DevExporterAccreditationSeedService.ReprocessorAccreditation(org, year)), 'b', ReprocessorRequests),
             .. Build(RegistrationOnly(DevExporterOrg.RegistrationOnly, year), 'a', RegistrationOnlyRequests),
         ];
     }
 
     // side: "a" for the exporter and "b" for the reprocessor, as their registration ids start.
-    private static IEnumerable<AccreditationChangeRequest> Build(Target target, char side, RequestSeed[] seeds) =>
-        seeds.Select((seed, index) => Request(target, side, index + 1, seed));
+    private static IEnumerable<AccreditationChangeRequest> Build(
+        Target target,
+        char side,
+        RequestSeed[] seeds,
+        int firstNumber = 1
+    ) =>
+        seeds.Select((seed, index) => Request(target, side, firstNumber + index, seed));
 
     private static AccreditationChangeRequest Request(Target target, char side, int number, RequestSeed seed)
     {
