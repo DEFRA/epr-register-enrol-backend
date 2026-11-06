@@ -1,6 +1,16 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.6, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.7, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06
+
+**Changes in v6.7 (2026-11-06): the other four application types (RA-745)**
+
+- **`details` now has a class for every type:** `OrsChangeDetails`, `TonnageChangeDetails`,
+  `NewRegistrationDetails` and `AnnualChargeDetails` join `AccreditationDetails`. Their fields are in
+  `register-enrol-application-types.md`, "The shape". An ORS change records a set of change kinds, because an edit
+  and interim site changes to the same ORS travel in one application.
+- **New index `registrationId_applicationType_current`** (§4.2), for listing a registration's applications by type.
+- **The open-site check sees every type, in both directions** (§3.2): an open in-year ORS change holds its site
+  against a reapplication, and an open reapplication holds its sites against an ORS change.
 
 **Changes in v6.6 (2026-11-05): application types, option C1 (RA-744)**
 
@@ -836,6 +846,11 @@ db.accreditationVersions.find({ entityId: id }).sort({ version: 1 })
   current one. This keeps `siteNumber` unique across all the registration's current ORSs. A multikey
   unique index does **not** stop the same value appearing twice inside **one** document, so the write path
   also checks the ORS's own array before adding an entry.
+- **Application types (v6.7).** `applicationVersions` holds every application type, so it gets a lookup index
+  `{registrationId: 1, applicationType: 1}` with `partialFilterExpression: {isCurrent: true}`
+  (`registrationId_applicationType_current`), for listing a registration's applications, optionally of one type.
+  It is not unique: rules such as one open change per ORS are chosen by `applicationType` in application code.
+  Fields inside `details` are not indexed until a rule needs to query them.
 
 #### How suspend and unsuspend appear
 
@@ -1694,6 +1709,10 @@ Priority runs from 0 (critical) to 4 (backlog).
 | B21 | Next-year accreditation number (Q18): reserve **YY+1 of the previous year's number** on the new application (from `sourceAccreditationId`), falling back to the counter when there is no previous-year accreditation; remove the in-place YY+1 "reapply" branch | feature | 2 | B9 | `accreditation-number` with `regenerate:false` returns YY+1 when a source accreditation exists, otherwise the counter; an approved accreditation's number can never change |
 | B17 | Archive: rename the frozen legacy collection to `accreditationApplications_legacyArchive`; remove legacy paths, lazy backfills and flags | task | 3 | B14 + consumer moves (MF2, frontend fallback, T1) | Archive count matches; rename-back and projection script tested |
 | B18 | Consumer change list handed to the frontend, management-be, management-fe and test owners (reference naming F3 and `SubmitResponse`, singular `interimSite` reads, MF3 schema) | task | 3 | — | Tickets raised in the owning repos; not implemented here |
+| B26 | Application envelope plus polymorphic `details` (option C1), with `AccreditationDetails`; legacy applications map to `kind: Reapply` (RA-744) | task | 1 | B8 | Built (PR #237). Round-trip and guard tests on the replica set; dual-write endpoint tests unchanged |
+| B27 | The other four `details` types, typed CRUD helpers, `registrationId_applicationType_current`, and the open-site check across types in both directions (RA-745) | task | 2 | B26 | Each type round-trips with `_t` = `applicationType`; a read of the wrong type returns null and a change of type is refused; an open ORS change holds its site against a reapplication and the reverse |
+| B28 | `$jsonSchema` validator on `applicationVersions` in `warn` and `moderate`; a missing validator reports Degraded | task | 2 | B27 | Each details builder passes; another type's details are flagged; closing an old version still works |
+| B29 | `exclusivityKey` field, key builder and partial unique index, with no writer until the one-live-application rule (R12) | task | 2 | B26 | Index tests; no production path sets the key |
 | B25 | v2 YAML changes from this review, for the YAML owner: remove `effectiveDate` (Q21); full ReEx transitions (Q28); `baselOecdCodes[]` (Q29); optional `asAt` on site paths (Q27); site ids are `orsId`/`siteNumber`, with the int `siteId` removed (Q26); correct the `code1`–`code3` reason in the mapping. *(v4: the descriptive wording for D1 and D2 has already been updated in the YAML and mapping.)* | task | 1 | — | YAML and mapping updated and agreed with Adam and Fran; the endpoint developer told |
 
 Dependency spine: B0 + B2 → B3 → B4 → B5/B6 → B8 (dual-write) → B7 (migration) → B9 → B10 + B11 → B12 → B14 → B17.

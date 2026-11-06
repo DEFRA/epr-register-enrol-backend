@@ -144,4 +144,80 @@ public sealed class ApplicationDetailsRoundTripTests : IDisposable
             .Should()
             .Be(1);
     }
+
+    // --- the other four types -----------------------------------------------------------------------------------
+
+    private async Task<(ApplicationEntity Read, BsonDocument Stored)> RoundTripAsync(
+        ApplicationDetails details
+    )
+    {
+        var created = await _applications.Versions.InsertAsync(
+            DomainModelBuilders.Application(ObjectId.GenerateNewId(), details),
+            Change(),
+            cancellationToken: Ct
+        );
+        var read = await _applications.Versions.GetCurrentAsync(
+            created.EntityId,
+            cancellationToken: Ct
+        );
+        var stored = await _raw.Find(new BsonDocument("_id", created.Id)).SingleAsync(Ct);
+        stored["details"]["_t"].AsString.Should().Be(stored["applicationType"].AsString);
+        return (read!, stored);
+    }
+
+    [Fact]
+    public async Task OrsChange_RoundTripsWithItsKindsDeclarationAndSite()
+    {
+        var siteId = ObjectId.GenerateNewId();
+        var (read, stored) = await RoundTripAsync(
+            DomainModelBuilders.OrsChangeDetails(siteId, interimSiteNumbers: "001")
+        );
+
+        read.ApplicationType.Should().Be(ApplicationType.OrsChange);
+        var details = read.Details.Should().BeOfType<OrsChangeDetails>().Subject;
+        details.OverseasSiteId.Should().Be(siteId);
+        details
+            .ChangeKinds.Should()
+            .Equal(OrsChangeKind.EditSite, OrsChangeKind.ChangeInterimSites);
+        details.Declaration!.DeclaredBy.FullName.Should().Be("A Declarer");
+        details.Site.OverseasSiteId.Should().Be(siteId);
+        details.Site.InterimSites.Should().ContainSingle(i => i.SiteNumber == "001");
+        stored["applicationType"].AsString.Should().Be("OrsChange");
+        stored["details"]["changeKinds"][0].AsString.Should().Be("EditSite");
+    }
+
+    [Fact]
+    public async Task TonnageChange_RoundTripsWithItsBandsStoredAsReExValues()
+    {
+        var (read, stored) = await RoundTripAsync(DomainModelBuilders.TonnageChangeDetails());
+
+        read.ApplicationType.Should().Be(ApplicationType.TonnageChange);
+        var details = read.Details.Should().BeOfType<TonnageChangeDetails>().Subject;
+        details.FromBand.Should().Be(TonnageBand.UpTo5000);
+        details.ToBand.Should().Be(TonnageBand.UpTo10000);
+        stored["details"]["fromBand"].AsString.Should().Be("up_to_5000");
+        stored["details"]["toBand"].AsString.Should().Be("up_to_10000");
+    }
+
+    [Fact]
+    public async Task NewRegistration_RoundTripsWithItsNamedSectionStatuses()
+    {
+        var (read, stored) = await RoundTripAsync(DomainModelBuilders.NewRegistrationDetails());
+
+        read.ApplicationType.Should().Be(ApplicationType.NewRegistration);
+        read.Details.Should()
+            .BeOfType<NewRegistrationDetails>()
+            .Which.Sections.Should()
+            .ContainSingle(s => s.Name == "wasteDetails" && s.Status == SectionStatus.InProgress);
+        stored["details"]["sections"][0]["status"].AsString.Should().Be("Completed");
+    }
+
+    [Fact]
+    public async Task AnnualCharge_RoundTripsWithItsChargeYear()
+    {
+        var (read, _) = await RoundTripAsync(DomainModelBuilders.AnnualChargeDetails(2028));
+
+        read.ApplicationType.Should().Be(ApplicationType.AnnualCharge);
+        read.Details.Should().BeOfType<AnnualChargeDetails>().Which.ChargeYear.Should().Be(2028);
+    }
 }
