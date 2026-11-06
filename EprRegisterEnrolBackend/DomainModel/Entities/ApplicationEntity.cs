@@ -1,5 +1,4 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
-using EprRegisterEnrolBackend.DomainModel.Entities.Sections;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
@@ -7,9 +6,11 @@ using MongoDB.Bson.Serialization.Attributes;
 namespace EprRegisterEnrolBackend.DomainModel.Entities;
 
 /// <summary>
-/// One version of an Application, in <c>applicationVersions</c>: the operator's proposal plus case-processing
-/// state. Its <c>entityId</c> is the legacy <c>accreditationApplications._id</c>, so the public
-/// <c>{applicationId}</c> never changes (identity rule, design doc §3.1). The legacy collection stays the source
+/// One version of an Application, in <c>applicationVersions</c>. It is a common envelope (ids, type, lifecycle) with
+/// a <see cref="Details"/> whose shape depends on <see cref="ApplicationType"/> (option C1,
+/// register-enrol-application-types.md). A field belongs on the envelope only if every type has it and it is queried.
+/// For an accreditation application the <c>entityId</c> is the legacy <c>accreditationApplications._id</c>, so the
+/// public <c>{applicationId}</c> never changes (identity rule, design doc §3.1). The legacy collection stays the source
 /// of truth for writes until the cut (Q33).
 /// </summary>
 public class ApplicationEntity : VersionedEntityBase
@@ -25,17 +26,25 @@ public class ApplicationEntity : VersionedEntityBase
 
     public string? ReExRegistrationId { get; set; }
 
-    /// <summary>The accreditation year applied for.</summary>
-    public int Year { get; set; }
-
-    /// <summary>The Accreditation (prior year) this application was seeded from. Null for migrated 2027 applications (D10).</summary>
-    public ObjectId? SourceAccreditationId { get; set; }
+    /// <summary>
+    /// Which type this application is, taken from <see cref="Details"/> so the two can never disagree. Stored for
+    /// queries and indexes; it is the same string as <c>details._t</c>. Never read back: <see cref="Details"/> decides.
+    /// </summary>
+    [BsonElement("applicationType")]
+    [BsonRepresentation(BsonType.String)]
+    public ApplicationType ApplicationType => Details.ApplicationType;
 
     [BsonRepresentation(BsonType.String)]
     public ApplicationStatus Status { get; set; } = ApplicationStatus.Saved;
 
     public string? ApplicationReference { get; set; }
     public string? PaymentReference { get; set; }
+
+    /// <summary>
+    /// Shared by the applications submitted together, such as one batch of in-year ORS changes. A single application
+    /// is a submission of one. Null until the first type that submits in batches writes it.
+    /// </summary>
+    public string? SubmissionReference { get; set; }
 
     [BsonGuidRepresentation(GuidRepresentation.Standard)]
     public Guid? CaseManagementWorkItemId { get; set; }
@@ -47,19 +56,6 @@ public class ApplicationEntity : VersionedEntityBase
     public DateTime DateLastEdited { get; set; }
     public ApplicationQuery? Query { get; set; }
 
-    public PrnsSection Prns { get; set; } = new();
-    public BusinessPlanSection BusinessPlan { get; set; } = new();
-    public SamplingPlanSection SamplingPlan { get; set; } = new();
-    public BesEvidenceSection? BesEvidence { get; set; }
-
-    /// <summary>The overseas sites section's status and submission history. The sites are <see cref="ApplicationOverseasSites"/>.</summary>
-    public OverseasSitesSection? OverseasSitesSection { get; set; }
-
-    /// <summary>One entry per overseas site this application touches.</summary>
-    public List<ApplicationOverseasSiteEntry> ApplicationOverseasSites { get; set; } = [];
-
-    public string? ReservedAccreditationNumber { get; set; }
-
-    /// <summary>Set when the application is approved.</summary>
-    public ObjectId? AccreditationId { get; set; }
+    /// <summary>The fields that belong to this type only.</summary>
+    public required ApplicationDetails Details { get; set; }
 }

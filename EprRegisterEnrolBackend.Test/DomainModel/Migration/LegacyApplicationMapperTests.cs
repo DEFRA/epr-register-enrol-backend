@@ -62,7 +62,10 @@ public class LegacyApplicationMapperTests
         Assert.Equal(RegistrationId, entity.RegistrationId);
         Assert.Equal("org-1", entity.ReExOrganisationId);
         Assert.Equal("reg-1", entity.ReExRegistrationId);
-        Assert.Equal(2027, entity.Year);
+        Assert.Equal(ApplicationType.Accreditation, entity.ApplicationType);
+        // Every legacy application is a re-accreditation; sourceAccreditationId can't say so for migrated 2027 ones.
+        Assert.Equal(AccreditationKind.Reapply, entity.AsAccreditation().Kind);
+        Assert.Equal(2027, entity.AsAccreditation().Year);
         Assert.Equal(ApplicationStatus.Queried, entity.Status);
         Assert.Equal("ref-1", entity.ApplicationReference);
         Assert.Equal("pay-1", entity.PaymentReference);
@@ -71,8 +74,8 @@ public class LegacyApplicationMapperTests
         Assert.Equal("reason", entity.WithdrawalReason);
         Assert.Equal(legacy.DateSent, entity.DateSent);
         Assert.Equal(FixedDate, entity.DateLastEdited);
-        Assert.Equal("A27EX1234567P", entity.ReservedAccreditationNumber);
-        Assert.Same(overseasSites, entity.ApplicationOverseasSites);
+        Assert.Equal("A27EX1234567P", entity.AsAccreditation().ReservedAccreditationNumber);
+        Assert.Same(overseasSites, entity.AsAccreditation().ApplicationOverseasSites);
         Assert.Equal("Test User", entity.SubmittedBy!.FullName);
         Assert.Equal("Manager", entity.SubmittedBy.JobTitle);
         Assert.Equal("test@example.com", entity.SubmittedBy.Email);
@@ -116,7 +119,10 @@ public class LegacyApplicationMapperTests
             ],
         };
 
-        var prns = LegacyApplicationMapper.ToEntity(legacy, RegistrationId, []).Prns;
+        var prns = LegacyApplicationMapper
+            .ToEntity(legacy, RegistrationId, [])
+            .AsAccreditation()
+            .Prns;
 
         Assert.Equal(TonnageBand.UpTo10000, prns.PlannedTonnageBand);
         Assert.Equal(SectionStatus.Completed, prns.SectionStatus);
@@ -159,12 +165,13 @@ public class LegacyApplicationMapperTests
 
         var entity = LegacyApplicationMapper.ToEntity(legacy, RegistrationId, []);
 
-        Assert.Equal(40, entity.BusinessPlan.NewInfrastructurePercent);
-        Assert.Equal("x", entity.BusinessPlan.OtherDetail);
-        Assert.Equal(SectionStatus.InProgress, entity.BusinessPlan.SectionStatus);
-        Assert.Equal(10, Assert.Single(entity.BusinessPlan.Versions).NewUsesPercent);
+        var details = entity.AsAccreditation();
+        Assert.Equal(40, details.BusinessPlan.NewInfrastructurePercent);
+        Assert.Equal("x", details.BusinessPlan.OtherDetail);
+        Assert.Equal(SectionStatus.InProgress, details.BusinessPlan.SectionStatus);
+        Assert.Equal(10, Assert.Single(details.BusinessPlan.Versions).NewUsesPercent);
 
-        var mapped = Assert.Single(entity.SamplingPlan.Files);
+        var mapped = Assert.Single(details.SamplingPlan.Files);
         Assert.Equal("f1", mapped.FileId);
         Assert.Equal("plan.pdf", mapped.Filename);
         Assert.Equal("application/pdf", mapped.ContentType);
@@ -172,7 +179,7 @@ public class LegacyApplicationMapperTests
         Assert.Equal(FileScanStatus.Clean, mapped.ScanStatus);
         Assert.Equal(AccreditationFileDocumentType.SamplingPlan, mapped.DocumentType);
         Assert.Equal("k1", mapped.S3Key);
-        var snapshot = Assert.Single(entity.SamplingPlan.Versions);
+        var snapshot = Assert.Single(details.SamplingPlan.Versions);
         Assert.Equal("f1", Assert.Single(snapshot.Files).FileId);
         Assert.Equal(FixedDate, snapshot.VersionedAt);
     }
@@ -223,8 +230,8 @@ public class LegacyApplicationMapperTests
 
         Assert.Null(entity.RegistrationId);
         Assert.Null(entity.Query);
-        Assert.Null(entity.BesEvidence);
-        Assert.Null(entity.OverseasSitesSection);
+        Assert.Null(entity.AsAccreditation().BesEvidence);
+        Assert.Null(entity.AsAccreditation().OverseasSitesSection);
         Assert.Null(entity.SubmittedBy);
     }
 
@@ -264,6 +271,7 @@ public class LegacyApplicationMapperTests
 
         var section = LegacyApplicationMapper
             .ToEntity(legacy, RegistrationId, [])
+            .AsAccreditation()
             .OverseasSitesSection!;
 
         Assert.Equal(SectionStatus.Completed, section.SectionStatus);

@@ -193,6 +193,10 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
             cancellationToken: Ct
         );
 
+    private async Task<List<ApplicationOverseasSiteEntry>> ApplicationSitesAsync(
+        AccreditationApplicationModel application
+    ) => (await CurrentApplicationAsync(application))!.AsAccreditation().ApplicationOverseasSites;
+
     // --- tests ----------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -214,7 +218,10 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         Assert.Equal(application.Id, added.ProposedByApplicationId);
         Assert.Equal(added.EntityId, legacySite.OverseasSiteEntityId);
         var entity = (await CurrentApplicationAsync(application))!;
-        Assert.Contains(entity.ApplicationOverseasSites, e => e.OverseasSiteId == added.EntityId);
+        Assert.Contains(
+            entity.AsAccreditation().ApplicationOverseasSites,
+            e => e.OverseasSiteId == added.EntityId
+        );
     }
 
     [Fact]
@@ -233,10 +240,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         Assert.Equal(3, legacy.Select(s => s.OrsId).Distinct().Count());
         var sites = await CurrentSitesAsync();
         Assert.Equal(legacy.Select(s => s.OrsId).Order(), sites.Select(s => s.OrsId).Order());
-        Assert.Equal(
-            3,
-            (await CurrentApplicationAsync(application))!.ApplicationOverseasSites.Count
-        );
+        Assert.Equal(3, (await ApplicationSitesAsync(application)).Count);
     }
 
     [Fact]
@@ -273,18 +277,14 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, promoted.StatusCode);
         var ors = Assert.Single(await CurrentSitesAsync());
         Assert.Equal("ReEx Site", ors.SiteName);
-        var entry = Assert.Single(
-            (await CurrentApplicationAsync(application))!.ApplicationOverseasSites
-        );
+        var entry = Assert.Single((await ApplicationSitesAsync(application)));
         Assert.Equal("Promoted", entry.ProposedChanges!["siteName"].AsString);
         Assert.True(entry.Selected);
 
         var reverted = await _client.PostAsync(Url(application, "/1/revert"), null, Ct);
 
         Assert.Equal(HttpStatusCode.OK, reverted.StatusCode);
-        entry = Assert.Single(
-            (await CurrentApplicationAsync(application))!.ApplicationOverseasSites
-        );
+        entry = Assert.Single((await ApplicationSitesAsync(application)));
         Assert.Null(entry.ProposedChanges);
         Assert.False(entry.Selected);
     }
@@ -394,9 +394,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         Assert.Equal(InterimSiteStatus.Proposed, interim.Status);
         Assert.Equal(application.Id, interim.ProposedByApplicationId);
         Assert.Equal("Quay", interim.SiteName);
-        var entry = Assert.Single(
-            (await CurrentApplicationAsync(application))!.ApplicationOverseasSites
-        );
+        var entry = Assert.Single((await ApplicationSitesAsync(application)));
         Assert.Equal(added.SiteNumber, Assert.Single(entry.InterimSites).SiteNumber);
     }
 
@@ -656,7 +654,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         var reference = (await LegacyAsync(application))!.AccreditationReference;
         Assert.NotNull(reference);
         var entity = (await CurrentApplicationAsync(application))!;
-        Assert.Equal(reference, entity.ReservedAccreditationNumber);
+        Assert.Equal(reference, entity.AsAccreditation().ReservedAccreditationNumber);
         Assert.Equal(ChangeReason.ApplicationEdited, entity.LastChange.Reason);
     }
 
@@ -1281,7 +1279,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     }
 
     private static ApplicationOverseasSiteEntry Entry(ApplicationEntity entity) =>
-        Assert.Single(entity.ApplicationOverseasSites);
+        Assert.Single(entity.AsAccreditation().ApplicationOverseasSites);
 
     [Fact]
     public async Task PatchRecyclingOperations_ModelWriteFails_RollsBackAndWritesNoAudit()
@@ -1634,7 +1632,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
             Assert.Equal(10, legacy.BusinessPlan.NewInfrastructurePercent);
             Assert.NotNull(legacy.CaseManagementStatusUpdatedAt);
             var entity = (await CurrentApplicationAsync(application))!;
-            Assert.Equal(10, entity.BusinessPlan.NewInfrastructurePercent);
+            Assert.Equal(10, entity.AsAccreditation().BusinessPlan.NewInfrastructurePercent);
             Assert.NotNull(entity.CaseManagementStatusUpdatedAt);
         }
     }
@@ -1674,7 +1672,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         Assert.Equal(OverseasSiteStatus.Active, (await CurrentSiteAsync(orsId)).Status);
         var entity = (await CurrentApplicationAsync(application))!;
         Assert.Equal(ApplicationStatus.Approved, entity.Status);
-        Assert.Equal(accreditation.EntityId, entity.AccreditationId);
+        Assert.Equal(accreditation.EntityId, entity.AsAccreditation().AccreditationId);
         Assert.Equal(
             accreditation.EntityId,
             (await LegacyAsync(application))!.AccreditationEntityId

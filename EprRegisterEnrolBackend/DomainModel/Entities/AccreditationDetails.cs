@@ -1,0 +1,44 @@
+using EprRegisterEnrolBackend.DomainModel.Entities.Sections;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
+
+namespace EprRegisterEnrolBackend.DomainModel.Entities;
+
+/// <summary>
+/// The details of a New or Reapply accreditation application. Every field here is valid only for those two kinds,
+/// which is why none of them is on the envelope (register-enrol-application-types.md, "Can the accreditation-shaped
+/// fields stay on a shared shape?").
+/// </summary>
+[BsonDiscriminator(nameof(ApplicationType.Accreditation))]
+public sealed class AccreditationDetails : ApplicationDetails
+{
+    public override ApplicationType ApplicationType => ApplicationType.Accreditation;
+
+    [BsonRepresentation(BsonType.String)]
+    public required AccreditationKind Kind { get; set; }
+
+    /// <summary>The accreditation year applied for.</summary>
+    public int Year { get; set; }
+
+    /// <summary>The Accreditation (prior year) this application was seeded from. Null for New and for migrated 2027 applications (D10).</summary>
+    public ObjectId? SourceAccreditationId { get; set; }
+
+    public PrnsSection Prns { get; set; } = new();
+    public BusinessPlanSection BusinessPlan { get; set; } = new();
+    public SamplingPlanSection SamplingPlan { get; set; } = new();
+    public BesEvidenceSection? BesEvidence { get; set; }
+
+    /// <summary>The overseas sites section's status and submission history. The sites are <see cref="ApplicationOverseasSites"/>.</summary>
+    public OverseasSitesSection? OverseasSitesSection { get; set; }
+
+    /// <summary>One entry per overseas site this application touches.</summary>
+    public List<ApplicationOverseasSiteEntry> ApplicationOverseasSites { get; set; } = [];
+
+    public string? ReservedAccreditationNumber { get; set; }
+
+    /// <summary>Set when the application is approved: the Accreditation it created.</summary>
+    public ObjectId? AccreditationId { get; set; }
+
+    public override IEnumerable<ApplicationOverseasSiteEntry> HeldSites() =>
+        ApplicationOverseasSites;
+}

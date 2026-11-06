@@ -165,6 +165,10 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
             a => a.EntityId == application.Id
         );
 
+    private async Task<List<ApplicationOverseasSiteEntry>> ApplicationSitesAsync(
+        AccreditationApplicationModel application
+    ) => (await CurrentApplicationAsync(application)).AsAccreditation().ApplicationOverseasSites;
+
     private Task<AccreditationApplicationModel?> LegacyAsync(
         AccreditationApplicationModel application
     ) => _applications.GetByIdAsync(ReExOrganisationId, application.Id.ToString()!);
@@ -230,7 +234,10 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal(1, savedVersion.Version);
         Assert.Equal(registration.EntityId, savedVersion.RegistrationId);
         Assert.Equal(ApplicationStatus.Saved, savedVersion.Status);
-        var savedNewSite = Assert.Single(savedVersion.ApplicationOverseasSites, e => e.SiteId == 2);
+        var savedNewSite = Assert.Single(
+            savedVersion.AsAccreditation().ApplicationOverseasSites,
+            e => e.SiteId == 2
+        );
         Assert.Equal(newSite.EntityId, savedNewSite.OverseasSiteId);
         Assert.True(savedNewSite.IsNewSite);
         var interimEntry = Assert.Single(savedNewSite.InterimSites);
@@ -301,12 +308,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal(second.Id, added.ProposedByApplicationId);
         Assert.Equal(
             added.EntityId,
-            Assert
-                .Single(
-                    (await CurrentApplicationAsync(second)).ApplicationOverseasSites,
-                    e => e.SiteId == 2
-                )
-                .OverseasSiteId
+            Assert.Single((await ApplicationSitesAsync(second)), e => e.SiteId == 2).OverseasSiteId
         );
     }
 
@@ -343,16 +345,10 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
             c => c.Kind == MigrationConflictKind.OrsDetailsDiffer && c.OrsId == "001"
         );
 
-        var proposal = Assert
-            .Single((await CurrentApplicationAsync(saved)).ApplicationOverseasSites)
-            .ProposedChanges;
+        var proposal = Assert.Single((await ApplicationSitesAsync(saved))).ProposedChanges;
         Assert.NotNull(proposal);
         Assert.Equal("Proposed Name", proposal["siteName"].AsString);
-        Assert.Null(
-            Assert
-                .Single((await CurrentApplicationAsync(approved)).ApplicationOverseasSites)
-                .ProposedChanges
-        );
+        Assert.Null(Assert.Single((await ApplicationSitesAsync(approved))).ProposedChanges);
     }
 
     [Fact]
@@ -386,9 +382,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal(OverseasSiteStatus.Proposed, site.Status);
         Assert.Equal(
             site.EntityId,
-            Assert
-                .Single((await CurrentApplicationAsync(application)).ApplicationOverseasSites)
-                .OverseasSiteId
+            Assert.Single((await ApplicationSitesAsync(application))).OverseasSiteId
         );
         var conflict = Assert.Single(result.Conflicts);
         Assert.Equal(MigrationConflictKind.OrsIdMissing, conflict.Kind);
@@ -417,10 +411,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal(ChangeReason.LegacySiteNumberRenumbered, site.LastChange.Reason);
         Assert.Equal("001", Assert.Single((await CurrentSiteAsync("002")).InterimSites).SiteNumber);
 
-        var entry = Assert.Single(
-            (await CurrentApplicationAsync(application)).ApplicationOverseasSites,
-            e => e.SiteId == 1
-        );
+        var entry = Assert.Single((await ApplicationSitesAsync(application)), e => e.SiteId == 1);
         var interimEntry = Assert.Single(entry.InterimSites);
         Assert.Equal("002", interimEntry.SiteNumber);
         Assert.Equal(2, interimEntry.LegacySiteId);
@@ -473,9 +464,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         );
         Assert.Equal("ReEx Name", site.SiteName);
 
-        var entry = Assert.Single(
-            (await CurrentApplicationAsync(application)).ApplicationOverseasSites
-        );
+        var entry = Assert.Single((await ApplicationSitesAsync(application)));
         Assert.Equal(site.EntityId, entry.OverseasSiteId);
         Assert.Equal("Edited Name", entry.ProposedChanges!["siteName"].AsString);
         Assert.DoesNotContain(
@@ -539,11 +528,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal(OverseasSiteStatus.Active, site.Status);
         Assert.Equal(SiteOrigin.ReEx, site.Origin);
         Assert.Equal(ChangeReason.Migration, site.LastChange.Reason);
-        Assert.Null(
-            Assert
-                .Single((await CurrentApplicationAsync(application)).ApplicationOverseasSites)
-                .ProposedChanges
-        );
+        Assert.Null(Assert.Single((await ApplicationSitesAsync(application))).ProposedChanges);
         Assert.DoesNotContain(
             result.Conflicts,
             c => c.Kind == MigrationConflictKind.OrsDetailsDiffer
@@ -636,7 +621,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal(
             "Edited Name",
             Assert
-                .Single((await CurrentApplicationAsync(inFlight)).ApplicationOverseasSites)
+                .Single((await ApplicationSitesAsync(inFlight)))
                 .ProposedChanges!["siteName"]
                 .AsString
         );
@@ -900,7 +885,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         );
         Assert.Equal(
             accreditation.EntityId,
-            (await CurrentApplicationAsync(application)).AccreditationId
+            (await CurrentApplicationAsync(application)).AsAccreditation().AccreditationId
         );
         Assert.Equal(
             accreditation.EntityId,
@@ -927,7 +912,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
 
         var version = await CurrentApplicationAsync(application);
         Assert.Equal(ApplicationStatus.Started, version.Status);
-        Assert.Equal(TonnageBand.UpTo10000, version.Prns.PlannedTonnageBand);
+        Assert.Equal(TonnageBand.UpTo10000, version.AsAccreditation().Prns.PlannedTonnageBand);
     }
 
     [Fact]

@@ -43,7 +43,11 @@ public static class DomainModelBuilders
             Material = MaterialType.Plastic,
             Nation = Nation.England,
             Site = new RegistrationSite { Address = Address(), SiteId = "1" },
-            Source = new EntitySource { System = SourceSystem.Application, EnrichmentPending = true },
+            Source = new EntitySource
+            {
+                System = SourceSystem.Application,
+                EnrichmentPending = true,
+            },
         };
 
     public static OverseasSiteEntity OverseasSite(
@@ -86,10 +90,17 @@ public static class DomainModelBuilders
             RegistrationId = registrationId,
             ReExOrganisationId = ObjectId.GenerateNewId().ToString(),
             ReExRegistrationId = ObjectId.GenerateNewId().ToString(),
-            Year = 2027,
             Status = ApplicationStatus.Submitted,
             ApplicationReference = applicationReference ?? $"APP-{Next():D6}",
             DateLastEdited = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Details = AccreditationDetails(),
+        };
+
+    public static AccreditationDetails AccreditationDetails() =>
+        new()
+        {
+            Kind = AccreditationKind.Reapply,
+            Year = 2027,
             Prns = new PrnsSection
             {
                 PlannedTonnageBand = TonnageBand.UpTo10000,
