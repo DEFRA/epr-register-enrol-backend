@@ -86,22 +86,45 @@ public class FakeOrganisationPersistenceTests
         result.Should().BeNull();
     }
 
-    // RA-425's dedicated exporter, included only where its dev seed runs (see
+    // RA-425's dedicated exporters, included only where their dev seed runs (see
     // DevExporterAccreditationSeedService.IsEnabled).
-    private static FakeOrganisationPersistence WithManageExporter(TimeProvider clock) =>
-        new(clock, includeManageExporter: true);
+    private static FakeOrganisationPersistence WithDevExporters(TimeProvider clock) =>
+        new(clock, includeDevExporters: true);
 
     private static readonly DateTime Late2026 = new(2026, 12, 31, 23, 59, 0, DateTimeKind.Utc);
 
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ExporterOrg50018_IsIncludedOnlyWhenAskedFor(bool includeManageExporter)
+    public async Task ExporterOrg50018_IsIncludedOnlyWhenAskedFor(bool includeDevExporters)
     {
-        var sut = new FakeOrganisationPersistence(TimeProvider.System, includeManageExporter);
+        var sut = new FakeOrganisationPersistence(TimeProvider.System, includeDevExporters);
 
-        (await sut.GetByOrgIdAsync(50018) is not null).Should().Be(includeManageExporter);
-        (await sut.GetAllAsync()).Any(o => o.OrgId == 50018).Should().Be(includeManageExporter);
+        (await sut.GetByOrgIdAsync(50018) is not null).Should().Be(includeDevExporters);
+        (await sut.GetAllAsync()).Any(o => o.OrgId == 50018).Should().Be(includeDevExporters);
+    }
+
+    // RA-492: the in-year add-ORS journey's exporter, alongside RA-425's.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExporterOrg50019_IsIncludedOnlyWhenAskedFor(bool includeDevExporters)
+    {
+        var sut = new FakeOrganisationPersistence(TimeProvider.System, includeDevExporters);
+
+        (await sut.GetByOrgIdAsync(50019) is not null).Should().Be(includeDevExporters);
+    }
+
+    [Fact]
+    public async Task ExporterOrg50019_HasItsOwnDatedRegistrationNumberAndOverseasSites()
+    {
+        var org = await WithDevExporters(new TestClock(Late2026)).GetByOrgIdAsync(50019);
+
+        org!.CompanyDetails!.Name.Should().Be("In-Year Change Exports Ltd");
+        org.CompanyDetails.RegistrationNumber.Should().Be("R26EX0500190001PL");
+        var registration = org.Registrations!.Should().ContainSingle().Subject;
+        registration.Id.ToString().Should().Be("aaa000000000000000050019");
+        registration.OverseasSites.Should().Equal("901901", "901910", "901911", "901912");
     }
 
     [Fact]
@@ -114,7 +137,7 @@ public class FakeOrganisationPersistenceTests
     public async Task ExporterOrg50018_RegistrationNumber_FollowsTheClockAcrossAYearBoundary()
     {
         var clock = new TestClock(Late2026);
-        var sut = WithManageExporter(clock);
+        var sut = WithDevExporters(clock);
 
         var before = await sut.GetByOrgIdAsync(50018);
         before!.CompanyDetails!.RegistrationNumber.Should().Be("R26EX0500180001PL");
@@ -137,12 +160,12 @@ public class FakeOrganisationPersistenceTests
     [Fact]
     public async Task ExporterOrg50018_RegistrationNumber_IsCurrentFromAnyReadPath_WithoutAnEarlierRead()
     {
-        (await WithManageExporter(new TestClock(Late2026)).GetAllAsync())
+        (await WithDevExporters(new TestClock(Late2026)).GetAllAsync())
             .Single(o => o.OrgId == 50018)
             .CompanyDetails!.RegistrationNumber.Should()
             .Be("R26EX0500180001PL");
         (
-            await WithManageExporter(new TestClock(Late2026))
+            await WithDevExporters(new TestClock(Late2026))
                 .SearchByValueAsync("R26EX0500180001PL")
         )
             .Should()
@@ -153,7 +176,7 @@ public class FakeOrganisationPersistenceTests
     public async Task ExporterOrg50018_AfterAnUpdate_RegistrationNumberStillFollowsTheClock()
     {
         var clock = new TestClock(Late2026);
-        var sut = WithManageExporter(clock);
+        var sut = WithDevExporters(clock);
         var updated = NewOrg(50018, "Renamed Exporter");
         updated.CompanyDetails!.RegistrationNumber = "R20EX0500180001PL";
         (await sut.UpdateAsync(updated)).Should().BeTrue();
@@ -168,7 +191,7 @@ public class FakeOrganisationPersistenceTests
     [Fact]
     public async Task ExporterOrg50018_UpsertedWithoutCompanyDetails_StillHasARegistrationNumber()
     {
-        var sut = WithManageExporter(new TestClock(Late2026));
+        var sut = WithDevExporters(new TestClock(Late2026));
         var upserted = NewOrg(50018);
         upserted.CompanyDetails = null;
         await sut.UpsertAsync(upserted);

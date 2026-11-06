@@ -1,5 +1,8 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 
@@ -253,5 +256,28 @@ public class StubCaseWorkingApiAdapterTests
             sut.NotifySiteAddedAsync(CreateApplication(), "overseas", "ORS456", null, false);
 
         await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_ReturnsAnApplicationFormatReferenceAndWorkItemId()
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, 2026);
+        var request = new AccreditationChangeRequest
+        {
+            OrganisationId = accreditation.OrganisationId,
+            ApplicationId = accreditation.ApplicationId!,
+            MaterialType = accreditation.MaterialType,
+            Year = accreditation.Year,
+        };
+
+        var result = await BuildSut().SubmitChangeRequestAsync(
+            request,
+            accreditation,
+            TestContext.Current.CancellationToken
+        );
+
+        // Same AP format as SubmitApplicationAsync: year 26, EA, org 050019, no site postcode, plastic.
+        result.ApplicationReference.Should().Be("AP26EA050019PL");
+        result.WorkItemId.Should().NotBeNull();
     }
 }

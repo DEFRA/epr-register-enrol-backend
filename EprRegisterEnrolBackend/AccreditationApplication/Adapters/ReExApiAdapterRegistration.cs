@@ -59,13 +59,13 @@ public static class ReExApiAdapterRegistration
         IHostEnvironment environment
     )
     {
-        var includeManageExporter = DevExporterAccreditationSeedService.IsEnabled(
+        var includeDevExporters = DevExporterAccreditationSeedService.IsEnabled(
             configuration,
             environment
         );
         services.AddSingleton(sp => new FakeOrganisationPersistence(
             sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            includeManageExporter
+            includeDevExporters
         ));
     }
 }

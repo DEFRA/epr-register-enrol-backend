@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationChanges;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
@@ -6,6 +7,14 @@ public interface ICaseWorkingApiAdapter
 {
     Task<CaseWorkingSubmissionResult> SubmitApplicationAsync(
         AccreditationApplicationModel application,
+        CancellationToken cancellationToken = default
+    );
+
+    // RA-492: creates an add-overseas-site work item for a submitted in-year change request.
+    // Allowed to throw - the caller only marks the request Submitted once this succeeds.
+    Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+        AccreditationChangeRequest changeRequest,
+        AccreditationApplicationModel accreditation,
         CancellationToken cancellationToken = default
     );
 

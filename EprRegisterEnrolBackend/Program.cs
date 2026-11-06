@@ -6,6 +6,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
@@ -132,6 +133,16 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+    // RA-492: in-year change requests (add registered ORS to a granted accreditation). Registered only
+    // with the in-year changes flag, like the routes that use them, so with it off the change-request
+    // collection and its indexes are never touched.
+    if (builder.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
+    {
+        builder.Services.AddSingleton<IChangeRequestPersistence, ChangeRequestPersistence>();
+        builder.Services.Configure<AccreditationChangesConfig>(
+            builder.Configuration.GetSection(AccreditationChangesConfig.SectionName)
+        );
+    }
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
     );
@@ -323,9 +334,9 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
         builder.Services.AddHostedService<DevRegistrationSeedService>();
     }
 
-    // RA-425: the dedicated exporter (org 50018). Also seedable on its own, for the fe-tests stack,
-    // whose other specs must not see the Delta Green data above. The same check decides whether
-    // the stub ReEx registry has the org (see ReExApiAdapterRegistration).
+    // RA-425: the dedicated exporters (orgs 50018 and, for RA-492, 50019). Also seedable on their own,
+    // for the fe-tests stack, whose other specs must not see the Delta Green data above. The same check
+    // decides whether the stub ReEx registry has the orgs (see ReExApiAdapterRegistration).
     if (DevExporterAccreditationSeedService.IsEnabled(builder.Configuration, builder.Environment))
     {
         builder.Services.AddHostedService<DevExporterAccreditationSeedService>();
@@ -467,10 +478,14 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseAccreditationApplicationEndpoints();
     // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
     app.UseAccreditationApiEndpoints();
-    // RA-425: the current registration status, for the frontend's material dashboard pages. Behind a
-    // flag, off by default, until the in-year changes journey ships.
-    if (app.Configuration.GetValue<bool>(RegistrationStatusEndpoints.FeatureFlagKey))
+    // The in-year changes journey, behind a flag, off by default, until it ships (unmapped, its routes
+    // return 404): RA-425's current registration status, for the frontend's material dashboard pages,
+    // and RA-492's change requests against a granted accreditation.
+    if (app.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
+    {
         app.UseRegistrationStatusEndpoints();
+        app.UseAccreditationChangeEndpoints();
+    }
 
     if (app.Environment.IsDevelopment())
     {

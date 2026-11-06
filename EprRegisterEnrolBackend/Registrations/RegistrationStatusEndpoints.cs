@@ -16,9 +16,6 @@ public sealed record RegistrationStatusResponse(
 /// </summary>
 public static class RegistrationStatusEndpoints
 {
-    /// <summary>Maps the endpoint only when on; off by default, until the in-year changes journey ships.</summary>
-    public const string FeatureFlagKey = "FeatureFlags:InYearChangesEnabled";
-
     public static void UseRegistrationStatusEndpoints(this IEndpointRouteBuilder app) =>
         app.MapGet("api/v1/registrations/{registrationId}/status", GetStatus)
             .RequireAuthorization(policy =>

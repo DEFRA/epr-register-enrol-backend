@@ -137,6 +137,7 @@ for why.
 | `Migrations__Ra691AccreditationReferenceCorrection__SpotCheckConfirmedBy` | No | _(blank)_ | RA-691: name of whoever reviewed the dry-run output against the live records. Required for `Apply`; logged with each applied change |
 | `CaseWorking__Url` | No | `http://localhost:8085` | Base URL of `epr-register-enrol-management-be` |
 | `CaseWorking__UseStub` | No | `false` (Development) | When `true`, submissions to management-be are stubbed instead of sent |
+| `AccreditationChanges__SubmitToCaseManagement` | No | `false` | RA-492: when `true`, submitting an in-year change request also creates an `add-overseas-site` work item in management-be. Deploy a management-be that registers that work-item type **before** switching this on — management-be on `main` rejects unknown types |
 | `CASE_MANAGEMENT_API_SHARED_SECRET` | **Yes** | _(blank)_ | HMAC secret this service signs its outbound calls to management-be with — must match management-be's `AUTH_SHARED_SECRET__BACKEND` exactly |
 | `CaseManagementAuth__ExpectedClientId` | No | `epr-register-enrol-management-be` | Expected `x-cdp-client-id` on inbound calls from management-be |
 | `AUTH_SHARED_SECRET__MANAGEMENT_BE` | **Yes** | _(blank)_ | Verifies inbound calls from management-be — must match management-be's `OPERATOR_BACKEND_SHARED_SECRET` exactly |
@@ -210,6 +211,21 @@ Base path: `api/v1/accreditation-applications/{organisationId}`
 | `DELETE` | `/{organisationId}/{applicationId}/files/{fileId}` | Remove a file from the sampling plan                                                                             |
 | `POST`   | `/{organisationId}/{applicationId}/submit`         | Submit the application (requires all sections `Completed`)                                                       |
 | `POST`   | `/case-management/{workItemId}/status`             | Push a Case Management service work-item status change onto `ApplicationStatus` (Case Management service caller) |
+
+#### In-year change requests (RA-492)
+
+Base path: `api/v1/accreditation-changes/{organisationId}/{applicationId}`, where `applicationId` is an **Approved** exporter accreditation application. A change request (`accreditationChangeRequests` collection, `InProgress` → `Submitted`) adds existing registered overseas sites (`selected: false`) to that accreditation; it reuses each site's `siteId` and ORS id and never modifies the approved application, so the sites stay registered until a regulator decision. At most one `InProgress` request exists per accreditation and it may hold several sites. The charge is £328 per site with no tonnage fee.
+
+| Method   | Path | Description |
+| -------- | ---- | ----------- |
+| `GET`    | _(base path)_ | Accreditation header, every site with `accreditationStatus`/`lockedFields`/pending request, the draft, every request, and `pendingOrsIds` |
+| `POST`   | `/requests/current/sites` | Add a registered site (`{ "siteId": 1 }`) to the draft, creating it if needed; 409 if the site is accredited or already in a submitted request |
+| `PATCH`  | `/requests/current/sites/{siteId}` | Supply missing `country`, `coordinates`, `operationCodes`, `conditionsOfExport`; 400 if a field already has a value on the site (locked) |
+| `DELETE` | `/requests/current/sites/{siteId}` | Remove a site; 204 when the draft became empty and was deleted |
+| `POST`   | `/requests/current/bes-evidence/initiate` | Start a CDP upload for BES evidence |
+| `POST`   | `/requests/current/sites/{siteId}/bes-evidence/files` | Attach a scanned upload to a site in the draft |
+| `DELETE` | `/requests/current/sites/{siteId}/bes-evidence/files/{fileId}` | Remove a BES evidence file |
+| `POST`   | `/requests/current/submit` | Declaration (`fullName`, `jobTitle`); 422 with per-site errors when incomplete, otherwise `Submitted` |
 
 #### Seed request body
 
