@@ -915,6 +915,18 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task AddSite_RegistrationOnlyDraftHoldsTheOrs_Conflicts()
+    {
+        SeedRegistrationOnly(
+            GrantedOn,
+            [RegistrationKeyedIndiaItem(ChangeItemStatus.InProgress)],
+            ChangeRequestStatus.InProgress
+        );
+
+        (await AddSite(901911)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
     public async Task AddSite_RegistrationOnlyRequestsItemForTheOrsIsFinal_CanBeAdded()
     {
         SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Rejected)]);

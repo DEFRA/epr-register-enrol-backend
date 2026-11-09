@@ -102,7 +102,7 @@ public static class AccreditationChangeEndpoints
         return created ? Results.Created(string.Empty, view) : Results.Ok(view);
     }
 
-    // RA-697: any granted accreditation, as the GET reads a reprocessor's (tonnage) requests too.
+    // Any granted (Approved) accreditation, exporter or reprocessor.
     private static async Task<(
         IResult? Error,
         AccreditationApplicationModel? Accreditation
@@ -374,7 +374,8 @@ public static class AccreditationChangeEndpoints
             applicationId,
             services.CancellationToken
         );
-        // RA-697: only one change per ORS can be active, so a submitted registration-only request counts too.
+        // RA-697: only one change per ORS can be active, so a registration-only request counts too, its draft
+        // included: that draft is never this accreditation's own, so the site can't join it here.
         var registrationOnly = await ListRegistrationOnlyAsync(organisationId, accreditation!, services);
         if (
             requests
@@ -384,6 +385,8 @@ public static class AccreditationChangeEndpoints
             return Results.Conflict(
                 "This overseas site already has a change request waiting for a regulator decision."
             );
+        if (registrationOnly.Exists(r => r.Status == ChangeRequestStatus.InProgress && HoldsActiveItemFor(r, site!)))
+            return Results.Conflict("This overseas site is already in the registration's draft change request.");
 
         var draft = requests.FirstOrDefault(r => r.Status == ChangeRequestStatus.InProgress);
         if (draft is not null && draft.Sites.Exists(s => s.SiteId == body.SiteId))

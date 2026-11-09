@@ -1,14 +1,12 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
-using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
@@ -16,7 +14,6 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MongoDB.Bson;
-using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
@@ -357,23 +354,12 @@ public sealed class RegistrationChangeRequestsEndpointTests(MongoIntegrationFixt
         (await client.GetAsync(Path, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
-    // RA-697: ReEx answering anything but "found" or 404 (here a server error) for the holder check.
-    private static WebApplicationFactory<Program> WithReExFailing(WebApplicationFactory<Program> factory)
-    {
-        var reEx = Substitute.For<IReExApiAdapter>();
-        reEx.GetRegistrationHolderNameAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(ReExResult<string?>.Fail(new ReExError(ReExErrorKind.ServerError), 500));
-        return factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services => services.AddSingleton(reEx))
-        );
-    }
-
     // Any other ReEx failure leaves the organisation name out rather than failing the view.
     [Fact]
     public async Task ReExFailing_ReturnsTheViewWithNoOrganisationName()
     {
         using var baseFactory = Factory();
-        using var factory = WithReExFailing(baseFactory);
+        using var factory = baseFactory.WithReExFailing();
         using var client = FrontendClient(factory);
         await SeedRegistration(factory);
 

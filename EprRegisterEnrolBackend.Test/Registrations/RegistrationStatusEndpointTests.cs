@@ -1,13 +1,11 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
-using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
@@ -15,7 +13,6 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MongoDB.Bson;
-using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.Registrations;
 
@@ -51,7 +48,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
             }
         );
 
-    private static HttpClient FrontendClient(EphemeralMongoTestFactory factory)
+    private static HttpClient FrontendClient(WebApplicationFactory<Program> factory)
     {
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
@@ -62,7 +59,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
     }
 
     private static VersionedMongoRepository<RegistrationEntity> Versions(
-        EphemeralMongoTestFactory factory
+        WebApplicationFactory<Program> factory
     ) => factory.Services.GetRequiredService<RegistrationVersionStore>().Versions;
 
     private static RegistrationEntity Registration(RegistrationStatus status) =>
@@ -230,29 +227,16 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
             .Be("Green Works, Leeds, LS10 1AB");
     }
 
-    // RA-697: ReEx answering anything but "found" or 404 (here a server error) for the holder check.
-    private static WebApplicationFactory<Program> WithReExFailing(WebApplicationFactory<Program> factory)
-    {
-        var reEx = Substitute.For<IReExApiAdapter>();
-        reEx.GetRegistrationHolderNameAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(ReExResult<string?>.Fail(new ReExError(ReExErrorKind.ServerError), 500));
-        return factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services => services.AddSingleton(reEx))
-        );
-    }
-
     // Any other ReEx failure leaves the organisation name out rather than failing the status, which every manage
     // page needs.
     [Fact]
     public async Task ReExFailing_ReturnsTheStatusWithNoOrganisationName()
     {
         using var baseFactory = Factory(expandEnabled: true);
-        using var factory = WithReExFailing(baseFactory);
-        using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", FrontendSecret);
-        await factory
-            .Services.GetRequiredService<RegistrationVersionStore>()
-            .Versions.InsertAsync(
+        using var factory = baseFactory.WithReExFailing();
+        using var client = FrontendClient(factory);
+        await Versions(factory)
+            .InsertAsync(
                 Registration(RegistrationStatus.Approved),
                 new ChangeInfo { Reason = ChangeReason.ReExImport },
                 cancellationToken: Ct
