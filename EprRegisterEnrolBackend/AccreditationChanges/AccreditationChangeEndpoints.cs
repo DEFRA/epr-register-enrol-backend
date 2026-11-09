@@ -349,6 +349,27 @@ public static class AccreditationChangeEndpoints
         };
     }
 
+    // RA-697: only one change per ORS can be active, so a registration-only request counts too, its draft included:
+    // that draft is never this accreditation's own, so the site can't join it here. Null when the site is free.
+    private static IResult? HeldElsewhere(
+        OverseasSiteModel site,
+        List<AccreditationChangeRequest> requests,
+        List<AccreditationChangeRequest> registrationOnly
+    )
+    {
+        if (
+            requests
+                .Concat(registrationOnly)
+                .Any(r => r.Status == ChangeRequestStatus.Submitted && HoldsActiveItemFor(r, site))
+        )
+            return Results.Conflict(
+                "This overseas site already has a change request waiting for a regulator decision."
+            );
+        if (registrationOnly.Exists(r => r.Status == ChangeRequestStatus.InProgress && HoldsActiveItemFor(r, site)))
+            return Results.Conflict("This overseas site is already in the registration's draft change request.");
+        return null;
+    }
+
     private static async Task<IResult> AddSite(
         string organisationId,
         string applicationId,
@@ -374,19 +395,9 @@ public static class AccreditationChangeEndpoints
             applicationId,
             services.CancellationToken
         );
-        // RA-697: only one change per ORS can be active, so a registration-only request counts too, its draft
-        // included: that draft is never this accreditation's own, so the site can't join it here.
         var registrationOnly = await ListRegistrationOnlyAsync(organisationId, accreditation!, services);
-        if (
-            requests
-                .Concat(registrationOnly)
-                .Any(r => r.Status == ChangeRequestStatus.Submitted && HoldsActiveItemFor(r, site!))
-        )
-            return Results.Conflict(
-                "This overseas site already has a change request waiting for a regulator decision."
-            );
-        if (registrationOnly.Exists(r => r.Status == ChangeRequestStatus.InProgress && HoldsActiveItemFor(r, site!)))
-            return Results.Conflict("This overseas site is already in the registration's draft change request.");
+        if (HeldElsewhere(site!, requests, registrationOnly) is { } held)
+            return held;
 
         var draft = requests.FirstOrDefault(r => r.Status == ChangeRequestStatus.InProgress);
         if (draft is not null && draft.Sites.Exists(s => s.SiteId == body.SiteId))
