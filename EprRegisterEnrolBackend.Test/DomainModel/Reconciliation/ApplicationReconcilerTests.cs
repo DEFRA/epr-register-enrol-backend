@@ -535,6 +535,51 @@ public sealed class ApplicationReconcilerTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_AnUnexpectedErrorOnOneApplication_IsCountedAndTheRunCarriesOn()
+    {
+        var bad = await CreateAsync(
+            Application(ApplicationStatus.Started, Day1, 2026, Site(1, "001", "Plant"))
+        );
+        var fine = await CreateAsync(
+            Application(ApplicationStatus.Started, Day1, 2027, Site(1, "001", "Plant"))
+        );
+        await MigrateAsync(fine);
+        // An overlay the projection cannot read: not one of the driver's deserialisation errors.
+        await _factory
+            .GetCollection<BsonDocument>(DomainModelCollections.ApplicationVersions)
+            .UpdateOneAsync(
+                new BsonDocument { { "entityId", bad }, { "isCurrent", true } },
+                new BsonDocument(
+                    "$set",
+                    new BsonDocument(
+                        "details.applicationOverseasSites.0.proposedChanges",
+                        new BsonDocument("operationCodes", "not a list")
+                    )
+                ),
+                cancellationToken: Ct
+            );
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.Unreadable.Should().Be(1);
+        report.UnreadableByKind.Should().ContainKey(nameof(InvalidCastException));
+        report.Matching.Should().Be(1);
+        report.SampleApplicationIds.Should().Equal(bad);
+    }
+
+    [Fact]
+    public async Task Run_Cancelled_StopsRatherThanCountingEveryApplicationAsUnreadable()
+    {
+        await MigrateAsync(await CreateAsync(Application(sites: Site(1, "001", "Plant"))));
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        var run = () => _reconciler.RunAsync(cancelled.Token);
+
+        await run.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task Run_AnApplicationNotYetMigrated_IsCountedNotCompared()
     {
         await CreateAsync(Application(sites: Site(1, "001", "Plant")));

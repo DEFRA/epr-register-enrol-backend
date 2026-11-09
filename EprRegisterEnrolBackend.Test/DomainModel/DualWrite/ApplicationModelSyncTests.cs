@@ -29,6 +29,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
     private readonly AccreditationApplicationPersistence _applications;
@@ -41,7 +42,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("modelsync");
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
-        var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
+        var clock = _clock;
         var logs = NullLoggerFactory.Instance;
         _applications = new AccreditationApplicationPersistence(_factory, logs);
         _stores = new ApplicationGroupStores(
@@ -954,17 +955,33 @@ public sealed class ApplicationModelSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task ApplicationApproved_ASiteWithNoDateIsStampedOnce()
+    public async Task ApplicationApproved_ASiteWithNoDate_TakesTheApprovalTime()
     {
         var application = await SubmittedWithProposalsAsync();
+        _clock.Advance(TimeSpan.FromDays(30));
         await ApproveAsync(application);
 
         await SyncAsync(application);
-        var approvedAt = new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc);
-        Assert.Equal(approvedAt, (await CurrentSiteAsync("002")).FirstApprovedAt);
+
+        var site = await CurrentSiteAsync("002");
+        Assert.Equal(_clock.GetUtcNow().UtcDateTime, site.FirstApprovedAt);
+        Assert.Equal(FirstApprovalSource.ThisService, site.FirstApprovalSource);
+    }
+
+    [Fact]
+    public async Task ApplicationApproved_ASiteAlreadyHoldingADate_KeepsIt()
+    {
+        var site = Site(1, "001", "ReEx Site");
+        site.ValidFrom = "2019-03-01T00:00:00Z";
+        var application = await MigratedApplicationAsync(ApplicationStatus.Submitted, site);
+        _clock.Advance(TimeSpan.FromDays(30));
+        await ApproveAsync(application);
 
         await SyncAsync(application);
-        Assert.Equal(approvedAt, (await CurrentSiteAsync("002")).FirstApprovedAt);
+
+        var current = await CurrentSiteAsync("001");
+        Assert.Equal(new DateTime(2019, 3, 1, 0, 0, 0, DateTimeKind.Utc), current.FirstApprovedAt);
+        Assert.Equal(FirstApprovalSource.ReEx, current.FirstApprovalSource);
     }
 
     [Fact]

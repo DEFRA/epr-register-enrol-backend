@@ -104,8 +104,10 @@ public sealed class ApplicationReconciler(
 
             tally.Record(id, Differences(legacy, sources), listed);
         }
-        // A document the current classes cannot read or project: a finding for the report, not a reason to stop.
-        catch (Exception ex) when (ex is FormatException or MongoDB.Bson.BsonException)
+        // One document that cannot be read or projected is a finding for the report, not a reason to lose the report.
+        catch (Exception ex)
+            when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested
+            )
         {
             tally.RecordUnreadable(id, ex);
         }

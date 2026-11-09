@@ -501,6 +501,28 @@ public sealed class SeedDualWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_AnAccreditedSiteAlreadyHoldingADate_KeepsIt()
+    {
+        var first = ReEx();
+        first.OverseasSites[0].ValidFrom = "2019-03-01T00:00:00Z";
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+        await ClosedApplicationAsync(ApplicationStatus.Approved);
+
+        var later = ReEx();
+        later.OverseasSites[0].ValidFrom = "2025-01-01T00:00:00Z";
+        await Writer().WriteAsync(Seed(later, await LegacyApplicationAsync(later)), Ct);
+
+        var site = await _factory
+            .GetCollection<OverseasSiteEntity>(DomainModelCollections.OverseasSiteVersions)
+            .Find(
+                Builders<OverseasSiteEntity>.Filter.Eq(s => s.OrsId, "001")
+                    & Builders<OverseasSiteEntity>.Filter.Eq(s => s.IsCurrent, true)
+            )
+            .SingleAsync(Ct);
+        Assert.Equal(new DateTime(2019, 3, 1, 0, 0, 0, DateTimeKind.Utc), site.FirstApprovedAt);
+    }
+
+    [Fact]
     public async Task WriteAsync_RolledBackAfterAConflict_LogsOnlyTheFailure()
     {
         await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);

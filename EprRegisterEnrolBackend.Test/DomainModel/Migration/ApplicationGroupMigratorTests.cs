@@ -637,7 +637,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     }
 
     [Fact]
-    public async Task Migrate_AnExistingSiteWithoutADate_IsFilledAndOneWithADateIsKept()
+    public async Task Migrate_AnExistingSiteWithoutADate_IsFilled()
     {
         var registration = await SeededRegistrationAsync();
         var seeded = await SeededSiteAsync(registration);
@@ -652,6 +652,27 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         var site = await CurrentSiteAsync(seeded.OrsId);
         Assert.Equal(new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc), site.FirstApprovedAt);
         Assert.Equal(seeded.EntityId, site.EntityId);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Started)]
+    [InlineData(ApplicationStatus.Approved)] // The application's details replace the ORS's, but not this date.
+    public async Task Migrate_AnExistingSiteWithADate_KeepsIt(ApplicationStatus status)
+    {
+        var earliest = new DateTime(2018, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var registration = await SeededRegistrationAsync();
+        await SeededSiteAsync(registration, earliest);
+        var application = await ApplicationAsync(
+            status,
+            Day1,
+            ApprovedSite("2015-06-01T00:00:00Z")
+        );
+
+        await MigrateAsync(application);
+
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(earliest, site.FirstApprovedAt);
+        Assert.Equal(FirstApprovalSource.ReEx, site.FirstApprovalSource);
     }
 
     [Fact]
@@ -714,12 +735,17 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
             cancellationToken: Ct
         );
 
-    private async Task<OverseasSiteEntity> SeededSiteAsync(RegistrationEntity registration) =>
+    private async Task<OverseasSiteEntity> SeededSiteAsync(
+        RegistrationEntity registration,
+        DateTime? firstApprovedAt = null
+    ) =>
         await _stores.OverseasSites.Versions.InsertAsync(
             new OverseasSiteEntity
             {
                 RegistrationId = registration.EntityId,
                 OrsId = "001",
+                FirstApprovedAt = firstApprovedAt,
+                FirstApprovalSource = firstApprovedAt is null ? null : FirstApprovalSource.ReEx,
                 SiteName = "ReEx Name",
                 Status = OverseasSiteStatus.Active,
                 Origin = SiteOrigin.ReEx,

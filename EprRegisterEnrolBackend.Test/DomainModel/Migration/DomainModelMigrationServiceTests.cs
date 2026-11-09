@@ -32,6 +32,7 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
     private readonly TestClock _clock = new(Now);
     private readonly AccreditationApplicationPersistence _applications;
     private readonly DomainModelMigrationPersistence _persistence;
+    private readonly ApplicationGroupMigrator _realMigrator;
     private readonly SpyMigrator _migrator;
     private readonly DomainModelSchemaStatus _schema = new();
     private readonly DomainModelMigrationStatus _status = new();
@@ -44,20 +45,19 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
         var logs = NullLoggerFactory.Instance;
         _applications = new AccreditationApplicationPersistence(_factory, logs);
         _persistence = new DomainModelMigrationPersistence(_factory, logs);
-        _migrator = new SpyMigrator(
-            new ApplicationGroupMigrator(
-                _applications,
-                new ApplicationGroupStores(
-                    new OrganisationPersistence(_factory, logs),
-                    new RegistrationPersistence(_factory, logs, _clock),
-                    new OverseasSitePersistence(_factory, logs, _clock),
-                    new ApplicationVersionPersistence(_factory, logs, _clock),
-                    new AccreditationPersistence(_factory, logs, _clock),
-                    new MigrationConflictPersistence(_factory, logs)
-                ),
-                _clock
-            )
+        _realMigrator = new ApplicationGroupMigrator(
+            _applications,
+            new ApplicationGroupStores(
+                new OrganisationPersistence(_factory, logs),
+                new RegistrationPersistence(_factory, logs, _clock),
+                new OverseasSitePersistence(_factory, logs, _clock),
+                new ApplicationVersionPersistence(_factory, logs, _clock),
+                new AccreditationPersistence(_factory, logs, _clock),
+                new MigrationConflictPersistence(_factory, logs)
+            ),
+            _clock
         );
+        _migrator = new SpyMigrator(_realMigrator);
         _schema.Record(HealthCheckResult.Healthy());
     }
 
@@ -76,7 +76,11 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
             CancellationToken cancellationToken = default
         )
         {
-            Calls.Add(applicationId);
+            lock (Calls)
+            {
+                Calls.Add(applicationId);
+            }
+
             if (Before is not null)
             {
                 await Before(applicationId);
@@ -435,6 +439,69 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
         var state = await StateAsync();
         state.LeaseOwner.Should().Be("newer", "only its holder gives a lease back");
         state.PassCompletedAt.Should().BeNull();
+    }
+
+    private Task RealFirstTouchAsync(ObjectId applicationId) =>
+        InsertRaceRetry.RunInTransactionAsync(
+            _factory,
+            (session, token) => _realMigrator.EnsureMigratedAsync(applicationId, session, token),
+            _ => { },
+            Ct
+        );
+
+    [Fact]
+    public async Task Run_RacingALiveFirstTouchOnTheSameGroup_LeavesOneVersionOfEach()
+    {
+        var ids = new List<ObjectId>();
+        for (var round = 0; round < 3; round++)
+        {
+            var first = await ApplicationAsync(Registration(round), 2027);
+            var second = await ApplicationAsync(Registration(round), 2028);
+            ids.AddRange([first, second]);
+            Task? liveWrite = null;
+            // Started once the service's transaction is open, so the two really overlap.
+            _migrator.Before = id =>
+            {
+                liveWrite ??= RealFirstTouchAsync(second);
+                return Task.CompletedTask;
+            };
+
+            await Service().RunAsync(Ct);
+            await liveWrite!;
+        }
+
+        (await VersionCountAsync()).Should().Be(ids.Count);
+        (await MigratedAsync()).Should().BeEquivalentTo(ids);
+        (await StateAsync()).Failures.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Run_TwoInstancesTogether_NeverWorkAtTheSameTimeOrRepeatAGroup()
+    {
+        var ids = new List<ObjectId>();
+        for (var i = 0; i < 4; i++)
+        {
+            ids.Add(await ApplicationAsync(Registration(i)));
+        }
+
+        var inFlight = 0;
+        var mostAtOnce = 0;
+        _migrator.Before = async _ =>
+        {
+            var now = Interlocked.Increment(ref inFlight);
+            Interlocked.Exchange(ref mostAtOnce, Math.Max(mostAtOnce, now));
+            await Task.Delay(40, Ct);
+        };
+        _migrator.After = _ => Interlocked.Decrement(ref inFlight);
+
+        await Task.WhenAll(Service().RunAsync(Ct), Service().RunAsync(Ct));
+
+        mostAtOnce.Should().Be(1);
+        _migrator.Calls.Should().OnlyHaveUniqueItems().And.BeEquivalentTo(ids);
+        (await MigratedAsync()).Should().BeEquivalentTo(ids);
+        var state = await StateAsync();
+        state.Failures.Should().BeEmpty();
+        state.LeaseOwner.Should().BeNull();
     }
 
     [Fact]
