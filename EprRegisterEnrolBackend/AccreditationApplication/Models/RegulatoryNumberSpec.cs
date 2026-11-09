@@ -4,7 +4,6 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 // object so the method itself stays under Sonar's 7-parameter limit (S107).
 public record RegulatoryNumberSpec
 {
-    public required NumberType Type { get; init; }
     public required Nation Nation { get; init; }
     public required bool IsExporter { get; init; }
     public required int OrgId { get; init; }

@@ -3,8 +3,8 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
 // RA-448: gates /health/ready on the counter backfill (AC4) having completed, so
-// real traffic can't reach the registration/accreditation-number endpoints before
-// the 16 pools are seeded - closing the race RegulatoryNumberSequenceBackfillService's
+// real traffic can't reach the registration-number endpoint before
+// the eight R-* pools are seeded - closing the race RegulatoryNumberSequenceBackfillService's
 // non-blocking BackgroundService design otherwise leaves open (a request landing in
 // that window would upsert a fresh counter at CurrentMax=0 and return sequence=1,
 // colliding with a real already-issued number). Tagged "ready" like

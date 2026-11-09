@@ -13,6 +13,32 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public void Seed(AccreditationApplicationModel application) => _store.Add(application);
 
+    public Task StampDomainModelForeignKeysAsync(
+        ObjectId applicationId,
+        ObjectId registrationEntityId,
+        IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
+        ObjectId? accreditationEntityId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var application =
+            _store.Find(a => a.Id == applicationId)
+            ?? throw new InvalidOperationException($"Application {applicationId} not found.");
+        application.RegistrationEntityId = registrationEntityId;
+        application.AccreditationEntityId =
+            accreditationEntityId ?? application.AccreditationEntityId;
+        foreach (var site in application.OverseasSites?.Sites ?? [])
+        {
+            if (site.OrsId is not null && overseasSiteEntityIds.TryGetValue(site.OrsId, out var id))
+            {
+                site.OverseasSiteEntityId = id;
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
     public void Clear()
     {
         _store.Clear();
@@ -63,6 +89,19 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         stored.Version++;
     }
 
+    public Task UpsertAsync(AccreditationApplicationModel application)
+    {
+        _store.RemoveAll(a => a.Id == application.Id);
+        _store.Add(application);
+        return Task.CompletedTask;
+    }
+
+    public Task<long> DeleteManyAsync(IEnumerable<ObjectId> ids)
+    {
+        var idList = ids.ToList();
+        return Task.FromResult((long)_store.RemoveAll(a => a.Id is { } id && idList.Contains(id)));
+    }
+
     public Task<AccreditationApplicationModel?> CreateAsync(
         AccreditationApplicationModel application
     )
@@ -87,7 +126,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        int year
+        int year,
+        IClientSessionHandle? session = null
     )
     {
         var match = _store
@@ -102,6 +142,47 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             .FirstOrDefault();
         return Task.FromResult(match is null ? null : ShallowCopy(match));
     }
+
+    // RA-690: mirrors AccreditationApplicationPersistence.GetLatestPreviousAccreditationAsync.
+    public Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        GlassRecyclingProcess? glassRecyclingProcess,
+        int beforeYear
+    )
+    {
+        var match = _store
+            .Where(a =>
+                a.OrganisationId == organisationId
+                && a.RegistrationId == registrationId
+                && a.MaterialType == materialType
+                && a.GlassRecyclingProcess == glassRecyclingProcess
+                && a.Year < beforeYear
+                && a.ApplicationStatus == ApplicationStatus.Approved
+                && !string.IsNullOrEmpty(a.AccreditationReference)
+            )
+            .OrderByDescending(a => a.Year)
+            .ThenByDescending(a => a.DateLastEdited)
+            .FirstOrDefault();
+        return Task.FromResult(match is null ? null : ShallowCopy(match));
+    }
+
+    // RA-690: mirrors AccreditationApplicationPersistence.GetOtherAccreditationReferenceHoldersAsync.
+    public Task<
+        IReadOnlyList<AccreditationReferenceHolder>
+    > GetOtherAccreditationReferenceHoldersAsync(
+        string accreditationReference,
+        ObjectId applicationId
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationReferenceHolder>>(
+            _store
+                .Where(a =>
+                    a.AccreditationReference == accreditationReference && a.Id != applicationId
+                )
+                .Select(a => new AccreditationReferenceHolder(a.Id!.Value, a.ApplicationStatus))
+                .ToList()
+        );
 
     public Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(
         int orgId,
@@ -126,13 +207,24 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     public Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
-    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit)
+    )> SearchGrantedAccreditationsAsync(
+        GrantedAccreditationFilter filter,
+        int firstYear,
+        int skip,
+        int limit
+    )
     {
         var matches = _store
             .Where(a =>
                 a.OrgId is not null
+                && !string.IsNullOrEmpty(a.RegistrationReference)
                 && a.Year >= firstYear
-                && (year is null || a.Year == year)
+                && (filter.Year is null || a.Year == filter.Year)
+                && (filter.OrganisationNumber is null || a.OrgId == filter.OrganisationNumber)
+                && (
+                    filter.RegistrationNumber is null
+                    || a.RegistrationReference == filter.RegistrationNumber
+                )
                 && a.ApplicationStatus == ApplicationStatus.Approved
                 && !string.IsNullOrEmpty(a.AccreditationReference)
             )
@@ -143,7 +235,10 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         );
     }
 
-    public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId)
+    public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
+        string registrationId,
+        IClientSessionHandle? session = null
+    )
     {
         IReadOnlyList<string> orsIds = _store
             .Where(a => a.RegistrationId == registrationId)
@@ -156,7 +251,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
     }
 
     public Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
-        string registrationId
+        string registrationId,
+        IClientSessionHandle? session = null
     )
     {
         IReadOnlyList<string> numbers = _store
@@ -172,7 +268,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
-        string applicationId
+        string applicationId,
+        IClientSessionHandle? session = null
     )
     {
         if (!ObjectId.TryParse(applicationId, out var oid))
@@ -183,14 +280,56 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
 
-    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId)
+    public Task<AccreditationApplicationModel?> GetByObjectIdAsync(
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var stored = _store.FirstOrDefault(a => a.Id == applicationId);
+        return Task.FromResult(stored is null ? null : ShallowCopy(stored));
+    }
+
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
+        string organisationId,
+        string registrationId,
+        int limit,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a =>
+                    a.OrganisationId == organisationId && a.RegistrationId == registrationId
+                )
+                .Take(limit)
+                .Select(ShallowCopy)
+                .ToList()
+        );
+
+    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        IClientSessionHandle? session = null
+    )
     {
         var stored = _store.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
 
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByAccreditationReferenceAsync(
+        string accreditationReference,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a => a.AccreditationReference == accreditationReference)
+                .Select(ShallowCopy)
+                .ToList()
+        );
+
     public Task<AccreditationApplicationModel?> UpdateAsync(
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        IClientSessionHandle? session = null
     )
     {
         if (FailNextUpdate)
@@ -213,7 +352,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
         AccreditationApplicationModel application,
-        string siteNumber
+        string siteNumber,
+        IClientSessionHandle? session = null
     )
     {
         if (FailNextInterimSiteNumberWrites > 0)
@@ -238,7 +378,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
 
     public Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
-        string orsId
+        string orsId,
+        IClientSessionHandle? session = null
     )
     {
         if (FailNextOrsIdWrites > 0)
@@ -288,6 +429,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         ObjectId id,
         FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
+        IClientSessionHandle? session = null,
         CancellationToken cancellationToken = default
     )
     {

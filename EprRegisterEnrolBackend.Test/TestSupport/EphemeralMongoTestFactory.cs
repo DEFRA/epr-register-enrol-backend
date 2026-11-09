@@ -43,6 +43,13 @@ public sealed class EphemeralMongoTestFactory : WebApplicationFactory<Program>
         builder.ConfigureAppConfiguration(
             (_, config) => config.AddInMemoryCollection(_settings));
 
+        // Also as host settings: Program reads some flags (DomainModel:ExpandEnabled) while it registers
+        // services, before the app configuration above is applied.
+        foreach (var (key, value) in _settings)
+        {
+            builder.UseSetting(key, value);
+        }
+
         builder.ConfigureServices(services =>
             services.UseEphemeralMongoPersistence(_fixture, _databaseName));
     }

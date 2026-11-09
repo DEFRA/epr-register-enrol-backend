@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationChanges;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
@@ -66,6 +67,29 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new CaseWorkingSubmissionResult(applicationReference, workItemId));
     }
 
+    public Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+        AccreditationChangeRequest changeRequest,
+        AccreditationApplicationModel accreditation,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var workItemId = Guid.NewGuid();
+        var reference = GenerateReference(accreditation);
+
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.SubmitChangeRequestAsync called for requestId={RequestId} reference={Reference} workItemId={WorkItemId} org={OrganisationId}",
+                changeRequest.RequestId,
+                reference,
+                workItemId,
+                changeRequest.OrganisationId
+            );
+        }
+
+        return Task.FromResult(new CaseWorkingSubmissionResult(reference, workItemId));
+    }
+
     public Task<NotificationStatusResult> GetNotificationStatusAsync(
         AccreditationApplicationModel application,
         CancellationToken cancellationToken = default
@@ -121,7 +145,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
             );
         }
 
-        return Task.FromResult(new WithdrawResult(true));
+        return Task.FromResult(WithdrawResult.Succeeded);
     }
 
     public Task NotifySiteAddedAsync(
@@ -155,7 +179,12 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     private static string GenerateReference(AccreditationApplicationModel application)
     {
         var postcode = HttpCaseWorkingApiAdapter.ExtractPostcode(application.SiteAddress);
-        var year = application.Year % 100;
+        // Two digits for a real accreditation year, as the real generator does. The E2E specs use
+        // made-up years (3000-3999) on one organisation, registration and material, so outside the
+        // 2000s the full year keeps their references apart.
+        var year = application.Year is >= 2000 and < 2100
+            ? application.Year % 100
+            : application.Year;
         var agency = ResolveAgencyCode(postcode);
         var orgNumber = application.OrgId?.ToString("D6") ?? string.Empty;
         var postcodeSuffix = PostcodeSuffix(postcode);

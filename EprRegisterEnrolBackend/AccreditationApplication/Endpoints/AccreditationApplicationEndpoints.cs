@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -7,11 +8,14 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Logging;
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
@@ -333,6 +337,9 @@ public static class AccreditationApplicationEndpoints
         if (application.RegistrationReference is not null && !request.Regenerate)
             return Results.Ok(application);
 
+        // RA-644 B8e: ReEx is asked before the unit of work opens, so a transaction never waits
+        // on it and a retried transaction does not ask again. The checks above are repeated
+        // inside, against what the transaction reads.
         var orgIdResolution = await ResolveOrgIdAsync(
             organisationId,
             request,
@@ -340,29 +347,73 @@ public static class AccreditationApplicationEndpoints
             services.CancellationToken
         );
 
-        if (
-            request.Nation is not { } nationValue
-            || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
-            || orgIdResolution is not { } orgId
-            || request.Year is not { } year
-        )
-            return Results.BadRequest(
-                "Nation, OrgId and Year are required to generate a registration number."
-            );
-
-        var newNumber = await services.Generator.GenerateAsync(
-            new RegulatoryNumberSpec
-            {
-                Type = NumberType.Registration,
-                Nation = nation,
-                IsExporter = application.IsExporter,
-                OrgId = orgId,
-                Material = application.MaterialType,
-                GlassRecyclingProcess = application.GlassRecyclingProcess,
-                Year = year,
-            },
+        return await services.UnitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                IssueRegistrationNumberAsync(
+                    services,
+                    new RegistrationNumberRequest(
+                        organisationId,
+                        applicationId,
+                        request,
+                        orgIdResolution
+                    ),
+                    session
+                ),
             services.CancellationToken
         );
+    }
+
+    private sealed record RegistrationNumberRequest(
+        string OrganisationId,
+        string ApplicationId,
+        GenerateOrUpdateRegulatoryNumberRequest Body,
+        int? OrgId
+    );
+
+    // RA-644 B8e: with DualWrite on (IRegistrationNumberRules.NumbersAreFixed) a registration
+    // number belongs to the Registration and never changes once issued: an application without one
+    // takes the Registration's, a regenerate is refused, and the number is copied to every other
+    // in-flight application of the registration. With the flag off the RA-448 rules are unchanged.
+    private static async Task<IResult> IssueRegistrationNumberAsync(
+        RegulatoryNumberServices services,
+        RegistrationNumberRequest call,
+        IClientSessionHandle? session
+    )
+    {
+        var (organisationId, applicationId, request, orgId) = call;
+        var application = await services.Persistence.GetByIdAsync(
+            organisationId,
+            applicationId,
+            session
+        );
+        if (application is null)
+            return Results.NotFound();
+        if (RejectIfTerminal(application) is { } conflict)
+            return conflict;
+        if (application.RegistrationReference is not null && !request.Regenerate)
+            return Results.Ok(application);
+
+        var rules = services.NumberRules;
+        var issued = await rules.IssuedNumberAsync(
+            application,
+            session,
+            services.CancellationToken
+        );
+        if (request.Regenerate && rules.RefusesRegenerate(application, issued))
+            return Results.Conflict(
+                "A registration number is never regenerated once it has been issued."
+            );
+
+        var newNumber = issued;
+        if (newNumber is null)
+        {
+            if (RegistrationNumberSpec(application, request, orgId) is not { } spec)
+                return Results.BadRequest(
+                    "Nation, OrgId and Year are required to generate a registration number."
+                );
+            newNumber = await services.Generator.GenerateAsync(spec, services.CancellationToken);
+        }
 
         // Regenerate: keep the prior number in the audit trail, never reuse/reissue it
         // (AC5). A first-ever generate has no prior number to preserve.
@@ -372,106 +423,250 @@ public static class AccreditationApplicationEndpoints
         application.RegistrationReference = newNumber;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await services.Persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to update registration number.")
-            : Results.Ok(updated);
+        var updated = await services.Persistence.UpdateAsync(application, session);
+        if (updated is null)
+            return Results.Problem("Failed to update registration number.");
+
+        await rules.CopyToInFlightApplicationsAsync(
+            updated,
+            newNumber,
+            session,
+            services.CancellationToken
+        );
+        return Results.Ok(updated);
     }
 
-    // RA-448 AC1/AC5/AC6/AC7/AC9. Regenerate here is NOT the same mechanism as
-    // registration's: "reapply for accreditation" increments only the existing
-    // number's YY segment in place - it never draws from the atomic counter and
-    // never mutates regulatoryNumberSequences. A first-ever generate still goes
-    // through the normal counter-backed generator, same as registration.
+    // What a new registration number is generated from, or null when the request lacks any of it.
+    private static RegulatoryNumberSpec? RegistrationNumberSpec(
+        AccreditationApplicationModel application,
+        GenerateOrUpdateRegulatoryNumberRequest request,
+        int? orgIdResolution
+    )
+    {
+        if (
+            request.Nation is not { } nationValue
+            || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
+            || orgIdResolution is not { } orgId
+            || request.Year is not { } year
+        )
+            return null;
+
+        return new RegulatoryNumberSpec
+        {
+            Nation = nation,
+            IsExporter = application.IsExporter,
+            OrgId = orgId,
+            Material = application.MaterialType,
+            GlassRecyclingProcess = application.GlassRecyclingProcess,
+            Year = year,
+        };
+    }
+
+    // RA-690 (replaces RA-448's counter draw and "reapply" YY increment): the accreditation
+    // reference is DERIVED from the application's registration reference - leading R becomes A,
+    // YY becomes the application's own Year - and never drawn from a sequence counter. See
+    // AccreditationReferenceDerivation for the rule itself.
+    //
+    // Deliberately takes no request body. The nation, OrgId, year and regenerate an older
+    // management-be still sends are ignored: the application's stored Year is authoritative, and
+    // an issued reference is never regenerated. So this backend accepts an older management-be,
+    // but an older backend rejects the new body-less request (400): deploy this backend first.
     private static async Task<IResult> GenerateOrUpdateAccreditationNumber(
         string organisationId,
         string applicationId,
-        GenerateOrUpdateRegulatoryNumberRequest request,
-        [AsParameters] RegulatoryNumberServices services
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
     )
     {
-        var validation = await services.Validator.ValidateAsync(
-            request,
-            services.CancellationToken
-        );
-        if (!validation.IsValid)
-            return Results.BadRequest(validation.Errors);
-
-        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
-
-        // AC9: registration precedes and is independent of accreditation - an
-        // accreditation number is never issued with nothing to accredit against.
-        if (application.RegistrationReference is null)
-            return Results.Conflict(
-                "Application has no registration number yet; an accreditation number cannot be issued."
-            );
-
-        // AC5: idempotent - an existing number is returned unchanged unless the
-        // caller explicitly asks to regenerate.
-        if (application.AccreditationReference is not null && !request.Regenerate)
-            return Results.Ok(application);
-
-        string newNumber;
-        if (application.AccreditationReference is { } numberToReapply && request.Regenerate)
-        {
-            // "Reapply for accreditation": pure string transform, no counter draw.
-            newNumber = IncrementYear(numberToReapply);
-        }
-        else
-        {
-            var orgIdResolution = await ResolveOrgIdAsync(
-                organisationId,
-                request,
-                services.ReExAdapter,
-                services.CancellationToken
-            );
-
-            if (
-                request.Nation is not { } nationValue
-                || !Enum.TryParse<Nation>(nationValue, ignoreCase: true, out var nation)
-                || orgIdResolution is not { } orgId
-                || request.Year is not { } year
-            )
-                return Results.BadRequest(
-                    "Nation, OrgId and Year are required to generate an accreditation number."
+        // The work can re-run, so the issue is logged once, after the commit.
+        Action? logIssued = null;
+        var result = await unitOfWork.RunAsync(
+            nameof(GenerateOrUpdateAccreditationNumber),
+            applicationId,
+            async (session, _) =>
+            {
+                logIssued = null;
+                var (issueResult, log) = await IssueAccreditationNumberAsync(
+                    persistence,
+                    loggerFactory,
+                    organisationId,
+                    applicationId,
+                    session
                 );
-
-            newNumber = await services.Generator.GenerateAsync(
-                new RegulatoryNumberSpec
-                {
-                    Type = NumberType.Accreditation,
-                    Nation = nation,
-                    IsExporter = application.IsExporter,
-                    OrgId = orgId,
-                    Material = application.MaterialType,
-                    GlassRecyclingProcess = application.GlassRecyclingProcess,
-                    Year = year,
-                },
-                services.CancellationToken
-            );
-        }
-
-        // Regenerate (either mechanism): keep the prior number in the audit trail,
-        // never reuse/reissue it (AC5). A first-ever generate has no prior number.
-        if (application.AccreditationReference is { } previousNumber)
-            application.PreviousAccreditationNumbers.Add(previousNumber);
-
-        application.AccreditationReference = newNumber;
-        application.DateLastEdited = DateTime.UtcNow;
-
-        var updated = await services.Persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to update accreditation number.")
-            : Results.Ok(updated);
+                logIssued = log;
+                return issueResult;
+            },
+            cancellationToken
+        );
+        if (Committed(result))
+            logIssued?.Invoke();
+        return result;
     }
 
-    // Bundles GenerateOrUpdateRegistrationNumber/GenerateOrUpdateAccreditationNumber's
-    // DI-service/framework parameters under one [AsParameters] argument so each handler
-    // stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    private static async Task<(IResult Result, Action? LogIssued)> IssueAccreditationNumberAsync(
+        IAccreditationApplicationPersistence persistence,
+        ILoggerFactory loggerFactory,
+        string organisationId,
+        string applicationId,
+        IClientSessionHandle? session
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
+        if (application is null)
+            return (Results.NotFound(), null);
+        if (RejectIfTerminal(application) is { } conflict)
+            return (conflict, null);
+
+        // RA-448 AC9: registration precedes and is independent of accreditation - an
+        // accreditation number is never issued with nothing to accredit against.
+        if (application.RegistrationReference is not { } registrationReference)
+            return (
+                Results.Conflict(
+                    "Application has no registration number yet; an accreditation number cannot be issued."
+                ),
+                null
+            );
+
+        // Idempotent retry: an issued reference may already be quoted externally, so it is
+        // returned unchanged and never re-derived. This holds while the application is open
+        // (between approval steps 1 and 2); once Approved, RejectIfTerminal above returns 409.
+        if (application.AccreditationReference is not null)
+            return (Results.Ok(application), null);
+
+        // A renewal keeps the latest previous accreditation reference held in this backend, so a
+        // lapsed year doesn't change it either. Without a registration id there is nothing to
+        // match previous years on, so it falls back to the registration reference.
+        var previous = string.IsNullOrEmpty(application.RegistrationId)
+            ? null
+            : await persistence.GetLatestPreviousAccreditationAsync(
+                application.OrganisationId,
+                application.RegistrationId,
+                application.MaterialType,
+                application.GlassRecyclingProcess,
+                application.Year
+            );
+        var (sourceKind, sourceReference) = previous is null
+            ? (AccreditationReferenceSourceKind.Registration, registrationReference)
+            : (
+                AccreditationReferenceSourceKind.PreviousAccreditation,
+                previous.AccreditationReference!
+            );
+
+        var derivation = AccreditationReferenceDerivation.Derive(
+            sourceReference,
+            sourceKind,
+            application.Year
+        );
+        // A malformed source must fail visibly rather than issue a wrong reference. A malformed
+        // previous reference deliberately does not fall back to the registration reference.
+        if (!derivation.IsValid)
+            return (Results.UnprocessableEntity(derivation.Error), null);
+
+        // Duplicate live applications for the same registration, material and year are possible
+        // (Seed is best-effort, with no unique index) and would derive the same reference. A
+        // reference is never issued twice. Read-then-write: a unique index is a follow-up to RA-691.
+        // A withdrawn holder doesn't block: an operator who withdrew and started again derives
+        // the same reference, and the withdrawn record keeps its value for audit.
+        var holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
+            derivation.Reference!,
+            application.Id!.Value
+        );
+        if (holders.Any(h => h.BlocksIssuing))
+            return (
+                Results.Conflict(
+                    $"Accreditation reference {derivation.Reference} is already held by another application; it cannot be issued again."
+                ),
+                null
+            );
+
+        application.AccreditationReference = derivation.Reference;
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application, session);
+        if (updated is null)
+            return (Results.Problem("Failed to update accreditation number."), null);
+
+        var withdrawnHolderIds = holders.Where(h => !h.BlocksIssuing).Select(h => h.Id).ToList();
+        return (
+            Results.Ok(updated),
+            () =>
+                LogAccreditationReferenceIssued(
+                    loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                    updated,
+                    sourceKind,
+                    sourceReference,
+                    previous?.ApplicationId,
+                    withdrawnHolderIds
+                )
+        );
+    }
+
+    // RA-690: the source of each issued reference is logged, not stored, so support can explain
+    // any reference without a schema change. A previous-accreditation source also names the
+    // application it came from, and any withdrawn applications already holding the reference are
+    // named so support can see why two records share it.
+    private const string IssuedTemplate =
+        "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference}";
+    private const string SourceApplicationTemplate = " sourceApplicationId={SourceApplicationId}";
+    private const string WithdrawnHoldersTemplate = " withdrawnHolderIds={WithdrawnHolderIds}";
+
+    private static void LogAccreditationReferenceIssued(
+        ILogger logger,
+        AccreditationApplicationModel application,
+        AccreditationReferenceSourceKind sourceKind,
+        string sourceReference,
+        string? sourceApplicationId,
+        IReadOnlyList<ObjectId> withdrawnHolderIds
+    )
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+            return;
+
+        var (reference, id) = (application.AccreditationReference, application.Id);
+        var withdrawnIds = string.Join(",", withdrawnHolderIds);
+        switch (sourceApplicationId, withdrawnHolderIds.Count)
+        {
+            case (null, 0):
+                logger.LogInformation(IssuedTemplate, reference, id, sourceKind, sourceReference);
+                break;
+            case (null, _):
+                logger.LogInformation(
+                    IssuedTemplate + WithdrawnHoldersTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    withdrawnIds
+                );
+                break;
+            case (_, 0):
+                logger.LogInformation(
+                    IssuedTemplate + SourceApplicationTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    sourceApplicationId
+                );
+                break;
+            default:
+                logger.LogInformation(
+                    IssuedTemplate + SourceApplicationTemplate + WithdrawnHoldersTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    sourceApplicationId,
+                    withdrawnIds
+                );
+                break;
+        }
+    }
+
+    // Bundles GenerateOrUpdateRegistrationNumber's DI-service/framework parameters under one
+    // [AsParameters] argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
     // RecyclingOperationsServices above. A positional record, not bare `{ get; init; }`
     // auto-properties, for the same S3459/S1144 reason given there.
     private sealed record RegulatoryNumberServices(
@@ -479,6 +674,8 @@ public static class AccreditationApplicationEndpoints
         IRegulatoryNumberGenerator Generator,
         IValidator<GenerateOrUpdateRegulatoryNumberRequest> Validator,
         IReExApiAdapter ReExAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        IRegistrationNumberRules NumberRules,
         CancellationToken CancellationToken
     );
 
@@ -543,31 +740,27 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
-
-        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        if (site is null)
-            return Results.NotFound();
-
-        if (
-            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
-            { } codesError
-        )
-            return codesError;
-
-        // Snapshotted before mutation, as an independent list - not aliased with the request's
-        // own OperationCodes below (RecyclingOperationsAuditPersistence's tests require the
-        // before/after lists to remain independent).
-        var beforeCodes = site.OperationCodes.ToList();
-        site.OperationCodes = request.OperationCodes;
-
-        var updated = await services.Persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to update recycling operations.");
+        // RA-644 B8g: the change runs in the dual-write unit of work; the audit record is written
+        // only once it has committed. A box, not a local, so the analyser sees the callback set it
+        // (S2583).
+        var beforeCodes = new StrongBox<List<string>?>();
+        var result = await services.UnitOfWork.RunAsync(
+            nameof(PatchRecyclingOperations),
+            applicationId,
+            async (session, _) =>
+            {
+                (var changed, beforeCodes.Value) = await ChangeRecyclingOperationsAsync(
+                    services.Persistence,
+                    new SiteRoute(organisationId, applicationId, siteId),
+                    request,
+                    session
+                );
+                return changed;
+            },
+            services.CancellationToken
+        );
+        if (beforeCodes.Value is null || !Committed(result))
+            return result;
 
         await services.AuditPersistence.RecordAsync(
             new RecyclingOperationsAuditRecord
@@ -579,18 +772,61 @@ public static class AccreditationApplicationEndpoints
                 OrganisationId = organisationId,
                 ApplicationId = applicationId,
                 SiteId = siteId,
-                BeforeCodes = beforeCodes,
+                BeforeCodes = beforeCodes.Value,
                 AfterCodes = request.OperationCodes,
             },
             services.CancellationToken
         );
+        return result;
+    }
+
+    private sealed record SiteRoute(string OrganisationId, string ApplicationId, int SiteId);
+
+    // RA-644 B8g: PatchRecyclingOperations' read and write, with the session. Returns the codes
+    // the site had before, for the audit record, or null when nothing was written.
+    private static async Task<(
+        IResult Result,
+        List<string>? BeforeCodes
+    )> ChangeRecyclingOperationsAsync(
+        IAccreditationApplicationPersistence persistence,
+        SiteRoute route,
+        PatchRecyclingOperationsRequest request,
+        IClientSessionHandle? session
+    )
+    {
+        var (organisationId, applicationId, siteId) = route;
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
+        if (application is null)
+            return (Results.NotFound(), null);
+        if (RejectIfTerminal(application) is { } conflict)
+            return (conflict, null);
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return (Results.NotFound(), null);
+
+        if (
+            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
+            { } codesError
+        )
+            return (codesError, null);
+
+        // Snapshotted before mutation, as an independent list - not aliased with the request's
+        // own OperationCodes below (RecyclingOperationsAuditPersistence's tests require the
+        // before/after lists to remain independent).
+        var beforeCodes = site.OperationCodes.ToList();
+        site.OperationCodes = request.OperationCodes;
+
+        var updated = await persistence.UpdateAsync(application, session);
+        if (updated is null)
+            return (Results.Problem("Failed to update recycling operations."), null);
 
         // `site` is the same object already mutated above (and, on the real Mongo-backed
         // persistence, `updated` is that same `application` reference echoed back on success -
         // see AccreditationApplicationPersistence.UpdateAsync) - returning it directly avoids
         // re-deriving it from `updated` with a null-forgiving lookup, matching AddInterimSite's
         // own pattern of returning the local object it already holds.
-        return Results.Ok(site);
+        return (Results.Ok(site), beforeCodes);
     }
 
     // Bundles PatchRecyclingOperations' DI-service/framework parameters under one
@@ -607,24 +843,10 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence Persistence,
         IValidator<PatchRecyclingOperationsRequest> Validator,
         IRecyclingOperationsAuditPersistence AuditPersistence,
+        IDualWriteUnitOfWork UnitOfWork,
         HttpContext HttpContext,
         CancellationToken CancellationToken
     );
-
-    // "Reapply for accreditation" (AC5, RA-448): increments only the YY segment
-    // (index 1-2 of the fixed {R|A}{YY}{AgencyType}{OrgID}{Sequence}{Material}
-    // format) against whatever YY the number currently holds - not the calendar
-    // year at reapply time - leaving every other segment byte-identical.
-    private static string IncrementYear(string existingNumber)
-    {
-        var currentYear = int.Parse(existingNumber.Substring(1, 2));
-        var nextYear = (currentYear + 1) % 100;
-        return string.Concat(
-            existingNumber.AsSpan(0, 1),
-            nextYear.ToString("D2"),
-            existingNumber.AsSpan(3)
-        );
-    }
 
     private static readonly System.Text.RegularExpressions.Regex FilenameIsSafe = new(
         @"^[^\x00-\x1f<>:""/\\|?*]+$",
@@ -632,10 +854,14 @@ public static class AccreditationApplicationEndpoints
         TimeSpan.FromMilliseconds(100)
     );
 
+    // CDP's status for a scanned file: "complete" means it passed the virus scan.
+    internal static FileScanStatus ScanStatusOf(CdpCallbackFile file) =>
+        file.FileStatus == "complete" ? FileScanStatus.Clean : FileScanStatus.Infected;
+
     // H6 (2026-08-08 pentest report) fix: file identity/scan-result/S3 location must come
     // from the server-held PendingUploadService record, populated only by the real
     // CDP-uploader webhook callback — never trusted verbatim from the client request body.
-    private static async Task<(
+    internal static async Task<(
         IResult? Error,
         CdpCallbackFile? ScannedFile
     )> TryResolveScannedFileAsync(
@@ -667,16 +893,25 @@ public static class AccreditationApplicationEndpoints
         return (null, file);
     }
 
+    // Bundles Seed's DI services under one [AsParameters] argument so the handler stays under Sonar's
+    // 7-parameter limit (S107) - same reasoning, and the same positional-record shape, as
+    // RecyclingOperationsServices above.
+    private sealed record SeedServices(
+        IAccreditationApplicationPersistence Persistence,
+        IReExApiAdapter ReExAdapter,
+        IValidator<SeedRequest> Validator,
+        ISeedDualWriter SeedDualWriter
+    );
+
     private static async Task<IResult> Seed(
         string organisationId,
         string registrationId,
         string materialType,
         SeedRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IReExApiAdapter reExAdapter,
-        IValidator<SeedRequest> validator
+        [AsParameters] SeedServices services
     )
     {
+        var (persistence, reExAdapter, validator, seedDualWriter) = services;
         if (!Enum.TryParse<MaterialType>(materialType, ignoreCase: true, out var materialTypeEnum))
             return Results.BadRequest("Invalid material type.");
 
@@ -807,6 +1042,18 @@ public static class AccreditationApplicationEndpoints
         if (created is null)
             return Results.Problem("Failed to create accreditation application.");
 
+        // Phase 2 seed dual-write (DomainModel:DualWriteSeed). Never throws: a failure is logged and counted,
+        // and the application just created is returned as before.
+        await seedDualWriter.WriteAsync(
+            new SeedDualWrite(
+                organisationId,
+                registrationId,
+                materialTypeEnum,
+                priorYearData,
+                created
+            )
+        );
+
         return Results.Created(
             $"/api/v1/accreditation-applications/{organisationId}/{created.Id}",
             created
@@ -916,19 +1163,43 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(application);
     }
 
-    private static async Task<IResult> PatchPrns(
+    private static Task<IResult> PatchPrns(
         string organisationId,
         string applicationId,
         PatchPrnsRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchPrnsRequest> validator
+        IValidator<PatchPrnsRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PatchPrnsAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    validator,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> PatchPrnsAsync(
+        string organisationId,
+        string applicationId,
+        PatchPrnsRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchPrnsRequest> validator,
+        IClientSessionHandle? session
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -971,25 +1242,49 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update PRNs section.")
             : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchTonnage(
+    private static Task<IResult> PatchTonnage(
         string organisationId,
         string applicationId,
         PatchTonnageRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchTonnageRequest> validator
+        IValidator<PatchTonnageRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PatchTonnageAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    validator,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> PatchTonnageAsync(
+        string organisationId,
+        string applicationId,
+        PatchTonnageRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchTonnageRequest> validator,
+        IClientSessionHandle? session
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1032,23 +1327,47 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null ? Results.Problem("Failed to update tonnage.") : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchBusinessPlan(
+    private static Task<IResult> PatchBusinessPlan(
         string organisationId,
         string applicationId,
         PatchBusinessPlanRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchBusinessPlanRequest> validator
+        IValidator<PatchBusinessPlanRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PatchBusinessPlanAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    validator,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> PatchBusinessPlanAsync(
+        string organisationId,
+        string applicationId,
+        PatchBusinessPlanRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchBusinessPlanRequest> validator,
+        IClientSessionHandle? session
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.UnprocessableEntity(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1065,6 +1384,37 @@ public static class AccreditationApplicationEndpoints
             );
 
         var bp = application.BusinessPlan;
+        ApplyBusinessPlanFields(bp, request);
+
+        if (bp.SectionStatus != SectionStatus.Queried)
+        {
+            var (status, error) = SectionStatusService.ResolveRequestedStatus(
+                request.SectionStatus,
+                () => SectionStatusService.ComputeBusinessPlan(bp),
+                "Business plan"
+            );
+            if (error is not null)
+                return Results.UnprocessableEntity(error);
+            bp.SectionStatus = status!.Value;
+        }
+        application.DateLastEdited = DateTime.UtcNow;
+
+        if (application.ApplicationStatus == ApplicationStatus.Saved)
+            application.ApplicationStatus = ApplicationStatus.Started;
+
+        var updated = await persistence.UpdateAsync(application, session);
+        return updated is null
+            ? Results.Problem("Failed to update business plan section.")
+            : Results.Ok(updated);
+    }
+
+    // Copies each field the request carries onto the business plan; an absent field is left as it is.
+    // Extracted from PatchBusinessPlanAsync to keep its cognitive complexity within the limit (S3776).
+    private static void ApplyBusinessPlanFields(
+        AccreditationApplicationBusinessPlan bp,
+        PatchBusinessPlanRequest request
+    )
+    {
         if (request.NewInfrastructurePercent.HasValue)
             bp.NewInfrastructurePercent = request.NewInfrastructurePercent;
         if (request.PriceSupportPercent.HasValue)
@@ -1094,37 +1444,38 @@ public static class AccreditationApplicationEndpoints
             bp.NewUsesDetail = request.NewUsesDetail;
         if (request.OtherDetail != null)
             bp.OtherDetail = request.OtherDetail;
-
-        if (bp.SectionStatus != SectionStatus.Queried)
-        {
-            var (status, error) = SectionStatusService.ResolveRequestedStatus(
-                request.SectionStatus,
-                () => SectionStatusService.ComputeBusinessPlan(bp),
-                "Business plan"
-            );
-            if (error is not null)
-                return Results.UnprocessableEntity(error);
-            bp.SectionStatus = status!.Value;
-        }
-        application.DateLastEdited = DateTime.UtcNow;
-
-        if (application.ApplicationStatus == ApplicationStatus.Saved)
-            application.ApplicationStatus = ApplicationStatus.Started;
-
-        var updated = await persistence.UpdateAsync(application);
-        return updated is null
-            ? Results.Problem("Failed to update business plan section.")
-            : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchSamplingPlan(
+    private static Task<IResult> PatchSamplingPlan(
         string organisationId,
         string applicationId,
         PatchSamplingPlanRequest request,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PatchSamplingPlanAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> PatchSamplingPlanAsync(
+        string organisationId,
+        string applicationId,
+        PatchSamplingPlanRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1159,21 +1510,48 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update sampling plan section.")
             : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchOverseasSites(
+    // RA-644 B8c: every overseas site write runs in the dual-write unit of work, which with
+    // DomainModel:DualWrite on makes it one transaction with the model sync. The work can re-run,
+    // so it re-reads the application inside the callback and passes the session to every call.
+    private static Task<IResult> PatchOverseasSites(
         string organisationId,
         string applicationId,
         PatchOverseasSitesRequest request,
         IAccreditationApplicationPersistence persistence,
-        ILoggerFactory loggerFactory
+        IDualWriteUnitOfWork unitOfWork,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PatchOverseasSitesAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    loggerFactory,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> PatchOverseasSitesAsync(
+        string organisationId,
+        string applicationId,
+        PatchOverseasSitesRequest request,
+        IAccreditationApplicationPersistence persistence,
+        ILoggerFactory loggerFactory,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1223,23 +1601,32 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update overseas sites.")
             : Results.Ok(updated);
     }
 
+    // Bundles AddOverseasSite's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // RecyclingOperationsServices above.
+    private sealed record AddOverseasSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddOverseasSiteRequest> Validator,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> AddOverseasSite(
         string organisationId,
         string applicationId,
         AddOverseasSiteRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<AddOverseasSiteRequest> validator,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken
+        [AsParameters] AddOverseasSiteServices services
     )
     {
+        var (persistence, validator, _, unitOfWork, loggerFactory, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
@@ -1252,12 +1639,55 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
+        // The work can re-run, so it reports what it added through these, reset on every run, and
+        // the notification below goes out only once the write has committed.
+        OverseasSiteModel? newSite = null;
+        AccreditationApplicationModel? updated = null;
+        var result = await unitOfWork.RunAsync(
+            nameof(AddOverseasSite),
+            applicationId,
+            async (session, _) =>
+            {
+                (newSite, updated) = (null, null);
+                var application = await persistence.GetByIdAsync(
+                    organisationId,
+                    applicationId,
+                    session
+                );
+                if (application is null)
+                    return Results.NotFound();
+                if (RejectIfTerminal(application) is { } conflict)
+                    return conflict;
 
+                if (RejectIfCannotAddSite(application) is { } rejected)
+                    return rejected;
+
+                var (errorResult, created, persisted) = await AllocateGeneratedIdAsync(
+                    persistence,
+                    organisationId,
+                    applicationId,
+                    application,
+                    OrsIdAllocation(persistence, request, session),
+                    session
+                );
+                if (errorResult is not null || created is null || persisted is null)
+                    return errorResult ?? Results.Problem("Failed to add overseas site.");
+
+                (newSite, updated) = (created, persisted);
+                return Results.Created(string.Empty, created);
+            },
+            cancellationToken
+        );
+        if (Committed(result) && newSite is not null && updated is not null)
+            await NotifySiteAddedAsync(services, applicationId, updated, newSite);
+
+        return result;
+    }
+
+    // Adds a site only to an editable overseas sites section with room for it; creates the
+    // section when the application has none yet.
+    private static IResult? RejectIfCannotAddSite(AccreditationApplicationModel application)
+    {
         if (
             !AccreditationApplicationSections.IsSectionEditable(
                 application.ApplicationStatus,
@@ -1276,47 +1706,50 @@ public static class AccreditationApplicationEndpoints
                 $"A maximum of {maxSitesPerApplication} overseas sites is permitted per application."
             );
 
-        var (errorResult, newSite, updated) = await AllocateGeneratedIdAsync(
-            persistence,
-            organisationId,
-            applicationId,
-            application,
-            OrsIdAllocation(persistence, request)
-        );
-        if (errorResult is not null || newSite is null || updated is null)
-            return errorResult ?? Results.Problem("Failed to add overseas site.");
-
-        // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
-        // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s): skip the round-trip
-        // entirely when there is nothing to notify, and defend in depth around the call even
-        // though NotifySiteAddedAsync itself already guarantees it never throws.
-        if (updated.CaseManagementWorkItemId is not null)
-        {
-            try
-            {
-                await caseWorkingAdapter.NotifySiteAddedAsync(
-                    updated,
-                    siteType: "ors",
-                    orsId: newSite.OrsId ?? string.Empty,
-                    siteNumber: null,
-                    isNewSite: newSite.IsNewSite,
-                    cancellationToken: cancellationToken
-                );
-            }
-            catch (Exception ex)
-            {
-                loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
-                    .LogWarning(
-                        ex,
-                        "Failed to notify ManagementBe of new overseas site for applicationId={ApplicationId}",
-                        applicationId
-                    );
-            }
-        }
-
-        return Results.Created(string.Empty, newSite);
+        return null;
     }
+
+    // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
+    // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s): skip the round-trip
+    // entirely when there is nothing to notify, and defend in depth around the call even
+    // though NotifySiteAddedAsync itself already guarantees it never throws.
+    private static async Task NotifySiteAddedAsync(
+        AddOverseasSiteServices services,
+        string applicationId,
+        AccreditationApplicationModel updated,
+        OverseasSiteModel newSite
+    )
+    {
+        if (updated.CaseManagementWorkItemId is null)
+            return;
+
+        try
+        {
+            await services.CaseWorkingAdapter.NotifySiteAddedAsync(
+                updated,
+                siteType: "ors",
+                orsId: newSite.OrsId ?? string.Empty,
+                siteNumber: null,
+                isNewSite: newSite.IsNewSite,
+                cancellationToken: services.CancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            services
+                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LogWarning(
+                    ex,
+                    "Failed to notify ManagementBe of new overseas site for applicationId={ApplicationId}",
+                    applicationId
+                );
+        }
+    }
+
+    // RA-644 B8c: whether a unit-of-work result means the write committed, so a side effect that
+    // must not run for a rolled-back write (a notification, an audit record) may now go out.
+    private static bool Committed(IResult result) =>
+        result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 };
 
     /// <summary>
     /// What <see cref="AllocateGeneratedIdAsync{T}"/> needs to know about one kind of generated
@@ -1329,7 +1762,11 @@ public static class AccreditationApplicationEndpoints
         string IdName,
         Func<AccreditationApplicationModel, Task<IEnumerable<string?>>> Scope,
         Func<AccreditationApplicationModel, string, (IResult? Error, T? Created)> Attach,
-        Func<AccreditationApplicationModel, string, Task<AccreditationApplicationModel?>> WriteIfAbsent
+        Func<
+            AccreditationApplicationModel,
+            string,
+            Task<AccreditationApplicationModel?>
+        > WriteIfAbsent
     )
         where T : class;
 
@@ -1350,7 +1787,8 @@ public static class AccreditationApplicationEndpoints
         string organisationId,
         string applicationId,
         AccreditationApplicationModel application,
-        GeneratedIdAllocation<T> allocation
+        GeneratedIdAllocation<T> allocation,
+        IClientSessionHandle? session
     )
         where T : class
     {
@@ -1370,13 +1808,17 @@ public static class AccreditationApplicationEndpoints
 
             var (attachError, created) = allocation.Attach(application, generated.OrsId!);
             if (attachError is not null || created is null)
-                return (attachError ?? Results.Problem("Failed to attach the new site."), null, null);
+                return (
+                    attachError ?? Results.Problem("Failed to attach the new site."),
+                    null,
+                    null
+                );
 
             var updated = await allocation.WriteIfAbsent(application, generated.OrsId!);
             if (updated is not null)
                 return (null, created, updated);
 
-            var refetched = await persistence.GetByIdAsync(organisationId, applicationId);
+            var refetched = await persistence.GetByIdAsync(organisationId, applicationId, session);
             if (refetched is null)
                 return (Results.NotFound(), null, null);
             if (RejectIfOverseasSitesNotEditable(refetched) is { } notEditable)
@@ -1397,12 +1839,13 @@ public static class AccreditationApplicationEndpoints
     // application under the registration, never taken from the client.
     private static GeneratedIdAllocation<OverseasSiteModel> OrsIdAllocation(
         IAccreditationApplicationPersistence persistence,
-        AddOverseasSiteRequest request
+        AddOverseasSiteRequest request,
+        IClientSessionHandle? session
     ) =>
         new(
             CapacityNoun: "overseas sites",
             IdName: "ORS id",
-            Scope: application => OrsIdScope(persistence, application),
+            Scope: application => OrsIdScope(persistence, application, session),
             Attach: (application, orsId) =>
             {
                 application.OverseasSites ??= new AccreditationApplicationOverseasSites();
@@ -1414,7 +1857,8 @@ public static class AccreditationApplicationEndpoints
                     application.ApplicationStatus = ApplicationStatus.Started;
                 return (null, newSite);
             },
-            WriteIfAbsent: persistence.UpdateIfOrsIdAbsentAsync
+            WriteIfAbsent: (application, value) =>
+                persistence.UpdateIfOrsIdAbsentAsync(application, value, session)
         );
 
     // RA-603: interim site ids are unique application-wide, but a bulk PATCH body is
@@ -1479,13 +1923,14 @@ public static class AccreditationApplicationEndpoints
     // scope against, so this falls back to just the current application's own sites.
     private static async Task<IEnumerable<string?>> OrsIdScope(
         IAccreditationApplicationPersistence persistence,
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        IClientSessionHandle? session
     )
     {
         if (application.RegistrationId is null)
             return (application.OverseasSites?.Sites ?? []).Select(s => s.OrsId);
 
-        return await persistence.GetOrsIdsByRegistrationAsync(application.RegistrationId);
+        return await persistence.GetOrsIdsByRegistrationAsync(application.RegistrationId, session);
     }
 
     // RA-603: the interim site NUMBER allocation scope - not to be confused with NextSiteId
@@ -1498,19 +1943,32 @@ public static class AccreditationApplicationEndpoints
     // interim sites are included - their numbers stay claimed for as long as the record does,
     // which under AC05 is permanently. Legacy SN-000N values come through untouched and simply
     // do not parse, which is what makes them harmless here.
+    //
+    // RA-644 B8d: with DualWrite on, the numbers the domain model holds count too. The migration
+    // can renumber a legacy SN-000N into the 3-digit pool, and legacy alone would hand that number
+    // out again.
     private static async Task<IEnumerable<string?>> InterimSiteNumberScope(
         IAccreditationApplicationPersistence persistence,
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        InterimNumberSources sources
     )
     {
+        var model = await sources.ModelNumbers.GetAsync(
+            application.RegistrationEntityId,
+            sources.Session
+        );
         if (application.RegistrationId is null)
             return (application.OverseasSites?.Sites ?? [])
                 .SelectMany(InterimSiteSync.All)
-                .Select(i => i.SiteNumber);
+                .Select(i => i.SiteNumber)
+                .Concat(model);
 
-        return await persistence.GetInterimSiteNumbersByRegistrationAsync(
-            application.RegistrationId
-        );
+        return (
+            await persistence.GetInterimSiteNumbersByRegistrationAsync(
+                application.RegistrationId,
+                sources.Session
+            )
+        ).Concat(model);
     }
 
     // Site numbers must be unique application-wide across both ORS sites and their nested
@@ -1678,6 +2136,7 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence Persistence,
         IValidator<PromoteOverseasSiteRequest> Validator,
         IRecyclingOperationsAuditPersistence AuditPersistence,
+        IDualWriteUnitOfWork UnitOfWork,
         ILoggerFactory LoggerFactory,
         HttpContext HttpContext,
         CancellationToken CancellationToken
@@ -1718,68 +2177,33 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-        if (RejectIfTerminal(application) is { } conflict)
-            return conflict;
+        // The work can re-run, so it reports the codes it replaced through this, reset on every run,
+        // and the audit record below is written only once the edit has committed.
+        List<string>? beforeCodes = null;
+        var result = await services.UnitOfWork.RunAsync(
+            nameof(UpdateOverseasSite),
+            applicationId,
+            async (session, _) =>
+            {
+                beforeCodes = null;
+                var (failure, site, replaced) = await UpdateOverseasSiteAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    request,
+                    services.Persistence,
+                    session
+                );
+                if (failure is not null)
+                    return failure;
 
-        if (
-            !AccreditationApplicationSections.IsSectionEditable(
-                application.ApplicationStatus,
-                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
-            )
-        )
-            return Results.Conflict(
-                "Overseas sites section is not editable in the application's current status."
-            );
-
-        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
-        if (site is null)
-            return Results.NotFound();
-
-        // Gap 2: the same application/material-type-aware check PatchRecyclingOperations enforces -
-        // PromoteOverseasSiteRequestValidator alone doesn't cover it. RA-486 removed the old AC11
-        // R12/R13-needs-interim-site sub-check (and its Gap 1 inverse, "an interim site needs
-        // R12/R13 kept selected on the ORS") entirely - the ORS and any attached interim site are
-        // independent now, so dropping/keeping R12/R13 here never depends on, or is constrained
-        // by, site.InterimSite.
-        if (
-            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
-            { } codesError
-        )
-            return codesError;
-
-        // Gap 5: BES evidence is tied to Country/ConditionsOfExport - either changing makes any
-        // previously uploaded evidence and a Completed section status stale.
-        var besEvidenceInvalidated =
-            site.Country != request.Country
-            || site.ConditionsOfExport != request.ConditionsOfExport;
-
-        // Snapshot current fields (undo target) before overwriting - same as PromoteOverseasSite.
-        site.PreviousSites.Add(SnapshotSiteFields(site));
-
-        // Snapshotted before mutation, as an independent list - not aliased with the request's own
-        // OperationCodes below (matches PatchRecyclingOperations' own before/after handling).
-        var beforeCodes = site.OperationCodes.ToList();
-
-        ApplyPromotedFields(site, request);
-        // Deliberately NOT setting Selected/RegisteredNowAccredited here, unlike Promote - this is
-        // an in-place edit of an already-selected/accredited site, not a promotion.
-
-        if (besEvidenceInvalidated)
-        {
-            site.BesEvidence?.BesEvidenceUploads.Clear();
-            if (application.BesEvidence?.SectionStatus == SectionStatus.Completed)
-                application.BesEvidence.SectionStatus = SectionStatus.InProgress;
-        }
-
-        RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
-        application.DateLastEdited = DateTime.UtcNow;
-
-        var updated = await services.Persistence.UpdateAsync(application);
-        if (updated is null)
-            return Results.Problem("Failed to update overseas site.");
+                beforeCodes = replaced;
+                return Results.Ok(site);
+            },
+            services.CancellationToken
+        );
+        if (!Committed(result) || beforeCodes is null)
+            return result;
 
         // Gap 3: audit operator-driven operation-code changes the same way PatchRecyclingOperations
         // audits regulator-driven ones. Only written when the codes actually changed - unlike
@@ -1821,20 +2245,114 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
-        return Results.Ok(site);
+        return result;
     }
+
+    // UpdateOverseasSite's read-check-write, inside the unit of work's callback. Reports a failure,
+    // or the edited site with the operation codes it had before, for the audit record.
+    private static async Task<(
+        IResult? Failure,
+        OverseasSiteModel? Site,
+        List<string>? BeforeCodes
+    )> UpdateOverseasSiteAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PromoteOverseasSiteRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
+        if (application is null)
+            return (Results.NotFound(), null, null);
+        if (RejectIfTerminal(application) is { } conflict)
+            return (conflict, null, null);
+
+        if (
+            !AccreditationApplicationSections.IsSectionEditable(
+                application.ApplicationStatus,
+                application.OverseasSites?.SectionStatus ?? SectionStatus.NotStarted
+            )
+        )
+            return (
+                Results.Conflict(
+                    "Overseas sites section is not editable in the application's current status."
+                ),
+                null,
+                null
+            );
+
+        var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
+        if (site is null)
+            return (Results.NotFound(), null, null);
+
+        // Gap 2: the same application/material-type-aware check PatchRecyclingOperations enforces -
+        // PromoteOverseasSiteRequestValidator alone doesn't cover it. RA-486 removed the old AC11
+        // R12/R13-needs-interim-site sub-check (and its Gap 1 inverse, "an interim site needs
+        // R12/R13 kept selected on the ORS") entirely - the ORS and any attached interim site are
+        // independent now, so dropping/keeping R12/R13 here never depends on, or is constrained
+        // by, site.InterimSite.
+        if (
+            ValidateOperationCodesForSite(application.MaterialType, request.OperationCodes) is
+            { } codesError
+        )
+            return (codesError, null, null);
+
+        // Gap 5: BES evidence is tied to Country/ConditionsOfExport - either changing makes any
+        // previously uploaded evidence and a Completed section status stale.
+        var besEvidenceInvalidated =
+            site.Country != request.Country
+            || site.ConditionsOfExport != request.ConditionsOfExport;
+
+        // Snapshot current fields (undo target) before overwriting - same as PromoteOverseasSite.
+        site.PreviousSites.Add(SnapshotSiteFields(site));
+
+        // Snapshotted before mutation, as an independent list - not aliased with the request's own
+        // OperationCodes below (matches PatchRecyclingOperations' own before/after handling).
+        var beforeCodes = site.OperationCodes.ToList();
+
+        ApplyPromotedFields(site, request);
+        // Deliberately NOT setting Selected/RegisteredNowAccredited here, unlike Promote - this is
+        // an in-place edit of an already-selected/accredited site, not a promotion.
+
+        if (besEvidenceInvalidated)
+        {
+            site.BesEvidence?.BesEvidenceUploads.Clear();
+            if (application.BesEvidence?.SectionStatus == SectionStatus.Completed)
+                application.BesEvidence.SectionStatus = SectionStatus.InProgress;
+        }
+
+        RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
+        application.DateLastEdited = DateTime.UtcNow;
+
+        var updated = await persistence.UpdateAsync(application, session);
+        if (updated is null)
+            return (Results.Problem("Failed to update overseas site."), null, null);
+
+        return (null, site, beforeCodes);
+    }
+
+    // Bundles PromoteOverseasSite's DI-service/framework parameters under one [AsParameters]
+    // argument so the handler stays under Sonar's 7-parameter limit (S107).
+    private sealed record PromoteOverseasSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<PromoteOverseasSiteRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
 
     private static async Task<IResult> PromoteOverseasSite(
         string organisationId,
         string applicationId,
         int siteId,
         PromoteOverseasSiteRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<PromoteOverseasSiteRequest> validator,
-        ILoggerFactory loggerFactory
+        [AsParameters] PromoteOverseasSiteServices services
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var (persistence, validator, unitOfWork, loggerFactory, cancellationToken) = services;
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
@@ -1846,7 +2364,31 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        return await unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PromoteOverseasSiteAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    request,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+    }
+
+    private static async Task<IResult> PromoteOverseasSiteAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PromoteOverseasSiteRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
+    )
+    {
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1880,20 +2422,42 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to promote overseas site.")
             : Results.Ok(site);
     }
 
-    private static async Task<IResult> RevertOverseasSite(
+    private static Task<IResult> RevertOverseasSite(
         string organisationId,
         string applicationId,
         int siteId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                RevertOverseasSiteAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> RevertOverseasSiteAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -1928,7 +2492,7 @@ public static class AccreditationApplicationEndpoints
         RecomputeOverseasSitesSectionStatus(application.OverseasSites!);
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to revert overseas site.")
             : Results.Ok(site);
@@ -1952,10 +2516,11 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         string organisationId,
         string applicationId,
-        int siteId
+        int siteId,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return (Results.NotFound(), null, null);
 
@@ -1987,7 +2552,7 @@ public static class AccreditationApplicationEndpoints
         [AsParameters] UpdateInterimSiteServices services
     )
     {
-        var (persistence, validator, loggerFactory, cancellationToken) = services;
+        var (persistence, validator, unitOfWork, loggerFactory, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
@@ -2000,11 +2565,42 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
+        return await unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                UpdateInterimSiteAsync(
+                    persistence,
+                    new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
+                    request,
+                    session
+                ),
+            cancellationToken
+        );
+    }
+
+    // RA-644 B8d: the route values every per-interim-site handler addresses, kept together so the
+    // handlers' unit-of-work bodies stay under Sonar's parameter limit (S107).
+    private sealed record InterimSiteRoute(
+        string OrganisationId,
+        string ApplicationId,
+        int SiteId,
+        int InterimSiteId
+    );
+
+    private static async Task<IResult> UpdateInterimSiteAsync(
+        IAccreditationApplicationPersistence persistence,
+        InterimSiteRoute route,
+        AddInterimSiteRequest request,
+        IClientSessionHandle? session
+    )
+    {
+        var (organisationId, applicationId, siteId, interimSiteId) = route;
         var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -2035,10 +2631,8 @@ public static class AccreditationApplicationEndpoints
         InterimSiteSync.SyncMirror(site);
         application!.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
-        return updated is null
-            ? LostInterimSiteRace(interimSiteId)
-            : Results.Ok(interimSite);
+        var updated = await persistence.UpdateAsync(application, session);
+        return updated is null ? LostInterimSiteRace(interimSiteId) : Results.Ok(interimSite);
     }
 
     /// <summary>
@@ -2046,19 +2640,39 @@ public static class AccreditationApplicationEndpoints
     /// it remains available for reporting, and only stops appearing wherever active sites are
     /// listed. Idempotent, and it never overwrites an earlier withdrawal date.
     /// </summary>
-    private static async Task<IResult> WithdrawInterimSite(
+    private static Task<IResult> WithdrawInterimSite(
         string organisationId,
         string applicationId,
         int siteId,
         int interimSiteId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                WithdrawInterimSiteAsync(
+                    persistence,
+                    new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> WithdrawInterimSiteAsync(
+        IAccreditationApplicationPersistence persistence,
+        InterimSiteRoute route,
+        IClientSessionHandle? session
     )
     {
+        var (organisationId, applicationId, siteId, interimSiteId) = route;
         var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -2072,10 +2686,8 @@ public static class AccreditationApplicationEndpoints
         InterimSiteSync.SyncMirror(site);
         application!.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
-        return updated is null
-            ? LostInterimSiteRace(interimSiteId)
-            : Results.NoContent();
+        var updated = await persistence.UpdateAsync(application, session);
+        return updated is null ? LostInterimSiteRace(interimSiteId) : Results.NoContent();
     }
 
     /// <summary>
@@ -2087,19 +2699,39 @@ public static class AccreditationApplicationEndpoints
     /// Called restore rather than revert: the ORS already has a /revert route, which un-promotes a
     /// registered site and is a different thing entirely.
     /// </summary>
-    private static async Task<IResult> RestoreInterimSite(
+    private static Task<IResult> RestoreInterimSite(
         string organisationId,
         string applicationId,
         int siteId,
         int interimSiteId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                RestoreInterimSiteAsync(
+                    persistence,
+                    new InterimSiteRoute(organisationId, applicationId, siteId, interimSiteId),
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> RestoreInterimSiteAsync(
+        IAccreditationApplicationPersistence persistence,
+        InterimSiteRoute route,
+        IClientSessionHandle? session
     )
     {
+        var (organisationId, applicationId, siteId, interimSiteId) = route;
         var (failure, application, site) = await ResolveEditableOverseasSiteAsync(
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -2113,10 +2745,8 @@ public static class AccreditationApplicationEndpoints
         InterimSiteSync.SyncMirror(site);
         application!.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
-        return updated is null
-            ? LostInterimSiteRace(interimSiteId)
-            : Results.Ok(interimSite);
+        var updated = await persistence.UpdateAsync(application, session);
+        return updated is null ? LostInterimSiteRace(interimSiteId) : Results.Ok(interimSite);
     }
 
     // RA-603: UpdateAsync is version-guarded, so null from it on these routes means another write
@@ -2129,18 +2759,36 @@ public static class AccreditationApplicationEndpoints
             $"The application changed while interim site '{interimSiteId}' was being saved; please reload and try again."
         );
 
+    // Bundles AddInterimSite's DI-service/framework parameters under one [AsParameters] argument
+    // so the handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // AddOverseasSiteServices above.
+    private sealed record AddInterimSiteServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<AddInterimSiteRequest> Validator,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        IModelInterimSiteNumbers ModelNumbers,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> AddInterimSite(
         string organisationId,
         string applicationId,
         int siteId,
         AddInterimSiteRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<AddInterimSiteRequest> validator,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken
+        [AsParameters] AddInterimSiteServices services
     )
     {
+        var (
+            persistence,
+            validator,
+            _,
+            unitOfWork,
+            modelNumbers,
+            loggerFactory,
+            cancellationToken
+        ) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
         {
@@ -2153,73 +2801,118 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var (failure, application, _) = await ResolveEditableOverseasSiteAsync(
-            persistence,
-            organisationId,
+        // The work can re-run, so it reports what it added through these, reset on every run, and
+        // the notification below goes out only once the write has committed.
+        InterimSiteModel? interimSite = null;
+        AccreditationApplicationModel? updated = null;
+        var result = await unitOfWork.RunAsync(
+            nameof(AddInterimSite),
             applicationId,
-            siteId
-        );
-        if (failure is not null)
-            return failure;
-
-        var (allocationError, interimSite, updated) = await AllocateGeneratedIdAsync(
-            persistence,
-            organisationId,
-            applicationId,
-            application!,
-            InterimSiteNumberAllocation(persistence, siteId, request)
-        );
-        if (allocationError is not null)
-            return allocationError;
-
-        // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
-        // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s).
-        if (updated!.CaseManagementWorkItemId is not null)
-        {
-            try
+            async (session, _) =>
             {
-                await caseWorkingAdapter.NotifySiteAddedAsync(
-                    updated,
-                    siteType: "interim",
-                    orsId: updated
-                        .OverseasSites!.Sites.First(s => s.SiteId == siteId)
-                        .OrsId ?? string.Empty,
-                    siteNumber: interimSite!.SiteNumber,
-                    isNewSite: interimSite.IsNewSite,
-                    cancellationToken: cancellationToken
+                (interimSite, updated) = (null, null);
+                var (failure, application, _) = await ResolveEditableOverseasSiteAsync(
+                    persistence,
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    session
                 );
-            }
-            catch (Exception ex)
-            {
-                loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
-                    .LogWarning(
-                        ex,
-                        "Failed to notify ManagementBe of new interim site for applicationId={ApplicationId}",
-                        applicationId
-                    );
-            }
-        }
+                if (failure is not null)
+                    return failure;
 
-        return Results.Created(string.Empty, interimSite);
+                var (allocationError, created, persisted) = await AllocateGeneratedIdAsync(
+                    persistence,
+                    organisationId,
+                    applicationId,
+                    application!,
+                    InterimSiteNumberAllocation(
+                        persistence,
+                        siteId,
+                        request,
+                        new InterimNumberSources(modelNumbers, session)
+                    ),
+                    session
+                );
+                if (allocationError is not null || created is null || persisted is null)
+                    return allocationError ?? Results.Problem("Failed to add interim site.");
+
+                (interimSite, updated) = (created, persisted);
+                return Results.Created(string.Empty, created);
+            },
+            cancellationToken
+        );
+        if (Committed(result) && interimSite is not null && updated is not null)
+            await NotifyInterimSiteAddedAsync(
+                services,
+                applicationId,
+                siteId,
+                updated,
+                interimSite
+            );
+
+        return result;
     }
+
+    // Courtesy notification to ManagementBe — must never fail this response (RA-294 AC05 /
+    // RA-297 AC04). Same guard/comment style as GetById (RA102-j7s).
+    private static async Task NotifyInterimSiteAddedAsync(
+        AddInterimSiteServices services,
+        string applicationId,
+        int siteId,
+        AccreditationApplicationModel updated,
+        InterimSiteModel interimSite
+    )
+    {
+        if (updated.CaseManagementWorkItemId is null)
+            return;
+
+        try
+        {
+            await services.CaseWorkingAdapter.NotifySiteAddedAsync(
+                updated,
+                siteType: "interim",
+                orsId: updated.OverseasSites!.Sites.First(s => s.SiteId == siteId).OrsId
+                    ?? string.Empty,
+                siteNumber: interimSite.SiteNumber,
+                isNewSite: interimSite.IsNewSite,
+                cancellationToken: services.CancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            services
+                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LogWarning(
+                    ex,
+                    "Failed to notify ManagementBe of new interim site for applicationId={ApplicationId}",
+                    applicationId
+                );
+        }
+    }
+
+    // RA-644 B8d: where interim numbers already taken come from besides legacy, and the session
+    // they are read in. With DualWrite off the model contributes none.
+    private sealed record InterimNumberSources(
+        IModelInterimSiteNumbers ModelNumbers,
+        IClientSessionHandle? Session
+    );
 
     // RA-603: an interim site's regulator-visible number comes from its own registration-wide
     // sequence; its SiteId stays on the shared ORS+interim sequence, which is what routes address.
     private static GeneratedIdAllocation<InterimSiteModel> InterimSiteNumberAllocation(
         IAccreditationApplicationPersistence persistence,
         int siteId,
-        AddInterimSiteRequest request
+        AddInterimSiteRequest request,
+        InterimNumberSources sources
     ) =>
         new(
             CapacityNoun: "interim sites",
             IdName: "interim site number",
-            Scope: application => InterimSiteNumberScope(persistence, application),
+            Scope: application => InterimSiteNumberScope(persistence, application, sources),
             Attach: (application, siteNumber) =>
             {
-                var site = application.OverseasSites?.Sites.FirstOrDefault(s =>
-                    s.SiteId == siteId
-                );
+                var site = application.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
                 if (site is null)
                     return (Results.NotFound(), null);
 
@@ -2237,7 +2930,12 @@ public static class AccreditationApplicationEndpoints
                 application.DateLastEdited = DateTime.UtcNow;
                 return (null, interimSite);
             },
-            WriteIfAbsent: persistence.UpdateIfInterimSiteNumberAbsentAsync
+            WriteIfAbsent: (application, value) =>
+                persistence.UpdateIfInterimSiteNumberAbsentAsync(
+                    application,
+                    value,
+                    sources.Session
+                )
         );
 
     private static InterimSiteModel BuildInterimSite(
@@ -2271,6 +2969,7 @@ public static class AccreditationApplicationEndpoints
     private sealed record UpdateInterimSiteServices(
         IAccreditationApplicationPersistence Persistence,
         IValidator<AddInterimSiteRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
         ILoggerFactory LoggerFactory,
         CancellationToken CancellationToken
     );
@@ -2282,15 +2981,38 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence Persistence,
         IValidator<AddBesEvidenceFileRequest> Validator,
         IPendingUploadService PendingUploadService,
+        IDualWriteUnitOfWork UnitOfWork,
         CancellationToken CancellationToken
     );
 
-    private static async Task<IResult> AddBesEvidenceFile(
+    private static Task<IResult> AddBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         AddBesEvidenceFileRequest request,
         [AsParameters] AddBesEvidenceFileServices services
+    ) =>
+        services.UnitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                AddBesEvidenceFileAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    request,
+                    services,
+                    session
+                ),
+            services.CancellationToken
+        );
+
+    private static async Task<IResult> AddBesEvidenceFileAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        AddBesEvidenceFileRequest request,
+        AddBesEvidenceFileServices services,
+        IClientSessionHandle? session
     )
     {
         var validation = await services.Validator.ValidateAsync(
@@ -2309,7 +3031,11 @@ public static class AccreditationApplicationEndpoints
             return uploadError;
         var scannedFile = resolvedFile!;
 
-        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(
+            organisationId,
+            applicationId,
+            session
+        );
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -2329,11 +3055,15 @@ public static class AccreditationApplicationEndpoints
         if (site is null)
             return Results.NotFound();
 
+        var overCap = BesEvidenceFileCapRejection(site.BesEvidence);
+        if (overCap is not null)
+            return overCap;
+
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
             return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
 
-        var scanStatus = scannedFile.FileStatus == "complete" ? "Clean" : "Infected";
+        var scanStatus = ScanStatusOf(scannedFile).ToString();
 
         site.BesEvidence ??= new BesEvidenceModel();
         site.BesEvidence.BesEvidenceUploads.Add(
@@ -2354,21 +3084,45 @@ public static class AccreditationApplicationEndpoints
         );
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await services.Persistence.UpdateAsync(application);
+        var updated = await services.Persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to add BES evidence file.")
             : Results.Created(string.Empty, site.BesEvidence);
     }
 
-    private static async Task<IResult> PatchBesEvidence(
+    private static Task<IResult> PatchBesEvidence(
         string organisationId,
         string applicationId,
         int siteId,
         PatchBesEvidenceRequest request,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PatchBesEvidenceAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    request,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> PatchBesEvidenceAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        PatchBesEvidenceRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -2395,7 +3149,7 @@ public static class AccreditationApplicationEndpoints
                 .Value;
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update BES evidence.")
             : Results.Ok(updated);
@@ -2412,10 +3166,11 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         string organisationId,
         string applicationId,
-        int siteId
+        int siteId,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return (null, null, Results.NotFound());
         if (RejectIfTerminal(application) is { } conflict)
@@ -2439,19 +3194,44 @@ public static class AccreditationApplicationEndpoints
         return site is null ? (null, null, Results.NotFound()) : (application, site, null);
     }
 
-    private static async Task<IResult> DeleteBesEvidenceFile(
+    private static Task<IResult> DeleteBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         string fileId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                DeleteBesEvidenceFileAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    fileId,
+                    persistence,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> DeleteBesEvidenceFileAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        string fileId,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
         var (application, site, failure) = await ResolveEditableBesEvidenceSite(
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -2476,23 +3256,56 @@ public static class AccreditationApplicationEndpoints
         site.BesEvidence.BesEvidenceUploads.RemoveAll(f => f.FileId == fileId);
 
         application!.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to delete BES evidence file.")
             : Results.Ok();
     }
 
-    private static async Task<IResult> PatchBesEvidenceFile(
+    // RA-644 B8g: bundles PatchBesEvidenceFile's services under one [AsParameters] argument so the handler
+    // stays under Sonar's 7-parameter limit (S107) once it takes the unit of work.
+    private sealed record PatchBesEvidenceFileServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<PatchBesEvidenceFileRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
+        CancellationToken CancellationToken
+    );
+
+    private static Task<IResult> PatchBesEvidenceFile(
         string organisationId,
         string applicationId,
         int siteId,
         string fileId,
         PatchBesEvidenceFileRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<PatchBesEvidenceFileRequest> validator
+        [AsParameters] PatchBesEvidenceFileServices services
+    ) =>
+        services.UnitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PatchBesEvidenceFileAsync(
+                    organisationId,
+                    applicationId,
+                    siteId,
+                    fileId,
+                    request,
+                    services,
+                    session
+                ),
+            services.CancellationToken
+        );
+
+    private static async Task<IResult> PatchBesEvidenceFileAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        string fileId,
+        PatchBesEvidenceFileRequest request,
+        PatchBesEvidenceFileServices services,
+        IClientSessionHandle? session
     )
     {
-        var validation = await validator.ValidateAsync(request);
+        var (persistence, validator, _, cancellationToken) = services;
+        var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
@@ -2500,7 +3313,8 @@ public static class AccreditationApplicationEndpoints
             persistence,
             organisationId,
             applicationId,
-            siteId
+            siteId,
+            session
         );
         if (failure is not null)
             return failure;
@@ -2519,25 +3333,49 @@ public static class AccreditationApplicationEndpoints
             file.BesEvidenceExpiryDate = request.BesEvidenceExpiryDate;
 
         application!.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update BES evidence file.")
             : Results.Ok(updated);
     }
 
-    private static async Task<IResult> PatchBesEvidenceSection(
+    private static Task<IResult> PatchBesEvidenceSection(
         string organisationId,
         string applicationId,
         PatchBesEvidenceSectionRequest request,
         IAccreditationApplicationPersistence persistence,
-        IValidator<PatchBesEvidenceSectionRequest> validator
+        IValidator<PatchBesEvidenceSectionRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session =>
+                PatchBesEvidenceSectionAsync(
+                    organisationId,
+                    applicationId,
+                    request,
+                    persistence,
+                    validator,
+                    session
+                ),
+            cancellationToken
+        );
+
+    private static async Task<IResult> PatchBesEvidenceSectionAsync(
+        string organisationId,
+        string applicationId,
+        PatchBesEvidenceSectionRequest request,
+        IAccreditationApplicationPersistence persistence,
+        IValidator<PatchBesEvidenceSectionRequest> validator,
+        IClientSessionHandle? session
     )
     {
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -2570,7 +3408,7 @@ public static class AccreditationApplicationEndpoints
         }
 
         application.DateLastEdited = DateTime.UtcNow;
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to update BES evidence section.")
             : Results.Ok(updated);
@@ -2585,6 +3423,8 @@ public static class AccreditationApplicationEndpoints
         ICaseWorkingApiAdapter CaseWorkingAdapter,
         IReExApiAdapter ReExAdapter,
         IValidator<SubmitRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
         CancellationToken CancellationToken
     );
 
@@ -2636,50 +3476,8 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest("All sections must be completed before submission.");
         }
 
-        application.ApplicationStatus = ApplicationStatus.Submitted;
-        application.DateSent = DateTime.UtcNow;
-        application.DateLastEdited = DateTime.UtcNow;
-        application.SubmittedBy = new SubmittedByModel
-        {
-            FullName = request.FullName,
-            JobTitle = request.JobTitle,
-            Email = request.Email,
-        };
-        // RA-503: the operator's real bank payment reference, as shown on their own
-        // submit-confirmation/view-payment-details pages - see BuildPayload.
-        application.PaymentReference = request.PaymentReference;
-
-        // Version 1 for every section that exists on this application — only OverseasSites/
-        // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.
-        var versionedAt = DateTime.UtcNow;
-        AccreditationApplicationSections.SnapshotSection(
-            application,
-            OperatorSection.Prns,
-            versionedAt
-        );
-        AccreditationApplicationSections.SnapshotSection(
-            application,
-            OperatorSection.BusinessPlan,
-            versionedAt
-        );
-        AccreditationApplicationSections.SnapshotSection(
-            application,
-            OperatorSection.SamplingPlan,
-            versionedAt
-        );
-        if (application.IsExporter)
-        {
-            AccreditationApplicationSections.SnapshotSection(
-                application,
-                OperatorSection.OverseasSites,
-                versionedAt
-            );
-            AccreditationApplicationSections.SnapshotSection(
-                application,
-                OperatorSection.BesEvidence,
-                versionedAt
-            );
-        }
+        var submittedAt = DateTime.UtcNow;
+        ApplySubmission(application, request, submittedAt);
 
         // RA-503: resolve ReEx's numeric OrgId (e.g. 500500) fresh, immediately before submission,
         // so the work-item payload carries the operator/regulator-safe organisation number rather
@@ -2719,7 +3517,134 @@ public static class AccreditationApplicationEndpoints
         application.ApplicationReference = submissionResult.ApplicationReference;
         application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
-        var updated = await services.Persistence.UpdateAsync(application);
+        // RA-644 B8g: only the save runs in the unit of work, so a transaction never waits on
+        // the Case Management service. Each attempt re-reads the application with the session and
+        // applies the submission to that copy: a retried attempt must not save a copy whose Version
+        // the rolled-back attempt already bumped, and the first write must keep the model links the
+        // migration has just stamped on the document.
+        var submission = new Submission(
+            request,
+            submittedAt,
+            application.OrgId,
+            submissionResult,
+            application.Version
+        );
+        var result = await services.UnitOfWork.RunAsync(
+            nameof(Submit),
+            applicationId,
+            async (session, _) =>
+            {
+                var freshApplication = await services.Persistence.GetByIdAsync(
+                    organisationId,
+                    applicationId,
+                    session
+                );
+                return freshApplication is null
+                    ? Results.NotFound()
+                    : await RecordSubmissionAsync(
+                        services.Persistence,
+                        freshApplication,
+                        submission,
+                        session
+                    );
+            },
+            services.CancellationToken
+        );
+        LogIfCaseChangeNotRecorded(services.LoggerFactory, nameof(Submit), applicationId, result);
+        return result;
+    }
+
+    // Submit's changes to the application. Applied to the copy sent to the Case Management service,
+    // then again to the fresh copy each transaction attempt saves.
+    private static void ApplySubmission(
+        AccreditationApplicationModel application,
+        SubmitRequest request,
+        DateTime submittedAt
+    )
+    {
+        application.ApplicationStatus = ApplicationStatus.Submitted;
+        application.DateSent = submittedAt;
+        application.DateLastEdited = submittedAt;
+        application.SubmittedBy = new SubmittedByModel
+        {
+            FullName = request.FullName,
+            JobTitle = request.JobTitle,
+            Email = request.Email,
+        };
+        // RA-503: the operator's real bank payment reference, as shown on their own
+        // submit-confirmation/view-payment-details pages - see BuildPayload.
+        application.PaymentReference = request.PaymentReference;
+
+        // Version 1 for every section that exists on this application — only OverseasSites/
+        // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.Prns,
+            submittedAt
+        );
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.BusinessPlan,
+            submittedAt
+        );
+        AccreditationApplicationSections.SnapshotSection(
+            application,
+            OperatorSection.SamplingPlan,
+            submittedAt
+        );
+        if (application.IsExporter)
+        {
+            AccreditationApplicationSections.SnapshotSection(
+                application,
+                OperatorSection.OverseasSites,
+                submittedAt
+            );
+            AccreditationApplicationSections.SnapshotSection(
+                application,
+                OperatorSection.BesEvidence,
+                submittedAt
+            );
+        }
+    }
+
+    private sealed record Submission(
+        SubmitRequest Request,
+        DateTime SubmittedAt,
+        int? OrgId,
+        CaseWorkingSubmissionResult CaseWorking,
+        long ReadVersion
+    );
+
+    // RA-644 B8g: Submit's save, run in the unit of work against a read made with its session.
+    private static async Task<IResult> RecordSubmissionAsync(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel application,
+        Submission submission,
+        IClientSessionHandle? session
+    )
+    {
+        // A concurrent submit committed first: answer as the replay at the top of Submit does.
+        if (application.ApplicationStatus == ApplicationStatus.Submitted)
+            return Results.Ok(
+                new SubmitResponse { AccreditationReference = application.ApplicationReference }
+            );
+
+        // Case Management holds the copy read before its call. If the application changed since, an edit landed
+        // during the call: what was checked and sent is not what is stored, so nothing is saved, as before the
+        // re-read. A rolled-back attempt's version bump is undone and the FK stamp leaves the version alone, so
+        // this holds across retries and on first touch.
+        if (application.Version != submission.ReadVersion)
+            return Results.Problem("Failed to submit accreditation application.");
+
+        if (application.ApplicationStatus != ApplicationStatus.Started)
+            return Results.Conflict("Application must be in 'Started' status to submit.");
+
+        ApplySubmission(application, submission.Request, submission.SubmittedAt);
+        application.OrgId = submission.OrgId;
+        application.ApplicationReference = submission.CaseWorking.ApplicationReference;
+        application.CaseManagementWorkItemId = submission.CaseWorking.WorkItemId;
+
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to submit accreditation application.")
             : Results.Ok(
@@ -2727,15 +3652,25 @@ public static class AccreditationApplicationEndpoints
             );
     }
 
+    // RA-644 B8g: bundles Resubmit's services under one [AsParameters] argument so the handler
+    // stays under Sonar's 7-parameter limit (S107) once it takes the unit of work.
+    private sealed record ResubmitServices(
+        IAccreditationApplicationPersistence Persistence,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
+
     private static async Task<IResult> Resubmit(
         string organisationId,
         string applicationId,
         ResubmitRequest request,
-        IAccreditationApplicationPersistence persistence,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        CancellationToken cancellationToken
+        [AsParameters] ResubmitServices services
     )
     {
+        var (persistence, caseWorkingAdapter, unitOfWork, loggerFactory, cancellationToken) =
+            services;
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
@@ -2791,8 +3726,45 @@ public static class AccreditationApplicationEndpoints
         // during the round trip is invisible to the pre-round-trip `application` copy above. The
         // snapshot/status values below must be derived from this fresh read, not that stale copy,
         // or they silently overwrite a concurrent edit with outdated content.
-        var freshApplication =
-            await persistence.GetByIdAsync(organisationId, applicationId) ?? application;
+        var resubmission = new Resubmission(queriedSections, sectionKeys, contactDetails);
+        var recorded = await unitOfWork.RunAsync(
+            nameof(Resubmit),
+            applicationId,
+            async (session, token) =>
+            {
+                var freshApplication =
+                    await persistence.GetByIdAsync(organisationId, applicationId, session)
+                    ?? application;
+                return await RecordResubmissionAsync(
+                    persistence,
+                    freshApplication,
+                    resubmission,
+                    session,
+                    token
+                );
+            },
+            cancellationToken
+        );
+        LogIfCaseChangeNotRecorded(loggerFactory, nameof(Resubmit), applicationId, recorded);
+        return recorded;
+    }
+
+    private sealed record Resubmission(
+        List<OperatorSection> QueriedSections,
+        List<string> SectionKeys,
+        QuerySubmitterContactDetails ContactDetails
+    );
+
+    // RA-644 B8g: Resubmit's targeted update, run in the unit of work with the session.
+    private static async Task<IResult> RecordResubmissionAsync(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel freshApplication,
+        Resubmission resubmission,
+        IClientSessionHandle? session,
+        CancellationToken cancellationToken
+    )
+    {
+        var (queriedSections, sectionKeys, contactDetails) = resubmission;
 
         // RA-519: built as a targeted $set/$push UpdateDefinition and persisted via
         // UpdateFieldsAsync below, rather than mutated in-memory and persisted via UpdateAsync's
@@ -2886,6 +3858,7 @@ public static class AccreditationApplicationEndpoints
             freshApplication.Id!.Value,
             notAlreadyResubmittedGuard,
             combinedUpdate,
+            session,
             cancellationToken
         );
         // A null result here means notAlreadyResubmittedGuard rejected the write - a genuine
@@ -2938,6 +3911,7 @@ public static class AccreditationApplicationEndpoints
         QueryFromCaseManagementRequest request,
         IAccreditationApplicationPersistence persistence,
         IValidator<QueryFromCaseManagementRequest> validator,
+        IDualWriteUnitOfWork unitOfWork,
         HttpContext httpContext,
         ILoggerFactory loggerFactory
     )
@@ -2974,8 +3948,10 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(validation.Errors);
         }
 
-        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
-        if (application is null)
+        // RA-644 B8g: read once outside the transaction for the application id the unit of work
+        // migrates and syncs; the work reads it again in the session.
+        var known = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        if (known is null)
         {
             logger.LogWarning(
                 "QueryFromCaseManagement: no application found for workItemId={WorkItemId} correlationId={CorrelationId}",
@@ -2984,6 +3960,47 @@ public static class AccreditationApplicationEndpoints
             );
             return Results.NotFound();
         }
+
+        var push = new CaseManagementQueryPush(workItemId, request, correlationId);
+        var result = await unitOfWork.RunAsync(
+            nameof(QueryFromCaseManagement),
+            known.Id!.Value.ToString(),
+            (session, _) => RecordQueryAsync(persistence, logger, push, session),
+            httpContext.RequestAborted
+        );
+
+        // Only the recorded query answers 2xx.
+        if (Committed(result) && logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "QueryFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
+                known.Id,
+                workItemId,
+                correlationId ?? "(absent)"
+            );
+        }
+        return result;
+    }
+
+    private sealed record CaseManagementQueryPush(
+        Guid WorkItemId,
+        QueryFromCaseManagementRequest Request,
+        string? CorrelationId
+    );
+
+    // RA-644 B8g: QueryFromCaseManagement's checks and write, run in the unit of work with the
+    // session on every read and write.
+    private static async Task<IResult> RecordQueryAsync(
+        IAccreditationApplicationPersistence persistence,
+        ILogger logger,
+        CaseManagementQueryPush push,
+        IClientSessionHandle? session
+    )
+    {
+        var (workItemId, request, correlationId) = push;
+        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId, session);
+        if (application is null)
+            return Results.NotFound();
 
         // A second query while one is already open is rejected rather than merged into the
         // existing QueriedSectionKeys (RA-311 §3) — the operator must resubmit the open query
@@ -3072,7 +4089,7 @@ public static class AccreditationApplicationEndpoints
         // write, query or not.
         application.CaseManagementStatusUpdatedAt = queriedAt;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         if (updated is null)
         {
             logger.LogError(
@@ -3084,28 +4101,70 @@ public static class AccreditationApplicationEndpoints
             return Results.Problem("Failed to record query from case management.");
         }
 
-        if (logger.IsEnabled(LogLevel.Information))
-        {
-            logger.LogInformation(
-                "QueryFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} correlationId={CorrelationId}",
-                updated.Id,
-                workItemId,
-                correlationId ?? "(absent)"
-            );
-        }
         return Results.Ok(updated);
     }
 
-    private static async Task<IResult> AddFile(
+    // RA-605: infected files are excluded from the cap so a user can re-upload after a failed
+    // scan. The frontend keys off MaxSamplingPlanFilesErrorCode, not the message wording.
+    private const int MaxSamplingPlanFiles = 10;
+    internal const string MaxSamplingPlanFilesErrorCode = "MaxFilesExceeded";
+    internal const string MaxSamplingPlanFilesMessage =
+        "You can only upload a maximum of 10 'sampling and inspection plan' and 'supporting information' files.";
+    private const int MaxBesEvidenceFiles = 10;
+    internal const string MaxBesEvidenceFilesMessage =
+        "You can only upload a maximum of 10 files as evidence of broadly equivalent standards.";
+
+    /// <summary>
+    /// RA-605: the 422 for one more BES evidence file on an overseas site that already has
+    /// MaxBesEvidenceFiles non-infected ones, or null under the cap. Shared by the application's
+    /// BES upload and RA-492's change-request one, so the frontend recognises both the same way.
+    /// </summary>
+    internal static IResult? BesEvidenceFileCapRejection(BesEvidenceModel? evidence) =>
+        (evidence?.BesEvidenceUploads ?? []).Count(f =>
+            f.ScanStatus != nameof(FileScanStatus.Infected)
+        ) >= MaxBesEvidenceFiles
+            ? Results.Problem(
+                detail: MaxBesEvidenceFilesMessage,
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "Unprocessable Entity",
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = MaxSamplingPlanFilesErrorCode,
+                }
+            )
+            : null;
+
+    // RA-644 B8g: bundles AddFile's services under one [AsParameters] argument (S107) once it takes the unit of
+    // work.
+    private sealed record AddFileServices(
+        IAccreditationApplicationPersistence Persistence,
+        IValidator<FileUploadRequest> Validator,
+        IPendingUploadService PendingUploadService,
+        IDualWriteUnitOfWork UnitOfWork,
+        CancellationToken CancellationToken
+    );
+
+    private static Task<IResult> AddFile(
         string organisationId,
         string applicationId,
         FileUploadRequest request,
-        IAccreditationApplicationPersistence persistence,
-        IValidator<FileUploadRequest> validator,
-        IPendingUploadService pendingUploadService,
-        CancellationToken cancellationToken
+        [AsParameters] AddFileServices services
+    ) =>
+        services.UnitOfWork.InTransactionAsync(
+            applicationId,
+            session => AddFileAsync(organisationId, applicationId, request, services, session),
+            services.CancellationToken
+        );
+
+    private static async Task<IResult> AddFileAsync(
+        string organisationId,
+        string applicationId,
+        FileUploadRequest request,
+        AddFileServices services,
+        IClientSessionHandle? session
     )
     {
+        var (persistence, validator, pendingUploadService, _, cancellationToken) = services;
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
             return Results.BadRequest(validation.Errors);
@@ -3126,7 +4185,7 @@ public static class AccreditationApplicationEndpoints
         )
             return Results.UnprocessableEntity("Content type is not permitted.");
 
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -3142,8 +4201,19 @@ public static class AccreditationApplicationEndpoints
                 "Sampling plan section is not editable in the application's current status."
             );
 
-        if (application.SamplingPlan.Files.Count >= 10)
-            return Results.UnprocessableEntity("Maximum of 10 files permitted per application.");
+        if (
+            application.SamplingPlan.Files.Count(f => f.ScanStatus != FileScanStatus.Infected)
+            >= MaxSamplingPlanFiles
+        )
+            return Results.Problem(
+                detail: MaxSamplingPlanFilesMessage,
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "Unprocessable Entity",
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = MaxSamplingPlanFilesErrorCode,
+                }
+            );
 
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
@@ -3158,10 +4228,7 @@ public static class AccreditationApplicationEndpoints
             Filename = scannedFile.Filename!,
             ContentType = contentType,
             UploadedByUserId = string.Empty, // TODO: populate from auth claims once auth PR lands
-            ScanStatus =
-                scannedFile.FileStatus == "complete"
-                    ? FileScanStatus.Clean
-                    : FileScanStatus.Infected,
+            ScanStatus = ScanStatusOf(scannedFile),
             DocumentType = request.DocumentType,
             S3Key = scannedFile.S3Key!,
             S3Bucket = scannedFile.S3Bucket,
@@ -3177,20 +4244,35 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null
             ? Results.Problem("Failed to add file.")
             : Results.Created(string.Empty, file);
     }
 
-    private static async Task<IResult> DeleteFile(
+    private static Task<IResult> DeleteFile(
         string organisationId,
         string applicationId,
         string fileId,
-        IAccreditationApplicationPersistence persistence
+        IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
+        CancellationToken cancellationToken
+    ) =>
+        unitOfWork.InTransactionAsync(
+            applicationId,
+            session => DeleteFileAsync(organisationId, applicationId, fileId, persistence, session),
+            cancellationToken
+        );
+
+    private static async Task<IResult> DeleteFileAsync(
+        string organisationId,
+        string applicationId,
+        string fileId,
+        IAccreditationApplicationPersistence persistence,
+        IClientSessionHandle? session
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
         if (application is null)
             return Results.NotFound();
         if (RejectIfTerminal(application) is { } conflict)
@@ -3219,7 +4301,7 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus == ApplicationStatus.Saved)
             application.ApplicationStatus = ApplicationStatus.Started;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         return updated is null ? Results.Problem("Failed to delete file.") : Results.Ok();
     }
 
@@ -3229,11 +4311,17 @@ public static class AccreditationApplicationEndpoints
     // push still updates CaseManagementStatusUpdatedAt for ordering purposes. "queried"/"withdrawn"
     // are never sent here: query keeps its own richer /query endpoint, and withdrawal is entirely
     // out of scope for this plan (§4.1, §4.5).
+    // "assessment-started" (RA-527 follow-up) is the Case Management service's internal "started
+    // but still Duly made" state. Its start step is excluded from pushes, so it is never sent here
+    // by design; the entry is a safeguard so a misconfigured or replayed push lands on DulyMade
+    // rather than Updated or a status no-op. Only a query response or a deadline change makes a
+    // started case Updated.
     private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(string toStateId) =>
         toStateId switch
         {
             "submitted" => ApplicationStatus.Submitted,
             "duly-made" => ApplicationStatus.DulyMade,
+            "assessment-started" => ApplicationStatus.DulyMade,
             "assessment-in-progress" => ApplicationStatus.Updated,
             "updated" => ApplicationStatus.Updated,
             "awaiting-decision" => ApplicationStatus.AwaitingDecision,
@@ -3266,12 +4354,72 @@ public static class AccreditationApplicationEndpoints
         }
     }
 
+    // Terminal-status guard: once the Registration & Accreditation service has recorded a
+    // Case Management service push as Approved, Rejected or Withdrawn, no later mapped push
+    // may move the application again — a withdrawn application re-opening as DulyMade (or an
+    // approved one flipping to Rejected) would undo the very gates the terminal statuses
+    // exist to enforce. Unmapped pushes (anything the Case Management service adds in future
+    // with no arm in the mapping switch) are exempt: they only update the ordering watermark,
+    // never ApplicationStatus.
+    //
+    // RA-527: a push for the final status the application already has (Approved → approved,
+    // Rejected → rejected) is an idempotent repeat, not a move. The Case Management service's
+    // step 2 retries with a newer OccurredAt when its own write fails or the reply is lost, so
+    // the ordering guard does not catch it; refusing it with 409 would fail every retry. It is
+    // accepted (200) with no write, like the ordering guard's duplicate path — so the watermark
+    // does not advance either. Withdrawn has no mapped push, so it can never match and stays 409.
+    //
+    // Extracted from StatusChangedFromCaseManagement to keep that method's cognitive complexity
+    // (S3776) within the limit. Returns null when the push may proceed.
+    private static IResult? GuardTerminalStatus(
+        ILogger logger,
+        AccreditationApplicationModel application,
+        ApplicationStatus? mappedStatus,
+        Guid workItemId,
+        string toStateId,
+        string? correlationId
+    )
+    {
+        if (mappedStatus is null || RejectIfTerminal(application) is null)
+            return null;
+
+        if (mappedStatus == application.ApplicationStatus)
+        {
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "StatusChangedFromCaseManagement: idempotent repeat of final status {Status} ignored for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
+                    application.ApplicationStatus,
+                    application.Id,
+                    workItemId,
+                    toStateId,
+                    correlationId ?? "(absent)"
+                );
+            }
+            return Results.Ok(application);
+        }
+
+        logger.LogWarning(
+            "StatusChangedFromCaseManagement: application status {Status} is terminal and cannot accept toStateId={ToStateId} for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
+            application.ApplicationStatus,
+            toStateId,
+            workItemId,
+            application.Id,
+            correlationId ?? "(absent)"
+        );
+        return Results.Conflict(
+            "Application is already Approved, Rejected or Withdrawn and can no longer be updated."
+        );
+    }
+
     private static async Task<IResult> StatusChangedFromCaseManagement(
         Guid workItemId,
         StatusChangedFromCaseManagementRequest request,
         IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
         HttpContext httpContext,
-        ILoggerFactory loggerFactory
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
     )
     {
         var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
@@ -3296,8 +4444,10 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
-        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
-        if (application is null)
+        // RA-644 B8f: read once outside the transaction for the application id the unit of work
+        // migrates and syncs; the work reads it again in the session.
+        var known = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        if (known is null)
         {
             logger.LogWarning(
                 "StatusChangedFromCaseManagement: no application found for workItemId={WorkItemId} correlationId={CorrelationId}",
@@ -3306,6 +4456,59 @@ public static class AccreditationApplicationEndpoints
             );
             return Results.NotFound();
         }
+
+        var push = new CaseManagementStatusPush(workItemId, request, correlationId);
+        // A box, not a local, so the analyser sees the callback set it (S2583).
+        var applied = new StrongBox<bool>();
+        var result = await unitOfWork.RunAsync(
+            nameof(StatusChangedFromCaseManagement),
+            known.Id!.Value.ToString(),
+            async (session, _) =>
+            {
+                var (pushResult, wrote) = await ApplyStatusPushAsync(
+                    persistence,
+                    logger,
+                    push,
+                    session
+                );
+                applied.Value = wrote;
+                return pushResult;
+            },
+            cancellationToken
+        );
+
+        if (applied.Value && Committed(result) && logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StatusChangedFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
+                known.Id,
+                workItemId,
+                request.ToStateId,
+                correlationId ?? "(absent)"
+            );
+        }
+        return result;
+    }
+
+    private sealed record CaseManagementStatusPush(
+        Guid WorkItemId,
+        StatusChangedFromCaseManagementRequest Request,
+        string? CorrelationId
+    );
+
+    // Extracted from StatusChangedFromCaseManagement (RA-644 B8f) so it runs in the unit of work
+    // with the session on every read and write. Returns whether it wrote, for the success log.
+    private static async Task<(IResult Result, bool Wrote)> ApplyStatusPushAsync(
+        IAccreditationApplicationPersistence persistence,
+        ILogger logger,
+        CaseManagementStatusPush push,
+        IClientSessionHandle? session
+    )
+    {
+        var (workItemId, request, correlationId) = push;
+        var application = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId, session);
+        if (application is null)
+            return (Results.NotFound(), false);
 
         // Ordering guard, not a status-precedence table (RA-368 §4.3): a push whose OccurredAt is
         // not strictly after the last applied push is a duplicate or an out-of-order retry, so it
@@ -3323,32 +4526,24 @@ public static class AccreditationApplicationEndpoints
                 lastUpdated,
                 correlationId
             );
-            return Results.Ok(application);
+            return (Results.Ok(application), false);
         }
 
         var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
 
-        // Terminal-status guard: once the Registration & Accreditation service has recorded a
-        // Case Management service push as Approved, Rejected or Withdrawn, no later mapped push
-        // may move the application again — a withdrawn application re-opening as DulyMade (or an
-        // approved one flipping to Rejected) would undo the very gates the terminal statuses
-        // exist to enforce. Unmapped pushes (anything the Case Management service adds in future
-        // with no arm in the switch above) are exempt: they only update the ordering watermark
-        // below, never ApplicationStatus.
-        if (mappedStatus is not null && RejectIfTerminal(application) is not null)
-        {
-            logger.LogWarning(
-                "StatusChangedFromCaseManagement: application status {Status} is terminal and cannot accept toStateId={ToStateId} for workItemId={WorkItemId} applicationId={ApplicationId} correlationId={CorrelationId}",
-                application.ApplicationStatus,
-                request.ToStateId,
-                workItemId,
-                application.Id,
-                correlationId ?? "(absent)"
-            );
-            return Results.Conflict(
-                "Application is already Approved, Rejected or Withdrawn and can no longer be updated."
-            );
-        }
+        // Terminal-status guard (see GuardTerminalStatus): 409 for any mapped push that would
+        // move an Approved, Rejected or Withdrawn application; 200 with no write for a repeat of
+        // the final status it already has (RA-527).
+        var terminalResult = GuardTerminalStatus(
+            logger,
+            application,
+            mappedStatus,
+            workItemId,
+            request.ToStateId,
+            correlationId
+        );
+        if (terminalResult is not null)
+            return (terminalResult, false);
 
         // Approve/reject legality: the old Approve/Reject endpoints carried this check but are
         // deleted (RA-368 §4.5) — nothing else in the codebase still enforces it, so it is
@@ -3372,8 +4567,11 @@ public static class AccreditationApplicationEndpoints
                 application.Id,
                 correlationId ?? "(absent)"
             );
-            return Results.Conflict(
-                "Application must be in 'Submitted', 'Updated', 'DulyMade' or 'AwaitingDecision' status to approve or reject."
+            return (
+                Results.Conflict(
+                    "Application must be in 'Submitted', 'Updated', 'DulyMade' or 'AwaitingDecision' status to approve or reject."
+                ),
+                false
             );
         }
 
@@ -3383,7 +4581,7 @@ public static class AccreditationApplicationEndpoints
         application.CaseManagementStatusUpdatedAt = request.OccurredAt;
         application.DateLastEdited = DateTime.UtcNow;
 
-        var updated = await persistence.UpdateAsync(application);
+        var updated = await persistence.UpdateAsync(application, session);
         if (updated is null)
         {
             logger.LogError(
@@ -3392,40 +4590,18 @@ public static class AccreditationApplicationEndpoints
                 workItemId,
                 correlationId ?? "(absent)"
             );
-            return Results.Problem("Failed to record status change from case management.");
+            return (Results.Problem("Failed to record status change from case management."), false);
         }
 
-        if (logger.IsEnabled(LogLevel.Information))
-        {
-            logger.LogInformation(
-                "StatusChangedFromCaseManagement succeeded for applicationId={ApplicationId} workItemId={WorkItemId} toStateId={ToStateId} correlationId={CorrelationId}",
-                updated.Id,
-                workItemId,
-                request.ToStateId,
-                correlationId ?? "(absent)"
-            );
-        }
-        return Results.Ok(updated);
+        return (Results.Ok(updated), true);
     }
 
-    private static async Task<IResult> Withdraw(
-        string organisationId,
-        string applicationId,
-        WithdrawRequest request,
-        IAccreditationApplicationPersistence persistence,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        IValidator<WithdrawRequest> validator,
-        CancellationToken cancellationToken
-    )
+    private const string DecisionAlreadyMadeWithdrawMessage =
+        "A decision has already been made on this application, so it can no longer be withdrawn.";
+
+    // Returns the response when this application can't be withdrawn now, or null when it can.
+    private static IResult? GuardWithdraw(AccreditationApplicationModel application)
     {
-        var validation = await validator.ValidateAsync(request, cancellationToken);
-        if (!validation.IsValid)
-            return Results.BadRequest(validation.Errors);
-
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
-        if (application is null)
-            return Results.NotFound();
-
         if (application.ApplicationStatus == ApplicationStatus.Withdrawn)
             return Results.Ok(application);
 
@@ -3441,6 +4617,59 @@ public static class AccreditationApplicationEndpoints
         )
             return Results.Conflict("Only applications not yet decided can be withdrawn.");
 
+        // RA-690: only step 1 approval stores a reference, so a decision has already been made.
+        if (!string.IsNullOrEmpty(application.AccreditationReference))
+            return Results.Conflict(DecisionAlreadyMadeWithdrawMessage);
+
+        return null;
+    }
+
+    // RA-690: a refusal means step 1 has recorded a decision, so retrying can never work.
+    private static IResult WithdrawNotAppliedResult(WithdrawResult withdrawResult) =>
+        withdrawResult == WithdrawResult.Refused
+            ? Results.Conflict(DecisionAlreadyMadeWithdrawMessage)
+            : Results.Problem(
+                "Failed to withdraw accreditation application with the case management service."
+            );
+
+    // Bundles Withdraw's DI-service/framework parameters under one [AsParameters] argument so the
+    // handler stays under Sonar's 7-parameter limit (S107) - same reasoning as
+    // AddOverseasSiteServices above.
+    private sealed record WithdrawServices(
+        IAccreditationApplicationPersistence Persistence,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IValidator<WithdrawRequest> Validator,
+        IDualWriteUnitOfWork UnitOfWork,
+        ILoggerFactory LoggerFactory,
+        CancellationToken CancellationToken
+    );
+
+    private static async Task<IResult> Withdraw(
+        string organisationId,
+        string applicationId,
+        WithdrawRequest request,
+        [AsParameters] WithdrawServices services
+    )
+    {
+        var (
+            persistence,
+            caseWorkingAdapter,
+            validator,
+            unitOfWork,
+            loggerFactory,
+            cancellationToken
+        ) = services;
+        var validation = await validator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.Errors);
+
+        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        if (application is null)
+            return Results.NotFound();
+
+        if (GuardWithdraw(application) is { } notWithdrawable)
+            return notWithdrawable;
+
         var contactDetails = new QuerySubmitterContactDetails
         {
             FullName = request.FullName ?? string.Empty,
@@ -3449,24 +4678,80 @@ public static class AccreditationApplicationEndpoints
         };
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
+        // RA-644 B8f: it stays outside the unit of work, so a transaction never waits on the Case
+        // Management service.
         var withdrawResult = await caseWorkingAdapter.WithdrawApplicationAsync(
             application,
             contactDetails,
             request.Reason,
             cancellationToken
         );
-        if (!withdrawResult.IsSuccess)
-            return Results.Problem(
-                "Failed to withdraw accreditation application with the case management service."
-            );
+        if (withdrawResult != WithdrawResult.Succeeded)
+            return WithdrawNotAppliedResult(withdrawResult);
 
-        // RA-519 follow-up: re-read after the round trip, for the same reason as Resubmit above -
-        // WithdrawApplicationAsync can synchronously trigger ManagementBe's push-back while this
-        // call is in flight, and a queried section stays editable throughout it, so the status
-        // values below must reflect this fresh read rather than the pre-round-trip copy.
-        var freshApplication =
-            await persistence.GetByIdAsync(organisationId, applicationId) ?? application;
+        var wasQueried = application.ApplicationStatus == ApplicationStatus.Queried;
+        var result = await unitOfWork.RunAsync(
+            nameof(Withdraw),
+            applicationId,
+            async (session, token) =>
+            {
+                // RA-519 follow-up: re-read after the round trip, for the same reason as Resubmit above -
+                // WithdrawApplicationAsync can synchronously trigger ManagementBe's push-back while this
+                // call is in flight, and a queried section stays editable throughout it, so the status
+                // values below must reflect this fresh read rather than the pre-round-trip copy.
+                var freshApplication =
+                    await persistence.GetByIdAsync(organisationId, applicationId, session)
+                    ?? application;
+                return await RecordWithdrawalAsync(
+                    persistence,
+                    freshApplication,
+                    wasQueried,
+                    request.Reason,
+                    session,
+                    token
+                );
+            },
+            cancellationToken
+        );
 
+        LogIfCaseChangeNotRecorded(loggerFactory, nameof(Withdraw), applicationId, result);
+        return result;
+    }
+
+    // RA-644 B8f/B8g: Withdraw, Submit and Resubmit call the Case Management service before their
+    // transaction opens, so a rolled-back write leaves the case changed there but not here. Its
+    // withdraw, submit and resume are idempotent (a repeat replays as success), so the operator's
+    // retry records the change; this line makes the gap visible until then.
+    private static void LogIfCaseChangeNotRecorded(
+        ILoggerFactory loggerFactory,
+        string operation,
+        string applicationId,
+        IResult result
+    )
+    {
+        if (
+            result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status500InternalServerError }
+        )
+        {
+            loggerFactory
+                .CreateLogger("AccreditationApplicationEndpoints")
+                .LogWarning(
+                    "{Operation}: applicationId={ApplicationId} changed in the case management service but the change was not recorded here; a retry completes it",
+                    operation,
+                    applicationId
+                );
+        }
+    }
+
+    private static async Task<IResult> RecordWithdrawalAsync(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel freshApplication,
+        bool wasQueried,
+        string reason,
+        IClientSessionHandle? session,
+        CancellationToken cancellationToken
+    )
+    {
         // RA-519: same targeted-update migration as Resubmit above, and for the same reason -
         // WithdrawApplicationAsync above can synchronously trigger ManagementBe's push-back into
         // StatusChangedFromCaseManagement while this call is still in flight, racing this
@@ -3474,7 +4759,6 @@ public static class AccreditationApplicationEndpoints
         // ManagementBe happens not to push withdrawn transitions back synchronously - an
         // implementation detail of another repo, not something to rely on (see RA-519).
         var sectionUpdates = new List<UpdateDefinition<AccreditationApplicationModel>>();
-        var wasQueried = application.ApplicationStatus == ApplicationStatus.Queried;
         if (wasQueried)
         {
             var queriedSections = (freshApplication.Query?.QueriedSectionKeys ?? [])
@@ -3522,7 +4806,7 @@ public static class AccreditationApplicationEndpoints
                 .Append(
                     Builders<AccreditationApplicationModel>.Update.Set(
                         a => a.WithdrawalReason,
-                        request.Reason
+                        reason
                     )
                 )
                 .Append(
@@ -3550,6 +4834,7 @@ public static class AccreditationApplicationEndpoints
             freshApplication.Id!.Value,
             notAlreadyWithdrawnGuard,
             combinedUpdate,
+            session,
             cancellationToken
         );
         // A null result here means notAlreadyWithdrawnGuard rejected the write - a genuine rival
@@ -3579,7 +4864,6 @@ public static class AccreditationApplicationEndpoints
             persistence,
             cdpUploaderService,
             pendingUploadService,
-            cdpConfig,
             appConfig,
             cancellationToken,
             cdpConfig.Value.SamplingPlanBucket,
@@ -3604,7 +4888,6 @@ public static class AccreditationApplicationEndpoints
             persistence,
             cdpUploaderService,
             pendingUploadService,
-            cdpConfig,
             appConfig,
             cancellationToken,
             cdpConfig.Value.BesEvidenceBucket,
@@ -3618,7 +4901,6 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         ICdpUploaderService cdpUploaderService,
         IPendingUploadService pendingUploadService,
-        IOptions<CdpUploaderConfig> cdpConfig,
         IOptions<AppConfig> appConfig,
         CancellationToken cancellationToken,
         string bucketPrefix,
@@ -3639,8 +4921,35 @@ public static class AccreditationApplicationEndpoints
         )
             return Results.Conflict("Section is not editable in the application's current status.");
 
+        return await StartCdpUploadAsync(
+            organisationId,
+            applicationId,
+            request,
+            bucketPrefix,
+            new(cdpUploaderService, pendingUploadService, appConfig.Value),
+            cancellationToken
+        );
+    }
+
+    internal sealed record CdpUploadServices(
+        ICdpUploaderService CdpUploader,
+        IPendingUploadService PendingUploads,
+        AppConfig AppConfig
+    );
+
+    // Shared with the RA-492 change-request BES upload, whose guards differ (it uploads against
+    // an Approved application, which InitiateUploadInternal rejects as terminal).
+    internal static async Task<IResult> StartCdpUploadAsync(
+        string organisationId,
+        string applicationId,
+        InitiateUploadRequest request,
+        string bucketPrefix,
+        CdpUploadServices services,
+        CancellationToken cancellationToken
+    )
+    {
         var fileUploadId = Guid.NewGuid().ToString();
-        var baseUrl = appConfig.Value.BaseUrl.TrimEnd('/');
+        var baseUrl = services.AppConfig.BaseUrl.TrimEnd('/');
         var callbackUrl = $"{baseUrl}/api/v1/accreditation-applications/files/upload-completed";
         var statusUrl =
             $"{baseUrl}/api/v1/accreditation-applications/{organisationId}/{applicationId}/files/{fileUploadId}/status";
@@ -3661,8 +4970,8 @@ public static class AccreditationApplicationEndpoints
             Metadata = metadata,
         };
 
-        var cdpResponse = await cdpUploaderService.InitiateAsync(cdpRequest, cancellationToken);
-        await pendingUploadService.CreateAsync(
+        var cdpResponse = await services.CdpUploader.InitiateAsync(cdpRequest, cancellationToken);
+        await services.PendingUploads.CreateAsync(
             fileUploadId,
             cdpResponse.StatusUrl,
             cdpResponse.UploadId,

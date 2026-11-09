@@ -8,6 +8,12 @@ public interface IAccreditationApplicationPersistence
 {
     Task<AccreditationApplicationModel?> CreateAsync(AccreditationApplicationModel application);
 
+    // RA-646: insert-or-replace by Id, and remove by Id. Used by the test data seeder to put the
+    // database into a known state and clear it again; not part of any request path.
+    Task UpsertAsync(AccreditationApplicationModel application);
+
+    Task<long> DeleteManyAsync(IEnumerable<ObjectId> ids);
+
     /// <summary>
     /// RA-516: sorted server-side, newest first (CreatedAt descending, then Id descending as a
     /// tiebreak) - backed by the OrganisationId+CreatedAt+Id compound index on
@@ -24,7 +30,37 @@ public interface IAccreditationApplicationPersistence
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        int year
+        int year,
+        IClientSessionHandle? session = null
+    );
+
+    /// <summary>
+    /// RA-690: the latest previous approved accreditation for the same registration - the source
+    /// an accreditation reference is derived from on renewal. Matches the organisation,
+    /// registration, material and glass process, a year strictly before
+    /// <paramref name="beforeYear"/>, status Approved and a non-empty accreditation reference.
+    /// Highest year wins, then most recently edited, so a lapsed renewal (e.g. 2026 to 2028)
+    /// still finds the 2026 accreditation. Runs server-side and returns at most one; null when
+    /// nothing matches.
+    /// </summary>
+    Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        GlassRecyclingProcess? glassRecyclingProcess,
+        int beforeYear
+    );
+
+    /// <summary>
+    /// RA-690: every application other than <paramref name="applicationId"/> that holds
+    /// <paramref name="accreditationReference"/>, in any organisation and any status, Withdrawn
+    /// included. Guards an approval against issuing a reference already held elsewhere (see
+    /// <see cref="AccreditationReferenceHolder.BlocksIssuing"/>). This is a read-then-write check,
+    /// not a unique index.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationReferenceHolder>> GetOtherAccreditationReferenceHoldersAsync(
+        string accreditationReference,
+        ObjectId applicationId
     );
 
     /// <summary>
@@ -47,8 +83,9 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
-    /// A page of the granted accreditations across all organisations, optionally for one year,
-    /// from <paramref name="firstYear"/> on, ordered by accreditation number. Granted means the
+    /// A page of the granted accreditations across all organisations, optionally narrowed by year,
+    /// organisation number and registration number (<paramref name="filter"/>), from
+    /// <paramref name="firstYear"/> on, ordered by accreditation number. Granted means the
     /// same as <see cref="GetGrantedAccreditationAsync"/>, and the application must also carry an
     /// organisation number, since one without cannot be addressed by a service client. Also
     /// returns the total across all pages. Read-only.
@@ -56,9 +93,17 @@ public interface IAccreditationApplicationPersistence
     Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
-    )> SearchGrantedAccreditationsAsync(int? year, int firstYear, int skip, int limit);
+    )> SearchGrantedAccreditationsAsync(
+        GrantedAccreditationFilter filter,
+        int firstYear,
+        int skip,
+        int limit
+    );
 
-    Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(string registrationId);
+    Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
+        string registrationId,
+        IClientSessionHandle? session = null
+    );
 
     /// <summary>
     /// RA-603: every interim site's SiteNumber across every application under a registration.
@@ -66,7 +111,10 @@ public interface IAccreditationApplicationPersistence
     /// their own 001-999 set, but scoped the same way, because a registration spans years and a
     /// number reissued next year would collide with one already in a submitted return.
     /// </summary>
-    Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(string registrationId);
+    Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
+        string registrationId,
+        IClientSessionHandle? session = null
+    );
 
     /// <summary>
     /// RA-603: persists only if no interim site under this application already carries
@@ -76,12 +124,53 @@ public interface IAccreditationApplicationPersistence
     /// </summary>
     Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
         AccreditationApplicationModel application,
-        string siteNumber
+        string siteNumber,
+        IClientSessionHandle? session = null
     );
 
-    Task<AccreditationApplicationModel?> GetByIdAsync(string organisationId, string applicationId);
-    Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(Guid workItemId);
-    Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application);
+    Task<AccreditationApplicationModel?> GetByIdAsync(
+        string organisationId,
+        string applicationId,
+        IClientSessionHandle? session = null
+    );
+
+    /// <summary>The application with this <c>_id</c>, whatever its organisation: for the domain model migration (B8).</summary>
+    Task<AccreditationApplicationModel?> GetByObjectIdAsync(
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Every application under one ReEx registration of one organisation (the domain model's registration group,
+    /// design doc §6.2), up to <paramref name="limit"/> of them, so a caller can tell a group that is too big.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
+        string organisationId,
+        string registrationId,
+        int limit,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    );
+    Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        IClientSessionHandle? session = null
+    );
+
+    /// <summary>
+    /// RA-691: every application currently holding <paramref name="accreditationReference"/> as
+    /// its AccreditationReference. A list, not a single result: nothing enforces uniqueness on
+    /// that field, and AccreditationReferenceCorrectionMigration must be able to see (and refuse
+    /// to act on) a value held by more than one record.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetByAccreditationReferenceAsync(
+        string accreditationReference,
+        CancellationToken cancellationToken = default
+    );
+    Task<AccreditationApplicationModel?> UpdateAsync(
+        AccreditationApplicationModel application,
+        IClientSessionHandle? session = null
+    );
 
     /// <summary>
     /// Same whole-document replace contract as <see cref="UpdateAsync"/>, but the write only
@@ -92,7 +181,8 @@ public interface IAccreditationApplicationPersistence
     /// </summary>
     Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
-        string orsId
+        string orsId,
+        IClientSessionHandle? session = null
     );
 
     /// <summary>
@@ -126,6 +216,24 @@ public interface IAccreditationApplicationPersistence
         ObjectId id,
         FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
+        IClientSessionHandle? session = null,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Stamps the domain model foreign keys (B5) on an application inside <paramref name="session"/>'s
+    /// transaction: <c>registrationEntityId</c>, and <c>overseasSiteEntityId</c> on each site whose
+    /// <c>orsId</c> is a key of <paramref name="overseasSiteEntityIds"/>, and <c>accreditationEntityId</c> when
+    /// given. A targeted <c>$set</c> that leaves
+    /// <c>version</c> and <c>updatedAt</c> alone, so it never makes a concurrent operator write conflict.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No application has <paramref name="applicationId"/>.</exception>
+    Task StampDomainModelForeignKeysAsync(
+        ObjectId applicationId,
+        ObjectId registrationEntityId,
+        IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
+        ObjectId? accreditationEntityId,
+        IClientSessionHandle session,
         CancellationToken cancellationToken = default
     );
 }

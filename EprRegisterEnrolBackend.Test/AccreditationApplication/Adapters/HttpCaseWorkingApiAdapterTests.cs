@@ -4,6 +4,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -28,7 +31,7 @@ public class HttpCaseWorkingApiAdapterTests
             OrganisationName = "Acme Recycling Ltd",
             Year = 2026,
             RegistrationId = "reg-001",
-            RegistrationReference = "EPR-100023",
+            RegistrationReference = "R25ER1000230001PL",
             MaterialType = MaterialType.Plastic,
             ApplicationStatus = ApplicationStatus.Started,
             SiteAddress = "123 High Street, London, SW1A 1AA",
@@ -358,7 +361,7 @@ public class HttpCaseWorkingApiAdapterTests
 
         var payload = root.GetProperty("payload");
         payload.GetProperty("organisationName").GetString().Should().Be("Acme Recycling Ltd");
-        payload.GetProperty("registrationNumber").GetString().Should().Be("EPR-100023");
+        payload.GetProperty("registrationNumber").GetString().Should().Be("R25ER1000230001PL");
         payload.GetProperty("material").GetString().Should().Be("plastic");
         payload.GetProperty("previousAccreditationYear").GetInt32().Should().Be(2025);
         payload.GetProperty("complianceIssuesReported").GetInt32().Should().Be(0);
@@ -1364,7 +1367,8 @@ public class HttpCaseWorkingApiAdapterTests
         var (adapter, _) = CreateAdapter(url: "");
 
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*not configured*");
+        // The application submit's existing InvalidOperationException, now the specific subtype.
+        await act.Should().ThrowAsync<CaseWorkingNotConfiguredException>().WithMessage("*not configured*");
     }
 
     [Fact]
@@ -1901,7 +1905,7 @@ public class HttpCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeFalse();
+        result.Should().Be(WithdrawResult.Failed);
         handler.CapturedRequest.Should().BeNull();
     }
 
@@ -1919,7 +1923,7 @@ public class HttpCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeFalse();
+        result.Should().Be(WithdrawResult.Failed);
     }
 
     [Fact]
@@ -1937,7 +1941,7 @@ public class HttpCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeTrue();
+        result.Should().Be(WithdrawResult.Succeeded);
         handler
             .CapturedRequest!.RequestUri!.ToString()
             .Should()
@@ -1986,14 +1990,34 @@ public class HttpCaseWorkingApiAdapterTests
         request.Headers.GetValues("x-cdp-user-name").Should().ContainSingle("Alex Withdrawer");
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task WithdrawApplicationAsync_NonSuccessResponse_ReturnsFailed(
+        HttpStatusCode statusCode
+    )
+    {
+        var result = await WithdrawAgainstManagementBeResponding(statusCode);
+
+        result.Should().Be(WithdrawResult.Failed);
+    }
+
     [Fact]
-    public async Task WithdrawApplicationAsync_NonSuccessResponse_ReturnsFailure()
+    public async Task WithdrawApplicationAsync_ConflictResponse_ReturnsRefused()
+    {
+        // RA-690: ManagementBe answers 409 once step 1 has recorded a decision.
+        var result = await WithdrawAgainstManagementBeResponding(HttpStatusCode.Conflict);
+
+        result.Should().Be(WithdrawResult.Refused);
+    }
+
+    private static async Task<WithdrawResult> WithdrawAgainstManagementBeResponding(
+        HttpStatusCode statusCode
+    )
     {
         var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
-        var handler = new CapturingHttpMessageHandler(
-            HttpStatusCode.InternalServerError,
-            new { title = "Error" }
-        );
+        var handler = new CapturingHttpMessageHandler(statusCode, new { title = "Error" });
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
         httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
         var adapter = new HttpCaseWorkingApiAdapter(
@@ -2004,14 +2028,12 @@ public class HttpCaseWorkingApiAdapterTests
         var app = CreateTestApplication();
         app.CaseManagementWorkItemId = Guid.NewGuid();
 
-        var result = await adapter.WithdrawApplicationAsync(
+        return await adapter.WithdrawApplicationAsync(
             app,
             WithdrawingUserContactDetails(),
             "No longer required",
             cancellationToken: TestContext.Current.CancellationToken
         );
-
-        result.IsSuccess.Should().BeFalse();
     }
 
     [Fact]
@@ -2037,7 +2059,7 @@ public class HttpCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeFalse();
+        result.Should().Be(WithdrawResult.Failed);
     }
 
     // --- NotifySiteAddedAsync ---
@@ -2193,6 +2215,108 @@ public class HttpCaseWorkingApiAdapterTests
         var act = async () => await adapter.NotifySiteAddedAsync(app, "ors", "001", null, true);
 
         await act.Should().NotThrowAsync();
+    }
+
+    // ---------------------------------------------------------------- RA-492 change requests
+
+    private static (AccreditationChangeRequest Request, AccreditationApplicationModel Accreditation) CreateChangeRequest()
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, 2026);
+        var request = new AccreditationChangeRequest
+        {
+            OrganisationId = accreditation.OrganisationId,
+            ApplicationId = accreditation.ApplicationId!,
+            RegistrationId = accreditation.RegistrationId,
+            MaterialType = accreditation.MaterialType,
+            Year = accreditation.Year,
+            AccreditationReference = accreditation.AccreditationReference,
+            ChargePence = 32800,
+            SubmittedBy = new SubmittedByModel
+            {
+                FullName = "Jane Smith",
+                JobTitle = "Director",
+                Email = "jane@example.com",
+            },
+            Sites =
+            [
+                new ChangeRequestSite
+                {
+                    SiteId = 901912,
+                    OrsId = "007",
+                    SiteName = "Izmir Recycling AS",
+                    Answers = new ChangeRequestSiteAnswers
+                    {
+                        OperationCodes = ["R3"],
+                        ConditionsOfExport = false,
+                    },
+                },
+            ],
+        };
+        return (request, accreditation);
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_PostsAnAddOverseasSiteWorkItemWithTheEffectiveSiteValues()
+    {
+        var (adapter, handler) = CreateAdapter(sharedSecret: "secret");
+        var (request, accreditation) = CreateChangeRequest();
+
+        var result = await adapter.SubmitChangeRequestAsync(
+            request,
+            accreditation,
+            TestContext.Current.CancellationToken
+        );
+
+        result.ApplicationReference.Should().Be(TestApplicationReference);
+        handler.CapturedRequest!.RequestUri!.ToString().Should().Be($"{TestUrl}/work-items");
+        handler.CapturedRequest.Headers.GetValues("x-cdp-user-id").Single().Should().Be("jane@example.com");
+        handler.CapturedRequest.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
+        var body = JsonNode.Parse(handler.CapturedRequestBody!)!;
+        body["typeId"]!.GetValue<string>().Should().Be("add-overseas-site");
+        var payload = body["payload"]!;
+        payload["operatorRequestId"]!.GetValue<string>().Should().Be(request.RequestId);
+        payload["accreditationReference"]!.GetValue<string>().Should().Be("A26EX0500190001PL");
+        payload["chargePence"]!.GetValue<int>().Should().Be(32800);
+        payload["wasteProcessingType"]!.GetValue<string>().Should().Be("exporter");
+        payload["companyRegisterAddressPostcode"]!.GetValue<string>().Should().Be("HU1 1AA");
+        payload["operatorOrgNumber"]!.GetValue<int>().Should().Be(50019);
+        var site = payload["sites"]![0]!;
+        site["orsId"]!.GetValue<string>().Should().Be("007");
+        site["country"]!.GetValue<string>().Should().Be("Turkey");
+        site["coordinates"]!.GetValue<string>().Should().Be("38.4237, 27.1428");
+        site["operationCodes"]![0]!.GetValue<string>().Should().Be("R3");
+        site["suppliedFields"]!.AsArray().Select(n => n!.GetValue<string>())
+            .Should().Equal("operationCodes", "conditionsOfExport");
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_NoUrlConfigured_Throws()
+    {
+        var (adapter, _) = CreateAdapter(url: null);
+        var (request, accreditation) = CreateChangeRequest();
+
+        var act = () => adapter.SubmitChangeRequestAsync(request, accreditation);
+
+        await act.Should().ThrowAsync<CaseWorkingNotConfiguredException>();
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_ManagementBeRejectsTheType_Throws()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl, ClientId = TestClientId });
+        var handler = new CapturingHttpMessageHandler(HttpStatusCode.BadRequest, new { title = "Unknown type" });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        var (request, accreditation) = CreateChangeRequest();
+
+        var act = () => adapter.SubmitChangeRequestAsync(request, accreditation);
+
+        await act.Should().ThrowAsync<HttpRequestException>();
     }
 
     #region Test infrastructure
@@ -2367,7 +2491,7 @@ public class HttpCaseWorkingApiAdapterTests
         var payload = await CapturedSubmitPayload(application);
 
         payload.TryGetProperty("paymentReference", out _).Should().BeFalse();
-        payload.GetProperty("registrationNumber").GetString().Should().Be("EPR-100023");
+        payload.GetProperty("registrationNumber").GetString().Should().Be("R25ER1000230001PL");
     }
 
     // RA-503: PaymentReference is the operator's real, nation-specific bank reference

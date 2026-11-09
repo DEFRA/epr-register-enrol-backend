@@ -39,6 +39,18 @@ See above.
 docker compose up -d mongodb
 ```
 
+The compose `mongodb` service runs as a **single-node replica set** (`rs0`), because the versioned domain
+model writes with multi-document transactions, which MongoDB only supports on a replica set. A healthcheck
+initiates the set on first start. From the host, connect with `directConnection=true`, because the set
+advertises its member as `mongodb:27017`, which only resolves inside the compose network:
+
+```
+mongosh "mongodb://127.0.0.1:27017/?directConnection=true"
+```
+
+Set `Mongo__DatabaseUri` to `mongodb://127.0.0.1:27017/?directConnection=true` when running the service
+outside compose. An existing `mongodb-data` volume keeps its data; the healthcheck initiates the set on top of it.
+
 #### MongoDB locally
 
 Alternatively install MongoDB locally:
@@ -54,6 +66,37 @@ sudo mongod --dbpath ~/mongodb-cdp
 
 In CDP environments a MongoDB instance is already set up
 and the credentials exposed as enviromment variables.
+
+#### Domain model flags
+
+The domain model (`docs/analysis/register-enrol-domain-model-design.md`) ships in phases, each behind a
+`DomainModel:*` flag that is off by default. Phases 0 and 1 are released together, and so are phases 2 and 3:
+`DualWriteSeed` and `DualWrite` are switched on at the same time in each environment, though either can be turned off
+alone in a rollback. See §6 of the design doc for the release plan.
+
+- `DomainModel__ExpandEnabled=true` (phase 1) builds the empty versioned collections and their indexes at
+  startup and adds the `domain-model-schema` check to `/health/ready`. If Mongo is unreachable at startup,
+  it retries in the background until the check passes, so readiness recovers on its own. `compose.yml`
+  turns it on locally. Turning it off again is the rollback.
+- `DomainModel__DualWriteSeed=true` (phase 2, needs `ExpandEnabled`) makes Seed also write the Organisation,
+  Registration and overseas sites, and stamp their ids on the application. A failure is logged and counted,
+  and the seed still succeeds. Turning it off is the rollback.
+- `DomainModel__DualWrite=true` (phase 3, needs `ExpandEnabled`; the service refuses to start without it) makes
+  every write path write the legacy application and the domain model in one transaction. A failed model write
+  fails the request and rolls the legacy write back. Turning it off is the rollback; the model is then stale until
+  the migration is re-run.
+- `DomainModel__DiagnosticsEnabled=true` (test environments only) runs the diagnostics below.
+
+#### Domain model diagnostics (test environments only)
+
+Set `DomainModel__DiagnosticsEnabled=true` to make the service run, once at startup, a **transaction smoke test**
+(does this Mongo support multi-document transactions?) and a **read-only survey** of `accreditationApplications`
+for the legacy shapes the domain model migration must handle. Each logs one line, `DomainModelDiagnostics
+transactions ...` and `DomainModelDiagnostics survey ...`, with counts only and no personal data. It is off by
+default and is not meant for production, where this team cannot examine the data. For production, the same
+survey is packaged as `tools/domain-model/legacy-data-survey.js`, which someone with production access runs with
+`mongosh "<connection string>" --quiet --file tools/domain-model/legacy-data-survey.js`; it prints counts only. See
+`docs/analysis/register-enrol-domain-model-design.md` (B0, B1).
 
 ### Inspect MongoDB
 
@@ -77,7 +120,7 @@ for why.
 
 | Variable | Secret? | Local default | Description |
 | --- | --- | --- | --- |
-| `Mongo__DatabaseUri` | No | `mongodb://127.0.0.1:27017` | MongoDB connection string (AWS IAM auth in deployed environments) |
+| `Mongo__DatabaseUri` | No | `mongodb://127.0.0.1:27017/?directConnection=true` | MongoDB connection string (AWS IAM auth in deployed environments) |
 | `Mongo__DatabaseName` | No | `epr` | MongoDB database name |
 | `App__BaseUrl` | No | `http://localhost:5000` | This service's own public base URL, used for CDP callback/status URLs |
 | `CdpUploader__Url` | No | `http://localhost:7337` | Base URL of the CDP Uploader service |
@@ -89,8 +132,12 @@ for why.
 | `REEX_API_BASIC_AUTH_PASSWORD` | **Yes** | _(blank)_ | Basic Auth password for the ReEx API above |
 | `ReExApi__UseStub` | No | `false` | When `true` outside Development, every ReEx lookup is answered by the stub adapter (e.g. perf-test) |
 | `TestOrganisations__Enabled` | No | `false` | Turns on E2E test organisations and the mgmt-tests caller (see below). The service refuses to start with it `true` when `ENVIRONMENT` is `prod` |
+| `Migrations__Ra691AccreditationReferenceCorrection__Enabled` | No | `false` | RA-691 one-off: corrects the three incorrectly generated 2027 accreditation references (Infinity Plastic Solutions Ltd 500527, PLASGRAN LIMITED 500105, Kronospan Limited 500108) at startup. On its own it is a dry run that logs each `org: old -> new` change and writes nothing |
+| `Migrations__Ra691AccreditationReferenceCorrection__Apply` | No | `false` | RA-691: with `Enabled`, writes the corrections. Has no effect (the run stays a dry run, with an error log) until `SpotCheckConfirmedBy` is also set |
+| `Migrations__Ra691AccreditationReferenceCorrection__SpotCheckConfirmedBy` | No | _(blank)_ | RA-691: name of whoever reviewed the dry-run output against the live records. Required for `Apply`; logged with each applied change |
 | `CaseWorking__Url` | No | `http://localhost:8085` | Base URL of `epr-register-enrol-management-be` |
 | `CaseWorking__UseStub` | No | `false` (Development) | When `true`, submissions to management-be are stubbed instead of sent |
+| `AccreditationChanges__SubmitToCaseManagement` | No | `false` | RA-492: when `true`, submitting an in-year change request also creates an `add-overseas-site` work item in management-be. Deploy a management-be that registers that work-item type **before** switching this on — management-be on `main` rejects unknown types |
 | `CASE_MANAGEMENT_API_SHARED_SECRET` | **Yes** | _(blank)_ | HMAC secret this service signs its outbound calls to management-be with — must match management-be's `AUTH_SHARED_SECRET__BACKEND` exactly |
 | `CaseManagementAuth__ExpectedClientId` | No | `epr-register-enrol-management-be` | Expected `x-cdp-client-id` on inbound calls from management-be |
 | `AUTH_SHARED_SECRET__MANAGEMENT_BE` | **Yes** | _(blank)_ | Verifies inbound calls from management-be — must match management-be's `OPERATOR_BACKEND_SHARED_SECRET` exactly |
@@ -164,6 +211,21 @@ Base path: `api/v1/accreditation-applications/{organisationId}`
 | `DELETE` | `/{organisationId}/{applicationId}/files/{fileId}` | Remove a file from the sampling plan                                                                             |
 | `POST`   | `/{organisationId}/{applicationId}/submit`         | Submit the application (requires all sections `Completed`)                                                       |
 | `POST`   | `/case-management/{workItemId}/status`             | Push a Case Management service work-item status change onto `ApplicationStatus` (Case Management service caller) |
+
+#### In-year change requests (RA-492)
+
+Base path: `api/v1/accreditation-changes/{organisationId}/{applicationId}`, where `applicationId` is an **Approved** exporter accreditation application. A change request (`accreditationChangeRequests` collection, `InProgress` → `Submitted`) adds existing registered overseas sites (`selected: false`) to that accreditation; it reuses each site's `siteId` and ORS id and never modifies the approved application, so the sites stay registered until a regulator decision. At most one `InProgress` request exists per accreditation and it may hold several sites. The charge is £328 per site with no tonnage fee.
+
+| Method   | Path | Description |
+| -------- | ---- | ----------- |
+| `GET`    | _(base path)_ | Accreditation header, every site with `accreditationStatus`/`lockedFields`/pending request, the draft, every request, and `pendingOrsIds` |
+| `POST`   | `/requests/current/sites` | Add a registered site (`{ "siteId": 1 }`) to the draft, creating it if needed; 409 if the site is accredited or already in a submitted request |
+| `PATCH`  | `/requests/current/sites/{siteId}` | Supply missing `country`, `coordinates`, `operationCodes`, `conditionsOfExport`; 400 if a field already has a value on the site (locked) |
+| `DELETE` | `/requests/current/sites/{siteId}` | Remove a site; 204 when the draft became empty and was deleted |
+| `POST`   | `/requests/current/bes-evidence/initiate` | Start a CDP upload for BES evidence |
+| `POST`   | `/requests/current/sites/{siteId}/bes-evidence/files` | Attach a scanned upload to a site in the draft |
+| `DELETE` | `/requests/current/sites/{siteId}/bes-evidence/files/{fileId}` | Remove a BES evidence file |
+| `POST`   | `/requests/current/submit` | Declaration (`fullName`, `jobTitle`); 422 with per-site errors when incomplete, otherwise `Submitted` |
 
 #### Seed request body
 

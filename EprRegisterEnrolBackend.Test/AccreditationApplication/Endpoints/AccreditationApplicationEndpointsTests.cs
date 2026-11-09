@@ -3,9 +3,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -141,6 +143,49 @@ public class AccreditationApplicationEndpointsTests
         body!.OrganisationId.Should().Be("org-123");
         body.MaterialType.Should().Be(MaterialType.Steel);
         body.ApplicationStatus.Should().Be(ApplicationStatus.Saved);
+    }
+
+    // B6: Seed hands the application it just created, and the same ReEx response, to the seed dual-writer.
+    [Fact]
+    public async Task Seed_ValidRequest_PassesTheCreatedApplicationToTheSeedDualWriter()
+    {
+        Reset();
+        var adapterResult = MinimalAdapterSuccess();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(adapterResult));
+        var writer = Substitute.For<ISeedDualWriter>();
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton(writer))
+        );
+
+        var response = await factory
+            .CreateClient()
+            .PostAsJsonAsync(
+                "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+                new SeedRequest { Year = 2026 },
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var created = (await _factory.FakePersistence.GetByOrganisationAsync("org-123")).Single();
+        await writer
+            .Received(1)
+            .WriteAsync(
+                Arg.Is<SeedDualWrite>(s =>
+                    s.ReExOrganisationId == "org-123"
+                    && s.ReExRegistrationId == "reg-1"
+                    && s.Material == MaterialType.Steel
+                    && s.ReEx == adapterResult.Value
+                    && s.Application.Id == created.Id
+                ),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -367,7 +412,7 @@ public class AccreditationApplicationEndpointsTests
                             MaterialType = MaterialType.Steel,
                             Year = 2025,
                             OrganisationName = "Acme Reprocessing Ltd",
-                            RegistrationReference = "REP-001",
+                            RegistrationReference = "R25ER0000010001PL",
                             SiteAddress = "1 Factory Lane, Manchester, M1 1AA",
                             IsExporter = false,
                             CompanyRegisterAddressPostcode = "EC1A 1BB",
@@ -394,7 +439,7 @@ public class AccreditationApplicationEndpointsTests
         );
         body!.OrganisationName.Should().Be("Acme Reprocessing Ltd");
         body.SiteAddress.Should().Be("1 Factory Lane, Manchester, M1 1AA");
-        body.RegistrationReference.Should().Be("REP-001");
+        body.RegistrationReference.Should().Be("R25ER0000010001PL");
         body.CompanyRegisterAddressPostcode.Should().Be("EC1A 1BB");
         body.CompaniesHouseNumber.Should().Be("01234567");
         body.PermitNumbers.Should().BeEquivalentTo(["WML123456", "PPC456789"]);
@@ -2623,7 +2668,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest
         {
@@ -2679,7 +2724,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -2752,7 +2797,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -2898,7 +2943,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(false)));
+            .Returns(Task.FromResult(WithdrawResult.Failed));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -2914,6 +2959,76 @@ public class AccreditationApplicationEndpointsTests
         );
         stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
         stored.WithdrawalReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Withdraw_WhenCaseManagementRefuses_Returns409AndApplicationRemainsUnchanged()
+    {
+        // RA-690: management-be refuses once step 1 has recorded an approval or refusal.
+        Reset();
+        var app = SeedApplication(status: ApplicationStatus.AwaitingDecision);
+        _factory
+            .MockCaseWorkingAdapter.WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(WithdrawResult.Refused));
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().Contain("A decision has already been made on this application");
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.AwaitingDecision);
+        stored.WithdrawalReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Withdraw_WhenAccreditationReferenceIssued_Returns409WithoutCallingAdapter()
+    {
+        // RA-690: only step 1 approval stores a reference, so a decision has been made.
+        Reset();
+        var app = SeedApplication(
+            status: ApplicationStatus.AwaitingDecision,
+            configure: a => a.AccreditationReference = "R26EPAC0001EX"
+        );
+
+        var request = new WithdrawRequest { Reason = "No longer required" };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/withdraw",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().Contain("A decision has already been made on this application");
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.AwaitingDecision);
+        stored.WithdrawalReason.Should().BeNull();
+        stored.AccreditationReference.Should().Be("R26EPAC0001EX");
+        await _factory
+            .MockCaseWorkingAdapter.DidNotReceive()
+            .WithdrawApplicationAsync(
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     // --- AddFile ---
@@ -3039,13 +3154,15 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
-    [Fact]
-    public async Task AddFile_ExceedsMaxFileCount_Returns422()
-    {
-        Reset();
-        var app = SeedApplication(configure: a =>
+    // Seeds `count` sampling plan files, the first `infected` of them failing the virus scan.
+    private static Action<AccreditationApplicationModel> WithSamplingPlanFiles(
+        int count,
+        int infected = 0,
+        FileScanStatus otherStatus = FileScanStatus.Clean
+    ) =>
+        a =>
         {
-            for (var i = 0; i < 10; i++)
+            for (var i = 0; i < count; i++)
                 a.SamplingPlan.Files.Add(
                     new AccreditationApplicationFile
                     {
@@ -3053,28 +3170,78 @@ public class AccreditationApplicationEndpointsTests
                         Filename = $"file{i}.pdf",
                         ContentType = "application/pdf",
                         UploadedByUserId = string.Empty,
+                        ScanStatus = i < infected ? FileScanStatus.Infected : otherStatus,
                         S3Key = $"sampling-plans/existing-{i}",
                     }
                 );
-        });
+        };
 
+    private async Task<HttpResponseMessage> PostNewSamplingPlanFile(
+        AccreditationApplicationModel app
+    )
+    {
         var fileUploadId = await SeedValidatedUpload(
             "file-new",
             "new.pdf",
             "sampling-plans/file-new"
         );
-        var request = new FileUploadRequest
-        {
-            FileUploadId = fileUploadId,
-            DocumentType = AccreditationFileDocumentType.SamplingPlan,
-        };
-        var response = await _client.PostAsJsonAsync(
+        return await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
-            request,
+            new FileUploadRequest
+            {
+                FileUploadId = fileUploadId,
+                DocumentType = AccreditationFileDocumentType.SamplingPlan,
+            },
             cancellationToken: TestContext.Current.CancellationToken
         );
+    }
+
+    [Fact]
+    public async Task AddFile_ExceedsMaxFileCount_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(configure: WithSamplingPlanFiles(10));
+
+        var response = await PostNewSamplingPlanFile(app);
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        body.RootElement.GetProperty("code")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesErrorCode);
+        body.RootElement.GetProperty("detail")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesMessage);
+    }
+
+    // RA-605: files still being scanned count towards the cap.
+    [Fact]
+    public async Task AddFile_TenPendingFiles_Returns422()
+    {
+        Reset();
+        var app = SeedApplication(
+            configure: WithSamplingPlanFiles(10, otherStatus: FileScanStatus.Pending)
+        );
+
+        var response = await PostNewSamplingPlanFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    // RA-605: infected files don't count towards the limit.
+    [Fact]
+    public async Task AddFile_NineCleanAndOneInfected_AcceptsAnotherFile()
+    {
+        Reset();
+        var app = SeedApplication(configure: WithSamplingPlanFiles(10, infected: 1));
+
+        var response = await PostNewSamplingPlanFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
     // RA-571 AC01/AC03
@@ -5454,6 +5621,95 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
+    private AccreditationApplicationModel SeedSiteWithBesFiles(int count, int infected = 0) =>
+        SeedApplication(configure: a =>
+            a.OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites =
+                [
+                    new OverseasSiteModel
+                    {
+                        SiteId = 1,
+                        SiteName = "Test Site",
+                        BesEvidence = new BesEvidenceModel
+                        {
+                            BesEvidenceUploads = Enumerable
+                                .Range(0, count)
+                                .Select(i => new BesEvidenceFileModel
+                                {
+                                    FileId = $"existing-{i}",
+                                    Filename = $"existing{i}.pdf",
+                                    ScanStatus = i < infected ? "Infected" : "Clean",
+                                    S3Key = $"bes-evidence/existing-{i}",
+                                })
+                                .ToList(),
+                        },
+                    },
+                ],
+            }
+        );
+
+    private async Task<HttpResponseMessage> PostNewBesEvidenceFile(
+        AccreditationApplicationModel app
+    )
+    {
+        var fileUploadId = await SeedValidatedUpload(
+            "bes-new",
+            "new.pdf",
+            "bes-evidence/bes-new"
+        );
+        return await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
+            new AddBesEvidenceFileRequest { FileUploadId = fileUploadId },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+    }
+
+    // RA-605: the cap is 10 per overseas site.
+    [Fact]
+    public async Task AddBesEvidenceFile_TenthFile_Returns201()
+    {
+        Reset();
+        var app = SeedSiteWithBesFiles(9);
+
+        var response = await PostNewBesEvidenceFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_EleventhFile_Returns422WithMaxFilesExceeded()
+    {
+        Reset();
+        var app = SeedSiteWithBesFiles(10);
+
+        var response = await PostNewBesEvidenceFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        body.RootElement.GetProperty("code")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxSamplingPlanFilesErrorCode);
+        body.RootElement.GetProperty("detail")
+            .GetString()
+            .Should()
+            .Be(AccreditationApplicationEndpoints.MaxBesEvidenceFilesMessage);
+    }
+
+    [Fact]
+    public async Task AddBesEvidenceFile_InfectedFilesNotCounted_Returns201()
+    {
+        Reset();
+        var app = SeedSiteWithBesFiles(10, infected: 1);
+
+        var response = await PostNewBesEvidenceFile(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
     [Fact]
     public async Task AddBesEvidenceFile_EmptyFileUploadId_Returns400()
     {
@@ -6660,6 +6916,8 @@ public class AccreditationApplicationEndpointsTests
     [Theory]
     [InlineData("submitted", ApplicationStatus.Submitted)]
     [InlineData("duly-made", ApplicationStatus.DulyMade)]
+    [InlineData("assessment-started", ApplicationStatus.DulyMade)]
+    [InlineData("assessment-in-progress", ApplicationStatus.Updated)]
     [InlineData("updated", ApplicationStatus.Updated)]
     public async Task StatusChangedFromCaseManagement_MappedState_SetsApplicationStatus(
         string toStateId,
@@ -6761,7 +7019,8 @@ public class AccreditationApplicationEndpointsTests
     [Theory]
     [InlineData(ApplicationStatus.Saved)]
     [InlineData(ApplicationStatus.Started)]
-    [InlineData(ApplicationStatus.Approved)]
+    // Approved receiving "approved" is an idempotent repeat (200) since RA-527 — see
+    // StatusChangedFromCaseManagement_RepeatOfCurrentFinalStatus_Returns200AndWritesNothing.
     [InlineData(ApplicationStatus.Rejected)]
     [InlineData(ApplicationStatus.Withdrawn)]
     public async Task StatusChangedFromCaseManagement_ApproveFromIllegalStatus_Returns409(
@@ -6842,6 +7101,77 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
+    public async Task StatusChangedFromCaseManagement_AssessmentStarted_SetsDulyMadeAndAdvancesWatermark()
+    {
+        // RA-527 follow-up: the Case Management service never pushes "assessment-started" (the
+        // start step is excluded from pushes), but a misconfigured or replayed push must land on
+        // DulyMade - never Updated and never a status no-op - and advance the ordering watermark
+        // like any other mapped push.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var watermark = DateTime.UtcNow.AddMinutes(-10);
+        SeedApplication(
+            status: ApplicationStatus.Updated,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = watermark;
+            }
+        );
+
+        var occurredAt = watermark.AddMinutes(1);
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "assessment-started",
+            ActionId = "start-assessment",
+            OccurredAt = occurredAt,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.DulyMade);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
+    }
+
+    [Fact]
+    public async Task StatusChangedFromCaseManagement_AssessmentStartedOutOfOrder_IsNoOp()
+    {
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var lastUpdated = DateTime.UtcNow;
+        SeedApplication(
+            status: ApplicationStatus.Updated,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = lastUpdated;
+            }
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "assessment-started",
+            ActionId = "start-assessment",
+            OccurredAt = lastUpdated.AddSeconds(-1),
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Updated);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(lastUpdated);
+    }
+
+    [Fact]
     public async Task StatusChangedFromCaseManagement_ContinueReviewDuringDulyMaking_DowngradesFromUpdatedToSubmitted()
     {
         // Mirrors the Case Management service's continue-review-during-duly-making action, which
@@ -6881,9 +7211,16 @@ public class AccreditationApplicationEndpointsTests
 
     [Theory]
     [InlineData(ApplicationStatus.Withdrawn, "duly-made")]
+    [InlineData(ApplicationStatus.Withdrawn, "assessment-started")]
+    [InlineData(ApplicationStatus.Approved, "assessment-started")]
+    [InlineData(ApplicationStatus.Rejected, "assessment-started")]
     [InlineData(ApplicationStatus.Withdrawn, "submitted")]
+    [InlineData(ApplicationStatus.Withdrawn, "approved")]
+    [InlineData(ApplicationStatus.Withdrawn, "rejected")]
     [InlineData(ApplicationStatus.Approved, "duly-made")]
+    [InlineData(ApplicationStatus.Approved, "rejected")]
     [InlineData(ApplicationStatus.Rejected, "updated")]
+    [InlineData(ApplicationStatus.Rejected, "approved")]
     public async Task StatusChangedFromCaseManagement_MappedPushFromTerminalStatus_Returns409AndLeavesStatusUnchanged(
         ApplicationStatus fromStatus,
         string toStateId
@@ -6914,6 +7251,97 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
         stored!.ApplicationStatus.Should().Be(fromStatus);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Approved, "approved")]
+    [InlineData(ApplicationStatus.Rejected, "rejected")]
+    public async Task StatusChangedFromCaseManagement_RepeatOfCurrentFinalStatus_Returns200AndWritesNothing(
+        ApplicationStatus finalStatus,
+        string toStateId
+    )
+    {
+        // RA-527: the Case Management service's step 2 (confirm applicant contact) pushes the
+        // final status, then writes its own record. If that write fails or the reply is lost, the
+        // regulator retries with a newer OccurredAt. The repeat must be accepted (200) rather than
+        // refused by the terminal-status guard, or every retry fails and the work item is stuck.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var watermark = DateTime.UtcNow.AddMinutes(-5);
+        var lastEdited = DateTime.UtcNow.AddMinutes(-5);
+        SeedApplication(
+            status: finalStatus,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = watermark;
+                a.DateLastEdited = lastEdited;
+            }
+        );
+        // Any write attempt would fail and surface as a 500, so a 200 also shows nothing was written.
+        _factory.FakePersistence.FailNextUpdate = true;
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = toStateId,
+            ActionId = "confirm-applicant-contact",
+            OccurredAt = DateTime.UtcNow,
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.ApplicationStatus.Should().Be(finalStatus);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(finalStatus);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(watermark);
+        stored.DateLastEdited.Should().Be(lastEdited);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task StatusChangedFromCaseManagement_StalePushToTerminalApplication_OrderingGuardRunsFirstAndReturns200NoOp(
+        int secondsRelativeToWatermark
+    )
+    {
+        // The ordering guard still runs before the terminal-status guard: an equal or older
+        // OccurredAt is a 200 no-op even when the push would otherwise be a 409.
+        Reset();
+        var workItemId = Guid.NewGuid();
+        var watermark = DateTime.UtcNow;
+        SeedApplication(
+            status: ApplicationStatus.Approved,
+            configure: a =>
+            {
+                a.CaseManagementWorkItemId = workItemId;
+                a.CaseManagementStatusUpdatedAt = watermark;
+            }
+        );
+
+        var request = new StatusChangedFromCaseManagementRequest
+        {
+            ToStateId = "rejected",
+            ActionId = "reject",
+            OccurredAt = watermark.AddSeconds(secondsRelativeToWatermark),
+        };
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(watermark);
     }
 
     [Theory]
@@ -7029,7 +7457,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -7105,7 +7533,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(

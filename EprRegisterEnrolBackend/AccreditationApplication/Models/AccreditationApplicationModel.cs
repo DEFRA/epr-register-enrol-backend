@@ -16,6 +16,22 @@ public class AccreditationApplicationModel
 
     public required string OrganisationId { get; set; }
 
+    // Domain model foreign keys (docs/analysis/register-enrol-domain-model-design.md, B5). Stamped by the
+    // migration and by dual-write with a targeted $set that does not bump Version, and ignored by every
+    // existing reader: [JsonIgnore] keeps them off the wire, so the existing endpoints return exactly the
+    // JSON they did before, and IgnoreIfNull keeps them out of stored documents until they are set. They hold
+    // stable entityIds, never a version _id, hence the *EntityId names (RegistrationId is already taken
+    // by ReEx's registration id).
+    //
+    // The Registration this application belongs to.
+    [JsonIgnore]
+    public ObjectId? RegistrationEntityId { get; set; }
+
+    // The Accreditation created when this application was approved. The reserved accreditation number
+    // needs no new field: AccreditationReference already holds it until approval.
+    [JsonIgnore]
+    public ObjectId? AccreditationEntityId { get; set; }
+
     // RA-503: ReEx's numeric organisation number (e.g. 500500) - the value an operator or
     // regulator should actually see. Distinct from OrganisationId above, which is ReEx's own
     // internal ObjectId and must never be surfaced to an operator or regulator (see
@@ -97,11 +113,13 @@ public class AccreditationApplicationModel
 
     // RA-448: no ReEx-sourced equivalent exists for accreditation (unlike
     // RegistrationReference) - always issued by this backend's own endpoint.
+    // RA-690: derived from the registration reference, never from a counter, and
+    // never regenerated once issued.
     public string? AccreditationReference { get; set; }
 
-    // RA-448: "reapply for accreditation" regenerate - a YY-increment string
-    // transform, kept distinct from PreviousRegistrationNumbers since a reader
-    // later needs to tell at a glance which history belongs to which number.
+    // RA-448's "reapply for accreditation" regenerate history. RA-690 removed that
+    // path, so nothing writes this any more; it stays so existing documents still
+    // deserialise.
     public List<string> PreviousAccreditationNumbers { get; set; } = [];
 
     public SubmittedByModel? SubmittedBy { get; set; }

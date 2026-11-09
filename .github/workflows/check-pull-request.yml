@@ -76,3 +76,94 @@ jobs:
     uses: ./.github/workflows/sonarcloud.yml
     needs: pr-validator
     secrets: inherit
+
+  # This backend runs in both e2e stacks, so a PR here runs both suites. Each
+  # job uses this PR's image plus any sibling branch with the same name, and
+  # falls back to the published image (or main) where there is none.
+  test-e2e-operator:
+    name: Run Operator E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check for matching e2e test branch
+        id: e2e-branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          BRANCH="$HEAD_REF"
+          if git ls-remote --heads https://github.com/DEFRA/epr-register-enrol-fe-tests.git "$BRANCH" | grep -q .; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build backend docker image
+        run: docker build -t defradigital/epr-register-enrol-backend:${{ github.sha }} .
+
+      # No frontend tag is passed: the action then builds the same-named
+      # frontend branch itself, or frontend main when there is none.
+      - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
+        uses: DEFRA/epr-register-enrol-fe-tests/run-journey-tests@9131e3469f647b8c16389998abe32b5e881acec4 # main
+        with:
+          epr-register-enrol-be: ${{ github.sha }}
+          branch: ${{ steps.e2e-branch.outputs.ref }}
+
+  test-e2e-management:
+    name: Run Management E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check for matching e2e test branch
+        id: e2e-branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          BRANCH="$HEAD_REF"
+          if git ls-remote --heads https://github.com/DEFRA/epr-register-enrol-mgmt-tests.git "$BRANCH" | grep -q .; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build backend docker image
+        run: docker build -t defradigital/epr-register-enrol-backend:${{ github.sha }} .
+
+      # The action doesn't look for sibling branches when called from another
+      # repo, so build the same-named management-fe and management-be here.
+      - name: Build matching management-fe and management-be branches
+        id: siblings
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          for SERVICE in management-fe management-be; do
+            REPO="https://github.com/DEFRA/epr-register-enrol-$SERVICE.git"
+            if git ls-remote --heads "$REPO" "$HEAD_REF" | grep -q .; then
+              git clone --branch "$HEAD_REF" --depth 1 "$REPO" "_$SERVICE"
+              SHA=$(git -C "_$SERVICE" rev-parse --short HEAD)
+              docker build -t "defradigital/epr-register-enrol-$SERVICE:$SHA" "_$SERVICE"
+              echo "$SERVICE=$SHA" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      # Diagnostic only: say which build each service came from, because an
+      # unmatched sibling silently runs on its published 'latest' image.
+      - name: Report resolved e2e stack
+        env:
+          FE_TAG: ${{ steps.siblings.outputs.management-fe }}
+          BE_TAG: ${{ steps.siblings.outputs.management-be }}
+          E2E_REF: ${{ steps.e2e-branch.outputs.ref }}
+        run: |
+          echo "operator-be   : ${{ github.sha }} (this PR)"
+          echo "mgmt-tests    : $E2E_REF"
+          echo "management-fe : ${FE_TAG:-latest (published image)}"
+          echo "management-be : ${BE_TAG:-latest (published image)}"
+
+      - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
+        uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@f906a4044d665eefdef2367828bfbb2bd314ed5f # main
+        with:
+          operator-be: ${{ github.sha }}
+          management-fe: ${{ steps.siblings.outputs.management-fe }}
+          management-be: ${{ steps.siblings.outputs.management-be }}
+          branch: ${{ steps.e2e-branch.outputs.ref }}

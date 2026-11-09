@@ -1,17 +1,21 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApi;
+using EprRegisterEnrolBackend.TestData;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Config;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.Organisation.Endpoints;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Config;
+using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.StubPersistence.Endpoints;
 using EprRegisterEnrolBackend.StubPersistence.Services;
 using EprRegisterEnrolBackend.Utils;
@@ -113,7 +117,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         .AddCheck<RequiredConfigHealthCheck>("required-config", tags: ["ready"])
         // RA-448: keeps /health/ready unhealthy until the counter backfill completes,
         // so the platform doesn't route real traffic to the number-generation
-        // endpoints before the 16 pools are seeded (see RegulatoryNumberSequenceBackfillService).
+        // endpoint before the eight R-* pools are seeded (see RegulatoryNumberSequenceBackfillService).
         .AddCheck<RegulatoryNumberBackfillHealthCheck>(
             "regulatory-number-backfill",
             tags: ["ready"]
@@ -129,6 +133,16 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+    // RA-492: in-year change requests (add registered ORS to a granted accreditation). Registered only
+    // with the in-year changes flag, like the routes that use them, so with it off the change-request
+    // collection and its indexes are never touched.
+    if (builder.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
+    {
+        builder.Services.AddSingleton<IChangeRequestPersistence, ChangeRequestPersistence>();
+        builder.Services.Configure<AccreditationChangesConfig>(
+            builder.Configuration.GetSection(AccreditationChangesConfig.SectionName)
+        );
+    }
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
     );
@@ -138,6 +152,13 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IAccreditationApplicationPersistence,
         AccreditationApplicationPersistence
     >();
+
+    // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a
+    // DomainModel:* flag, off by default; phase 1 "Expand" adds the domain-model-schema readiness check.
+    builder.Services.AddDomainModel(builder.Configuration);
+    // RA-425: the domain model's registration versions, readable whatever the Expand flag, for the
+    // registration status endpoint and the dev seeds.
+    builder.Services.AddRegistrationVersionStore();
 
     // RA-448: registration/accreditation number generation
     builder.Services.AddSingleton<
@@ -163,6 +184,21 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // Build the Mongo-backed persistences' indexes at startup (off the request
     // path) rather than on whichever request first resolves the singleton.
     builder.Services.AddHostedService<MongoIndexInitializerService>();
+
+    // RA-691: one-off correction of three incorrectly generated accreditation references.
+    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+    builder.Services.Configure<AccreditationReferenceCorrectionOptions>(
+        builder.Configuration.GetSection(AccreditationReferenceCorrectionOptions.SectionName)
+    );
+    builder.Services.AddHostedService<AccreditationReferenceCorrectionMigration>();
+
+    // RA-646: fixed test accreditations for other teams to read in dev, test and ext-test.
+    // Off unless TestData:SeedOnStartup is set, which only those environments do.
+    builder.Services.Configure<TestDataConfig>(
+        builder.Configuration.GetSection(TestDataConfig.SectionName)
+    );
+    builder.Services.AddSingleton<AccreditationApiTestDataSeeder>();
+    builder.Services.AddHostedService<AccreditationApiTestDataSeedingService>();
 
     // CDP Uploader
     builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
@@ -280,9 +316,30 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
 
     if (builder.Environment.IsDevelopment())
+        ConfigureDevelopmentServices(builder);
+}
+
+[ExcludeFromCodeCoverage]
+static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
+{
+    builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
+    builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
+
+    // RA-690: local manual-testing data. Opt-in as well as Development-only, because the
+    // test hosts run as Development too; the local compose stack sets it.
+    // RA-425: the same flag gives Delta Green's registration an Approved domain model version.
+    if (builder.Configuration.GetValue<bool>(DevAccreditationHistorySeedService.ConfigKey))
     {
-        builder.Services.AddHostedService<EprRegisterEnrolBackend.CdpUploader.Services.DevScanAutoCompleteService>();
-        builder.Services.AddSingleton<IStubApplicationPersistence, StubApplicationPersistence>();
+        builder.Services.AddHostedService<DevAccreditationHistorySeedService>();
+        builder.Services.AddHostedService<DevRegistrationSeedService>();
+    }
+
+    // RA-425: the dedicated exporters (orgs 50018 and, for RA-492, 50019). Also seedable on their own,
+    // for the fe-tests stack, whose other specs must not see the Delta Green data above. The same check
+    // decides whether the stub ReEx registry has the orgs (see ReExApiAdapterRegistration).
+    if (DevExporterAccreditationSeedService.IsEnabled(builder.Configuration, builder.Environment))
+    {
+        builder.Services.AddHostedService<DevExporterAccreditationSeedService>();
     }
 }
 
@@ -421,6 +478,14 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseAccreditationApplicationEndpoints();
     // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
     app.UseAccreditationApiEndpoints();
+    // The in-year changes journey, behind a flag, off by default, until it ships (unmapped, its routes
+    // return 404): RA-425's current registration status, for the frontend's material dashboard pages,
+    // and RA-492's change requests against a granted accreditation.
+    if (app.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
+    {
+        app.UseRegistrationStatusEndpoints();
+        app.UseAccreditationChangeEndpoints();
+    }
 
     if (app.Environment.IsDevelopment())
     {

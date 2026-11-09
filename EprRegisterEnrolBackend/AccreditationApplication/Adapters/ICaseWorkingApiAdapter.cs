@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationChanges;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
@@ -6,6 +7,14 @@ public interface ICaseWorkingApiAdapter
 {
     Task<CaseWorkingSubmissionResult> SubmitApplicationAsync(
         AccreditationApplicationModel application,
+        CancellationToken cancellationToken = default
+    );
+
+    // RA-492: creates an add-overseas-site work item for a submitted in-year change request.
+    // Allowed to throw - the caller only marks the request Submitted once this succeeds.
+    Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+        AccreditationChangeRequest changeRequest,
+        AccreditationApplicationModel accreditation,
         CancellationToken cancellationToken = default
     );
 
@@ -65,4 +74,11 @@ public sealed record NotificationStatusResult(string? NotificationStatus, DateTi
 
 public sealed record ResumeFromQueryResult(bool IsSuccess);
 
-public sealed record WithdrawResult(bool IsSuccess);
+// Refused means ManagementBe answered 409: the application has already been decided.
+// Failed is every other problem, which the caller still reports as a service fault.
+public enum WithdrawResult
+{
+    Succeeded,
+    Refused,
+    Failed,
+}

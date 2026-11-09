@@ -39,6 +39,8 @@ public class OrganisationModel
     public List<AccreditationModel>? Accreditations { get; set; }
 
     public string? FormSubmissionRawDataId { get; set; }
+
+    internal OrganisationModel ShallowCopy() => (OrganisationModel)MemberwiseClone();
 }
 
 public class OrganisationSummaryModel
@@ -60,6 +62,8 @@ public class CompanyDetailsModel
     public string? RegistrationNumber { get; set; }
     public string? CompaniesHouseNumber { get; set; }
     public RegisteredAddressModel? RegisteredAddress { get; set; }
+
+    internal CompanyDetailsModel ShallowCopy() => (CompanyDetailsModel)MemberwiseClone();
 }
 
 public class RegisteredAddressModel

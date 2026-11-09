@@ -1,5 +1,8 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
+using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 
@@ -29,7 +32,7 @@ public class StubCaseWorkingApiAdapterTests
             OrganisationName = "Acme Recycling Ltd",
             Year = year,
             RegistrationId = "reg-001",
-            RegistrationReference = "EPR-100023",
+            RegistrationReference = "R25ER1000230001PL",
             MaterialType = materialType,
             ApplicationStatus = ApplicationStatus.Started,
             SiteAddress = siteAddress,
@@ -64,6 +67,34 @@ public class StubCaseWorkingApiAdapterTests
         );
 
         result.ApplicationReference.Should().Be("AP26EA5005001AAPL");
+    }
+
+    // The E2E specs give each disposable application a made-up year in 3000-3999 on one
+    // organisation, registration and material. Two of those years with the same last two digits
+    // must not share a reference, or the second submit breaks the unique applicationReference
+    // index. A real accreditation year keeps the two-digit format.
+    [Fact]
+    public async Task SubmitApplicationAsync_YearsOutsideThe2000s_DoNotShareAReference()
+    {
+        var sut = BuildSut();
+        var ct = TestContext.Current.CancellationToken;
+
+        var first = await sut.SubmitApplicationAsync(
+            CreateApplication(orgId: 50003, year: 3039),
+            ct
+        );
+        var second = await sut.SubmitApplicationAsync(
+            CreateApplication(orgId: 50003, year: 3139),
+            ct
+        );
+        var real = await sut.SubmitApplicationAsync(
+            CreateApplication(orgId: 50003, year: 2039),
+            ct
+        );
+
+        first.ApplicationReference.Should().NotBe(second.ApplicationReference);
+        first.ApplicationReference.Should().StartWith("AP3039");
+        real.ApplicationReference.Should().StartWith("AP39");
     }
 
     // RA-503: the reference must embed the operator/regulator-safe numeric OrgId, never
@@ -202,7 +233,7 @@ public class StubCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeTrue();
+        result.Should().Be(WithdrawResult.Succeeded);
     }
 
     [Fact]
@@ -225,5 +256,28 @@ public class StubCaseWorkingApiAdapterTests
             sut.NotifySiteAddedAsync(CreateApplication(), "overseas", "ORS456", null, false);
 
         await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_ReturnsAnApplicationFormatReferenceAndWorkItemId()
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, 2026);
+        var request = new AccreditationChangeRequest
+        {
+            OrganisationId = accreditation.OrganisationId,
+            ApplicationId = accreditation.ApplicationId!,
+            MaterialType = accreditation.MaterialType,
+            Year = accreditation.Year,
+        };
+
+        var result = await BuildSut().SubmitChangeRequestAsync(
+            request,
+            accreditation,
+            TestContext.Current.CancellationToken
+        );
+
+        // Same AP format as SubmitApplicationAsync: year 26, EA, org 050019, no site postcode, plastic.
+        result.ApplicationReference.Should().Be("AP26EA050019PL");
+        result.WorkItemId.Should().NotBeNull();
     }
 }

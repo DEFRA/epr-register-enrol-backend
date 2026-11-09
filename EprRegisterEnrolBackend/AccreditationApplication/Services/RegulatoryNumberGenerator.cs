@@ -10,66 +10,15 @@ public class RegulatoryNumberGenerator(IRegulatoryNumberSequenceCounterPersisten
         CancellationToken ct = default
     )
     {
-        // Everything below is pure (no I/O) and runs before the atomic increment,
+        // The format is pure (no I/O) and resolved before the atomic increment,
         // so an invalid combination throws without ever touching a counter (AC6) -
         // a defence-in-depth backstop even though the calling endpoint validates
         // first too.
-        var agencyLetter = AgencyLetterFor(spec.Nation);
-        var processTypeLetter = spec.IsExporter ? 'X' : 'R';
-        var agencyType = $"{agencyLetter}{processTypeLetter}";
-        var materialCode = MaterialCodeFor(spec.Material, spec.GlassRecyclingProcess);
-        var prefix = spec.Type == NumberType.Registration ? 'R' : 'A';
-        var poolKey = $"{prefix}-{agencyType}";
+        var format = RegulatoryNumberFormat.For(spec);
+        var poolKey = $"R-{format.AgencyType}";
 
         var sequence = await counters.IncrementAsync(poolKey, ct);
 
-        return $"{prefix}{spec.Year % 100:D2}{agencyType}{spec.OrgId:D6}{sequence:D4}{materialCode}";
+        return format.RegistrationNumber(sequence);
     }
-
-    private static char AgencyLetterFor(Nation nation) =>
-        nation switch
-        {
-            Nation.England => 'E',
-            Nation.Scotland => 'S',
-            Nation.Wales => 'W',
-            Nation.NorthernIreland => 'N',
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(nation),
-                nation,
-                "Unrecognised nation."
-            ),
-        };
-
-    // Six of the seven MaterialType values map 1:1. Glass is the exception - it
-    // splits into two number-format codes (GO/GR) depending on
-    // GlassRecyclingProcess, which is why that parameter must be supplied
-    // whenever material is Glass (see RA-448 design notes: GR = Remelt, GO = Other,
-    // matching GlassRecyclingProcess's own "glass_re_melt"/"glass_other" naming).
-    private static string MaterialCodeFor(
-        MaterialType material,
-        GlassRecyclingProcess? glassRecyclingProcess
-    ) =>
-        material switch
-        {
-            MaterialType.Steel => "ST",
-            MaterialType.Wood => "WO",
-            MaterialType.Aluminium => "AL",
-            MaterialType.Fibre => "FB",
-            MaterialType.Paper => "PA",
-            MaterialType.Plastic => "PL",
-            MaterialType.Glass => glassRecyclingProcess switch
-            {
-                GlassRecyclingProcess.Remelt => "GR",
-                GlassRecyclingProcess.Other => "GO",
-                _ => throw new ArgumentException(
-                    "GlassRecyclingProcess is required when material is Glass.",
-                    nameof(glassRecyclingProcess)
-                ),
-            },
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(material),
-                material,
-                "Unrecognised material type."
-            ),
-        };
 }

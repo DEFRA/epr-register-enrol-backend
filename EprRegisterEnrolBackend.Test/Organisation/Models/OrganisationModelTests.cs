@@ -99,7 +99,7 @@ public class OrganisationModelTests
         {
             Name = "Acme Ltd",
             TradingName = "Acme",
-            RegistrationNumber = "12345678",
+            RegistrationNumber = "R26ER0123450001PL",
             CompaniesHouseNumber = "87654321",
             RegisteredAddress = new RegisteredAddressModel
             {
@@ -111,7 +111,7 @@ public class OrganisationModelTests
 
         model.Name.Should().Be("Acme Ltd");
         model.TradingName.Should().Be("Acme");
-        model.RegistrationNumber.Should().Be("12345678");
+        model.RegistrationNumber.Should().Be("R26ER0123450001PL");
         model.CompaniesHouseNumber.Should().Be("87654321");
         model.RegisteredAddress.Should().NotBeNull();
     }

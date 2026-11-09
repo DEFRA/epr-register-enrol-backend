@@ -1,6 +1,6 @@
 namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
-// RA-448: atomic per-pool sequence counters backing registration/accreditation
+// RA-448: atomic per-pool sequence counters backing registration
 // number generation. IncrementAsync is the only mutating operation - callers
 // never read-then-write CurrentMax themselves (see AC3 in the design doc).
 public interface IRegulatoryNumberSequenceCounterPersistence

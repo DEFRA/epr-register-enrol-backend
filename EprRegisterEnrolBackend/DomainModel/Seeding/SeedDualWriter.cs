@@ -1,0 +1,294 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
+using EprRegisterEnrolBackend.DomainModel.Versioning;
+using EprRegisterEnrolBackend.Utils.Mongo;
+using MongoDB.Bson;
+using MongoDB.Driver;
+
+namespace EprRegisterEnrolBackend.DomainModel.Seeding;
+
+/// <summary>
+/// Writes the seed's entities and the application's foreign keys in one transaction of their own, separate
+/// from the legacy insert (see <see cref="ISeedDualWriter"/>). Re-seeding the same registration updates the
+/// current versions, and writes no new version when nothing changed.
+/// </summary>
+public sealed class SeedDualWriter(
+    IMongoDbClientFactory clientFactory,
+    SeedModelStores stores,
+    IAccreditationApplicationPersistence applications,
+    SeedDualWriteMetrics metrics,
+    TimeProvider clock,
+    ILogger<SeedDualWriter> logger
+) : ISeedDualWriter
+{
+    public async Task WriteAsync(SeedDualWrite seed, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await WriteWithRetryAsync(seed, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            metrics.RecordFailure();
+            // Ids and the error kind only. The exception is not logged: a driver message can quote document
+            // values, and logs must hold no personal data (design doc §6.1).
+            logger.LogError(
+                "Seed dual-write failed and was rolled back: application {ApplicationId}, organisation {ReExOrganisationId}, registration {ReExRegistrationId}, error {ErrorKind}",
+                seed.Application.Id,
+                seed.ReExOrganisationId,
+                seed.ReExRegistrationId,
+                MongoErrors.Kind(ex)
+            );
+        }
+    }
+
+    private async Task WriteWithRetryAsync(SeedDualWrite seed, CancellationToken cancellationToken)
+    {
+        var (conflicts, replacedNumber) = await InsertRaceRetry.RunInTransactionAsync(
+            clientFactory,
+            (session, token) => WriteCoreAsync(session, seed, token),
+            attempt =>
+                logger.LogWarning(
+                    "Seed dual-write lost an insert race and will retry: application {ApplicationId}, attempt {Attempt}",
+                    seed.Application.Id,
+                    attempt
+                ),
+            cancellationToken
+        );
+        logger.LogRecorded(conflicts);
+        if (replacedNumber is not null)
+        {
+            // ReEx is the oracle for this until we hold registrations, so it went through. It should be very rare, and
+            // could be a mistake on their side, so it needs checking with them.
+            logger.LogWarning(
+                "Seed changed an issued registration number because ReEx holds a different one, check with ReEx: registration {ReExRegistrationId}, from {OldNumber} to {NewNumber}, application {ApplicationId}",
+                seed.ReExRegistrationId,
+                replacedNumber,
+                seed.ReEx.RegistrationReference,
+                seed.Application.Id
+            );
+        }
+    }
+
+    private async Task<(List<MigrationConflict> Conflicts, string? ReplacedNumber)> WriteCoreAsync(
+        IClientSessionHandle session,
+        SeedDualWrite seed,
+        CancellationToken cancellationToken
+    )
+    {
+        var now = clock.GetUtcNow().UtcDateTime;
+        var organisationId = await stores.Organisations.UpsertAsync(
+            seed.ReExOrganisationId,
+            organisation => SeedEntityMapper.ApplyTo(organisation, seed.ReEx),
+            now,
+            session,
+            cancellationToken
+        );
+        var (registration, replacedNumber) = await UpsertRegistrationAsync(
+            session,
+            seed,
+            organisationId,
+            now,
+            cancellationToken
+        );
+
+        var accredited = await AccreditedOrsIdsAsync(session, seed, cancellationToken);
+        var siteIds = new Dictionary<string, ObjectId>();
+        var conflicts = new List<MigrationConflict>();
+        foreach (var site in seed.ReEx.OverseasSites)
+        {
+            // ReEx keys its sites by orsId, so it is always set; a site without one has no key to upsert on.
+            if (string.IsNullOrWhiteSpace(site.OrsId) || siteIds.ContainsKey(site.OrsId))
+            {
+                continue;
+            }
+
+            siteIds[site.OrsId] = await UpsertOverseasSiteAsync(
+                session,
+                seed,
+                registration.EntityId,
+                site,
+                accredited,
+                conflicts,
+                cancellationToken
+            );
+        }
+
+        if (conflicts.Count > 0)
+        {
+            await stores.Conflicts.InsertManyAsync(conflicts, session, cancellationToken);
+        }
+
+        await applications.StampDomainModelForeignKeysAsync(
+            seed.Application.Id!.Value,
+            registration.EntityId,
+            siteIds,
+            null,
+            session,
+            cancellationToken
+        );
+        return (conflicts, replacedNumber);
+    }
+
+    // The sites an approved application selected. The legacy applications are read rather than the Accreditations
+    // because one approved before phase 3 has no Accreditation until its group is first touched (§6.2).
+    private async Task<HashSet<string>> AccreditedOrsIdsAsync(
+        IClientSessionHandle session,
+        SeedDualWrite seed,
+        CancellationToken cancellationToken
+    )
+    {
+        var group = await applications.GetRegistrationGroupAsync(
+            seed.ReExOrganisationId,
+            seed.ReExRegistrationId,
+            ApplicationGroupMigrator.MaxGroupSize + 1,
+            session,
+            cancellationToken
+        );
+        // The read is capped, so past the limit an approved application could be missing and its sites overwritten.
+        if (group.Count > ApplicationGroupMigrator.MaxGroupSize)
+        {
+            throw new ApplicationGroupTooLargeException(
+                seed.ReExRegistrationId,
+                ApplicationGroupMigrator.MaxGroupSize
+            );
+        }
+
+        return group
+            .Where(a => a.ApplicationStatus == ApplicationStatus.Approved)
+            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+            .Where(s => s.Selected && s.OrsId is not null)
+            .Select(s => s.OrsId!)
+            .ToHashSet();
+    }
+
+    private async Task<(
+        RegistrationEntity Registration,
+        string? ReplacedNumber
+    )> UpsertRegistrationAsync(
+        IClientSessionHandle session,
+        SeedDualWrite seed,
+        ObjectId organisationId,
+        DateTime now,
+        CancellationToken cancellationToken
+    )
+    {
+        var versions = stores.Registrations.Versions;
+        var current = await versions.FindCurrentAsync(
+            Builders<RegistrationEntity>.Filter.Eq(
+                x => x.ReExRegistrationId,
+                seed.ReExRegistrationId
+            ),
+            session,
+            cancellationToken
+        );
+        var oldNumber = current?.RegistrationNumber;
+        var registration = current ?? new RegistrationEntity();
+        registration.OrganisationId = organisationId;
+        SeedEntityMapper.ApplyTo(registration, seed.ReEx, seed.ReExRegistrationId, seed.Material);
+        registration.Source.ImportedAt = now;
+
+        if (current is null)
+        {
+            var created = await versions.InsertAsync(
+                registration,
+                Change(seed, ChangeReason.ReExImport),
+                session,
+                cancellationToken
+            );
+            return (created, null);
+        }
+
+        var result = await versions.UpdateAsync(
+            registration,
+            current.Version,
+            Change(seed, ChangeReason.ReExRefresh),
+            session,
+            cancellationToken
+        );
+        var replaced = oldNumber != result.Entity.RegistrationNumber ? oldNumber : null;
+        return (result.Entity, replaced);
+    }
+
+    private async Task<ObjectId> UpsertOverseasSiteAsync(
+        IClientSessionHandle session,
+        SeedDualWrite seed,
+        ObjectId registrationId,
+        OverseasSiteModel site,
+        HashSet<string> accredited,
+        List<MigrationConflict> conflicts,
+        CancellationToken cancellationToken
+    )
+    {
+        var versions = stores.OverseasSites.Versions;
+        var filter = Builders<OverseasSiteEntity>.Filter;
+        var current = await versions.FindCurrentAsync(
+            filter.Eq(x => x.RegistrationId, registrationId) & filter.Eq(x => x.OrsId, site.OrsId),
+            session,
+            cancellationToken
+        );
+        var details = new Dictionary<string, string> { ["orsId"] = site.OrsId! };
+
+        if (current is null)
+        {
+            var created = await versions.InsertAsync(
+                SeedEntityMapper.NewReExSite(registrationId, site),
+                Change(seed, ChangeReason.ReExImport, details),
+                session,
+                cancellationToken
+            );
+            return created.EntityId;
+        }
+
+        // A site on an accreditation holds what this service collected and approved, so a seed never changes it.
+        if (accredited.Contains(site.OrsId!))
+        {
+            if (!SeedEntityMapper.HasSameDetails(current, site))
+            {
+                conflicts.Add(ReExDifference(seed, current));
+            }
+
+            return current.EntityId;
+        }
+
+        SeedEntityMapper.ApplyTo(current, site);
+        var result = await versions.UpdateAsync(
+            current,
+            current.Version,
+            Change(seed, ChangeReason.ReExRefresh, details),
+            session,
+            cancellationToken
+        );
+        return result.Entity.EntityId;
+    }
+
+    private MigrationConflict ReExDifference(SeedDualWrite seed, OverseasSiteEntity site) =>
+        new()
+        {
+            Id = ObjectId.GenerateNewId(),
+            Kind = MigrationConflictKind.ReExDetailsDiffer,
+            ReExRegistrationId = seed.ReExRegistrationId,
+            RegistrationId = site.RegistrationId,
+            OrsId = site.OrsId,
+            ApplicationIds = [seed.Application.Id!.Value],
+            RecordedAt = clock.GetUtcNow().UtcDateTime,
+        };
+
+    private static ChangeInfo Change(
+        SeedDualWrite seed,
+        ChangeReason reason,
+        Dictionary<string, string>? details = null
+    ) =>
+        new()
+        {
+            Reason = reason,
+            ApplicationId = seed.Application.Id,
+            Details = details,
+        };
+}

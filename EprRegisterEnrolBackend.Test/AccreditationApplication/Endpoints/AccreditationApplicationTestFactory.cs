@@ -16,7 +16,7 @@ public class AccreditationApplicationTestFactory : WebApplicationFactory<Program
 {
     public FakeAccreditationApplicationPersistence FakePersistence { get; } = new();
 
-    // RA-448: deterministic in-memory counter store, so registration/accreditation
+    // RA-448: deterministic in-memory counter store, so registration
     // number tests can assert exact sequence values without a real Mongo instance.
     public FakeRegulatoryNumberSequenceCounterPersistence FakeCounters { get; } = new();
 

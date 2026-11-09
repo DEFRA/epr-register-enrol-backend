@@ -852,7 +852,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -893,7 +893,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -930,7 +930,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult(new WithdrawResult(true)));
+            .Returns(Task.FromResult(WithdrawResult.Succeeded));
 
         var request = new WithdrawRequest { Reason = "No longer required" };
         var response = await _client.PostAsJsonAsync(
@@ -1004,7 +1004,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
                     TestContext.Current.CancellationToken
                 );
                 webhookResponse.StatusCode.Should().Be(HttpStatusCode.OK);
-                return new WithdrawResult(true);
+                return WithdrawResult.Succeeded;
             });
 
         var request = new WithdrawRequest { Reason = "No longer required" };
@@ -1073,7 +1073,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
                             "the nested, genuinely-first-to-persist request must succeed"
                         );
                 }
-                return new WithdrawResult(true);
+                return WithdrawResult.Succeeded;
             });
 
         var response = await _client.PostAsJsonAsync(
