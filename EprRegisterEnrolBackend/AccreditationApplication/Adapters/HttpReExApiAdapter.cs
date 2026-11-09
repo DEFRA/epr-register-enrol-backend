@@ -346,6 +346,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 Nation = nation,
                 CompanyRegisterAddressPostcode = companyAddressSource?.Postcode,
                 CompanyRegisteredAddress = companyRegisteredAddress,
+                CompanyAddress = companyAddressSource,
                 IsUkRegisteredAddress = isUkRegisteredAddress,
                 CompaniesHouseNumber = org.CompanyDetails?.CompaniesHouseNumber,
                 PermitNumbers = permitNumbers,

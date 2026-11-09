@@ -93,15 +93,6 @@ public sealed class DomainModelReconciliationService(
             );
         }
 
-        foreach (var (field, applications) in report.NotInModelByField)
-        {
-            logger.LogInformation(
-                "DomainModelReconciliation not in the model: field {Field}, applications {Applications}",
-                field,
-                applications
-            );
-        }
-
         if (report.SampleApplicationIds.Count > 0)
         {
             logger.LogWarning(

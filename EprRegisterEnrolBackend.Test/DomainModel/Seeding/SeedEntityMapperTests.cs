@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
+using EprRegisterEnrolBackend.ReEx.Dtos;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.Seeding;
@@ -239,5 +240,76 @@ public class SeedEntityMapperTests
         Assert.Equal(SiteOrigin.ReEx, site.Origin);
         Assert.Equal(OverseasSiteStatus.Active, site.Status);
         Assert.Equal("001", site.OrsId);
+    }
+
+    [Fact]
+    public void ApplyTo_Organisation_CopiesCompanyAddressAndSubmitter()
+    {
+        var target = new OrganisationEntity { ReExOrganisationId = "org" };
+
+        SeedEntityMapper.ApplyTo(
+            target,
+            new ReExAccreditationDto
+            {
+                CompanyRegisteredAddress = "1 High St, Leeds, LS1 1AA",
+                CompanyRegisterAddressPostcode = "LS1 1AA",
+                IsUkRegisteredAddress = true,
+                CompanyAddress = new RegisteredAddressDto
+                {
+                    Line1 = "1 High St",
+                    Town = "Leeds",
+                    County = "West Yorkshire",
+                },
+                SubmitterContactDetails = new SubmitterContactDetailsDto
+                {
+                    FullName = "Org Submitter",
+                    Phone = "222",
+                },
+            }
+        );
+
+        Assert.Equal("1 High St, Leeds, LS1 1AA", target.FormattedRegisteredAddress);
+        Assert.True(target.IsUkRegisteredAddress);
+        Assert.Equal("1 High St", target.RegisteredAddress?.Line1);
+        Assert.Equal("Leeds", target.RegisteredAddress?.TownOrCity);
+        Assert.Equal("West Yorkshire", target.RegisteredAddress?.Region);
+        Assert.Equal("LS1 1AA", target.RegisteredAddress?.Postcode);
+        Assert.Equal("Org Submitter", target.SubmitterContactDetails?.FullName);
+    }
+
+    [Fact]
+    public void ApplyTo_Organisation_NothingSent_KeepsWhatIsHeld()
+    {
+        var target = new OrganisationEntity
+        {
+            ReExOrganisationId = "org",
+            FormattedRegisteredAddress = "Kept",
+            SubmitterContactDetails = new ContactPerson { FullName = "Kept" },
+        };
+
+        SeedEntityMapper.ApplyTo(target, new ReExAccreditationDto());
+
+        Assert.Equal("Kept", target.FormattedRegisteredAddress);
+        Assert.Equal("Kept", target.SubmitterContactDetails?.FullName);
+    }
+
+    [Fact]
+    public void ApplyTo_Registration_CopiesPermitsAndSiteAddress()
+    {
+        var target = new RegistrationEntity();
+
+        SeedEntityMapper.ApplyTo(
+            target,
+            new ReExAccreditationDto
+            {
+                PermitNumbers = ["EPR/AB1234"],
+                SiteAddress = "2 Mill Rd, Leeds",
+            },
+            "reg",
+            MaterialType.Plastic
+        );
+
+        Assert.Equal(["EPR/AB1234"], target.PermitNumbers);
+        Assert.Equal("2 Mill Rd, Leeds", target.Site?.FormattedAddress);
     }
 }

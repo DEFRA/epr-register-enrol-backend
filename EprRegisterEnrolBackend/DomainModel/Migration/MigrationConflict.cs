@@ -62,4 +62,7 @@ public enum MigrationConflictKind
 
     /// <summary>A seed's ReEx details differ from an accredited ORS, which a seed never changes.</summary>
     ReExDetailsDiffer,
+
+    /// <summary>An application holds a different address, contact or permit list from the one copy the Organisation or Registration keeps.</summary>
+    SeededDetailsDiffer,
 }

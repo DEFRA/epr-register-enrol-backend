@@ -183,6 +183,12 @@ public sealed class ApplicationGroupMigrator(
                 session,
                 cancellationToken
             );
+            var organisation = await stores.Organisations.FillMissingCompanyDetailsAsync(
+                organisationId,
+                NewOrganisation(),
+                session,
+                cancellationToken
+            );
             if (Newest.RegistrationId is not null)
             {
                 _registration = await EnsureRegistrationAsync(
@@ -194,6 +200,7 @@ public sealed class ApplicationGroupMigrator(
                 RecordDuplicateLiveApplications();
             }
 
+            RecordSeededDetailDifferences(organisation);
             foreach (var application in pending)
             {
                 await InsertApplicationVersionAsync(application);
@@ -212,9 +219,100 @@ public sealed class ApplicationGroupMigrator(
                 Name = Newest.OrganisationName,
                 OrganisationNumber = Newest.OrgId,
                 CompaniesHouseNumber = Newest.CompaniesHouseNumber,
+                FormattedRegisteredAddress = Blank(Newest.CompanyRegisteredAddress),
+                RegisteredAddress = Blank(Newest.CompanyRegisterAddressPostcode) is { } postcode
+                    ? new PostalAddress { Postcode = postcode }
+                    : null,
+                IsUkRegisteredAddress = Newest.IsUkRegisteredAddress,
+                SubmitterContactDetails = Newest.SubmitterContactDetails is { } contact
+                    ? new ContactPerson
+                    {
+                        FullName = contact.FullName,
+                        Email = contact.Email,
+                        Phone = contact.Phone,
+                        JobTitle = contact.JobTitle,
+                    }
+                    : null,
                 Source = new EntitySource { EnrichmentPending = true, ImportedAt = now },
                 UpdatedAt = now,
             };
+
+        private static string? Blank(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? null : value;
+
+        // The Organisation and Registration keep one copy, but each application took its own at seed time, so one can
+        // differ. An application holding nothing has nothing to disagree with.
+        private void RecordSeededDetailDifferences(OrganisationEntity organisation)
+        {
+            var differing = pending
+                .Where(a => DiffersFrom(a, organisation) || DiffersFrom(a, _registration))
+                .Select(a => a.Id!.Value)
+                .ToList();
+            if (differing.Count > 0)
+            {
+                Conflicts.Add(Conflict(MigrationConflictKind.SeededDetailsDiffer, differing));
+            }
+        }
+
+        private static bool DiffersFrom(
+            AccreditationApplicationModel application,
+            OrganisationEntity organisation
+        ) =>
+            Differs(application.CompanyRegisteredAddress, organisation.FormattedRegisteredAddress)
+            || Differs(
+                application.CompanyRegisterAddressPostcode,
+                organisation.RegisteredAddress?.Postcode
+            )
+            || (
+                organisation.IsUkRegisteredAddress is { } isUk
+                && !string.IsNullOrWhiteSpace(application.CompanyRegisteredAddress)
+                && isUk != application.IsUkRegisteredAddress
+            )
+            || Differs(
+                application.SubmitterContactDetails?.FullName,
+                organisation.SubmitterContactDetails?.FullName
+            )
+            || Differs(
+                application.SubmitterContactDetails?.Email,
+                organisation.SubmitterContactDetails?.Email
+            )
+            || Differs(
+                application.SubmitterContactDetails?.Phone,
+                organisation.SubmitterContactDetails?.Phone
+            )
+            || Differs(
+                application.SubmitterContactDetails?.JobTitle,
+                organisation.SubmitterContactDetails?.JobTitle
+            );
+
+        private static bool DiffersFrom(
+            AccreditationApplicationModel application,
+            RegistrationEntity? registration
+        ) =>
+            registration is not null
+            && (
+                Differs(application.SiteAddress, registration.Site?.FormattedAddress)
+                || (
+                    application.PermitNumbers.Count > 0
+                    && !application.PermitNumbers.SequenceEqual(registration.PermitNumbers)
+                )
+            );
+
+        private static bool Differs(string? held, string? kept) =>
+            !string.IsNullOrWhiteSpace(held) && held != kept;
+
+        // A registration seeded before these were copied has none, so the newest application's fills it in.
+        private RegistrationSite? WithSiteAddress(RegistrationSite? site)
+        {
+            if (site?.FormattedAddress is not null || Blank(Newest.SiteAddress) is null)
+            {
+                return site;
+            }
+
+            site ??= new RegistrationSite();
+            site.FormattedAddress = Newest.SiteAddress;
+            return site;
+        }
 
         private async Task<RegistrationEntity> EnsureRegistrationAsync(
             ObjectId organisationId,
@@ -248,6 +346,12 @@ public sealed class ApplicationGroupMigrator(
                 // Keep everything the seed copied from ReEx; only fill in the number it did not have and the older
                 // numbers the applications hold. A no-op, writing no version, when there are none to add.
                 current.RegistrationNumber ??= winner?.RegistrationReference;
+                current.Site = WithSiteAddress(current.Site);
+                if (current.PermitNumbers.Count == 0)
+                {
+                    current.PermitNumbers = [.. Newest.PermitNumbers];
+                }
+
                 current.PreviousRegistrationNumbers = OlderNumbers(
                     current.RegistrationNumber,
                     current.PreviousRegistrationNumbers
@@ -290,6 +394,8 @@ public sealed class ApplicationGroupMigrator(
                 ReExRegistrationId = reExRegistrationId,
                 RegistrationNumber = numberWinner?.RegistrationReference,
                 PreviousRegistrationNumbers = OlderNumbers(numberWinner?.RegistrationReference, []),
+                PermitNumbers = [.. Newest.PermitNumbers],
+                Site = WithSiteAddress(null),
                 Material = Newest.MaterialType,
                 Nation = Newest.Nation,
                 GlassRecyclingProcess = Newest.GlassRecyclingProcess,

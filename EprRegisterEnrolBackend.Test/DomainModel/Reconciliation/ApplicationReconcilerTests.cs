@@ -161,6 +161,21 @@ public sealed class ApplicationReconcilerTests : IDisposable
             OrgId = 500500,
             OrganisationName = "Acme Recycling Ltd",
             CompaniesHouseNumber = "01234567",
+            CompanyRegisteredAddress = "1 High St, Leeds, LS1 1AA",
+            CompanyRegisterAddressPostcode = "LS1 1AA",
+            IsUkRegisteredAddress = true,
+            SubmitterContactDetails = new SubmitterContactDetailsModel
+            {
+                FullName = "Org Submitter",
+                Email = "org@example.com",
+                Phone = "222",
+                JobTitle = "Manager",
+            },
+            SiteAddress = "2 Mill Rd, Leeds, LS2 2BB",
+            PermitNumbers = ["EPR/AB1234", "EPR/CD5678"],
+            SourceReExAccreditationId = "6512a0f0c0ffee0000000009",
+            SourceYear = year - 1,
+            PreviousAccreditationNumbers = ["A26EX5005000001PL"],
             RegistrationId = ReExRegistrationId,
             RegistrationReference = "R27EX1234567P",
             WasteProcessingType = "exporter",
@@ -379,29 +394,17 @@ public sealed class ApplicationReconcilerTests : IDisposable
     }
 
     [Fact]
-    public async Task Run_FieldsTheModelDoesNotHold_AreCountedApartAndDoNotFail()
+    public async Task Run_ASiteValidFrom_IsNotCompared()
     {
-        var application = Application(sites: Site(1, "001", "Plant"));
-        application.PermitNumbers = ["EPR/AB1234"];
-        application.SourceYear = 2026;
-        application.OverseasSites!.Sites[0].ValidFrom = "2026-01-01";
-        var id = await CreateAsync(application);
+        var site = Site(1, "001", "Plant");
+        site.ValidFrom = "2026-01-01";
+        var id = await CreateAsync(Application(sites: site));
         await MigrateAsync(id);
 
         var report = await _reconciler.RunAsync(Ct);
 
         report.Matching.Should().Be(1);
         report.DifferencesByField.Should().BeEmpty();
-        report
-            .NotInModelByField.Should()
-            .BeEquivalentTo(
-                new Dictionary<string, long>
-                {
-                    ["permitNumbers"] = 1,
-                    ["sourceYear"] = 1,
-                    ["overseasSites.sites[].validFrom"] = 1,
-                }
-            );
     }
 
     [Fact]

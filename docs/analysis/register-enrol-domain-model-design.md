@@ -12,11 +12,13 @@
 - **Reconciliation reports run on test environments only**, never in live (phase 4, B10).
 - **The facade's projection is built, with no route using it yet.** `ApplicationReadModel` and `ApplicationProjection`
   build the legacy application from the model, and reconciliation goes through them. Switching routes stays in phase 5.
-- **Ten legacy fields have no home in the model:** `siteAddress`, `companyRegisterAddressPostcode`,
-  `companyRegisteredAddress`, `isUkRegisteredAddress`, `permitNumbers`, `sourceReExAccreditationId`, `sourceYear`,
-  `previousAccreditationNumbers`, `submitterContactDetails` and `sites[].validFrom`. §5.1 has them as stored or derived, but
-  the migration does not store them, and enrichment is deferred (Q35). The report counts them apart from differences.
-  **The read switch can't serve them until they have a home.**
+- **The legacy fields that had no home now have one**, written by the seed and the migration (§5.1): the flattened site
+  address and permit numbers on Registration, the registered address, its UK flag and the submitter on Organisation,
+  and `sourceReExAccreditationId`, `seedDataSourceYear` and `previousReservedAccreditationNumbers` on the Application.
+  `sourceReExAccreditationId` is copied to the Accreditation at approval. A site's ReEx `validFrom` is dropped: it is only
+  used at seed time, to set `selected`.
+- **Organisation and Registration keep one copy.** An application that took a different copy at seed time is listed in
+  `migrationConflicts` as `SeededDetailsDiffer`, and shows as a reconciliation difference.
 - **Corrected the phase 3 rollback:** a re-run skips what is already migrated, so a stale model has to be truncated first.
 
 **Changes in v6.9 (2026-11-06): a `$jsonSchema` validator on `applicationVersions`, in warn mode (RA-746)**
@@ -1006,18 +1008,18 @@ in `AccreditationDetails`. Envelope fields such as `status` and `applicationRefe
 | `registrationId` | Registration.`reExRegistrationId` | derived | Application gains FK `registrationEntityId` (the Registration `entityId`). The legacy field is kept until the contract phase |
 | `isExporter` | Registration.`wasteProcessingType == exporter` | derived | |
 | `nation` | Registration.`nation` | derived | Remove the GetById lazy backfill (`:874-886`) |
-| `siteAddress` (formatted string) | Registration.`site.address` (structured) | derived (formatted) | ✚ Only the formatted string is stored today. Re-fetch the structure from ReEx during backfill |
-| `companyRegisterAddressPostcode` | Organisation.`registeredAddress.postcode` ∨ `address.postcode` | derived | |
-| `companyRegisteredAddress` | Organisation.`registeredAddress` ∨ `address` | derived (formatted) | ✚ structured address from ReEx |
-| `isUkRegisteredAddress` | Organisation: `registeredAddress` has mappable fields | derived | |
+| `siteAddress` (formatted string) | Registration.`site.formattedAddress` | derived | Flattened and stored as it arrives (v6.10). Registration.`site.address` waits on enrichment |
+| `companyRegisterAddressPostcode` | Organisation.`registeredAddress.postcode` | derived | |
+| `companyRegisteredAddress` | Organisation.`formattedRegisteredAddress`, with the structured `registeredAddress` from a seed | derived | Legacy holds only the flattened string, which cannot be split reliably, so it is kept as well (v6.10) |
+| `isUkRegisteredAddress` | Organisation.`isUkRegisteredAddress` | derived | True when ReEx's registered address was used, false when it fell back to its address |
 | `companiesHouseNumber` | Organisation.`companiesHouseNumber` | derived | |
-| `permitNumbers[]` | Registration.`wasteManagementPermits[].permitNumber` | derived | ✚ The full permit objects (type, authorised materials, exemptions) come from ReEx |
+| `permitNumbers[]` | Registration.`permitNumbers[]` | derived | ✚ The full permit objects (type, authorised materials, exemptions) still come with enrichment |
 | `wasteProcessingType` | Registration.`wasteProcessingType` | derived | |
 | `materialType` | Registration.`material` | stored on Application (denormalised, indexed) | ⚠ Assumes one material per registration ([A3](#assumptions)). Kept on Application for existing indexes and seed idempotency |
 | `glassRecyclingProcess` | Registration.`glassRecyclingProcess` | derived | Stored as a string name; the API rename stays in the mapper |
 | `applicationStatus` | Application.`status` | stored | |
-| `sourceReExAccreditationId` | Kept on the Application as the raw ReEx id. `sourceAccreditationId` (→ this service's prior-year Accreditation) stays null for migrated applications, because none exists here (D10) | stored | Seed does **not** create the Accreditation (A11 refuted) and nothing imports it |
-| `sourceYear` | Application (or derived from the source Accreditation.`year`) | stored | |
+| `sourceReExAccreditationId` | Kept on the Application as the raw ReEx id, and copied to the Accreditation at approval (v6.10). `sourceAccreditationId` (→ this service's prior-year Accreditation) stays null for migrated applications, because none exists here (D10) | stored | Seed does **not** create the Accreditation (A11 refuted) and nothing imports it |
+| `sourceYear` | Application.`seedDataSourceYear` | stored | Renamed (v6.10) |
 | `applicationReference` | Application | stored | |
 | `paymentReference` | Application | stored | |
 | `caseManagementReference` | **drop** | omitted (IgnoreIfNull already omits it) | ❓ Never written by backend code (only `Requests.cs:314` exists, on a response DTO). Confirm it is absent in deployed data ([survey](#7-risks)) |
@@ -1025,7 +1027,7 @@ in `AccreditationDetails`. Envelope fields such as `status` and `applicationRefe
 | `registrationReference` | Registration.`registrationNumber` | derived | ⚠ Before phase 3 it was per application, so two applications under one registration can disagree after a regenerate. The migration keeps the number per §6.1 step 1 and puts the others into `previousRegistrationNumbers` ([R4](#7-risks)). With `DualWrite` on, the number is fixed once issued and is never regenerated (§6.2) |
 | `previousRegistrationNumbers[]` | Registration.`previousRegistrationNumbers[]` (+ history) | derived | No consumer reads it |
 | `accreditationReference` | before approval: Application.`reservedAccreditationNumber`; after approval: Accreditation.`accreditationNumber` | derived (reserved ∨ accreditation) | ⚠ Minted **before** approval by design (M2), so it must be reserved on the Application and copied to the Accreditation at approval |
-| `previousAccreditationNumbers[]` | Application.`previousReservedAccreditationNumbers[]` | derived | An approved Accreditation's number **never changes** (Q7), so the Accreditation has no previous-numbers list. Only the reserved number on an undecided Application can be regenerated. ⚠ The current "reapply" branch (YY+1 in place on the same application, `:419-423`) contradicts Q7. Management-be always sends `regenerate:false` (M1), so the branch looks unused. A new year's number is derived as YY+1 from the prior year's (Q18 answered; B21) |
+| `previousAccreditationNumbers[]` | Application.`previousReservedAccreditationNumbers[]` | stored | An approved Accreditation's number **never changes** (Q7), so the Accreditation has no previous-numbers list. Only the reserved number on an undecided Application can be regenerated |
 | `submittedBy` {fullName, jobTitle, email} | Application | stored | |
 | `submitterContactDetails` | Organisation.`submitterContactDetails` | derived | ⚠ The comment (RA-480) says "registration submitter", but the code copies the **organisation's** (`HttpReExApiAdapter.cs:361`). The model follows the code ([Q8](#q8)) |
 | `withdrawalReason` | Application | stored | |
@@ -1048,7 +1050,7 @@ in `AccreditationDetails`. Envelope fields such as `status` and `applicationRefe
 | `sites[].siteName`, `siteAddress`, `addressLine1`, `addressLine2`, `townOrCity`, `country`, `coordinates`, `contactName`, `contactEmail`, `contactPhone`, `isEu`, `isOecd`, `repatriatedLoads`, `conditionsOfExport` | ORS (structured `address`, `contact`), overlaid with `applicationOverseasSites[].proposedChanges` | derived (flattened again) | |
 | `sites[].operationCodes[]` | ORS.`operationCodes`, plus overlay | derived | Regulator correction writes to the overlay ([A7](#assumptions)) |
 | `sites[].code1`, `code2`, `code3` | ORS.`baselOecdCodes[]` (list) | derived: list split back into `code1`–`code3` | ⚠ **Not** a legacy duplicate of `operationCodes`, as PR #210's mapping suggests (`:267`, `:309`). They are Basel/OECD waste codes: `code1` is mandatory and validated against a BA-signed-off list (`Validators/OverseasSiteRequestValidatorBase.cs:55-73`) and sent to CM (`HttpCaseWorkingApiAdapter.cs:733`). The frontend already holds them as a list (`baselAndOecdCodes`, `MAX_CODES = 3`) and only splits them into three fields for the backend. **Store as a list.** The cap stays at 3 until the legacy consumers of `code1`–`code3` (existing endpoints, the CM payload, management-be's copy) move to the list |
-| `sites[].validFrom` (ReEx ORS-A approval date) | Not carried to the Accreditation; it stays in the application's legacy site data. An accredited site starts at the approval time of the version that added it | derived | Not system time |
+| `sites[].validFrom` (ReEx ORS-A approval date) | Dropped (v6.10): used only at seed time to set `selected`. An accredited site starts at the approval time of the version that added it | omitted | Not system time |
 | `sites[].selected` | Application.`applicationOverseasSites[].selected` | stored | |
 | `sites[].besEvidence` {besEvidenceUploads[], doYouWantToUploadMoreEvidence} | Application.`applicationOverseasSites[].besEvidence` → Accreditation.`accreditationOverseasSites[].besEvidence[]` at approval | stored | Evidence validity dates are business dates for the accredited site |
 | `sites[].isNewSite` | Application.`applicationOverseasSites[].isNewSite` | stored | Regulator badge (RA-292) |

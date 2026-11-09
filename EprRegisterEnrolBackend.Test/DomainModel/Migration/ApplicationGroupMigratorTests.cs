@@ -473,6 +473,136 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         );
     }
 
+    [Fact]
+    public async Task Migrate_CarriesTheSeededDetailsOntoTheModel()
+    {
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.CompanyRegisteredAddress = "1 High St, Leeds, LS1 1AA";
+        application.CompanyRegisterAddressPostcode = "LS1 1AA";
+        application.IsUkRegisteredAddress = true;
+        application.SubmitterContactDetails = new SubmitterContactDetailsModel
+        {
+            FullName = "Org Submitter",
+            Email = "org@example.com",
+        };
+        application.SiteAddress = "2 Mill Rd, Leeds";
+        application.PermitNumbers = ["EPR/AB1234"];
+        application.SourceReExAccreditationId = "reex-accreditation";
+        application.SourceYear = 2026;
+        application.PreviousAccreditationNumbers = ["A26OLD"];
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        var organisation = Assert.Single(
+            await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations)
+        );
+        Assert.Equal("1 High St, Leeds, LS1 1AA", organisation.FormattedRegisteredAddress);
+        Assert.Equal("LS1 1AA", organisation.RegisteredAddress?.Postcode);
+        Assert.True(organisation.IsUkRegisteredAddress);
+        Assert.Equal("org@example.com", organisation.SubmitterContactDetails?.Email);
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal("2 Mill Rd, Leeds", registration.Site?.FormattedAddress);
+        Assert.Equal(["EPR/AB1234"], registration.PermitNumbers);
+        var details = Assert.IsType<AccreditationDetails>(
+            (await CurrentApplicationAsync(application)).Details
+        );
+        Assert.Equal("reex-accreditation", details.SourceReExAccreditationId);
+        Assert.Equal(2026, details.SeedDataSourceYear);
+        Assert.Equal(["A26OLD"], details.PreviousReservedAccreditationNumbers);
+    }
+
+    [Fact]
+    public async Task Migrate_AnOlderSeededRegistrationAndOrganisation_AreFilledInNotReplaced()
+    {
+        await SeededRegistrationAsync();
+        await _stores.Organisations.GetOrCreateAsync(
+            ReExOrganisationId,
+            () =>
+                new OrganisationEntity
+                {
+                    ReExOrganisationId = ReExOrganisationId,
+                    Name = "From the seed",
+                },
+            await _factory.GetClient().StartSessionAsync(cancellationToken: Ct),
+            Ct
+        );
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.CompanyRegisteredAddress = "1 High St";
+        application.PermitNumbers = ["EPR/AB1234"];
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        var organisation = Assert.Single(
+            await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations)
+        );
+        Assert.Equal("From the seed", organisation.Name);
+        Assert.Equal("1 High St", organisation.FormattedRegisteredAddress);
+        Assert.Equal(
+            ["EPR/AB1234"],
+            Assert
+                .Single(
+                    await CurrentAsync<RegistrationEntity>(
+                        DomainModelCollections.RegistrationVersions
+                    )
+                )
+                .PermitNumbers
+        );
+    }
+
+    [Fact]
+    public async Task Migrate_ApplicationsHoldingDifferentCompanyDetails_RecordsTheOlderOne()
+    {
+        var older = NewApplication(ApplicationStatus.Started, Day1);
+        older.Year = 2026;
+        older.CompanyRegisteredAddress = "Old address";
+        older.PermitNumbers = ["OLD"];
+        var newer = NewApplication(ApplicationStatus.Started, Day2);
+        newer.CompanyRegisteredAddress = "New address";
+        newer.PermitNumbers = ["NEW"];
+        await _applications.CreateAsync(older);
+        await _applications.CreateAsync(newer);
+
+        var result = await MigrateAsync(newer);
+
+        var conflict = Assert.Single(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.SeededDetailsDiffer
+        );
+        Assert.Equal([older.Id!.Value], conflict.ApplicationIds);
+        Assert.Equal(
+            "New address",
+            Assert
+                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
+                .FormattedRegisteredAddress
+        );
+    }
+
+    [Fact]
+    public async Task Migrate_AnApprovedApplication_CopiesItsSourceOntoTheAccreditation()
+    {
+        var application = NewApplication(ApplicationStatus.Approved, Day1);
+        application.AccreditationReference = "A27EX1";
+        application.SourceReExAccreditationId = "reex-accreditation";
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        Assert.Equal(
+            "reex-accreditation",
+            Assert
+                .Single(
+                    await CurrentAsync<AccreditationEntity>(
+                        DomainModelCollections.AccreditationVersions
+                    )
+                )
+                .SourceReExAccreditationId
+        );
+    }
+
     private async Task<RegistrationEntity> SeededRegistrationAsync(
         string number = "R27FROMREEX",
         params string[] previousNumbers

@@ -19,6 +19,49 @@ public class OrganisationPersistence(
         loggerFactory
     )
 {
+    /// <summary>
+    /// Fills in the company address and submitter from <paramref name="values"/> where the organisation has none, such as
+    /// one a seed wrote before it copied them. What it already holds is left alone. Returns the organisation as stored.
+    /// </summary>
+    public async Task<OrganisationEntity> FillMissingCompanyDetailsAsync(
+        ObjectId organisationId,
+        OrganisationEntity values,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var filter = Builders<OrganisationEntity>.Filter.Eq(x => x.Id, organisationId);
+        var stored = await Collection.Find(session, filter).SingleAsync(cancellationToken);
+        var fillAddress =
+            stored.FormattedRegisteredAddress is null
+            && values.FormattedRegisteredAddress is not null;
+        var fillSubmitter =
+            stored.SubmitterContactDetails is null && values.SubmitterContactDetails is not null;
+        if (fillAddress)
+        {
+            stored.FormattedRegisteredAddress = values.FormattedRegisteredAddress;
+            stored.RegisteredAddress ??= values.RegisteredAddress;
+            stored.IsUkRegisteredAddress = values.IsUkRegisteredAddress;
+        }
+
+        if (fillSubmitter)
+        {
+            stored.SubmitterContactDetails = values.SubmitterContactDetails;
+        }
+
+        if (fillAddress || fillSubmitter)
+        {
+            await Collection.ReplaceOneAsync(
+                session,
+                filter,
+                stored,
+                cancellationToken: cancellationToken
+            );
+        }
+
+        return stored;
+    }
+
     /// <summary>The organisation with <paramref name="reExOrganisationId"/>, or null.</summary>
     public async Task<OrganisationEntity?> FindByReExOrganisationIdAsync(
         string reExOrganisationId,

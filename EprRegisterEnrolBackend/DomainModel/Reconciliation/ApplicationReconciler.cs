@@ -33,25 +33,9 @@ public sealed class ApplicationReconciler(
         "registrationEntityId",
         "accreditationEntityId",
         "overseasSites.sites[].overseasSiteEntityId",
-        "overseasSites.sites[].previousSites[].overseasSiteEntityId",
-    ];
-
-    /// <summary>
-    /// Legacy fields with no home in the model yet, because they wait on ReEx enrichment (Q35) or were never mapped.
-    /// Counted apart from differences, so they stay visible without hiding a real one.
-    /// </summary>
-    private static readonly HashSet<string> s_notInModel =
-    [
-        "siteAddress",
-        "companyRegisterAddressPostcode",
-        "companyRegisteredAddress",
-        "isUkRegisteredAddress",
-        "permitNumbers",
-        "sourceReExAccreditationId",
-        "sourceYear",
-        "previousAccreditationNumbers",
-        "submitterContactDetails",
+        // ReEx's approval date, used only to set Selected at seed time.
         "overseasSites.sites[].validFrom",
+        "overseasSites.sites[].previousSites[].overseasSiteEntityId",
     ];
 
     public async Task<ReconciliationReport> RunAsync(CancellationToken cancellationToken)
@@ -169,7 +153,6 @@ public sealed class ApplicationReconciler(
     private sealed class Tally
     {
         private readonly Dictionary<string, long> _differences = [];
-        private readonly Dictionary<string, long> _notInModel = [];
         private readonly List<ObjectId> _sample = [];
         private long _matching;
         private long _withDifferences;
@@ -184,11 +167,10 @@ public sealed class ApplicationReconciler(
             paths.ExceptWith(s_ignored);
             foreach (var path in paths)
             {
-                var counts = s_notInModel.Contains(path) ? _notInModel : _differences;
-                counts[path] = counts.GetValueOrDefault(path) + 1;
+                _differences[path] = _differences.GetValueOrDefault(path) + 1;
             }
 
-            if (paths.All(s_notInModel.Contains))
+            if (paths.Count == 0)
             {
                 _matching++;
                 return;
@@ -223,7 +205,6 @@ public sealed class ApplicationReconciler(
                 _unreadable,
                 _unreadableKinds,
                 _differences,
-                _notInModel,
                 _sample
             );
     }

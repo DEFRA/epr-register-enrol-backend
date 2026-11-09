@@ -89,6 +89,7 @@ public static class AccreditationFromApplication
                 ? null
                 : application.AccreditationReference,
             ApplicationId = application.Id,
+            SourceReExAccreditationId = application.SourceReExAccreditationId,
             Status = AccreditationStatus.Approved,
             ApprovedAt = application.CaseManagementStatusUpdatedAt,
             TonnageBand = TonnageBandConversion.FromLegacy(application.Prns.PlannedTonnageBand),

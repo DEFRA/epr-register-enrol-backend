@@ -24,6 +24,9 @@ public class AccreditationEntity : VersionedEntityBase
     /// <summary>The approving Application's <c>entityId</c>.</summary>
     public ObjectId? ApplicationId { get; set; }
 
+    /// <summary>ReEx's id for the prior-year accreditation the approving application was seeded from.</summary>
+    public string? SourceReExAccreditationId { get; set; }
+
     [BsonRepresentation(BsonType.String)]
     public AccreditationStatus Status { get; set; } = AccreditationStatus.Approved;
 

@@ -25,6 +25,32 @@ public static class SeedEntityMapper
             target.CompaniesHouseNumber = dto.CompaniesHouseNumber;
         }
 
+        if (!string.IsNullOrWhiteSpace(dto.CompanyRegisteredAddress))
+        {
+            target.FormattedRegisteredAddress = dto.CompanyRegisteredAddress;
+            target.IsUkRegisteredAddress = dto.IsUkRegisteredAddress;
+            target.RegisteredAddress = new PostalAddress
+            {
+                Line1 = dto.CompanyAddress?.Line1,
+                Line2 = dto.CompanyAddress?.Line2,
+                TownOrCity = dto.CompanyAddress?.Town,
+                Region = dto.CompanyAddress?.County,
+                Country = dto.CompanyAddress?.Country,
+                Postcode = dto.CompanyRegisterAddressPostcode,
+            };
+        }
+
+        if (dto.SubmitterContactDetails is { } contact)
+        {
+            target.SubmitterContactDetails = new ContactPerson
+            {
+                FullName = contact.FullName,
+                Email = contact.Email,
+                Phone = contact.Phone,
+                JobTitle = contact.JobTitle,
+            };
+        }
+
         MarkFromReEx(target.Source);
     }
 
@@ -43,6 +69,17 @@ public static class SeedEntityMapper
             ? WasteProcessingKind.Exporter
             : WasteProcessingKind.Reprocessor;
         ApplyNumber(target, dto.RegistrationReference);
+        if (dto.PermitNumbers.Count > 0)
+        {
+            target.PermitNumbers = [.. dto.PermitNumbers];
+        }
+
+        if (!string.IsNullOrWhiteSpace(dto.SiteAddress))
+        {
+            target.Site ??= new RegistrationSite();
+            target.Site.FormattedAddress = dto.SiteAddress;
+        }
+
         MarkFromReEx(target.Source);
     }
 

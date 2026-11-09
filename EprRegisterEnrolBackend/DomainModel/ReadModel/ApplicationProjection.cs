@@ -28,6 +28,17 @@ public static class ApplicationProjection
             OrgId = sources.Organisation?.OrganisationNumber,
             OrganisationName = sources.Organisation?.Name,
             CompaniesHouseNumber = sources.Organisation?.CompaniesHouseNumber,
+            CompanyRegisteredAddress = sources.Organisation?.FormattedRegisteredAddress,
+            CompanyRegisterAddressPostcode = sources.Organisation?.RegisteredAddress?.Postcode,
+            IsUkRegisteredAddress = sources.Organisation?.IsUkRegisteredAddress ?? false,
+            SubmitterContactDetails = Convert<SubmitterContactDetailsModel>(
+                sources.Organisation?.SubmitterContactDetails
+            ),
+            SiteAddress = registration?.Site?.FormattedAddress,
+            PermitNumbers = registration?.PermitNumbers ?? [],
+            SourceReExAccreditationId = details.SourceReExAccreditationId,
+            SourceYear = details.SeedDataSourceYear,
+            PreviousAccreditationNumbers = details.PreviousReservedAccreditationNumbers,
             Year = details.Year,
             RegistrationId = application.ReExRegistrationId,
             IsExporter = registration?.WasteProcessingType == WasteProcessingKind.Exporter,

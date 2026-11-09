@@ -14,7 +14,6 @@ public sealed record ReconciliationReport(
     long Unreadable,
     IReadOnlyDictionary<string, long> UnreadableByKind,
     IReadOnlyDictionary<string, long> DifferencesByField,
-    IReadOnlyDictionary<string, long> NotInModelByField,
     IReadOnlyList<ObjectId> SampleApplicationIds
 )
 {
