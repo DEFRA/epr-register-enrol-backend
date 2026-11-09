@@ -72,7 +72,8 @@ Group every panel by `labels.ClientName`.
 
 Built the same way as the existing ones: named `epr-register-enrol-backend - <what>`, in the
 `Playground/epr-register-enrol-backend-monitoring` folder, sent to the team Slack channel
-(`epr-register-enrol-team-alerts-non-prod` for non-prod; the production channel is to be agreed).
+(`#epr-register-enrol-team-alerts-non-prod` for dev, test and the other non-production
+environments, and `#epr-register-enrol-team-alerts-prod` for production).
 The existing rules use a sum over a window against a threshold, and fire at 1.
 
 | Alert | Fires when | Notes |
