@@ -29,8 +29,6 @@ public sealed class DomainModelMigrationService(
     ILogger<DomainModelMigrationService> logger
 ) : BackgroundService
 {
-    private const string LegacyCollection = "accreditationApplications";
-
     private readonly IDomainModelMigrationStatus _status = status;
     private readonly IMongoDbClientFactory _clientFactory = clientFactory;
     private readonly TimeProvider _clock = clock;
@@ -195,20 +193,15 @@ public sealed class DomainModelMigrationService(
             CancellationToken cancellationToken
         )
         {
-            var filter = after is { } id
-                ? Builders<BsonDocument>.Filter.Gt("_id", id)
-                : Builders<BsonDocument>.Filter.Empty;
-            var documents = await service
-                ._clientFactory.GetCollection<BsonDocument>(LegacyCollection)
-                .Find(filter)
-                .Sort(Builders<BsonDocument>.Sort.Ascending("_id"))
-                .Limit(service.BatchSize)
-                .Project(
-                    Builders<BsonDocument>
-                        .Projection.Include(s_organisationElement)
-                        .Include(s_registrationElement)
-                )
-                .ToListAsync(cancellationToken);
+            var documents = await LegacyApplicationWalk.NextBatchAsync(
+                service._clientFactory,
+                after,
+                service.BatchSize,
+                Builders<BsonDocument>
+                    .Projection.Include(s_organisationElement)
+                    .Include(s_registrationElement),
+                cancellationToken
+            );
             return documents.ConvertAll(ToCandidate);
         }
 
@@ -272,7 +265,9 @@ public sealed class DomainModelMigrationService(
             return documents.Select(d => d[s_entityIdElement].AsObjectId).ToHashSet();
         }
 
-        // Its own transaction, so anything that goes wrong here costs this group alone.
+        // Its own transaction, so anything that goes wrong here costs this group alone. The lease is only checked when
+        // progress is saved afterwards, so it is best-effort exclusion: a group in flight still commits if the lease was
+        // lost meanwhile. That is safe, as the migrator is idempotent and the unique indexes settle any race.
         private async Task<bool> MigrateGroupAsync(
             Candidate candidate,
             CancellationToken cancellationToken
@@ -357,6 +352,7 @@ public sealed class DomainModelMigrationService(
                 cancellationToken
             );
             service._status.RecordFailedGroups(failures.Count);
+            await WarnAboutOtherIdsAsync(cancellationToken);
             if (!service._logger.IsEnabled(LogLevel.Information))
             {
                 return;
@@ -369,6 +365,22 @@ public sealed class DomainModelMigrationService(
                 _migrated,
                 failures.Count
             );
+        }
+
+        // Never skipped silently: these cannot be walked or read, so they are counted instead.
+        private async Task WarnAboutOtherIdsAsync(CancellationToken cancellationToken)
+        {
+            var count = await LegacyApplicationWalk.CountOtherIdsAsync(
+                service._clientFactory,
+                cancellationToken
+            );
+            if (count > 0)
+            {
+                service._logger.LogWarning(
+                    "DomainModelMigration skipped {Count} legacy document(s) whose _id is not an ObjectId",
+                    count
+                );
+            }
         }
 
         private DomainModelMigrationState Progress(

@@ -571,6 +571,27 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
             .BeGreaterThan(TimeSpan.FromMinutes(2) * InsertRaceRetry.MaxAttempts);
 
     [Fact]
+    public async Task Run_ALegacyIdThatIsNotAnObjectId_IsCountedAndDoesNotStopTheRun()
+    {
+        await _factory
+            .GetCollection<BsonDocument>("accreditationApplications")
+            .InsertOneAsync(
+                new BsonDocument { { "_id", "not-an-object-id" }, { "year", 2027 } },
+                cancellationToken: Ct
+            );
+        var id = await ApplicationAsync(Registration(1));
+
+        await Service().RunAsync(Ct);
+
+        (await MigratedAsync()).Should().Contain(id);
+        _logger
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Warning && e.Message.Contains("not an ObjectId")
+            );
+    }
+
+    [Fact]
     public async Task Run_SchemaNotChecked_WaitsBecauseTheUniqueIndexesMayNotExist()
     {
         var id = await ApplicationAsync(Registration(1));

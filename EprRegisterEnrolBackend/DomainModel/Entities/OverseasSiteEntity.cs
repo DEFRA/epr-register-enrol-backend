@@ -53,6 +53,29 @@ public class OverseasSiteEntity : VersionedEntityBase
 
     public List<InterimSiteEntry> InterimSites { get; set; } = [];
 
+    /// <summary>Sets the first approved date unless the site already has one: it is written once and never overwritten.</summary>
+    public void RecordFirstApproval(DateTime at, FirstApprovalSource source)
+    {
+        if (FirstApprovedAt is null)
+        {
+            FirstApprovedAt = at;
+            FirstApprovalSource = source;
+        }
+    }
+
+    /// <summary>
+    /// For a version being built from a legacy site, which sets the date that site holds: an earlier or better one
+    /// replaces it before the version is saved. Does nothing when there is none.
+    /// </summary>
+    public void AdoptFirstApproval(DateTime? at, FirstApprovalSource? source)
+    {
+        if (at is not null)
+        {
+            FirstApprovedAt = at;
+            FirstApprovalSource = source;
+        }
+    }
+
     /// <summary>
     /// Site numbers that appear more than once in this ORS's own <see cref="InterimSites"/>. The unique index
     /// across the registration's ORSs does not catch a repeat inside one document, so the write path must

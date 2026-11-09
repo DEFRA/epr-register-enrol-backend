@@ -32,8 +32,8 @@ public class MigrationConflictPersistence(
         }
     }
 
-    /// <summary>Whether any conflict is recorded for the application.</summary>
-    public Task<bool> IsListedAsync(
+    /// <summary>The kinds of conflict recorded for the application.</summary>
+    public Task<List<MigrationConflictKind>> KindsForApplicationAsync(
         ObjectId applicationId,
         IClientSessionHandle session,
         CancellationToken cancellationToken = default
@@ -43,7 +43,8 @@ public class MigrationConflictPersistence(
                 session,
                 Builders<MigrationConflict>.Filter.AnyEq(c => c.ApplicationIds, applicationId)
             )
-            .AnyAsync(cancellationToken);
+            .Project(c => c.Kind)
+            .ToListAsync(cancellationToken);
 
     /// <summary>Whether a conflict of <paramref name="kind"/> is already recorded for the application.</summary>
     public Task<bool> ExistsAsync(

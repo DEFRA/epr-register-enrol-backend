@@ -54,7 +54,8 @@ public sealed class ApplicationReconcilerTests : IDisposable
             _factory,
             _applications,
             new ApplicationReadModel(stores),
-            stores.Conflicts
+            stores.Conflicts,
+            clock
         );
     }
 
@@ -497,7 +498,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
         report.AcceptedConflicts.Should().Be(0);
         report.WithDifferences.Should().Be(1);
         report.ModelOnlyByField.Should().ContainKey("permitNumbers");
-        report.DifferencesByField.Should().ContainKey("companyRegisteredAddress");
+        report.DifferencesByField.Should().NotContainKey("companyRegisteredAddress");
     }
 
     [Fact]
@@ -603,7 +604,8 @@ public sealed class ApplicationReconcilerTests : IDisposable
             _factory,
             _applications,
             new ApplicationReadModel(_stores),
-            _stores.Conflicts
+            _stores.Conflicts,
+            TimeProvider.System
         )
         {
             BatchSize = 1,
@@ -621,6 +623,54 @@ public sealed class ApplicationReconcilerTests : IDisposable
     public async Task ConflictsAreIndexedByApplication()
     {
         (await _stores.Conflicts.GetIndexNamesAsync(Ct)).Should().Contain("applicationIds");
+    }
+
+    [Fact]
+    public async Task Run_DriftAConflictDoesNotExplain_IsStillADifference()
+    {
+        var older = Application(ApplicationStatus.Started, Day1, 2026, Site(1, "001", "Plant"));
+        older.CompanyRegisteredAddress = "Older address";
+        var newer = Application(
+            ApplicationStatus.Started,
+            Day1.AddDays(1),
+            2027,
+            Site(1, "001", "Plant")
+        );
+        var olderId = await CreateAsync(older);
+        await MigrateAsync(await CreateAsync(newer));
+        await EditLegacyAsync(olderId, new BsonDocument("paymentReference", "CHANGED"));
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.AcceptedConflicts.Should().Be(0);
+        report.WithDifferences.Should().Be(1);
+        report
+            .DifferencesByField.Should()
+            .BeEquivalentTo(new Dictionary<string, long> { ["paymentReference"] = 1 });
+    }
+
+    [Fact]
+    public async Task Run_AConflictOfAnUnrelatedKind_AcceptsNothing()
+    {
+        var id = await CreateAsync(Application(sites: Site(1, "001", "Plant")));
+        await MigrateAsync(id);
+        await _factory
+            .GetCollection<MigrationConflict>(DomainModelCollections.MigrationConflicts)
+            .InsertOneAsync(
+                new MigrationConflict
+                {
+                    Kind = MigrationConflictKind.DuplicateLiveApplications,
+                    ReExRegistrationId = ReExRegistrationId,
+                    ApplicationIds = [id],
+                },
+                cancellationToken: Ct
+            );
+        await EditLegacyAsync(id, new BsonDocument("permitNumbers", new BsonArray { "CHANGED" }));
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.AcceptedConflicts.Should().Be(0);
+        report.DifferencesByField.Should().ContainKey("permitNumbers");
     }
 
     [Fact]

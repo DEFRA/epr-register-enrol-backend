@@ -222,7 +222,7 @@ public sealed class SeedDualWriter(
     {
         if (
             !string.IsNullOrWhiteSpace(site.ValidFrom)
-            && SeedEntityMapper.ParseApprovalDate(site.ValidFrom) is null
+            && SiteApprovalDate.Parse(site.ValidFrom) is null
         )
         {
             logger.LogWarning(

@@ -4,12 +4,15 @@ using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.DomainModel.Persistence;
 
-/// <summary>The <c>domainModelMigrations</c> collection: the migration's lease and progress (§6.1).</summary>
+/// <summary>
+/// The <c>domainModelMigrations</c> collection: the migration's lease and progress (§6.1). Bookkeeping for the run, not
+/// part of the model, so it is not one of the collections the schema check verifies.
+/// </summary>
 public class DomainModelMigrationPersistence(
     IMongoDbClientFactory connectionFactory,
     ILoggerFactory loggerFactory
 )
-    : DomainModelPersistence<DomainModelMigrationState>(
+    : MongoService<DomainModelMigrationState>(
         connectionFactory,
         DomainModelCollections.DomainModelMigrations,
         loggerFactory

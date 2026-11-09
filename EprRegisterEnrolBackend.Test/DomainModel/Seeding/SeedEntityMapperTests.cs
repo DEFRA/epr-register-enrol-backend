@@ -335,6 +335,6 @@ public class SeedEntityMapperTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("not a date")]
-    public void ParseApprovalDate_NothingReadable_IsNull(string? value) =>
-        Assert.Null(SeedEntityMapper.ParseApprovalDate(value));
+    public void SiteApprovalDate_NothingReadable_IsNull(string? value) =>
+        Assert.Null(SiteApprovalDate.Parse(value));
 }

@@ -1,4 +1,3 @@
-using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Entities;
@@ -94,10 +93,9 @@ public static class SeedEntityMapper
         target.IsEu = site.IsEu;
         target.IsOecd = site.IsOecd;
         target.Coordinates = site.Coordinates;
-        if (target.FirstApprovedAt is null && ParseApprovalDate(site.ValidFrom) is { } approved)
+        if (SiteApprovalDate.Parse(site.ValidFrom) is { } approved)
         {
-            target.FirstApprovedAt = approved;
-            target.FirstApprovalSource = Entities.FirstApprovalSource.ReEx;
+            target.RecordFirstApproval(approved, FirstApprovalSource.ReEx);
         }
 
         target.BaselOecdCodes = new[] { site.Code1, site.Code2, site.Code3 }
@@ -105,17 +103,6 @@ public static class SeedEntityMapper
             .Select(code => code!)
             .ToList();
     }
-
-    /// <summary>ReEx's approval date for a site as a UTC date, or null when there is none or it cannot be read.</summary>
-    public static DateTime? ParseApprovalDate(string? value) =>
-        DateTime.TryParse(
-            value,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-            out var date
-        )
-            ? date
-            : null;
 
     /// <summary>Whether the ORS already holds every field <see cref="ApplyTo(OverseasSiteEntity, OverseasSiteModel)"/> would write.</summary>
     public static bool HasSameDetails(OverseasSiteEntity current, OverseasSiteModel site)

@@ -699,6 +699,64 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Migrate_ReExDate_IsPreferredOverAnEarlierApprovalHere()
+    {
+        var approvedHere = NewApplication(
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Plant")
+        );
+        approvedHere.Year = 2026;
+        approvedHere.AccreditationReference = "A26EX1";
+        approvedHere.CaseManagementStatusUpdatedAt = new DateTime(
+            2020,
+            1,
+            1,
+            0,
+            0,
+            0,
+            DateTimeKind.Utc
+        );
+        var withReExDate = NewApplication(
+            ApplicationStatus.Started,
+            Day2,
+            ApprovedSite("2024-06-01T00:00:00Z")
+        );
+        await _applications.CreateAsync(approvedHere);
+        await _applications.CreateAsync(withReExDate);
+
+        await MigrateAsync(withReExDate);
+
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc), site.FirstApprovedAt);
+        Assert.Equal(FirstApprovalSource.ReEx, site.FirstApprovalSource);
+    }
+
+    [Fact]
+    public async Task Migrate_TwoRegistrationsOfOneOrganisation_TheNewestDetailsWinWhicheverIsMigratedFirst()
+    {
+        var older = NewApplication(ApplicationStatus.Started, Day1);
+        older.CompanyRegisteredAddress = "Old address";
+        var newer = NewApplication(ApplicationStatus.Started, Day2);
+        newer.RegistrationId = "6512a0f0c0ffee0000000003";
+        newer.RegistrationReference = "R27EX7654321P";
+        newer.CompanyRegisteredAddress = "New address";
+        await _applications.CreateAsync(older);
+        await _applications.CreateAsync(newer);
+
+        var first = await MigrateAsync(older);
+        await MigrateAsync(newer);
+
+        Assert.Equal(
+            "New address",
+            Assert
+                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
+                .FormattedRegisteredAddress
+        );
+        Assert.Contains(first.Conflicts, c => c.Kind == MigrationConflictKind.SeededDetailsDiffer);
+    }
+
+    [Fact]
     public void WithDetailsOf_NeverOverwritesFirstApprovedAt()
     {
         var earliest = new DateTime(2018, 1, 1, 0, 0, 0, DateTimeKind.Utc);

@@ -1,8 +1,9 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
-using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -18,10 +19,10 @@ public sealed class ApplicationReconciler(
     IMongoDbClientFactory clientFactory,
     IAccreditationApplicationPersistence applications,
     ApplicationReadModel readModel,
-    MigrationConflictPersistence conflicts
+    MigrationConflictPersistence conflicts,
+    TimeProvider clock
 )
 {
-    private const string LegacyCollection = "accreditationApplications";
     private const int MaxSampleIds = 20;
 
     /// <summary>Bookkeeping that belongs to each store, and the model's own foreign keys on the legacy document.</summary>
@@ -61,7 +62,7 @@ public sealed class ApplicationReconciler(
             }
 
             after = ids[^1];
-            await Task.Delay(BatchPause, cancellationToken);
+            await Task.Delay(BatchPause, clock, cancellationToken);
         }
     }
 
@@ -70,16 +71,13 @@ public sealed class ApplicationReconciler(
         CancellationToken cancellationToken
     )
     {
-        var filter = after is { } id
-            ? Builders<BsonDocument>.Filter.Gt("_id", id)
-            : Builders<BsonDocument>.Filter.Empty;
-        var documents = await clientFactory
-            .GetCollection<BsonDocument>(LegacyCollection)
-            .Find(filter)
-            .Sort(Builders<BsonDocument>.Sort.Ascending("_id"))
-            .Limit(BatchSize)
-            .Project(Builders<BsonDocument>.Projection.Include("_id"))
-            .ToListAsync(cancellationToken);
+        var documents = await LegacyApplicationWalk.NextBatchAsync(
+            clientFactory,
+            after,
+            BatchSize,
+            Builders<BsonDocument>.Projection.Include("_id"),
+            cancellationToken
+        );
         return documents.ConvertAll(d => d["_id"].AsObjectId);
     }
 
@@ -102,7 +100,7 @@ public sealed class ApplicationReconciler(
                 return;
             }
 
-            tally.Record(id, comparison.Found, comparison.ListedAsConflict);
+            tally.Record(id, comparison.Found, comparison.ConflictKinds);
         }
         // One document that cannot be read or projected is a finding for the report, not a reason to lose the report.
         catch (Exception ex)
@@ -113,7 +111,10 @@ public sealed class ApplicationReconciler(
         }
     }
 
-    private sealed record Comparison(DocumentDifferences Found, bool ListedAsConflict);
+    private sealed record Comparison(
+        DocumentDifferences Found,
+        IReadOnlyCollection<MigrationConflictKind> ConflictKinds
+    );
 
     // Null when the application has not been migrated. Conflicts are only looked up for an application that differs.
     private async Task<Comparison?> CompareInSnapshotAsync(
@@ -130,10 +131,11 @@ public sealed class ApplicationReconciler(
         }
 
         var differences = Differences(legacy, sources);
-        var listed =
+        IReadOnlyCollection<MigrationConflictKind> kinds =
             differences.Paths.Count > 0
-            && await conflicts.IsListedAsync(id, session, cancellationToken);
-        return new Comparison(differences, listed);
+                ? await conflicts.KindsForApplicationAsync(id, session, cancellationToken)
+                : [];
+        return new Comparison(differences, kinds);
     }
 
     private static DocumentDifferences Differences(
@@ -169,9 +171,9 @@ public sealed class ApplicationReconciler(
         foreach (var site in legacy.OverseasSites?.Sites ?? [])
         {
             InterimSiteSync.Normalise(site);
-            if (SeedEntityMapper.ParseApprovalDate(site.ValidFrom) is { } approved)
+            if (SiteApprovalDate.Parse(site.ValidFrom) is { } approved)
             {
-                site.ValidFrom = ApplicationProjection.FormatApprovalDate(approved);
+                site.ValidFrom = SiteApprovalDate.Format(approved);
             }
 
             foreach (
@@ -200,7 +202,11 @@ public sealed class ApplicationReconciler(
         public long Applications { get; set; }
         public long NotMigrated { get; set; }
 
-        public void Record(ObjectId id, DocumentDifferences differences, bool listedAsConflict)
+        public void Record(
+            ObjectId id,
+            DocumentDifferences differences,
+            IReadOnlyCollection<MigrationConflictKind> conflictKinds
+        )
         {
             var paths = differences.Paths;
             var modelOnly = differences.ModelOnly;
@@ -210,8 +216,12 @@ public sealed class ApplicationReconciler(
                 return;
             }
 
-            // A value only the model holds is never accepted: nothing on the legacy side explains it.
-            if (listedAsConflict && modelOnly.Count == 0)
+            // A conflict accepts only the fields it explains. A value only the model holds is never accepted: nothing on
+            // the legacy side explains it.
+            paths.RemoveWhere(path =>
+                !modelOnly.Contains(path) && ConflictExplanations.Explains(conflictKinds, path)
+            );
+            if (paths.Count == 0)
             {
                 _acceptedConflicts++;
                 return;

@@ -21,10 +21,13 @@
   customer many years ago. It comes from ReEx's site `validFrom` at seed, the earliest date across the group at migration,
   or the approval here for a site with no ReEx date. It is not the versioning `validFrom`, which is when a version was
   recorded. `firstApprovalSource` says which of those it was, because only ReEx's date was ever on the legacy application.
-- **Reconciliation counts a difference already listed in `migrationConflicts` as accepted**, in its own count.
+- **Reconciliation accepts only the differences a listed conflict explains**, each kind of conflict covering its own
+  fields, and counts an application as accepted only when every difference on it is explained.
 - **A value only the model holds is flagged and never accepted.** If legacy is blank and the model has a value, the report
   lists it as model-only, because something has to explain where it came from.
-- **Organisation and Registration keep one copy.** An application that took a different copy at seed time is listed in
+- **Organisation and Registration keep one copy.** The Organisation's details come from its newest application across
+  all its registrations, and a Registration's from its newest approved application, otherwise its newest. Blanks are
+  filled, and a seed's values are kept. An application that took a different copy at seed time is listed in
   `migrationConflicts` as `SeededDetailsDiffer`, and shows as a reconciliation difference.
 - **To decide before phase 5:** where `version`, `createdAt` and `updatedAt` come from. The projection doesn't set them and
   reconciliation ignores them, so a clean report says nothing about them, and `version` is the submit path's concurrency
@@ -1269,8 +1272,12 @@ Rules:
   current version in `applicationVersions`. Anything dual-write has already migrated is skipped without opening a
   transaction. The seed's `registrationEntityId` stamp is not used for this, because a seed writes no application
   version. A re-run with nothing left only reads.
-- **One instance at a time.** A lease (owner plus expiry) in the single `domainModelMigrations` document stops two
-  instances working at once. Another instance waits, and takes over if the lease expires.
+- **One instance at a time, best effort.** A lease (owner plus expiry) in the single `domainModelMigrations` document
+  keeps a second instance waiting, and it takes over if the lease expires. The lease is only checked when progress is
+  saved, so a group in flight still commits if the lease was lost meanwhile. That is safe, as the migrator is idempotent
+  and the unique indexes settle any race.
+- **A clean pass isn't repeated straight away.** If a pass with no failures finished in the last 10 minutes, the walk is
+  skipped, so instances starting together in a rolling deploy don't each walk every application.
 - **Small batches with a time budget.** Each tick does a bounded amount of work and yields. It never
   assumes it will finish before the container is replaced.
 - **Failures are loud, short and structured.**
@@ -1278,7 +1285,7 @@ Rules:
     Production logs are the only way to find out what happened, so the key must be enough to retry the
     item.
   - The group is recorded with `attempts` and `lastErrorKind`, and the run carries on without it. It shows as Degraded
-    in the readiness check, which still answers 200, and in the reconciliation report. It is tried again at the next
+    in the readiness check, which still answers 200, and as not migrated in the reconciliation report. It is tried again at the next
     startup, and is never skipped silently.
 - **No personal data in logs, errors or reports (GDPR).** Log only internal ids (`ObjectId`, `entityId`)
   and public numbers (organisation number, registration number, accreditation number), plus the error

@@ -178,15 +178,29 @@ public sealed class ApplicationGroupMigrator(
 
         public async Task ExecuteAsync()
         {
+            // The organisation spans registration groups, and the walk reaches the oldest first, so its details come
+            // from its newest application anywhere, not from whichever group got here first.
+            var newestInOrganisation =
+                await applications.GetNewestForOrganisationAsync(
+                    Newest.OrganisationId,
+                    session,
+                    cancellationToken
+                ) ?? Newest;
             var organisationId = await stores.Organisations.GetOrCreateAsync(
                 Newest.OrganisationId,
-                NewOrganisation,
+                () => NewOrganisation(newestInOrganisation),
+                session,
+                cancellationToken
+            );
+            await stores.Organisations.FillMissingCompanyDetailsAsync(
+                organisationId,
+                NewOrganisation(newestInOrganisation),
                 session,
                 cancellationToken
             );
             var organisation = await stores.Organisations.FillMissingCompanyDetailsAsync(
                 organisationId,
-                NewOrganisation(),
+                NewOrganisation(Newest),
                 session,
                 cancellationToken
             );
@@ -213,19 +227,20 @@ public sealed class ApplicationGroupMigrator(
 
         // --- step 1: Organisation and Registration -------------------------------------------------------------------
 
-        private OrganisationEntity NewOrganisation() =>
+        private OrganisationEntity NewOrganisation(AccreditationApplicationModel source) =>
             new()
             {
-                ReExOrganisationId = Newest.OrganisationId,
-                Name = Newest.OrganisationName,
-                OrganisationNumber = Newest.OrgId,
-                CompaniesHouseNumber = Newest.CompaniesHouseNumber,
-                FormattedRegisteredAddress = Blank(Newest.CompanyRegisteredAddress),
-                RegisteredAddress = Blank(Newest.CompanyRegisterAddressPostcode) is { } postcode
+                ReExOrganisationId = source.OrganisationId,
+                Name = source.OrganisationName,
+                OrganisationNumber = source.OrgId,
+                CompaniesHouseNumber = source.CompaniesHouseNumber,
+                FormattedRegisteredAddress = NullIfBlank(source.CompanyRegisteredAddress),
+                RegisteredAddress = NullIfBlank(source.CompanyRegisterAddressPostcode)
+                    is { } postcode
                     ? new PostalAddress { Postcode = postcode }
                     : null,
-                IsUkRegisteredAddress = Newest.IsUkRegisteredAddress,
-                SubmitterContactDetails = Newest.SubmitterContactDetails is { } contact
+                IsUkRegisteredAddress = source.IsUkRegisteredAddress,
+                SubmitterContactDetails = source.SubmitterContactDetails is { } contact
                     ? new ContactPerson
                     {
                         FullName = contact.FullName,
@@ -238,7 +253,7 @@ public sealed class ApplicationGroupMigrator(
                 UpdatedAt = now,
             };
 
-        private static string? Blank(string? value) =>
+        private static string? NullIfBlank(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value;
 
         // The Organisation and Registration keep one copy, but each application took its own at seed time, so one can
@@ -305,7 +320,7 @@ public sealed class ApplicationGroupMigrator(
         // A registration seeded before these were copied has none, so the newest application's fills it in.
         private RegistrationSite? WithSiteAddress(RegistrationSite? site)
         {
-            if (site?.FormattedAddress is not null || Blank(Newest.SiteAddress) is null)
+            if (site?.FormattedAddress is not null || NullIfBlank(Newest.SiteAddress) is null)
             {
                 return site;
             }
@@ -647,10 +662,9 @@ public sealed class ApplicationGroupMigrator(
             {
                 var fillsFirstApproved =
                     existing.FirstApprovedAt is null && firstApproval is not null;
-                if (fillsFirstApproved)
+                if (firstApproval is { } approval)
                 {
-                    existing.FirstApprovedAt = firstApproval!.Value.At;
-                    existing.FirstApprovalSource = firstApproval.Value.Source;
+                    existing.RecordFirstApproval(approval.At, approval.Source);
                 }
 
                 // The newest approval wins over details the seed copied from ReEx, when it is being migrated now. One
@@ -686,24 +700,23 @@ public sealed class ApplicationGroupMigrator(
             site.ProposedByApplicationId =
                 site.Origin == SiteOrigin.Operator ? winner.ApplicationId : null;
             site.InterimSites = plan.NewInterimSites;
-            site.FirstApprovedAt = firstApproval?.At;
-            site.FirstApprovalSource = firstApproval?.Source;
+            site.AdoptFirstApproval(firstApproval?.At, firstApproval?.Source);
             plan.Saved = await versions.InsertAsync(site, change, session, cancellationToken);
         }
 
-        // The earliest date any application knows the site was approved: ReEx's, or the approval here of an
-        // operator-added site, which has no ReEx date.
+        // ReEx's earliest date for the site whenever any application holds one, because only that goes back out as
+        // validFrom. Otherwise the earliest approval here, for a site ReEx has no date for.
         private static (DateTime At, FirstApprovalSource Source)? FirstApproval(SitePlan plan) =>
             plan
                 .Holdings.Select(ApprovalOf)
                 .Where(approval => approval is not null)
-                .OrderBy(approval => approval!.Value.At)
-                .ThenBy(approval => approval!.Value.Source)
+                .OrderBy(approval => approval!.Value.Source)
+                .ThenBy(approval => approval!.Value.At)
                 .FirstOrDefault();
 
         private static (DateTime At, FirstApprovalSource Source)? ApprovalOf(Holding holding)
         {
-            if (SeedEntityMapper.ParseApprovalDate(holding.Site.ValidFrom) is { } fromReEx)
+            if (SiteApprovalDate.Parse(holding.Site.ValidFrom) is { } fromReEx)
             {
                 return (fromReEx, FirstApprovalSource.ReEx);
             }

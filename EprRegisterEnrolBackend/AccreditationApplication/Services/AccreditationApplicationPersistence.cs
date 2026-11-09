@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -12,7 +13,7 @@ public class AccreditationApplicationPersistence(
 )
     : MongoService<AccreditationApplicationModel>(
         connectionFactory,
-        "accreditationApplications",
+        DomainModelCollections.LegacyApplications,
         loggerFactory
     ),
         IAccreditationApplicationPersistence
@@ -244,7 +245,10 @@ public class AccreditationApplicationPersistence(
             granted = filters.And(granted, filters.Eq(a => a.Year, filter.Year.Value));
         // Both are covered by the (OrgId, RegistrationReference, Year) index.
         if (filter.OrganisationNumber is not null)
-            granted = filters.And(granted, filters.Eq(a => a.OrgId, filter.OrganisationNumber.Value));
+            granted = filters.And(
+                granted,
+                filters.Eq(a => a.OrgId, filter.OrganisationNumber.Value)
+            );
         if (filter.RegistrationNumber is not null)
             granted = filters.And(
                 granted,
@@ -293,6 +297,34 @@ public class AccreditationApplicationPersistence(
 
     // Filters on OrganisationId as well as RegistrationId so the read uses the OrganisationId index:
     // RegistrationId has none of its own.
+    public async Task<AccreditationApplicationModel?> GetNewestForOrganisationAsync(
+        string organisationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Find(
+                Builders<AccreditationApplicationModel>.Filter.Eq(
+                    a => a.OrganisationId,
+                    organisationId
+                ),
+                session
+            )
+            .SortByDescending(a => a.UpdatedAt)
+            .ThenByDescending(a => a.Id)
+            .Limit(1)
+            .Project<AccreditationApplicationModel>(
+                Builders<AccreditationApplicationModel>
+                    .Projection.Include(a => a.OrganisationId)
+                    .Include(a => a.OrganisationName)
+                    .Include(a => a.OrgId)
+                    .Include(a => a.CompaniesHouseNumber)
+                    .Include(a => a.CompanyRegisteredAddress)
+                    .Include(a => a.CompanyRegisterAddressPostcode)
+                    .Include(a => a.IsUkRegisteredAddress)
+                    .Include(a => a.SubmitterContactDetails)
+            )
+            .FirstOrDefaultAsync(cancellationToken);
+
     public async Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
         string organisationId,
         string registrationId,
