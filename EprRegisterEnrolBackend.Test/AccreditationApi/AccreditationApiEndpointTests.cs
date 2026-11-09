@@ -967,6 +967,31 @@ public class AccreditationApiEndpointTests : IDisposable
 
     // ---- traceability ----
 
+    // RA-651: auth failures are alerted on by client and code, so both are pinned.
+    [Fact]
+    public async Task AFailedSignature_IsLoggedAsAWarning_WithTheClientIdAndCode()
+    {
+        var logs = new CapturingLoggerFactory();
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton<ILoggerFactory>(logs))
+        );
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            ServiceClientSigner.Request(HttpMethod.Get, AccreditationPath, ReExClientId, "wrong-secret"),
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        var failure = logs.Entries.Should()
+            .ContainSingle(e => e.Message.StartsWith("Service client auth failed"))
+            .Subject;
+        failure.LogLevel.Should().Be(LogLevel.Warning);
+        failure.Properties["Code"].Should().Be("invalid_signature");
+        failure.Properties["ClientId"].Should().Be(ReExClientId);
+        logs.Entries.Select(e => e.Message).Should().NotContain(m => m.Contains("wrong-secret"));
+    }
+
     [Fact]
     public async Task EveryCall_IsLoggedWithTheClient_AndNeverTheSecret()
     {
@@ -1009,6 +1034,18 @@ public class AccreditationApiEndpointTests : IDisposable
         access[0].Message.Should().Contain($"organisationNumber={Org}");
         access[0].Message.Should().Contain($"registrationNumber={Registration}");
         access[0].Message.Should().Contain("year=2027");
+
+        // The structured fields the per-consumer dashboards and alerts filter on (RA-651). Renaming
+        // one would silently empty a panel or stop an alert, so they are pinned here.
+        access[0].Properties["ClientId"].Should().Be(ReExClientId);
+        access[0].Properties["ClientName"].Should().Be("reex");
+        access[0].Properties["Method"].Should().Be("GET");
+        access[0].Properties["Route"].Should().Be(
+            "/v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}"
+        );
+        access[0].Properties["Status"].Should().Be(200);
+        access[0].Properties["DurationMs"].Should().BeOfType<long>();
+        access[0].LogLevel.Should().Be(LogLevel.Information);
 
         var everything = string.Join('\n', logs.Entries.Select(e => e.Message));
         everything.Should().NotContain(ReExSecret);

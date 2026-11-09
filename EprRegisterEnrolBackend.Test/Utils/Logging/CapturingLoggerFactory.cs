@@ -11,7 +11,14 @@ namespace EprRegisterEnrolBackend.Test.Utils.Logging;
 /// </summary>
 public sealed class CapturingLoggerFactory : ILoggerFactory
 {
-    public sealed record Entry(string Category, LogLevel LogLevel, string Message);
+    // Properties holds the structured values the entry was logged with (the placeholders of the
+    // message template), which is what a log-based dashboard or alert filters on.
+    public sealed record Entry(
+        string Category,
+        LogLevel LogLevel,
+        string Message,
+        IReadOnlyDictionary<string, object?> Properties
+    );
 
     private readonly ConcurrentQueue<Entry> _entries = new();
 
@@ -38,6 +45,16 @@ public sealed class CapturingLoggerFactory : ILoggerFactory
             TState state,
             Exception? exception,
             Func<TState, Exception?, string> formatter
-        ) => entries.Enqueue(new Entry(category, logLevel, formatter(state, exception)));
+        ) =>
+            entries.Enqueue(
+                new Entry(
+                    category,
+                    logLevel,
+                    formatter(state, exception),
+                    state is IEnumerable<KeyValuePair<string, object?>> pairs
+                        ? pairs.GroupBy(p => p.Key).ToDictionary(g => g.Key, g => g.Last().Value)
+                        : new Dictionary<string, object?>()
+                )
+            );
     }
 }

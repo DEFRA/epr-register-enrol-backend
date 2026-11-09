@@ -235,6 +235,20 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         );
     }
 
+    public Task<UnservableApprovedCounts> CountUnservableApprovedAsync(int firstYear)
+    {
+        var approved = _store
+            .Where(a => a.ApplicationStatus == ApplicationStatus.Approved && a.Year >= firstYear)
+            .ToList();
+        return Task.FromResult(
+            new UnservableApprovedCounts(
+                approved.Count(a => a.OrgId is null),
+                approved.Count(a => string.IsNullOrEmpty(a.RegistrationReference)),
+                approved.Count(a => string.IsNullOrEmpty(a.AccreditationReference))
+            )
+        );
+    }
+
     public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
         string registrationId,
         IClientSessionHandle? session = null

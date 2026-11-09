@@ -262,6 +262,43 @@ public class AccreditationApplicationPersistence(
         return (items, total);
     }
 
+    public async Task<UnservableApprovedCounts> CountUnservableApprovedAsync(int firstYear)
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        var approved = filters.And(
+            filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
+            filters.Gte(a => a.Year, firstYear)
+        );
+
+        var noOrganisation = await Collection.CountDocumentsAsync(
+            filters.And(approved, filters.Eq(a => a.OrgId, null))
+        );
+        var noRegistration = await Collection.CountDocumentsAsync(
+            filters.And(
+                approved,
+                filters.Or(
+                    filters.Eq(a => a.RegistrationReference, null),
+                    filters.Eq(a => a.RegistrationReference, string.Empty)
+                )
+            )
+        );
+        var noAccreditation = await Collection.CountDocumentsAsync(
+            filters.And(
+                approved,
+                filters.Or(
+                    filters.Eq(a => a.AccreditationReference, null),
+                    filters.Eq(a => a.AccreditationReference, string.Empty)
+                )
+            )
+        );
+
+        return new UnservableApprovedCounts(
+            (int)noOrganisation,
+            (int)noRegistration,
+            (int)noAccreditation
+        );
+    }
+
     public async Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
         string applicationId,
