@@ -7,8 +7,10 @@ using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
-// RA-691: bound from Migrations:Ra691AccreditationReferenceCorrection. Every flag defaults off,
-// so the migration is a no-op in every environment until deliberately switched on.
+// RA-691: bound from Migrations:Ra691AccreditationReferenceCorrection. The section keeps its RA-691
+// name now that it also carries RA-763's correction, because prod's cdp-app-config sets these keys.
+// Every flag defaults off, so the migration is a no-op in every environment until deliberately
+// switched on.
 public sealed class AccreditationReferenceCorrectionOptions
 {
     public const string SectionName = "Migrations:Ra691AccreditationReferenceCorrection";
@@ -24,10 +26,16 @@ public sealed class AccreditationReferenceCorrectionOptions
     public string? SpotCheckConfirmedBy { get; set; }
 }
 
-// RA-691: corrects the accreditation references of three approved 2027 renewals that were issued
-// a fresh counter sequence instead of keeping the sequence from their 2026 reference (root cause
-// RA-690). One-off and scoped to exactly the records listed in Corrections - there is deliberately
-// no query that could widen it.
+// Corrects the accreditation references of four approved 2027 renewals. One-off and scoped to
+// exactly the records listed in Corrections - there is deliberately no query that could widen it.
+//   - RA-691 (three records): issued a fresh counter sequence instead of keeping the sequence from
+//     their 2026 reference (root cause RA-690).
+//   - RA-763 (Clearfield Envirotech): issued from its registration reference, because its 2026
+//     accreditation predates this service, so RA-690's derivation found no previous accreditation
+//     held here and fell back to the registration.
+// Each correction carries its ticket, which prefixes its log lines; the run-level lines name both.
+// The migration re-runs on every boot while enabled and skips records already corrected, so the
+// RA-691 records corrected on prod are left alone.
 //
 // Matching rule: each target is located by the reference it currently holds - incorrect or
 // corrected - and only then checked against its stable identity (OrgId, Year 2027, the
@@ -61,6 +69,7 @@ public class AccreditationReferenceCorrectionMigration(
 ) : BackgroundService
 {
     internal sealed record Correction(
+        string Ticket,
         string OrganisationName,
         int OrgId,
         MaterialType Material,
@@ -73,6 +82,7 @@ public class AccreditationReferenceCorrectionMigration(
     internal static readonly IReadOnlyList<Correction> Corrections =
     [
         new(
+            "RA-691",
             "Infinity Plastic Solutions Ltd",
             500527,
             MaterialType.Plastic,
@@ -80,6 +90,7 @@ public class AccreditationReferenceCorrectionMigration(
             "A27ER5005270246PL"
         ),
         new(
+            "RA-691",
             "PLASGRAN LIMITED",
             500105,
             MaterialType.Plastic,
@@ -87,11 +98,20 @@ public class AccreditationReferenceCorrectionMigration(
             "A27ER5001050197PL"
         ),
         new(
+            "RA-691",
             "Kronospan Limited",
             500108,
             MaterialType.Wood,
             "A27WR5001080075WO",
             "A27WR5001080008WO"
+        ),
+        new(
+            "RA-763",
+            "CLEARFIELD ENVIROTECH LIMITED",
+            500324,
+            MaterialType.Plastic,
+            "A27ER5003240079PL",
+            "A27ER5003240164PL"
         ),
     ];
 
@@ -117,7 +137,7 @@ public class AccreditationReferenceCorrectionMigration(
         {
             // Every plan check runs before any write, and each write is independently guarded,
             // so a failure part-way leaves a state the next run re-plans from safely.
-            logger.LogError(ex, "RA-691 accreditation reference correction failed");
+            logger.LogError(ex, "RA-691/RA-763 accreditation reference correction failed");
         }
     }
 
@@ -133,7 +153,7 @@ public class AccreditationReferenceCorrectionMigration(
         if (apply && string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy))
         {
             logger.LogError(
-                "RA-691 accreditation reference correction: Apply is set but SpotCheckConfirmedBy "
+                "RA-691/RA-763 accreditation reference correction: Apply is set but SpotCheckConfirmedBy "
                     + "is not, so running as a DRY RUN. Set it to whoever reviewed the dry-run "
                     + "output against the live records."
             );
@@ -143,7 +163,7 @@ public class AccreditationReferenceCorrectionMigration(
         if (apply && DualWriteIsOn())
         {
             logger.LogError(
-                "RA-691 accreditation reference correction: DomainModel:DualWrite is on, and this "
+                "RA-691/RA-763 accreditation reference correction: DomainModel:DualWrite is on, and this "
                     + "correction writes the legacy application without the domain model, so running as "
                     + "a DRY RUN. Apply it with DualWrite off."
             );
@@ -153,7 +173,7 @@ public class AccreditationReferenceCorrectionMigration(
         var mode = apply ? "APPLY" : "DRY RUN (nothing will be written)";
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-                "RA-691 accreditation reference correction starting. Mode={Mode}",
+                "RA-691/RA-763 accreditation reference correction starting. Mode={Mode}",
                 mode
             );
 
@@ -167,7 +187,7 @@ public class AccreditationReferenceCorrectionMigration(
             if (plan is null)
             {
                 logger.LogError(
-                    "RA-691 accreditation reference correction aborted: nothing has been written"
+                    "RA-691/RA-763 accreditation reference correction aborted: nothing has been written"
                 );
                 return RunResult.Aborted;
             }
@@ -185,7 +205,7 @@ public class AccreditationReferenceCorrectionMigration(
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-                "RA-691 accreditation reference correction complete. Mode={Mode}",
+                "RA-691/RA-763 accreditation reference correction complete. Mode={Mode}",
                 mode
             );
         return apply ? RunResult.Applied : RunResult.DryRun;
@@ -212,8 +232,9 @@ public class AccreditationReferenceCorrectionMigration(
             if (logger.IsEnabled(LogLevel.Information))
             {
                 logger.LogInformation(
-                    "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId} "
+                    "{Ticket} {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId} "
                         + "already holds {Corrected}; skipped",
+                    c.Ticket,
                     mode,
                     c.OrganisationName,
                     c.OrgId,
@@ -227,8 +248,9 @@ public class AccreditationReferenceCorrectionMigration(
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "RA-691 {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId}: "
+                "{Ticket} {Mode}: {OrganisationName} ({OrgId}) application {ApplicationId}: "
                     + "{Incorrect} -> {Corrected}",
+                c.Ticket,
                 mode,
                 c.OrganisationName,
                 c.OrgId,
@@ -260,8 +282,9 @@ public class AccreditationReferenceCorrectionMigration(
         if (holdingIncorrect.Count > 1 || holdingCorrected.Count > 1)
         {
             logger.LogError(
-                "RA-691 {OrganisationName} ({OrgId}): {Incorrect} is held by {IncorrectCount} "
+                "{Ticket} {OrganisationName} ({OrgId}): {Incorrect} is held by {IncorrectCount} "
                     + "records and {Corrected} by {CorrectedCount}; expected at most one each",
+                c.Ticket,
                 c.OrganisationName,
                 c.OrgId,
                 c.Incorrect,
@@ -275,9 +298,10 @@ public class AccreditationReferenceCorrectionMigration(
         if (holdingIncorrect.Count == 1 && holdingCorrected.Count == 1)
         {
             logger.LogError(
-                "RA-691 {OrganisationName} ({OrgId}): corrected value {Corrected} is already held "
+                "{Ticket} {OrganisationName} ({OrgId}): corrected value {Corrected} is already held "
                     + "by application {OtherApplicationId} while application {ApplicationId} "
                     + "still holds {Incorrect}",
+                c.Ticket,
                 c.OrganisationName,
                 c.OrgId,
                 c.Corrected,
@@ -291,8 +315,9 @@ public class AccreditationReferenceCorrectionMigration(
         if (holdingIncorrect.Count == 0 && holdingCorrected.Count == 0)
         {
             logger.LogError(
-                "RA-691 {OrganisationName} ({OrgId}): no record holds {Incorrect} or {Corrected}; "
+                "{Ticket} {OrganisationName} ({OrgId}): no record holds {Incorrect} or {Corrected}; "
                     + "its current reference matches neither",
+                c.Ticket,
                 c.OrganisationName,
                 c.OrgId,
                 c.Incorrect,
@@ -306,10 +331,11 @@ public class AccreditationReferenceCorrectionMigration(
         if (!IsTargetAccreditation(target, c) || target.Id is not { } applicationId)
         {
             logger.LogError(
-                "RA-691 {OrganisationName} ({OrgId}): application {ApplicationId} holding "
+                "{Ticket} {OrganisationName} ({OrgId}): application {ApplicationId} holding "
                     + "{Reference} is OrgId {ActualOrgId}, Year {Year}, {MaterialType}, "
                     + "IsExporter {IsExporter}; expected OrgId {ExpectedOrgId}, Year {ExpectedYear}, "
                     + "{ExpectedMaterialType}, reprocessor",
+                c.Ticket,
                 c.OrganisationName,
                 c.OrgId,
                 target.Id,
@@ -363,9 +389,10 @@ public class AccreditationReferenceCorrectionMigration(
         if (updated is null)
         {
             logger.LogError(
-                "RA-691 {OrganisationName} ({OrgId}) application {ApplicationId} no longer holds "
+                "{Ticket} {OrganisationName} ({OrgId}) application {ApplicationId} no longer holds "
                     + "{Incorrect}; it changed after planning, so nothing was written to it. "
                     + "Re-run the dry run to see its current state.",
+                c.Ticket,
                 c.OrganisationName,
                 c.OrgId,
                 plan.ApplicationId,
@@ -377,8 +404,9 @@ public class AccreditationReferenceCorrectionMigration(
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "RA-691 APPLIED: {OrganisationName} ({OrgId}) application {ApplicationId}: "
+                "{Ticket} APPLIED: {OrganisationName} ({OrgId}) application {ApplicationId}: "
                     + "{Incorrect} -> {Corrected}. Spot check confirmed by {ConfirmedBy}",
+                c.Ticket,
                 c.OrganisationName,
                 c.OrgId,
                 plan.ApplicationId,

@@ -15,7 +15,7 @@ using RunResult = EprRegisterEnrolBackend.AccreditationApplication.Startup.Accre
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
-// RA-691: runs against the real ephemeral mongod so the guarded $set/$addToSet update and the
+// RA-691 / RA-763: runs against the real ephemeral mongod so the guarded $set/$addToSet update and the
 // reference lookups are exercised exactly as production runs them.
 public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
 {
@@ -25,6 +25,8 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     private const string PlasgranCorrected = "A27ER5001050197PL";
     private const string KronospanIncorrect = "A27WR5001080075WO";
     private const string KronospanCorrected = "A27WR5001080008WO";
+    private const string ClearfieldIncorrect = "A27ER5003240079PL";
+    private const string ClearfieldCorrected = "A27ER5003240164PL";
 
     private readonly string _databaseName;
     private readonly TestMongoDbClientFactory _factory;
@@ -74,26 +76,70 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     private static AccreditationApplicationModel Kronospan(string reference, int year = 2027) =>
         Application(500108, reference, year, MaterialType.Wood);
 
-    // The three incorrect records plus unrelated ones that must never change: another
+    private static AccreditationApplicationModel Clearfield(string reference, int year = 2027) =>
+        Application(500324, reference, year);
+
+    // The four incorrect records plus unrelated ones that must never change: another
     // accreditation of the same material for the same org (a second site) and a 2026 record, for
-    // both a plastic and the wood target, and another org entirely.
+    // both a plastic and the wood target, Clearfield's 2026 accreditation (the reference its
+    // correction keeps the sequence of), and another org entirely.
     private async Task<(
         ObjectId Infinity,
         ObjectId Plasgran,
-        ObjectId Kronospan
+        ObjectId Kronospan,
+        ObjectId Clearfield
     )> SeedIncorrectStateAsync()
     {
         var infinity = await SeedAsync(Application(500527, InfinityIncorrect));
         var plasgran = await SeedAsync(Application(500105, PlasgranIncorrect));
         var kronospan = await SeedAsync(Kronospan(KronospanIncorrect));
+        var clearfield = await SeedAsync(Clearfield(ClearfieldIncorrect));
         await SeedAsync(Application(500527, "A27ER5005270400PL"));
         await SeedAsync(Application(500527, "A26ER5005270246PL", year: 2026));
         await SeedAsync(Kronospan("A27WR5001080100WO"));
         await SeedAsync(Kronospan("A26WR5001080008WO", year: 2026));
+        await SeedAsync(Clearfield("A26ER5003240164PL", year: 2026));
         await SeedAsync(
             Application(500999, "A27EX5009990123GL", material: MaterialType.Glass, isExporter: true)
         );
-        return (infinity.Id!.Value, plasgran.Id!.Value, kronospan.Id!.Value);
+        return (
+            infinity.Id!.Value,
+            plasgran.Id!.Value,
+            kronospan.Id!.Value,
+            clearfield.Id!.Value
+        );
+    }
+
+    private static AccreditationApplicationModel AlreadyCorrected(
+        AccreditationApplicationModel application,
+        string incorrect
+    )
+    {
+        application.PreviousAccreditationNumbers.Add(incorrect);
+        return application;
+    }
+
+    // Prod as RA-763 finds it: the three RA-691 records were corrected on 2026-11-02 and
+    // Clearfield still holds the reference issued from its registration.
+    private async Task<(
+        IReadOnlyList<ObjectId> Ra691,
+        ObjectId Clearfield
+    )> SeedRa691CorrectedStateAsync()
+    {
+        var infinity = await SeedAsync(
+            AlreadyCorrected(Application(500527, InfinityCorrected), InfinityIncorrect)
+        );
+        var plasgran = await SeedAsync(
+            AlreadyCorrected(Application(500105, PlasgranCorrected), PlasgranIncorrect)
+        );
+        var kronospan = await SeedAsync(
+            AlreadyCorrected(Kronospan(KronospanCorrected), KronospanIncorrect)
+        );
+        var clearfield = await SeedAsync(Clearfield(ClearfieldIncorrect));
+        return (
+            [infinity.Id!.Value, plasgran.Id!.Value, kronospan.Id!.Value],
+            clearfield.Id!.Value
+        );
     }
 
     private AccreditationReferenceCorrectionMigration CreateMigration(
@@ -152,7 +198,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     }
 
     [Fact]
-    public async Task Dry_run_logs_exactly_the_three_changes_and_writes_nothing()
+    public async Task Dry_run_logs_exactly_the_four_changes_and_writes_nothing()
     {
         await SeedIncorrectStateAsync();
         var before = await SnapshotAsync();
@@ -163,7 +209,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         result.Should().Be(RunResult.DryRun);
         (await SnapshotAsync()).Should().Equal(before);
         var changes = Logged(LogLevel.Information).Where(m => m.Contains(" -> ")).ToList();
-        changes.Should().HaveCount(3);
+        changes.Should().HaveCount(4);
         changes
             .Should()
             .ContainSingle(m =>
@@ -182,7 +228,14 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
                 m.Contains("Kronospan Limited (500108)")
                 && m.Contains($"{KronospanIncorrect} -> {KronospanCorrected}")
             );
-        changes.Should().OnlyContain(m => m.Contains("DRY RUN"));
+        changes
+            .Should()
+            .ContainSingle(m =>
+                m.StartsWith("RA-763 DRY RUN")
+                && m.Contains("CLEARFIELD ENVIROTECH LIMITED (500324)")
+                && m.Contains($"{ClearfieldIncorrect} -> {ClearfieldCorrected}")
+            );
+        changes.Where(m => m.StartsWith("RA-691 DRY RUN")).Should().HaveCount(3);
         Logged(LogLevel.Error).Should().BeEmpty();
     }
 
@@ -219,7 +272,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     [Fact]
     public async Task Apply_sets_the_corrected_references_and_keeps_the_incorrect_ones_as_previous()
     {
-        var (infinityId, plasgranId, kronospanId) = await SeedIncorrectStateAsync();
+        var (infinityId, plasgranId, kronospanId, clearfieldId) = await SeedIncorrectStateAsync();
 
         var result = await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
@@ -234,18 +287,26 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         var kronospan = await ReadAsync(kronospanId);
         kronospan.AccreditationReference.Should().Be(KronospanCorrected);
         kronospan.PreviousAccreditationNumbers.Should().Equal(KronospanIncorrect);
-        Logged(LogLevel.Information)
-            .Where(m => m.StartsWith("RA-691 APPLIED"))
+        var clearfield = await ReadAsync(clearfieldId);
+        clearfield.AccreditationReference.Should().Be(ClearfieldCorrected);
+        clearfield.PreviousAccreditationNumbers.Should().Equal(ClearfieldIncorrect);
+        var applied = Logged(LogLevel.Information).Where(m => m.Contains(" APPLIED: ")).ToList();
+        applied.Should().HaveCount(4).And.OnlyContain(m => m.Contains("A Reviewer"));
+        applied.Count(m => m.StartsWith("RA-691 APPLIED")).Should().Be(3);
+        applied
             .Should()
-            .HaveCount(3)
-            .And.OnlyContain(m => m.Contains("A Reviewer"));
+            .ContainSingle(m =>
+                m.StartsWith("RA-763 APPLIED")
+                && m.Contains("CLEARFIELD ENVIROTECH LIMITED (500324)")
+                && m.Contains($"{ClearfieldIncorrect} -> {ClearfieldCorrected}")
+            );
     }
 
     [Fact]
     public async Task Apply_changes_no_other_record()
     {
-        var (infinityId, plasgranId, kronospanId) = await SeedIncorrectStateAsync();
-        var targets = new[] { infinityId, plasgranId, kronospanId };
+        var (infinityId, plasgranId, kronospanId, clearfieldId) = await SeedIncorrectStateAsync();
+        var targets = new[] { infinityId, plasgranId, kronospanId, clearfieldId };
         var before = (await SnapshotAsync())
             .Where(d => !targets.Contains(d["_id"].AsObjectId))
             .ToList();
@@ -272,7 +333,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
 
         result.Should().Be(RunResult.Applied);
         (await SnapshotAsync()).Should().Equal(afterFirst);
-        Logged(LogLevel.Information).Count(m => m.Contains("skipped")).Should().Be(3);
+        Logged(LogLevel.Information).Count(m => m.Contains("skipped")).Should().Be(4);
     }
 
     [Fact]
@@ -283,6 +344,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(infinity);
         var plasgran = await SeedAsync(Application(500105, PlasgranIncorrect));
         var kronospan = await SeedAsync(Kronospan(KronospanIncorrect));
+        var clearfield = await SeedAsync(Clearfield(ClearfieldIncorrect));
         var infinityBefore = await _raw.Find(new BsonDocument("_id", infinity.Id!.Value))
             .FirstAsync(TestContext.Current.CancellationToken);
 
@@ -300,6 +362,119 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         (await ReadAsync(kronospan.Id!.Value))
             .AccreditationReference.Should()
             .Be(KronospanCorrected);
+        (await ReadAsync(clearfield.Id!.Value))
+            .AccreditationReference.Should()
+            .Be(ClearfieldCorrected);
+    }
+
+    [Fact]
+    public async Task Dry_run_after_RA_691_reports_the_three_as_skipped_and_only_Clearfield_as_a_change()
+    {
+        await SeedRa691CorrectedStateAsync();
+        var before = await SnapshotAsync();
+
+        var result = await CreateMigration(enabled: true, apply: false)
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        result.Should().Be(RunResult.DryRun);
+        (await SnapshotAsync()).Should().Equal(before);
+        var info = Logged(LogLevel.Information).ToList();
+        info.Where(m => m.Contains("skipped"))
+            .Should()
+            .HaveCount(3)
+            .And.OnlyContain(m => m.StartsWith("RA-691 DRY RUN"));
+        info.Where(m => m.Contains(" -> "))
+            .Should()
+            .ContainSingle()
+            .Which.Should()
+            .StartWith("RA-763 DRY RUN")
+            .And.Contain("CLEARFIELD ENVIROTECH LIMITED (500324)")
+            .And.Contain($"{ClearfieldIncorrect} -> {ClearfieldCorrected}");
+        Logged(LogLevel.Error).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Apply_after_RA_691_leaves_the_three_untouched_and_corrects_Clearfield()
+    {
+        var (ra691, clearfieldId) = await SeedRa691CorrectedStateAsync();
+        var ra691Before = (await SnapshotAsync())
+            .Where(d => ra691.Contains(d["_id"].AsObjectId))
+            .ToList();
+
+        var result = await CreateMigration(enabled: true, apply: true)
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        result.Should().Be(RunResult.Applied);
+        (await SnapshotAsync())
+            .Where(d => ra691.Contains(d["_id"].AsObjectId))
+            .Should()
+            .Equal(ra691Before);
+        var clearfield = await ReadAsync(clearfieldId);
+        clearfield.AccreditationReference.Should().Be(ClearfieldCorrected);
+        clearfield.PreviousAccreditationNumbers.Should().Equal(ClearfieldIncorrect);
+        Logged(LogLevel.Information)
+            .Where(m => m.Contains(" APPLIED: "))
+            .Should()
+            .ContainSingle()
+            .Which.Should()
+            .StartWith("RA-763 APPLIED")
+            .And.Contain("A Reviewer");
+        Logged(LogLevel.Error).Should().BeEmpty();
+    }
+
+    // Clearfield is planned last, so a missing Clearfield record must still stop the three
+    // earlier, valid fixes from being written.
+    [Fact]
+    public async Task Missing_Clearfield_record_aborts_the_whole_run_without_writes()
+    {
+        await SeedAsync(Application(500527, InfinityIncorrect));
+        await SeedAsync(Application(500105, PlasgranIncorrect));
+        await SeedAsync(Kronospan(KronospanIncorrect));
+        await SeedAsync(Clearfield("A27ER5003240999PL"));
+        var before = await SnapshotAsync();
+
+        var result = await CreateMigration(enabled: true, apply: true)
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        result.Should().Be(RunResult.Aborted);
+        (await SnapshotAsync()).Should().Equal(before);
+        Logged(LogLevel.Error)
+            .Should()
+            .Contain(m =>
+                m.StartsWith("RA-763 CLEARFIELD ENVIROTECH LIMITED (500324)")
+                && m.Contains("matches neither")
+            );
+    }
+
+    [Theory]
+    [InlineData(500999, 2027, MaterialType.Plastic, false)]
+    [InlineData(500324, 2026, MaterialType.Plastic, false)]
+    [InlineData(500324, 2027, MaterialType.Wood, false)]
+    [InlineData(500324, 2027, MaterialType.Plastic, true)]
+    public async Task Clearfield_reference_held_by_a_record_that_is_not_its_accreditation_aborts_without_writes(
+        int orgId,
+        int year,
+        MaterialType material,
+        bool isExporter
+    )
+    {
+        await SeedAsync(Application(500527, InfinityIncorrect));
+        await SeedAsync(Application(500105, PlasgranIncorrect));
+        await SeedAsync(Kronospan(KronospanIncorrect));
+        await SeedAsync(Application(orgId, ClearfieldIncorrect, year, material, isExporter));
+        var before = await SnapshotAsync();
+
+        var result = await CreateMigration(enabled: true, apply: true)
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        result.Should().Be(RunResult.Aborted);
+        (await SnapshotAsync()).Should().Equal(before);
+        Logged(LogLevel.Error)
+            .Should()
+            .Contain(m =>
+                m.StartsWith("RA-763 CLEARFIELD ENVIROTECH LIMITED (500324)")
+                && m.Contains("expected OrgId 500324, Year 2027, Plastic, reprocessor")
+            );
     }
 
     [Fact]
@@ -310,6 +485,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(infinity);
         await SeedAsync(Application(500105, PlasgranIncorrect));
         await SeedAsync(Kronospan(KronospanIncorrect));
+        await SeedAsync(Clearfield(ClearfieldIncorrect));
 
         await CreateMigration(enabled: true, apply: true)
             .RunAsync(TestContext.Current.CancellationToken);
@@ -322,10 +498,11 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     [Fact]
     public async Task Record_holding_neither_value_aborts_the_whole_run_without_writes()
     {
-        // PLASGRAN and Kronospan are fine, but Infinity's record holds some other value.
+        // PLASGRAN, Kronospan and Clearfield are fine, but Infinity's record holds some other value.
         await SeedAsync(Application(500527, "A27ER5005270999PL"));
         await SeedAsync(Application(500105, PlasgranIncorrect));
         await SeedAsync(Kronospan(KronospanIncorrect));
+        await SeedAsync(Clearfield(ClearfieldIncorrect));
         var before = await SnapshotAsync();
 
         var result = await CreateMigration(enabled: true, apply: true)
@@ -380,6 +557,7 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         await SeedAsync(Application(orgId, InfinityIncorrect, year, material, isExporter));
         await SeedAsync(Application(500105, PlasgranIncorrect));
         await SeedAsync(Kronospan(KronospanIncorrect));
+        await SeedAsync(Clearfield(ClearfieldIncorrect));
         var before = await SnapshotAsync();
 
         var result = await CreateMigration(enabled: true, apply: true)
@@ -390,13 +568,14 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
     }
 
     // The expected material is per correction: Kronospan's reference is a wood one, so a plastic
-    // record holding it is not the target even though the two plastic corrections accept plastic.
+    // record holding it is not the target even though the three plastic corrections accept plastic.
     [Fact]
     public async Task Kronospan_reference_held_by_a_plastic_record_aborts_without_writes()
     {
         await SeedAsync(Application(500527, InfinityIncorrect));
         await SeedAsync(Application(500105, PlasgranIncorrect));
         await SeedAsync(Application(500108, KronospanIncorrect, material: MaterialType.Plastic));
+        await SeedAsync(Clearfield(ClearfieldIncorrect));
         var before = await SnapshotAsync();
 
         var result = await CreateMigration(enabled: true, apply: true)

@@ -185,7 +185,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // path) rather than on whichever request first resolves the singleton.
     builder.Services.AddHostedService<MongoIndexInitializerService>();
 
-    // RA-691: one-off correction of three incorrectly generated accreditation references.
+    // RA-691 / RA-763: one-off correction of four incorrectly generated accreditation references
+    // (three under RA-691, Clearfield Envirotech's under RA-763).
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
     builder.Services.Configure<AccreditationReferenceCorrectionOptions>(
         builder.Configuration.GetSection(AccreditationReferenceCorrectionOptions.SectionName)
