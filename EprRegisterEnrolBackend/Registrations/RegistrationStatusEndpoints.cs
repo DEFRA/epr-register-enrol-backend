@@ -36,8 +36,8 @@ public static class RegistrationStatusEndpoints
             );
 
     // registrationId is the ReEx registration id, which is what the frontend's URLs carry. RA-697: organisationId is
-    // the ReEx organisation id in the same URL. ReEx names it, and must say it holds the registration: a
-    // registration-only page has no accreditation to tie the two together.
+    // the ReEx organisation id in the same URL, and required. ReEx names it, and must say it holds the registration:
+    // a registration-only page has no accreditation to tie the two together.
     private static async Task<IResult> GetStatus(
         string registrationId,
         string? organisationId,
@@ -46,6 +46,9 @@ public static class RegistrationStatusEndpoints
         CancellationToken cancellationToken
     )
     {
+        if (string.IsNullOrWhiteSpace(organisationId))
+            return Results.BadRequest("organisationId is required.");
+
         var current = await store.FindCurrentByReExRegistrationIdAsync(
             registrationId,
             cancellationToken
@@ -53,20 +56,12 @@ public static class RegistrationStatusEndpoints
         if (current is null)
             return Results.NotFound();
 
-        string? organisationName = null;
-        if (!string.IsNullOrWhiteSpace(organisationId))
-        {
-            var holder = await reEx.GetRegistrationHolderNameAsync(
-                organisationId,
-                registrationId,
-                cancellationToken
-            );
-            if (holder.IsNotFound)
-                return Results.NotFound();
-            // Any other failure leaves the name out rather than failing the status, which every manage page
-            // needs; the frontend shows no registration-only page without it.
-            organisationName = holder.IsSuccess ? holder.Value : null;
-        }
+        var holder = await reEx.GetRegistrationHolderNameAsync(organisationId, registrationId, cancellationToken);
+        if (holder.IsNotFound)
+            return Results.NotFound();
+        // Any other failure leaves the name out rather than failing the status, which every manage page
+        // needs; the frontend shows no registration-only page without it.
+        var organisationName = holder.IsSuccess ? holder.Value : null;
 
         return Results.Ok(
             new RegistrationStatusResponse(

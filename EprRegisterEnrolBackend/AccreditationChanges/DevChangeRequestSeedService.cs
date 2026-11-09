@@ -14,7 +14,7 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 // (registered only) has the one InProgress item, a New ORS accreditation in the only draft, as RA-492's journey
 // would make; the accredited ORSs 001-003 have one ORS update each, Queried, Submitted and Updated, and the tonnage
 // band upgrade is Duly made. Granted, refused and withdrawn items make up the history. The exporter registration
-// also has one registration-only ORS update (Submitted, on Dragon), which its accreditation view merges in: 14
+// also has one registration-only ORS update (Refused, on Dragon), which its accreditation view merges in: 14
 // items. Reprocessor: tonnage band upgrades only.
 // Orgs 50019 (RA-492's) and 50020 (the empty states') get none. Org 50021 (registration only) gets five
 // registration-only ORS updates (no accreditation), one item each across its seeded ORS records, none In
@@ -84,11 +84,11 @@ public class DevChangeRequestSeedService(
     ];
 
     // RA-697 task 014: org 50018's exporter registration also has a registration-only request (no accreditation):
-    // an ORS update on Dragon, registered only, keyed by the accreditation's site id and ORS id. Older than Dragon's
-    // draft, so the overseas-sites page still shows Dragon In progress. Numbered after the exporter's requests.
+    // an ORS update on Dragon, registered only. Refused, because Dragon's draft is its one active item. Numbered
+    // after the exporter's requests.
     private static readonly RequestSeed[] ExporterRegistrationOnlyRequests =
     [
-        new(Update, 9, 15, [Ors("004", ChangeItemStatus.Submitted)]),
+        new(Update, 9, 15, [Ors("004", ChangeItemStatus.Rejected)]),
     ];
 
     // RA-697: org 50021's, on DevExporterAccreditationSeedService's registered ORS records.
@@ -214,7 +214,11 @@ public class DevChangeRequestSeedService(
                     {
                         ItemId = itemId,
                         ChangeType = seed.ChangeType,
-                        SiteId = site.SiteId,
+                        // A registration-only item is keyed by its ORS id's integer value, as the registration view keys
+                        // its sites, even when the registration's accreditation keys the same ORS differently.
+                        SiteId = target.ApplicationId is null
+                            ? int.Parse(site.OrsId!, System.Globalization.CultureInfo.InvariantCulture)
+                            : site.SiteId,
                         OrsId = site.OrsId,
                         SiteName = site.SiteName,
                         Status = item.Status,

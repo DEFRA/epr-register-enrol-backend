@@ -130,6 +130,13 @@ public static class ChangeRequestRules
     public static OverseasSiteModel? FindSite(AccreditationApplicationModel accreditation, int siteId) =>
         accreditation.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
 
+    /// <summary>
+    /// RA-697: a registration-only item's SiteId is its ORS id's integer value, which need not be the
+    /// accreditation's key for the same ORS, so the ORS id is the match whenever the item and the site both have one.
+    /// </summary>
+    public static bool IsForSite(ChangeRequestSite item, OverseasSiteModel site) =>
+        item.OrsId is not null && site.OrsId is not null ? item.OrsId == site.OrsId : item.SiteId == site.SiteId;
+
     public static ChangeRequestView ToView(
         AccreditationChangeRequest request,
         AccreditationApplicationModel accreditation
@@ -144,7 +151,7 @@ public static class ChangeRequestRules
         var sites = request
             .Sites.Select(requestSite =>
             {
-                var site = orsSites.FirstOrDefault(s => s.SiteId == requestSite.SiteId);
+                var site = orsSites.FirstOrDefault(s => IsForSite(requestSite, s));
                 var effective = Effective(site, requestSite.Answers);
                 var missing = MissingFields(site, requestSite);
                 return new ChangeRequestSiteView(

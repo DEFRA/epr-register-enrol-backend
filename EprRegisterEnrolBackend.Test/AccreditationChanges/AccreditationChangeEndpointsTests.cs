@@ -876,6 +876,52 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         Strings(view.GetProperty("pendingOrsIds")).Should().Equal("006");
     }
 
+    // A registration-only item is keyed by its ORS id's integer value (6 for ORS 006), not the
+    // accreditation's site key (901911), so it is matched to the site by ORS id.
+    private static ChangeRequestSite RegistrationKeyedIndiaItem(ChangeItemStatus status) => Item(6, "006", status);
+
+    [Fact]
+    public async Task Get_RegistrationOnlyItemKeyedByOrsNumber_CountsTowardsTheSitesPendingStatus()
+    {
+        var registrationOnly = SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Queried)]);
+
+        var view = await Get();
+
+        var site = SiteIn(view, 901911);
+        site.GetProperty("pendingRequestId").GetString().Should().Be(registrationOnly.RequestId);
+        site.GetProperty("pendingRequestStatus").GetString().Should().Be("Submitted");
+    }
+
+    [Fact]
+    public async Task Get_RegistrationOnlyItemKeyedByOrsNumber_TakesItsEffectiveAnswersFromTheMatchingSite()
+    {
+        var registrationOnly = SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Submitted)]);
+
+        var view = await Get();
+
+        var country = SiteIn(view, 901911).GetProperty("site").GetProperty("country").GetString();
+        country.Should().NotBeNullOrWhiteSpace();
+        var item = SiteIn(RequestIn(view, registrationOnly.RequestId), 6);
+        item.GetProperty("effective").GetProperty("country").GetString().Should().Be(country);
+    }
+
+    // Only one change per ORS can be active at a time, whichever kind of request holds it.
+    [Fact]
+    public async Task AddSite_RegistrationOnlyRequestHoldsAnActiveItemForTheOrs_Conflicts()
+    {
+        SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Submitted)]);
+
+        (await AddSite(901911)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddSite_RegistrationOnlyRequestsItemForTheOrsIsFinal_CanBeAdded()
+    {
+        SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Rejected)]);
+
+        (await AddSite(901911)).StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
     // RA-492's journey and payment page act only on the accreditation's own draft.
     [Fact]
     public async Task Get_RegistrationOnlyDraft_NeverBecomesTheActiveRequest()

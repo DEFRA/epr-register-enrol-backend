@@ -25,6 +25,8 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
     private static readonly string ReExRegistrationId =
         FakeOrganisationPersistence.Reg50003.ToString();
     private static readonly string StatusPath = $"/api/v1/registrations/{ReExRegistrationId}/status";
+    // RA-697: organisationId is required; FakeOrganisationPersistence's org 50003 holds the registration.
+    private static readonly string HeldStatusPath = $"{StatusPath}?organisationId=50003";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -93,7 +95,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
             cancellationToken: Ct
         );
 
-        var response = await client.GetAsync(StatusPath, Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await Json(response);
@@ -122,7 +124,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 cancellationToken: Ct
             );
 
-        var response = await client.GetAsync($"{StatusPath}?organisationId=50003", Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await Json(response);
@@ -159,7 +161,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 cancellationToken: Ct
             );
 
-        var response = await client.GetAsync($"{StatusPath}?organisationId=50003", Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await Json(response);
@@ -217,16 +219,19 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 cancellationToken: Ct
             );
 
-        var response = await client.GetAsync($"{StatusPath}?organisationId=50003", Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         (await Json(response)).GetProperty("siteAddress").GetString()
             .Should()
             .Be("Green Works, Leeds, LS10 1AB");
     }
 
-    // The organisation is ReEx's, which the registration's own record does not name.
-    [Fact]
-    public async Task WithoutAnOrganisationId_ReturnsNoOrganisationName()
+    // RA-697: without the organisation there is no ReEx check that it holds the registration.
+    [Theory]
+    [InlineData("")]
+    [InlineData("?organisationId=")]
+    [InlineData("?organisationId=%20")]
+    public async Task WithoutAnOrganisationId_ReturnsBadRequest(string query)
     {
         using var factory = Factory(expandEnabled: true);
         using var client = FrontendClient(factory);
@@ -237,10 +242,9 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 cancellationToken: Ct
             );
 
-        var response = await client.GetAsync(StatusPath, Ct);
+        var response = await client.GetAsync($"{StatusPath}{query}", Ct);
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        (await Json(response)).GetProperty("organisationName").ValueKind.Should().Be(JsonValueKind.Null);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Theory]
@@ -251,7 +255,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
         using var factory = Factory(expandEnabled);
         using var client = FrontendClient(factory);
 
-        var response = await client.GetAsync(StatusPath, Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -276,7 +280,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
             cancellationToken: Ct
         );
 
-        var response = await client.GetAsync(StatusPath, Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -294,7 +298,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 cancellationToken: Ct
             );
 
-        var response = await client.GetAsync(StatusPath, Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -305,7 +309,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
         using var factory = Factory(expandEnabled: true);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(StatusPath, Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -320,7 +324,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
             "integration-management-be-secret"
         );
 
-        var response = await client.GetAsync(StatusPath, Ct);
+        var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }

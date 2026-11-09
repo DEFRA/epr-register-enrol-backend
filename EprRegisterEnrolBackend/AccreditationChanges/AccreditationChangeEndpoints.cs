@@ -175,18 +175,10 @@ public static class AccreditationChangeEndpoints
         );
         // RA-697: the registration's registration-only requests for the accreditation's material and year show too,
         // so nothing disappears when an accreditation is granted mid-year.
-        var registrationOnly = accreditation!.RegistrationId is { } registrationId
-            ? await services.Requests.ListForRegistrationAsync(
-                organisationId,
-                registrationId,
-                accreditation.MaterialType,
-                accreditation.Year,
-                services.CancellationToken
-            )
-            : [];
+        var registrationOnly = await ListRegistrationOnlyAsync(organisationId, accreditation!, services);
         var requests = ownRequests.Concat(registrationOnly).OrderByDescending(r => r.CreatedAt).ToList();
         // A never-registered site has no status and is left out, as RA-425's page shows it on neither tab.
-        var sites = (accreditation.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
+        var sites = (accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
             .Select(site => (Site: site, Status: ChangeRequestRules.AccreditationStatus(site)))
             .Where(s => s.Status is not null)
             .Select(s => (s.Site, s.Status!.Value))
@@ -290,6 +282,25 @@ public static class AccreditationChangeEndpoints
         );
     }
 
+    private static bool HoldsActiveItemFor(AccreditationChangeRequest request, OverseasSiteModel site) =>
+        request.Sites.Exists(item => item.Status.IsActive() && ChangeRequestRules.IsForSite(item, site));
+
+    // RA-697: the accreditation's registration's registration-only requests for its material and year.
+    private static async Task<List<AccreditationChangeRequest>> ListRegistrationOnlyAsync(
+        string organisationId,
+        AccreditationApplicationModel accreditation,
+        ChangeServices services
+    ) =>
+        accreditation.RegistrationId is { } registrationId
+            ? await services.Requests.ListForRegistrationAsync(
+                organisationId,
+                registrationId,
+                accreditation.MaterialType,
+                accreditation.Year,
+                services.CancellationToken
+            )
+            : [];
+
     // The header with its sites, active request, requests and pending ORS ids, from the requests (newest first).
     private static AccreditationChangesView ChangesView(
         AccreditationChangesView header,
@@ -299,12 +310,8 @@ public static class AccreditationChangeEndpoints
     {
         // RA-697: a site is in flight while a request holds an active item for it (AC09: a Submitted
         // one stays pending); a granted, refused or withdrawn item no longer holds it. Newest first.
-        var inFlightBySite = new Dictionary<int, AccreditationChangeRequest>();
-        foreach (var request in requests)
-        {
-            foreach (var site in request.Sites.Where(s => s.Status.IsActive()))
-                inFlightBySite.TryAdd(site.SiteId, request);
-        }
+        AccreditationChangeRequest? InFlight(OverseasSiteModel site) =>
+            requests.Find(r => HoldsActiveItemFor(r, site));
 
         var orsSites = sites.Select(s => s.Site).ToList();
         // RA-697: only the view's own draft is active - an accreditation's, or a registration-only one on the
@@ -317,7 +324,7 @@ public static class AccreditationChangeEndpoints
             Sites = sites
                 .Select(s =>
                 {
-                    inFlightBySite.TryGetValue(s.Site.SiteId, out var pending);
+                    var pending = InFlight(s.Site);
                     return new AccreditationChangeSiteView(
                         s.Site.SiteId,
                         s.Site.OrsId,
@@ -366,11 +373,12 @@ public static class AccreditationChangeEndpoints
             applicationId,
             services.CancellationToken
         );
+        // RA-697: only one change per ORS can be active, so a submitted registration-only request counts too.
+        var registrationOnly = await ListRegistrationOnlyAsync(organisationId, accreditation!, services);
         if (
-            requests.Any(r =>
-                r.Status == ChangeRequestStatus.Submitted
-                && r.Sites.Exists(s => s.SiteId == body.SiteId && s.Status.IsActive())
-            )
+            requests
+                .Concat(registrationOnly)
+                .Any(r => r.Status == ChangeRequestStatus.Submitted && HoldsActiveItemFor(r, site!))
         )
             return Results.Conflict(
                 "This overseas site already has a change request waiting for a regulator decision."

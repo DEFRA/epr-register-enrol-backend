@@ -121,8 +121,20 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
     public async Task SeedAsync_EachOrsHasAtMostOneActiveItem_AndTheOtherActiveStatusesOneEach()
     {
         var requests = await SeedAndList(ExporterApp);
+        // Only one change per ORS can be active, whichever kind of request holds it.
+        var registrationOnly = await _requests.ListForRegistrationAsync(
+            Org,
+            DevExporterOrg.Manage.RegistrationId.ToString(),
+            MaterialType.Plastic,
+            Year,
+            Ct
+        );
 
-        var activeSites = requests.SelectMany(r => r.Sites).Where(s => s.Status.IsActive()).ToList();
+        var activeSites = requests
+            .Concat(registrationOnly)
+            .SelectMany(r => r.Sites)
+            .Where(s => s.Status.IsActive())
+            .ToList();
         activeSites.Select(s => s.OrsId).Should().OnlyHaveUniqueItems();
         activeSites.Select(s => s.OrsId).Should().BeEquivalentTo("001", "002", "003", "004");
         var activeItems = ItemsOf(requests).Where(i => i.Status.IsActive()).ToList();
@@ -293,8 +305,9 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
         items.Select(i => i.OrsId).Distinct().Should().HaveCount(4);
     }
 
-    // RA-697 task 014: 50018's exporter also has one registration-only ORS update (no accreditation), Submitted, on
-    // Dragon - registered only, and in the accreditation's site list with the same site id and ORS id.
+    // RA-697 task 014: 50018's exporter also has one registration-only ORS update (no accreditation) on Dragon -
+    // registered only, and in the accreditation's site list. Keyed by the ORS id's integer value, as every
+    // registration-only item is, and Refused, so Dragon's draft stays its one active item.
     [Fact]
     public async Task SeedAsync_GivesTheAccreditedExporterOneRegistrationOnlyOrsUpdateOnDragon()
     {
@@ -315,10 +328,9 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
         request.Status.Should().Be(ChangeRequestStatus.Submitted);
         request.CaseManagementReference.Should().Be("CR26050018A012");
         var item = request.Sites.Should().ContainSingle().Subject;
-        var dragon = ExporterSites.Single(s => s.OrsId == "004");
         (item.SiteId, item.OrsId, item.SiteName, item.Status)
             .Should()
-            .Be((dragon.SiteId, "004", "Dragon Recyclers", ChangeItemStatus.Submitted));
+            .Be((4, "004", "Dragon Recyclers", ChangeItemStatus.Rejected));
         (await _requests.ListAsync(Org, ExporterApp, Ct)).Should().NotContain(r => r.RequestId == request.RequestId);
     }
 
