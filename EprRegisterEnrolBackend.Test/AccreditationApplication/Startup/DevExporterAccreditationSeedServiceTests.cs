@@ -257,6 +257,25 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
             .HaveCount(4);
     }
 
+    // RA-697: org 50022, registered with no accreditation and no ORSs, for the overseas-sites page's empty tabs.
+    [Fact]
+    public async Task SeedAsync_GivesTheNoOverseasSitesExporterAnApprovedRegistrationWithNoAccreditationOrOrsRecords()
+    {
+        (await SeedApplications(organisationId: "50022")).Should().BeEmpty();
+
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050022",
+            Ct
+        );
+        registration!.Status.Should().Be(RegistrationStatus.Approved);
+        registration.WasteProcessingType.Should().Be(WasteProcessingKind.Exporter);
+        (await _overseasSites.FindActiveByRegistrationAsync(registration.EntityId, Ct)).Should().BeEmpty();
+
+        var org = await new FakeOrganisationPersistence(Clock2026, includeDevExporters: true).GetByOrgIdAsync(50022);
+        org!.CompanyDetails!.Name.Should().Be("No Overseas Sites Exports Ltd");
+        org.Registrations!.Should().ContainSingle().Which.Id.ToString().Should().Be(registration.ReExRegistrationId);
+    }
+
     // The accredited orgs' ORSs come from their accreditations, as before; only 50021's are domain-model records.
     [Fact]
     public async Task SeedAsync_GivesTheAccreditedExportersNoOrsRecords()

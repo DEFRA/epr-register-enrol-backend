@@ -91,12 +91,30 @@ internal sealed class DevExporterOrg
         IsAccredited = false,
     };
 
+    /// <summary>
+    /// RA-697: an Approved exporter registration with no accreditation and no registered ORSs, for the
+    /// overseas-sites page's empty Accredited and Registered tabs.
+    /// </summary>
+    internal static readonly DevExporterOrg NoOverseasSites = new()
+    {
+        OrgId = 50022,
+        Name = "No Overseas Sites Exports Ltd",
+        TradingName = "No Overseas Sites Exports",
+        Email = "info@nooverseassitesexports.co.uk",
+        CompaniesHouseNumber = "12345022",
+        AddressLine1 = "22 Wharf Street",
+        Town = "Liverpool",
+        Postcode = "L3 4AA",
+        IsAccredited = false,
+    };
+
     internal static readonly IReadOnlyList<DevExporterOrg> All =
     [
         Manage,
         InYearChange,
         NoChangeRequests,
         RegistrationOnly,
+        NoOverseasSites,
     ];
 
     private DevExporterOrg() { }
