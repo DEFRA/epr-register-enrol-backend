@@ -15,8 +15,13 @@
 - **The legacy fields that had no home now have one**, written by the seed and the migration (§5.1): the flattened site
   address and permit numbers on Registration, the registered address, its UK flag and the submitter on Organisation,
   and `sourceReExAccreditationId`, `seedDataSourceYear` and `previousReservedAccreditationNumbers` on the Application.
-  `sourceReExAccreditationId` is copied to the Accreditation at approval. A site's ReEx `validFrom` is dropped: it is only
-  used at seed time, to set `selected`.
+  `sourceReExAccreditationId` is copied to the Accreditation at approval. The per-application copy of a site's ReEx `validFrom` is
+  dropped, and its earliest value becomes `firstApprovedAt` on the ORS.
+- **`firstApprovedAt` on the ORS**, written once and never overwritten, so it shows a site was first approved for this
+  customer many years ago. It comes from ReEx's site `validFrom` at seed, the earliest date across the group at migration,
+  or the approval here for a site with no ReEx date. It is not the versioning `validFrom`, which is when a version was
+  recorded.
+- **Reconciliation counts a difference already listed in `migrationConflicts` as accepted**, in its own count.
 - **Organisation and Registration keep one copy.** An application that took a different copy at seed time is listed in
   `migrationConflicts` as `SeededDetailsDiffer`, and shows as a reconciliation difference.
 - **Corrected the phase 3 rollback:** a re-run skips what is already migrated, so a stale model has to be truncated first.
@@ -1050,7 +1055,7 @@ in `AccreditationDetails`. Envelope fields such as `status` and `applicationRefe
 | `sites[].siteName`, `siteAddress`, `addressLine1`, `addressLine2`, `townOrCity`, `country`, `coordinates`, `contactName`, `contactEmail`, `contactPhone`, `isEu`, `isOecd`, `repatriatedLoads`, `conditionsOfExport` | ORS (structured `address`, `contact`), overlaid with `applicationOverseasSites[].proposedChanges` | derived (flattened again) | |
 | `sites[].operationCodes[]` | ORS.`operationCodes`, plus overlay | derived | Regulator correction writes to the overlay ([A7](#assumptions)) |
 | `sites[].code1`, `code2`, `code3` | ORS.`baselOecdCodes[]` (list) | derived: list split back into `code1`–`code3` | ⚠ **Not** a legacy duplicate of `operationCodes`, as PR #210's mapping suggests (`:267`, `:309`). They are Basel/OECD waste codes: `code1` is mandatory and validated against a BA-signed-off list (`Validators/OverseasSiteRequestValidatorBase.cs:55-73`) and sent to CM (`HttpCaseWorkingApiAdapter.cs:733`). The frontend already holds them as a list (`baselAndOecdCodes`, `MAX_CODES = 3`) and only splits them into three fields for the backend. **Store as a list.** The cap stays at 3 until the legacy consumers of `code1`–`code3` (existing endpoints, the CM payload, management-be's copy) move to the list |
-| `sites[].validFrom` (ReEx ORS-A approval date) | Dropped (v6.10): used only at seed time to set `selected`. An accredited site starts at the approval time of the version that added it | omitted | Not system time |
+| `sites[].validFrom` (ReEx ORS-A approval date) | ORS.`firstApprovedAt`, written once (v6.10). The per-application copy is dropped; it also sets `selected` at seed time. An accredited site starts at the approval time of the version that added it | omitted | Not system time |
 | `sites[].selected` | Application.`applicationOverseasSites[].selected` | stored | |
 | `sites[].besEvidence` {besEvidenceUploads[], doYouWantToUploadMoreEvidence} | Application.`applicationOverseasSites[].besEvidence` → Accreditation.`accreditationOverseasSites[].besEvidence[]` at approval | stored | Evidence validity dates are business dates for the accredited site |
 | `sites[].isNewSite` | Application.`applicationOverseasSites[].isNewSite` | stored | Regulator badge (RA-292) |

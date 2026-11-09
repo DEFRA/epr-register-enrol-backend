@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson;
@@ -15,7 +16,8 @@ namespace EprRegisterEnrolBackend.DomainModel.Reconciliation;
 public sealed class ApplicationReconciler(
     IMongoDbClientFactory clientFactory,
     IAccreditationApplicationPersistence applications,
-    ApplicationReadModel readModel
+    ApplicationReadModel readModel,
+    MigrationConflictPersistence conflicts
 )
 {
     private const string LegacyCollection = "accreditationApplications";
@@ -85,11 +87,12 @@ public sealed class ApplicationReconciler(
             using var session = await clientFactory
                 .GetClient()
                 .StartSessionAsync(cancellationToken: cancellationToken);
-            var (legacy, sources) = await session.WithTransactionAsync(
+            var (legacy, sources, listed) = await session.WithTransactionAsync(
                 async (s, token) =>
                     (
                         await applications.GetByObjectIdAsync(id, s, token),
-                        await readModel.LoadAsync(id, s, token)
+                        await readModel.LoadAsync(id, s, token),
+                        await conflicts.IsListedAsync(id, s, token)
                     ),
                 new TransactionOptions(readConcern: ReadConcern.Snapshot),
                 cancellationToken
@@ -100,7 +103,7 @@ public sealed class ApplicationReconciler(
                 return;
             }
 
-            tally.Record(id, Differences(legacy, sources));
+            tally.Record(id, Differences(legacy, sources), listed);
         }
         // A document the current classes cannot read or project: a finding for the report, not a reason to stop.
         catch (Exception ex) when (ex is FormatException or MongoDB.Bson.BsonException)
@@ -156,24 +159,31 @@ public sealed class ApplicationReconciler(
         private readonly List<ObjectId> _sample = [];
         private long _matching;
         private long _withDifferences;
+        private long _acceptedConflicts;
         private long _unreadable;
         private readonly Dictionary<string, long> _unreadableKinds = [];
 
         public long Applications { get; set; }
         public long NotMigrated { get; set; }
 
-        public void Record(ObjectId id, HashSet<string> paths)
+        public void Record(ObjectId id, HashSet<string> paths, bool listedAsConflict)
         {
             paths.ExceptWith(s_ignored);
-            foreach (var path in paths)
-            {
-                _differences[path] = _differences.GetValueOrDefault(path) + 1;
-            }
-
             if (paths.Count == 0)
             {
                 _matching++;
                 return;
+            }
+
+            if (listedAsConflict)
+            {
+                _acceptedConflicts++;
+                return;
+            }
+
+            foreach (var path in paths)
+            {
+                _differences[path] = _differences.GetValueOrDefault(path) + 1;
             }
 
             _withDifferences++;
@@ -201,6 +211,7 @@ public sealed class ApplicationReconciler(
                 Applications,
                 _matching,
                 _withDifferences,
+                _acceptedConflicts,
                 NotMigrated,
                 _unreadable,
                 _unreadableKinds,

@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -641,12 +642,16 @@ public sealed class ApplicationGroupMigrator(
                 plan.OrsId
             );
             var winner = plan.Holdings[0];
+            var firstApprovedAt = FirstApprovedAt(plan);
             if (plan.Existing is { } existing)
             {
+                var fillsFirstApproved =
+                    existing.FirstApprovedAt is null && firstApprovedAt is not null;
+                existing.FirstApprovedAt ??= firstApprovedAt;
                 // The newest approval wins over details the seed copied from ReEx, when it is being migrated now. One
                 // already migrated applied its details when it was approved, and an older one must not replace them.
                 plan.WinnerApplied = winner.Accredits && _pendingIds.Contains(winner.ApplicationId);
-                if (plan.WinnerApplied || plan.NewInterimSites.Count > 0)
+                if (plan.WinnerApplied || plan.NewInterimSites.Count > 0 || fillsFirstApproved)
                 {
                     existing.InterimSites.AddRange(plan.NewInterimSites);
                     plan.Saved = (
@@ -676,8 +681,20 @@ public sealed class ApplicationGroupMigrator(
             site.ProposedByApplicationId =
                 site.Origin == SiteOrigin.Operator ? winner.ApplicationId : null;
             site.InterimSites = plan.NewInterimSites;
+            site.FirstApprovedAt = firstApprovedAt;
             plan.Saved = await versions.InsertAsync(site, change, session, cancellationToken);
         }
+
+        // The earliest date any application knows the site was approved: ReEx's, or the approval here of an
+        // operator-added site, which has no ReEx date.
+        private static DateTime? FirstApprovedAt(SitePlan plan) =>
+            plan
+                .Holdings.Select(h =>
+                    SeedEntityMapper.ParseApprovalDate(h.Site.ValidFrom)
+                    ?? (h.Accredits ? h.Application.CaseManagementStatusUpdatedAt : null)
+                )
+                .Where(date => date is not null)
+                .Min();
 
         // Where an application's copy of a site differs from the ORS: an in-flight application keeps its version as
         // proposedChanges; an application that cannot change any more has lost it, which is a conflict. A site this

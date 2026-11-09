@@ -603,6 +603,98 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         );
     }
 
+    private static OverseasSiteModel ApprovedSite(string validFrom)
+    {
+        var site = Site(1, "001", "Plant");
+        site.ValidFrom = validFrom;
+        return site;
+    }
+
+    [Fact]
+    public async Task Migrate_FirstApprovedAt_IsTheEarliestDateAnyApplicationHolds()
+    {
+        var older = NewApplication(
+            ApplicationStatus.Started,
+            Day1,
+            ApprovedSite("2019-03-01T00:00:00Z")
+        );
+        older.Year = 2026;
+        var newer = NewApplication(
+            ApplicationStatus.Started,
+            Day2,
+            ApprovedSite("2024-06-01T00:00:00Z")
+        );
+        await _applications.CreateAsync(older);
+        await _applications.CreateAsync(newer);
+
+        await MigrateAsync(newer);
+
+        Assert.Equal(
+            new DateTime(2019, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+            (await CurrentSiteAsync("001")).FirstApprovedAt
+        );
+    }
+
+    [Fact]
+    public async Task Migrate_AnExistingSiteWithoutADate_IsFilledAndOneWithADateIsKept()
+    {
+        var registration = await SeededRegistrationAsync();
+        var seeded = await SeededSiteAsync(registration);
+        var application = await ApplicationAsync(
+            ApplicationStatus.Started,
+            Day1,
+            ApprovedSite("2021-01-01T00:00:00Z")
+        );
+
+        await MigrateAsync(application);
+
+        var site = await CurrentSiteAsync(seeded.OrsId);
+        Assert.Equal(new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc), site.FirstApprovedAt);
+        Assert.Equal(seeded.EntityId, site.EntityId);
+    }
+
+    [Fact]
+    public void WithDetailsOf_NeverOverwritesFirstApprovedAt()
+    {
+        var earliest = new DateTime(2018, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var current = new OverseasSiteEntity { FirstApprovedAt = earliest };
+
+        var next = LegacySiteMapper.WithDetailsOf(current, ApprovedSite("2025-01-01T00:00:00Z"));
+
+        Assert.Equal(earliest, next.FirstApprovedAt);
+    }
+
+    [Fact]
+    public async Task Migrate_AnOperatorAddedSiteApprovedHere_UsesTheApprovalTime()
+    {
+        var application = NewApplication(
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Plant", isNew: true)
+        );
+        application.AccreditationReference = "A27EX2";
+        application.CaseManagementStatusUpdatedAt = Day2;
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        Assert.Equal(Day2, (await CurrentSiteAsync("001")).FirstApprovedAt);
+    }
+
+    [Fact]
+    public async Task Migrate_ASiteNeverApproved_HasNoFirstApprovedDate()
+    {
+        var application = await ApplicationAsync(
+            ApplicationStatus.Started,
+            Day1,
+            Site(1, "001", "Plant", isNew: true)
+        );
+
+        await MigrateAsync(application);
+
+        Assert.Null((await CurrentSiteAsync("001")).FirstApprovedAt);
+    }
+
     private async Task<RegistrationEntity> SeededRegistrationAsync(
         string number = "R27FROMREEX",
         params string[] previousNumbers

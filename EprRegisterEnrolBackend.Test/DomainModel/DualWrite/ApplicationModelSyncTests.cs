@@ -954,6 +954,20 @@ public sealed class ApplicationModelSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplicationApproved_ASiteWithNoDateIsStampedOnce()
+    {
+        var application = await SubmittedWithProposalsAsync();
+        await ApproveAsync(application);
+
+        await SyncAsync(application);
+        var approvedAt = new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc);
+        Assert.Equal(approvedAt, (await CurrentSiteAsync("002")).FirstApprovedAt);
+
+        await SyncAsync(application);
+        Assert.Equal(approvedAt, (await CurrentSiteAsync("002")).FirstApprovedAt);
+    }
+
+    [Fact]
     public async Task ApplicationApproved_OnlyItsSelectedSitesAreActivated()
     {
         // Only the selected sites are accredited. A registered site it did not select stays as it was, without the

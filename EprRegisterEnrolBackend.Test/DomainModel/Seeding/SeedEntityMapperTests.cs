@@ -312,4 +312,29 @@ public class SeedEntityMapperTests
         Assert.Equal(["EPR/AB1234"], target.PermitNumbers);
         Assert.Equal("2 Mill Rd, Leeds", target.Site?.FormattedAddress);
     }
+
+    [Fact]
+    public void ApplyTo_Site_SetsFirstApprovedAtOnceOnly()
+    {
+        var target = new OverseasSiteEntity();
+        var site = new OverseasSiteModel
+        {
+            SiteId = 1,
+            SiteName = "Plant",
+            ValidFrom = "2019-03-01T00:00:00Z",
+        };
+
+        SeedEntityMapper.ApplyTo(target, site);
+        site.ValidFrom = "2025-01-01T00:00:00Z";
+        SeedEntityMapper.ApplyTo(target, site);
+
+        Assert.Equal(new DateTime(2019, 3, 1, 0, 0, 0, DateTimeKind.Utc), target.FirstApprovedAt);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not a date")]
+    public void ParseApprovalDate_NothingReadable_IsNull(string? value) =>
+        Assert.Null(SeedEntityMapper.ParseApprovalDate(value));
 }

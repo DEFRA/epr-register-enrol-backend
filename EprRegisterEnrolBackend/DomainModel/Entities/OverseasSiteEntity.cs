@@ -41,6 +41,12 @@ public class OverseasSiteEntity : VersionedEntityBase
 
     public ObjectId? ProposedByApplicationId { get; set; }
 
+    /// <summary>
+    /// When this site was first approved for the customer, which may be many years before this version. Written once
+    /// and never overwritten. Not the versioning <c>validFrom</c>, which is when this version was recorded.
+    /// </summary>
+    public DateTime? FirstApprovedAt { get; set; }
+
     public List<InterimSiteEntry> InterimSites { get; set; } = [];
 
     /// <summary>

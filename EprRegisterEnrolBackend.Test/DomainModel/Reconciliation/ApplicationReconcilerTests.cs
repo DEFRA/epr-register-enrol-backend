@@ -51,7 +51,8 @@ public sealed class ApplicationReconcilerTests : IDisposable
         _reconciler = new ApplicationReconciler(
             _factory,
             _applications,
-            new ApplicationReadModel(stores)
+            new ApplicationReadModel(stores),
+            stores.Conflicts
         );
     }
 
@@ -405,6 +406,42 @@ public sealed class ApplicationReconcilerTests : IDisposable
 
         report.Matching.Should().Be(1);
         report.DifferencesByField.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Run_ADifferenceAlreadyListedAsAConflict_IsCountedAsAcceptedNotADifference()
+    {
+        var older = Application(ApplicationStatus.Started, Day1, 2026, Site(1, "001", "Plant"));
+        older.CompanyRegisteredAddress = "Older address";
+        var newer = Application(
+            ApplicationStatus.Started,
+            Day1.AddDays(1),
+            2027,
+            Site(1, "001", "Plant")
+        );
+        await CreateAsync(older);
+        var id = await CreateAsync(newer);
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.AcceptedConflicts.Should().Be(1);
+        report.Matching.Should().Be(1);
+        report.WithDifferences.Should().Be(0);
+        report.DifferencesByField.Should().BeEmpty();
+        report.ToLogLine().Should().Contain("acceptedConflicts=1");
+    }
+
+    [Fact]
+    public async Task Run_AnApplicationThatMatchesButIsListed_IsMatchingNotAccepted()
+    {
+        var id = await CreateAsync(Application(sites: Site(1, null!, "No ORS id")));
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.Matching.Should().Be(1);
+        report.AcceptedConflicts.Should().Be(0);
     }
 
     [Fact]

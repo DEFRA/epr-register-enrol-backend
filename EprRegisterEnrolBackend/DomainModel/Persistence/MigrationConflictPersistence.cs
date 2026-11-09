@@ -32,6 +32,19 @@ public class MigrationConflictPersistence(
         }
     }
 
+    /// <summary>Whether any conflict is recorded for the application.</summary>
+    public Task<bool> IsListedAsync(
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    ) =>
+        Collection
+            .Find(
+                session,
+                Builders<MigrationConflict>.Filter.AnyEq(c => c.ApplicationIds, applicationId)
+            )
+            .AnyAsync(cancellationToken);
+
     /// <summary>Whether a conflict of <paramref name="kind"/> is already recorded for the application.</summary>
     public Task<bool> ExistsAsync(
         MigrationConflictKind kind,
