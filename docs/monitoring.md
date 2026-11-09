@@ -53,6 +53,42 @@ To act on an alert: the counts say how many and why. Find the applications in Mo
 year from 2027, missing the named reference) and fix the data, or tell the owner of the process that
 produced them.
 
+## Building it in CDP
+
+Follows the CDP monitoring guide
+(`portal.cdp-int.defra.cloud/documentation/how-to/monitoring.md`). Everything is built once, in the
+**dev** Grafana, and promoted to the other environments from the Portal.
+
+- **Dashboards.** In the playground folder `Playground/epr-register-enrol-backend-monitoring`, choose
+  New, then New Dashboard, then Add visualization, and pick the OpenSearch datasource. Name it
+  `epr-register-enrol-backend (custom)`: names that do not follow `service-name (custom)`, or use
+  special characters other than hyphens, are not promoted. Promote from the Portal under the
+  service's Diagnostics tab.
+- **Alerts.** In `metrics.dev.cdp-int.defra.cloud/alerting/list`, choose New alert rule and the
+  OpenSearch datasource. Save it in the same playground folder with the evaluation group
+  `epr-register-enrol-backend-advanced-alerts`, which the platform relies on. Promote one alert at a
+  time from the Diagnostics tab. Do not rename an alert while promoting it, as that creates a
+  duplicate. Once promoted it lives under `CDP_Tenants/epr-register-enrol-backend`.
+- **Timing.** An alert has an evaluation interval (set by the group), a pending period (how long a
+  breach must last before it fires) and a keep-firing period (how long it stays active after
+  recovery). Use the pending period for the "for 5 minutes" conditions below.
+- **Query language: Lucene.** OpenSearch defaults to DQL, but Grafana alerts need **Lucene**, so turn
+  off "OpenSearch Dashboards Query Language" before building an alert query. A query copied from
+  OpenSearch Dashboards will not work as it is.
+
+Examples in Lucene, to check against the index in Explore (the field types decide whether the range
+form works):
+
+| Use | Lucene |
+| --- | --- |
+| Access log lines | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess"` |
+| Server errors | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess" AND labels.Status:[500 TO *]` |
+| Auth failures | `log.logger:"EprRegisterEnrolBackend.Auth.ServiceClientAuthenticationHandler" AND log.level:Warning` |
+| Records the API cannot serve | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND log.level:Error` |
+| A record dropped from a response | `log.logger:"EprRegisterEnrolBackend.AccreditationApi" AND log.level:Warning AND message:"Dropped a malformed accreditation"` |
+
+For the per-consumer panels, group by `labels.ClientName` (or `labels.ClientId` for auth failures).
+
 ## Dashboard: one row per consumer
 
 Group every panel by `labels.ClientName`.
