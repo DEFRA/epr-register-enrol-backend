@@ -38,7 +38,7 @@ public class DevChangeRequestSeedService(
 
     private sealed record ItemSeed(
         string? OrsId,
-        PlannedTonnageBand? Band,
+        PlannedTonnageBand? TonnageBand,
         ChangeItemStatus Status,
         (int Month, int Day)? ValidFrom,
         (int Month, int Day)? WithdrawnAt
@@ -201,7 +201,7 @@ public class DevChangeRequestSeedService(
                 {
                     var itemId = Guid.Parse(FixedId(year, orgId, side, number, index + 1));
                     DateTime? validFrom = item.ValidFrom is { } from ? On(from) : null;
-                    if (item.Band is { } band)
+                    if (item.TonnageBand is { } band)
                         return new TonnageBandUpgradeItem
                         {
                             ItemId = itemId,
@@ -216,7 +216,7 @@ public class DevChangeRequestSeedService(
                         ChangeType = seed.ChangeType,
                         SiteId = site.SiteId,
                         OrsId = site.OrsId,
-                        SiteName = site.SiteName!,
+                        SiteName = site.SiteName,
                         Status = item.Status,
                         ValidFrom = validFrom,
                         WithdrawnAt = item.WithdrawnAt is { } at ? On(at) : null,
