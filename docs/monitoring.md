@@ -61,9 +61,9 @@ Follows the CDP monitoring guide
 
 - **Dashboards.** In the playground folder `Playground/epr-register-enrol-backend-monitoring`, choose
   New, then New Dashboard, then Add visualization, and pick the OpenSearch datasource. Name it
-  `epr-register-enrol-backend (custom)`: names that do not follow `service-name (custom)`, or use
-  special characters other than hyphens, are not promoted. Promote from the Portal under the
-  service's Diagnostics tab.
+  `epr-register-enrol-backend (custom)`: a dashboard that does not follow the `service-name (custom)`
+  convention is not promoted to the other environments, and the name must be no longer than 255
+  characters. Promote it with the Promote button in the Portal, under the service's Diagnostics tab.
 - **Alerts.** In `metrics.dev.cdp-int.defra.cloud/alerting/list`, choose New alert rule and the
   OpenSearch datasource. Save it in the same playground folder with the evaluation group
   `epr-register-enrol-backend-advanced-alerts`, which the platform relies on. Promote one alert at a
@@ -72,8 +72,8 @@ Follows the CDP monitoring guide
 - **Timing.** An alert has an evaluation interval (set by the group), a pending period (how long a
   breach must last before it fires) and a keep-firing period (how long it stays active after
   recovery). Use the pending period for the "for 5 minutes" conditions below.
-- **Query language: Lucene.** OpenSearch defaults to DQL, but Grafana alerts need **Lucene**, so turn
-  off "OpenSearch Dashboards Query Language" before building an alert query. A query copied from
+- **Query language: Lucene.** OpenSearch defaults to DQL, but Grafana uses **Lucene**, so switch the
+  query to Lucene by clicking the DQL link on the right of the query bar. A query copied from
   OpenSearch Dashboards will not work as it is.
 
 Examples in Lucene, to check against the index in Explore (the field types decide whether the range
