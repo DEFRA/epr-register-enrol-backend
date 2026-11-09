@@ -101,6 +101,22 @@ public class DualWriteRegistrationTests
     }
 
     [Fact]
+    public void AddDomainModel_ReconcileWithoutDualWrite_RefusesToStart()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Register(
+                new()
+                {
+                    ["DomainModel:ExpandEnabled"] = "true",
+                    ["DomainModel:ReconcileEnabled"] = "true",
+                }
+            )
+        );
+
+        Assert.Contains("DomainModel:ReconcileEnabled needs DomainModel:DualWrite", ex.Message);
+    }
+
+    [Fact]
     public void AddDomainModel_MigrateOff_RegistersNoMigration()
     {
         var services = Register(
@@ -125,9 +141,6 @@ public class DualWriteRegistrationTests
             }
         );
 
-        Assert.Contains(
-            services,
-            d => d.ImplementationType == typeof(DomainModelMigrationService)
-        );
+        Assert.Contains(services, d => d.ImplementationType == typeof(DomainModelMigrationService));
     }
 }

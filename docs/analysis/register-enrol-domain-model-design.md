@@ -10,6 +10,13 @@
 - **Each organisation and registration group is its own transaction**, so a run stopped part way keeps what it finished.
 - **A failed group shows as Degraded** and is tried again at the next startup.
 - **Reconciliation reports run on test environments only**, never in live (phase 4, B10).
+- **The facade's projection is built, with no route using it yet.** `ApplicationReadModel` and `ApplicationProjection`
+  build the legacy application from the model, and reconciliation goes through them. Switching routes stays in phase 5.
+- **Ten legacy fields have no home in the model:** `siteAddress`, `companyRegisterAddressPostcode`,
+  `companyRegisteredAddress`, `isUkRegisteredAddress`, `permitNumbers`, `sourceReExAccreditationId`, `sourceYear`,
+  `previousAccreditationNumbers`, `submitterContactDetails` and `sites[].validFrom`. §5.1 has them as stored or derived, but
+  the migration does not store them, and enrichment is deferred (Q35). The report counts them apart from differences.
+  **The read switch can't serve them until they have a home.**
 - **Corrected the phase 3 rollback:** a re-run skips what is already migrated, so a stale model has to be truncated first.
 
 **Changes in v6.9 (2026-11-06): a `$jsonSchema` validator on `applicationVersions`, in warn mode (RA-746)**

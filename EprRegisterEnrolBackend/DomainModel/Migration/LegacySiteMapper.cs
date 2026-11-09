@@ -124,7 +124,7 @@ public static class LegacySiteMapper
     public static bool IsThreeDigitNumber(string? siteNumber) =>
         siteNumber is { Length: 3 } && siteNumber.All(char.IsAsciiDigit);
 
-    private static BsonDocument Details(OverseasSiteEntity site) =>
+    internal static BsonDocument Details(OverseasSiteEntity site) =>
         new()
         {
             { "siteName", Value(site.SiteName) },
@@ -144,7 +144,7 @@ public static class LegacySiteMapper
             },
         };
 
-    private static BsonDocument InterimDetails(InterimSiteEntry site) =>
+    internal static BsonDocument InterimDetails(InterimSiteEntry site) =>
         new()
         {
             { "siteName", Value(site.SiteName) },

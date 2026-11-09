@@ -3,7 +3,6 @@ using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Utils.Mongo;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
@@ -71,10 +70,7 @@ public sealed class DomainModelMigrationService(
     internal async Task RunAsync(CancellationToken cancellationToken)
     {
         // The unique indexes must exist before anything relies on them to settle a race with a live write.
-        while (schema.Result.Status == HealthStatus.Unhealthy)
-        {
-            await Task.Delay(WaitDelay, _clock, cancellationToken);
-        }
+        await schema.WaitUntilBuiltAsync(WaitDelay, _clock, cancellationToken);
 
         // Resolved only now: constructing these builds indexes, which must not hold up startup.
         var migrator = services.GetRequiredService<IApplicationGroupMigrator>();

@@ -19,6 +19,22 @@ public class OrganisationPersistence(
         loggerFactory
     )
 {
+    /// <summary>The organisation with <paramref name="reExOrganisationId"/>, or null.</summary>
+    public async Task<OrganisationEntity?> FindByReExOrganisationIdAsync(
+        string reExOrganisationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Collection
+            .Find(
+                session,
+                Builders<OrganisationEntity>.Filter.Eq(
+                    x => x.ReExOrganisationId,
+                    reExOrganisationId
+                )
+            )
+            .FirstOrDefaultAsync(cancellationToken);
+
     /// <summary>
     /// Creates the organisation for <paramref name="reExOrganisationId"/>, or overwrites it in place (D7), with
     /// <paramref name="apply"/> run on the stored copy so fields it does not touch are kept.

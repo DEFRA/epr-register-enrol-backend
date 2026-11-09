@@ -36,6 +36,13 @@ public class DomainModelConfig
     public bool MigrateEnabled { get; set; }
 
     /// <summary>
+    /// Phase 4, "Reconcile": compare every migrated application with its legacy document and log a report with no
+    /// personal data, at startup and every few hours. Needs <see cref="DualWrite"/>. For test environments: it never
+    /// runs in live, whatever this is set to.
+    /// </summary>
+    public bool ReconcileEnabled { get; set; }
+
+    /// <summary>
     /// Run the B0 transaction smoke test and the B1 legacy-data survey once at startup. Only for test
     /// environments, where the data is test data (R15).
     /// </summary>

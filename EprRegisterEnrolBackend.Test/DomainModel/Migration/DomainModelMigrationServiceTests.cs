@@ -314,7 +314,10 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
         failure.Attempts.Should().Be(1);
         failure.LastErrorKind.Should().Be(nameof(InvalidOperationException));
         _status.Result.Status.Should().Be(HealthStatus.Degraded);
-        var line = _logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Subject;
+        var line = _logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error)
+            .Subject;
         line.Message.Should().Contain(failing.ToString()).And.NotContain("someone's name");
         line.Exception.Should().BeNull();
     }
