@@ -63,6 +63,29 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
 
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
 
+    /// <summary>Signals the moment the service starts to wait, so a test need not guess how long that takes.</summary>
+    private sealed class WaitSignallingClock(TimeProvider inner) : TimeProvider
+    {
+        private readonly TaskCompletionSource _waiting = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        public Task Waiting => _waiting.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period
+        )
+        {
+            _waiting.TrySetResult();
+            return base.CreateTimer(callback, state, dueTime, period);
+        }
+    }
+
     /// <summary>Counts the groups attempted, and lets a test fail or interrupt one.</summary>
     private sealed class SpyMigrator(IApplicationGroupMigrator inner) : IApplicationGroupMigrator
     {
@@ -92,7 +115,11 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
         }
     }
 
-    private DomainModelMigrationService Service(int batchSize = 100)
+    private DomainModelMigrationService Service(
+        int batchSize = 100,
+        TimeProvider? clock = null,
+        TimeSpan? recentPassWindow = null
+    )
     {
         var services = new ServiceCollection()
             .AddSingleton<IApplicationGroupMigrator>(_migrator)
@@ -103,12 +130,13 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
             _schema,
             _status,
             _factory,
-            _clock,
+            clock ?? _clock,
             _logger
         )
         {
             BatchSize = batchSize,
             BatchPause = TimeSpan.Zero,
+            RecentPassWindow = recentPassWindow ?? TimeSpan.Zero,
             WaitDelay = TimeSpan.FromMilliseconds(20),
         };
     }
@@ -134,7 +162,7 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
 
     private static string Registration(int number) => $"6512a0f0c0ffee00000001{number:D2}";
 
-    private Task LazyMigrateAsync(ObjectId applicationId) =>
+    private Task<GroupMigrationResult> LazyMigrateAsync(ObjectId applicationId) =>
         InsertRaceRetry.RunInTransactionAsync(
             _factory,
             (session, token) => _migrator.EnsureMigratedAsync(applicationId, session, token),
@@ -386,8 +414,9 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
         var id = await ApplicationAsync(Registration(1));
         await _persistence.TryAcquireLeaseAsync("other", Now, Now.AddMinutes(5), Ct);
 
-        var running = Service().RunAsync(Ct);
-        await Task.Delay(150, Ct);
+        var clock = new WaitSignallingClock(_clock);
+        var running = Service(clock: clock).RunAsync(Ct);
+        await clock.Waiting;
 
         _migrator.Calls.Should().BeEmpty();
         await _persistence.ReleaseLeaseAsync("other", Ct);
@@ -441,7 +470,7 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
         state.PassCompletedAt.Should().BeNull();
     }
 
-    private Task RealFirstTouchAsync(ObjectId applicationId) =>
+    private Task<GroupMigrationResult> RealFirstTouchAsync(ObjectId applicationId) =>
         InsertRaceRetry.RunInTransactionAsync(
             _factory,
             (session, token) => _realMigrator.EnsureMigratedAsync(applicationId, session, token),
@@ -458,7 +487,7 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
             var first = await ApplicationAsync(Registration(round), 2027);
             var second = await ApplicationAsync(Registration(round), 2028);
             ids.AddRange([first, second]);
-            Task? liveWrite = null;
+            Task<GroupMigrationResult>? liveWrite = null;
             // Started once the service's transaction is open, so the two really overlap.
             _migrator.Before = id =>
             {
@@ -505,13 +534,51 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_ACleanPassJustNow_IsNotRepeatedUntilTheWindowPasses()
+    {
+        var window = TimeSpan.FromMinutes(10);
+        await ApplicationAsync(Registration(1));
+        await Service(recentPassWindow: window).RunAsync(Ct);
+        var seededAfterwards = await ApplicationAsync(Registration(2));
+        _migrator.Calls.Clear();
+
+        await Service(recentPassWindow: window).RunAsync(Ct);
+        _migrator.Calls.Should().BeEmpty();
+
+        _clock.Advance(window);
+        await Service(recentPassWindow: window).RunAsync(Ct);
+        _migrator.Calls.Should().Equal(seededAfterwards);
+    }
+
+    [Fact]
+    public async Task Run_APassThatLeftFailures_IsAlwaysRepeated()
+    {
+        var window = TimeSpan.FromMinutes(10);
+        var failing = await ApplicationAsync(Registration(1));
+        _migrator.Before = _ => throw new InvalidOperationException();
+        await Service(recentPassWindow: window).RunAsync(Ct);
+        _migrator.Before = null;
+
+        await Service(recentPassWindow: window).RunAsync(Ct);
+
+        (await MigratedAsync()).Should().Contain(failing);
+    }
+
+    [Fact]
+    public void LeaseDuration_OutlastsTheSlowestGroup() =>
+        Service(clock: _clock)
+            .LeaseDuration.Should()
+            .BeGreaterThan(TimeSpan.FromMinutes(2) * InsertRaceRetry.MaxAttempts);
+
+    [Fact]
     public async Task Run_SchemaNotChecked_WaitsBecauseTheUniqueIndexesMayNotExist()
     {
         var id = await ApplicationAsync(Registration(1));
         _schema.Record(HealthCheckResult.Unhealthy("not built"));
 
-        var running = Service().RunAsync(Ct);
-        await Task.Delay(150, Ct);
+        var clock = new WaitSignallingClock(_clock);
+        var running = Service(clock: clock).RunAsync(Ct);
+        await clock.Waiting;
 
         _migrator.Calls.Should().BeEmpty();
         _schema.Record(HealthCheckResult.Degraded("validator missing"));

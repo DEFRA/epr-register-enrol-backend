@@ -32,12 +32,9 @@ public sealed class DomainModelReconciliationService(
 
         try
         {
-            await schema.WaitUntilBuiltAsync(WaitDelay, clock, stoppingToken);
-            // Resolved only now: constructing these builds indexes, which must not hold up startup.
-            var reconciler = services.GetRequiredService<ApplicationReconciler>();
             while (true)
             {
-                await ReportOnceAsync(reconciler, stoppingToken);
+                await ReportOnceAsync(stoppingToken);
                 await Task.Delay(Interval, clock, stoppingToken);
             }
         }
@@ -49,32 +46,44 @@ public sealed class DomainModelReconciliationService(
 
     private bool IsLive() =>
         string.Equals(
-            CdpEnvironment(),
+            CdpEnvironment()?.Trim(),
             TestOrganisationsConfig.ProductionCdpEnvironment,
             StringComparison.OrdinalIgnoreCase
         );
 
-    private async Task ReportOnceAsync(
-        ApplicationReconciler reconciler,
-        CancellationToken cancellationToken
-    )
+    // Never lets an exception out: an unhandled one in a background service stops the whole backend. A failed report is
+    // logged and tried again at the next interval.
+    private async Task ReportOnceAsync(CancellationToken cancellationToken)
     {
         try
         {
+            await schema.WaitUntilBuiltAsync(WaitDelay, clock, cancellationToken);
+            // Resolved only now: constructing these builds indexes, which must not hold up startup.
+            var reconciler = services.GetRequiredService<ApplicationReconciler>();
             Log(await reconciler.RunAsync(cancellationToken));
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
+            when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested
+            )
         {
-            logger.LogError(
-                "DomainModelReconciliation failed: error {ErrorKind}",
-                MongoErrors.Kind(ex)
-            );
+            LogFailure(ex);
         }
     }
 
+    // The error kind only: a driver's message can quote document values, and logs must hold no personal data.
+    private void LogFailure(Exception ex) =>
+        logger.LogError(
+            "DomainModelReconciliation failed: error {ErrorKind}",
+            MongoErrors.Kind(ex)
+        );
+
     private void Log(ReconciliationReport report)
     {
-        logger.LogInformation("DomainModelReconciliation report {Report}", report.ToLogLine());
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation("DomainModelReconciliation report {Report}", report.ToLogLine());
+        }
+
         foreach (var (kind, applications) in report.UnreadableByKind)
         {
             logger.LogWarning(
@@ -102,7 +111,7 @@ public sealed class DomainModelReconciliationService(
             );
         }
 
-        if (report.SampleApplicationIds.Count > 0)
+        if (report.SampleApplicationIds.Count > 0 && logger.IsEnabled(LogLevel.Warning))
         {
             logger.LogWarning(
                 "DomainModelReconciliation example applications: {ApplicationIds}",

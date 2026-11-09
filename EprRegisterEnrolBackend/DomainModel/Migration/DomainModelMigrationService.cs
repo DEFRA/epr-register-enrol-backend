@@ -40,8 +40,18 @@ public sealed class DomainModelMigrationService(
     internal int BatchSize { get; init; } = 100;
     internal TimeSpan BatchPause { get; init; } = TimeSpan.FromMilliseconds(200);
 
-    /// <summary>Longer than one group can take: a 60-second transaction, retried up to three times.</summary>
-    internal TimeSpan LeaseDuration { get; init; } = TimeSpan.FromMinutes(5);
+    /// <summary>
+    /// Longer than one group can take: each attempt at its transaction can keep retrying for about two minutes, and
+    /// there is some time left over for saving progress.
+    /// </summary>
+    internal TimeSpan LeaseDuration { get; init; } =
+        TimeSpan.FromMinutes(2) * (InsertRaceRetry.MaxAttempts + 2);
+
+    /// <summary>
+    /// A clean pass this recent is not repeated, so instances starting together in a rolling deploy don't each walk
+    /// every application.
+    /// </summary>
+    internal TimeSpan RecentPassWindow { get; init; } = TimeSpan.FromMinutes(10);
 
     /// <summary>How often to look again for the schema, or for a lease another instance holds.</summary>
     internal TimeSpan WaitDelay { get; init; } = TimeSpan.FromSeconds(30);
@@ -60,10 +70,16 @@ public sealed class DomainModelMigrationService(
         }
         catch (Exception ex)
         {
-            var kind = MongoErrors.Kind(ex);
-            _status.RecordStopped(kind);
-            _logger.LogError("DomainModelMigration stopped: step run, error {ErrorKind}", kind);
+            RecordStopped(ex);
         }
+    }
+
+    // The error kind only: a driver's message can quote document values, and logs must hold no personal data.
+    private void RecordStopped(Exception ex)
+    {
+        var kind = MongoErrors.Kind(ex);
+        _status.RecordStopped(kind);
+        _logger.LogError("DomainModelMigration stopped: step run, error {ErrorKind}", kind);
     }
 
     // Extracted so tests can await it deterministically.
@@ -80,7 +96,10 @@ public sealed class DomainModelMigrationService(
         _status.RecordFailedGroups(state.Failures.Count);
         try
         {
-            await new Pass(this, migrator, persistence, state).ExecuteAsync(cancellationToken);
+            if (!PassedCleanJustNow(state))
+            {
+                await new Pass(this, migrator, persistence, state).ExecuteAsync(cancellationToken);
+            }
         }
         finally
         {
@@ -88,6 +107,11 @@ public sealed class DomainModelMigrationService(
             await persistence.ReleaseLeaseAsync(_owner, CancellationToken.None);
         }
     }
+
+    private bool PassedCleanJustNow(DomainModelMigrationState state) =>
+        state.Failures.Count == 0
+        && state.PassCompletedAt is { } completedAt
+        && _clock.GetUtcNow().UtcDateTime - completedAt < RecentPassWindow;
 
     private async Task<DomainModelMigrationState> AcquireLeaseAsync(
         DomainModelMigrationPersistence persistence,
@@ -138,6 +162,7 @@ public sealed class DomainModelMigrationService(
             state.Failures.ToDictionary(f => f.Group);
         private readonly Dictionary<string, DomainModelMigrationFailure> _failures = [];
         private readonly HashSet<string> _settledGroups = [];
+        private readonly DateTime _startedAt = service._clock.GetUtcNow().UtcDateTime;
         private long _examined;
         private long _alreadyMigrated;
         private long _migrated;
@@ -332,6 +357,11 @@ public sealed class DomainModelMigrationService(
                 cancellationToken
             );
             service._status.RecordFailedGroups(failures.Count);
+            if (!service._logger.IsEnabled(LogLevel.Information))
+            {
+                return;
+            }
+
             service._logger.LogInformation(
                 "DomainModelMigration pass complete: examined {Examined}, already migrated {AlreadyMigrated}, migrated {Migrated}, failed groups {FailedGroups}",
                 _examined,
@@ -347,6 +377,7 @@ public sealed class DomainModelMigrationService(
         ) =>
             new()
             {
+                PassStartedAt = _startedAt,
                 PassCompletedAt = completedAt,
                 Examined = _examined,
                 AlreadyMigrated = _alreadyMigrated,

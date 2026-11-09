@@ -89,7 +89,8 @@ alone in a rollback. See §6 of the design doc for the release plan.
   every legacy application not yet in the domain model, one organisation and registration group per transaction, in
   the background at each startup. It skips what dual-write has already migrated and picks up where it stopped. A group
   it can't migrate shows as Degraded on `/health/ready` and is tried again at the next startup.
-- `DomainModel__ReconcileEnabled=true` (phase 4, test environments only, needs `DualWrite`) compares every migrated
+- `DomainModel__ReconcileEnabled=true` (phase 4, test environments only, needs `DualWrite`, and `MigrateEnabled` to have
+  anything to report) compares every migrated
   application with its legacy document through the read model, at startup and every 6 hours, and logs lines starting
   `DomainModelReconciliation`: counts, field names and application ids, never values. It never runs when the CDP
   environment is `prod`, whatever the flag says.

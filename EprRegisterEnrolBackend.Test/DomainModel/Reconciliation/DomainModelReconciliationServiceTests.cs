@@ -15,7 +15,7 @@ public class DomainModelReconciliationServiceTests
 
     private readonly CapturingLogger<DomainModelReconciliationService> _logger = new();
 
-    private DomainModelReconciliationService Service(string? environment)
+    private DomainModelReconciliationService Service(string? environment, TimeSpan? interval = null)
     {
         var schema = new DomainModelSchemaStatus();
         schema.Record(HealthCheckResult.Healthy());
@@ -27,12 +27,14 @@ public class DomainModelReconciliationServiceTests
         )
         {
             CdpEnvironment = () => environment,
+            Interval = interval ?? TimeSpan.FromHours(6),
         };
     }
 
     [Theory]
     [InlineData("prod")]
     [InlineData("PROD")]
+    [InlineData(" prod ")]
     public async Task Start_InLive_NeverRuns(string environment)
     {
         using var service = Service(environment);
@@ -45,6 +47,15 @@ public class DomainModelReconciliationServiceTests
         line.LogLevel.Should().Be(LogLevel.Warning);
     }
 
+    private async Task WaitForLogsAsync(int count)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (_logger.Entries.Count < count && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10, Ct);
+        }
+    }
+
     [Theory]
     [InlineData("dev")]
     [InlineData("test")]
@@ -55,9 +66,28 @@ public class DomainModelReconciliationServiceTests
 
         await service.StartAsync(Ct);
         // The provider has no reconciler, so getting as far as resolving one is the proof it went ahead.
-        var failure = () => service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        await WaitForLogsAsync(1);
+        await service.StopAsync(Ct);
 
-        await failure.Should().ThrowAsync<InvalidOperationException>();
-        _logger.Entries.Should().NotContain(e => e.Message.Contains("never runs in live"));
+        var line = _logger.Entries.Should().ContainSingle().Subject;
+        line.LogLevel.Should().Be(LogLevel.Error);
+        line.Message.Should().Contain(nameof(InvalidOperationException));
+        line.Exception.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Start_AFailureBeforeTheReport_NeverEscapesAndIsTriedAgain()
+    {
+        using var service = Service("test", TimeSpan.FromMilliseconds(10));
+
+        await service.StartAsync(Ct);
+        await WaitForLogsAsync(2);
+
+        service
+            .ExecuteTask!.IsCompleted.Should()
+            .BeFalse("an escaped exception would stop the host");
+        await service.StopAsync(Ct);
+        _logger.Entries.Count.Should().BeGreaterThanOrEqualTo(2);
+        service.ExecuteTask.IsFaulted.Should().BeFalse();
     }
 }

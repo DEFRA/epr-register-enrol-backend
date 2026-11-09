@@ -22,7 +22,6 @@ public sealed class ApplicationReconciler(
 )
 {
     private const string LegacyCollection = "accreditationApplications";
-    private const int BatchSize = 100;
     private const int MaxSampleIds = 20;
 
     /// <summary>Bookkeeping that belongs to each store, and the model's own foreign keys on the legacy document.</summary>
@@ -38,6 +37,11 @@ public sealed class ApplicationReconciler(
         "overseasSites.sites[].overseasSiteEntityId",
         "overseasSites.sites[].previousSites[].overseasSiteEntityId",
     ];
+
+    internal int BatchSize { get; init; } = 100;
+
+    /// <summary>Between batches, so a report doesn't hammer a shared test database.</summary>
+    internal TimeSpan BatchPause { get; init; } = TimeSpan.FromMilliseconds(200);
 
     public async Task<ReconciliationReport> RunAsync(CancellationToken cancellationToken)
     {
@@ -57,6 +61,7 @@ public sealed class ApplicationReconciler(
             }
 
             after = ids[^1];
+            await Task.Delay(BatchPause, cancellationToken);
         }
     }
 
@@ -86,23 +91,18 @@ public sealed class ApplicationReconciler(
             using var session = await clientFactory
                 .GetClient()
                 .StartSessionAsync(cancellationToken: cancellationToken);
-            var (legacy, sources, listed) = await session.WithTransactionAsync(
-                async (s, token) =>
-                    (
-                        await applications.GetByObjectIdAsync(id, s, token),
-                        await readModel.LoadAsync(id, s, token),
-                        await conflicts.IsListedAsync(id, s, token)
-                    ),
+            var comparison = await session.WithTransactionAsync(
+                (s, token) => CompareInSnapshotAsync(id, s, token),
                 new TransactionOptions(readConcern: ReadConcern.Snapshot),
                 cancellationToken
             );
-            if (legacy is null || sources is null)
+            if (comparison is null)
             {
                 tally.NotMigrated++;
                 return;
             }
 
-            tally.Record(id, Differences(legacy, sources), listed);
+            tally.Record(id, comparison.Differences, comparison.ListedAsConflict);
         }
         // One document that cannot be read or projected is a finding for the report, not a reason to lose the report.
         catch (Exception ex)
@@ -113,16 +113,42 @@ public sealed class ApplicationReconciler(
         }
     }
 
+    private sealed record Comparison(DocumentDifferences Differences, bool ListedAsConflict);
+
+    // Null when the application has not been migrated. Conflicts are only looked up for an application that differs.
+    private async Task<Comparison?> CompareInSnapshotAsync(
+        ObjectId id,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
+    )
+    {
+        var legacy = await applications.GetByObjectIdAsync(id, session, cancellationToken);
+        var sources = await readModel.LoadAsync(id, session, cancellationToken);
+        if (legacy is null || sources is null)
+        {
+            return null;
+        }
+
+        var differences = Differences(legacy, sources);
+        var listed =
+            differences.Paths.Count > 0
+            && await conflicts.IsListedAsync(id, session, cancellationToken);
+        return new Comparison(differences, listed);
+    }
+
     private static DocumentDifferences Differences(
         AccreditationApplicationModel legacy,
         ApplicationSources sources
     )
     {
         NormaliseSites(legacy, sources);
-        return BsonDifferences.Compare(
+        var differences = BsonDifferences.Compare(
             legacy.ToBsonDocument(),
             ApplicationProjection.ToLegacy(sources).ToBsonDocument()
         );
+        differences.Paths.ExceptWith(s_ignored);
+        differences.ModelOnly.IntersectWith(differences.Paths);
+        return differences;
     }
 
     // What the migration does on purpose: promote a pre-RA-603 singular interim site, renumber once (Q30b), and turn
@@ -177,9 +203,7 @@ public sealed class ApplicationReconciler(
         public void Record(ObjectId id, DocumentDifferences differences, bool listedAsConflict)
         {
             var paths = differences.Paths;
-            paths.ExceptWith(s_ignored);
             var modelOnly = differences.ModelOnly;
-            modelOnly.IntersectWith(paths);
             if (paths.Count == 0)
             {
                 _matching++;

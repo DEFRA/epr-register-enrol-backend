@@ -26,6 +26,9 @@
   lists it as model-only, because something has to explain where it came from.
 - **Organisation and Registration keep one copy.** An application that took a different copy at seed time is listed in
   `migrationConflicts` as `SeededDetailsDiffer`, and shows as a reconciliation difference.
+- **To decide before phase 5:** where `version`, `createdAt` and `updatedAt` come from. The projection doesn't set them and
+  reconciliation ignores them, so a clean report says nothing about them, and `version` is the submit path's concurrency
+  token (§5.1).
 - **Corrected the phase 3 rollback:** a re-run skips what is already migrated, so a stale model has to be truncated first.
 
 **Changes in v6.9 (2026-11-06): a `$jsonSchema` validator on `applicationVersions`, in warn mode (RA-746)**
@@ -1040,8 +1043,8 @@ in `AccreditationDetails`. Envelope fields such as `status` and `applicationRefe
 | `withdrawalReason` | Application | stored | |
 | `dateSent` | Application | stored | |
 | `caseManagementStatusUpdatedAt` | Application | stored | Internal watermark |
-| `dateLastEdited`, `createdAt`, `updatedAt` | Application | stored | Entities get their own `validFrom` and `createdAt` |
-| `version` | Application.`version` (RA-516) | stored | Temporal entities each have their own `version` |
+| `dateLastEdited`, `createdAt`, `updatedAt` | Application | stored | Entities get their own `validFrom` and `createdAt`. ⚠ `createdAt` and `updatedAt` are not stored or projected yet, and reconciliation ignores them. Decide their source before phase 5 |
+| `version` | Application.`version` (RA-516) | stored | Temporal entities each have their own `version`. ⚠ Not projected yet, and reconciliation ignores it, but the submit path compares it as its concurrency token. Decide its source before phase 5 |
 | `prns.plannedTonnageBand` | Application (proposal) → Accreditation.`tonnageBand` at approval (v4) | stored | Rewrite as the ReEx string value in the new collections; the legacy doc keeps int32 |
 | `prns.authorisers[]` {fullName, email} | Application → Accreditation.`signatories[]` | stored | |
 | `prns.authorisers[].isNew` | Application only | stored | Application-review facet. Not carried to Accreditation |

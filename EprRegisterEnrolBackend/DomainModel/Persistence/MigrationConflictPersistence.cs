@@ -68,5 +68,9 @@ public class MigrationConflictPersistence(
                 builder.Ascending(x => x.ReExRegistrationId),
                 new CreateIndexOptions { Name = "reExRegistrationId" }
             ),
+            new(
+                builder.Ascending(x => x.ApplicationIds),
+                new CreateIndexOptions { Name = "applicationIds" }
+            ),
         ];
 }

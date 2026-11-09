@@ -39,9 +39,7 @@ public class DomainModelMigrationPersistence(
                     ),
                 Builders<DomainModelMigrationState>
                     .Update.Set(s => s.LeaseOwner, owner)
-                    .Set(s => s.LeaseExpiresAt, expiresAt)
-                    .Set(s => s.PassStartedAt, now)
-                    .Set(s => s.PassCompletedAt, null),
+                    .Set(s => s.LeaseExpiresAt, expiresAt),
                 new FindOneAndUpdateOptions<DomainModelMigrationState>
                 {
                     IsUpsert = true,
@@ -69,6 +67,7 @@ public class DomainModelMigrationPersistence(
             ThisMigration & Filter.Eq(s => s.LeaseOwner, owner),
             Builders<DomainModelMigrationState>
                 .Update.Set(s => s.LeaseExpiresAt, expiresAt)
+                .Set(s => s.PassStartedAt, progress.PassStartedAt)
                 .Set(s => s.PassCompletedAt, progress.PassCompletedAt)
                 .Set(s => s.Examined, progress.Examined)
                 .Set(s => s.AlreadyMigrated, progress.AlreadyMigrated)

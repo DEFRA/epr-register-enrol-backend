@@ -44,12 +44,21 @@ public class OrganisationPersistence(
             stored.IsUkRegisteredAddress = values.IsUkRegisteredAddress;
         }
 
+        var fillPostcode =
+            stored.RegisteredAddress?.Postcode is null
+            && values.RegisteredAddress?.Postcode is not null;
+        if (fillPostcode)
+        {
+            stored.RegisteredAddress ??= new PostalAddress();
+            stored.RegisteredAddress.Postcode = values.RegisteredAddress!.Postcode;
+        }
+
         if (fillSubmitter)
         {
             stored.SubmitterContactDetails = values.SubmitterContactDetails;
         }
 
-        if (fillAddress || fillSubmitter)
+        if (fillAddress || fillPostcode || fillSubmitter)
         {
             await Collection.ReplaceOneAsync(
                 session,

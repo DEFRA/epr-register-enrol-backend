@@ -31,6 +31,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
     private readonly AccreditationApplicationPersistence _applications;
     private readonly ApplicationGroupMigrator _migrator;
     private readonly ApplicationReconciler _reconciler;
+    private readonly ApplicationGroupStores _stores;
 
     public ApplicationReconcilerTests(MongoIntegrationFixture fixture)
     {
@@ -48,6 +49,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
             new MigrationConflictPersistence(_factory, logs)
         );
         _migrator = new ApplicationGroupMigrator(_applications, stores, clock);
+        _stores = stores;
         _reconciler = new ApplicationReconciler(
             _factory,
             _applications,
@@ -292,7 +294,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
             Ct
         );
 
-    private Task EditLegacyAsync(ObjectId id, BsonDocument set) =>
+    private Task<UpdateResult> EditLegacyAsync(ObjectId id, BsonDocument set) =>
         _factory
             .GetCollection<BsonDocument>(LegacyCollection)
             .UpdateOneAsync(
@@ -577,6 +579,48 @@ public sealed class ApplicationReconcilerTests : IDisposable
         var run = () => _reconciler.RunAsync(cancelled.Token);
 
         await run.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task Run_WalksEveryBatchWithAPauseBetween()
+    {
+        for (var year = 2025; year < 2028; year++)
+        {
+            await CreateAsync(
+                Application(ApplicationStatus.Started, Day1, year, Site(1, "001", "Plant"))
+            );
+        }
+
+        await MigrateAsync(
+            (
+                await _factory
+                    .GetCollection<BsonDocument>(LegacyCollection)
+                    .Find(FilterDefinition<BsonDocument>.Empty)
+                    .FirstAsync(Ct)
+            )["_id"].AsObjectId
+        );
+        var reconciler = new ApplicationReconciler(
+            _factory,
+            _applications,
+            new ApplicationReadModel(_stores),
+            _stores.Conflicts
+        )
+        {
+            BatchSize = 1,
+            BatchPause = TimeSpan.FromMilliseconds(50),
+        };
+
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var report = await reconciler.RunAsync(Ct);
+
+        report.Applications.Should().Be(3);
+        timer.ElapsedMilliseconds.Should().BeGreaterThanOrEqualTo(140);
+    }
+
+    [Fact]
+    public async Task ConflictsAreIndexedByApplication()
+    {
+        (await _stores.Conflicts.GetIndexNamesAsync(Ct)).Should().Contain("applicationIds");
     }
 
     [Fact]

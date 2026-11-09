@@ -554,6 +554,29 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Migrate_APostcodeWithNoAddress_IsStillFilledIn()
+    {
+        await _stores.Organisations.GetOrCreateAsync(
+            ReExOrganisationId,
+            () => new OrganisationEntity { ReExOrganisationId = ReExOrganisationId },
+            await _factory.GetClient().StartSessionAsync(cancellationToken: Ct),
+            Ct
+        );
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.CompanyRegisterAddressPostcode = "LS1 1AA";
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        Assert.Equal(
+            "LS1 1AA",
+            Assert
+                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
+                .RegisteredAddress?.Postcode
+        );
+    }
+
+    [Fact]
     public async Task Migrate_ApplicationsHoldingDifferentCompanyDetails_RecordsTheOlderOne()
     {
         var older = NewApplication(ApplicationStatus.Started, Day1);
