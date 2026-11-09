@@ -148,7 +148,9 @@ public class MongoIndexInitializerService(
 
             var result = await DomainModelSchemaCheck.RunAsync(collections, cancellationToken);
             serviceProvider.GetRequiredService<IDomainModelSchemaStatus>().Record(result);
-            return result.Status == HealthStatus.Healthy;
+            // Only missing indexes are worth retrying for. A missing or different validator is Degraded: a collMod
+            // permission won't appear between retries, so it is reported and left (RA-746).
+            return result.Status != HealthStatus.Unhealthy;
         }
         catch (OperationCanceledException)
         {

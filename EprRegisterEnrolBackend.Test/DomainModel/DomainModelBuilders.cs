@@ -43,7 +43,11 @@ public static class DomainModelBuilders
             Material = MaterialType.Plastic,
             Nation = Nation.England,
             Site = new RegistrationSite { Address = Address(), SiteId = "1" },
-            Source = new EntitySource { System = SourceSystem.Application, EnrichmentPending = true },
+            Source = new EntitySource
+            {
+                System = SourceSystem.Application,
+                EnrichmentPending = true,
+            },
         };
 
     public static OverseasSiteEntity OverseasSite(
@@ -86,10 +90,17 @@ public static class DomainModelBuilders
             RegistrationId = registrationId,
             ReExOrganisationId = ObjectId.GenerateNewId().ToString(),
             ReExRegistrationId = ObjectId.GenerateNewId().ToString(),
-            Year = 2027,
             Status = ApplicationStatus.Submitted,
             ApplicationReference = applicationReference ?? $"APP-{Next():D6}",
             DateLastEdited = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Details = AccreditationDetails(),
+        };
+
+    public static AccreditationDetails AccreditationDetails() =>
+        new()
+        {
+            Kind = AccreditationKind.Reapply,
+            Year = 2027,
             Prns = new PrnsSection
             {
                 PlannedTonnageBand = TonnageBand.UpTo10000,
@@ -131,6 +142,86 @@ public static class DomainModelBuilders
                 },
             ],
         };
+
+    /// <summary>An application of any type on <paramref name="registrationId"/>, with the given details.</summary>
+    public static ApplicationEntity Application(
+        ObjectId? registrationId,
+        ApplicationDetails details,
+        ApplicationStatus status = ApplicationStatus.Submitted
+    ) =>
+        new()
+        {
+            RegistrationId = registrationId,
+            ReExOrganisationId = ObjectId.GenerateNewId().ToString(),
+            Status = status,
+            ApplicationReference = $"APP-{Next():D6}",
+            DateLastEdited = new DateTime(2027, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+            Details = details,
+        };
+
+    /// <summary>An in-year change to one ORS, holding that ORS (and any interim sites given) while open.</summary>
+    public static OrsChangeDetails OrsChangeDetails(
+        ObjectId overseasSiteId,
+        ObjectId? targetAccreditationId = null,
+        params string[] interimSiteNumbers
+    ) =>
+        new()
+        {
+            TargetAccreditationId = targetAccreditationId ?? ObjectId.GenerateNewId(),
+            OverseasSiteId = overseasSiteId,
+            ChangeKinds = [OrsChangeKind.EditSite, OrsChangeKind.ChangeInterimSites],
+            Declaration = new OrsChangeDeclaration
+            {
+                DeclaredBy = new Submitter { FullName = "A Declarer", JobTitle = "Director" },
+                DeclaredAt = new DateTime(2027, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+            },
+            Site = new ApplicationOverseasSiteEntry
+            {
+                SiteId = 1,
+                OverseasSiteId = overseasSiteId,
+                InterimSites = interimSiteNumbers
+                    .Select(
+                        (number, i) =>
+                            new ApplicationInterimSiteEntry
+                            {
+                                LegacySiteId = i + 1,
+                                SiteNumber = number,
+                            }
+                    )
+                    .ToList(),
+            },
+        };
+
+    public static TonnageChangeDetails TonnageChangeDetails(
+        ObjectId? targetAccreditationId = null
+    ) =>
+        new()
+        {
+            TargetAccreditationId = targetAccreditationId ?? ObjectId.GenerateNewId(),
+            FromBand = TonnageBand.UpTo5000,
+            ToBand = TonnageBand.UpTo10000,
+        };
+
+    public static NewRegistrationDetails NewRegistrationDetails() =>
+        new()
+        {
+            Sections =
+            [
+                new RegistrationJourneySection
+                {
+                    Name = "siteDetails",
+                    Status = SectionStatus.Completed,
+                },
+                new RegistrationJourneySection
+                {
+                    Name = "wasteDetails",
+                    Status = SectionStatus.InProgress,
+                },
+            ],
+        };
+
+    public static AnnualChargeDetails AnnualChargeDetails(int chargeYear = 2027) =>
+        new() { ChargeYear = chargeYear };
 
     public static AccreditationEntity Accreditation(
         ObjectId registrationId,

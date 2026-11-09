@@ -1,7 +1,10 @@
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApi;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApi;
 
@@ -99,7 +102,6 @@ public class AccreditationApiMapperTests
                 "prnIssuance",
                 "submitterContactDetails",
                 "siteAddress",
-                "overseasSites",
                 "accreditationReference",
                 "year",
             }
@@ -107,6 +109,58 @@ public class AccreditationApiMapperTests
         {
             json.TryGetProperty(name, out _).Should().BeFalse(name);
         }
+
+        // RA-647: an exporter carries its accredited overseas sites in the same response.
+        json.GetProperty("overseasSites").GetArrayLength().Should().Be(1);
+    }
+
+    // RA-647: a malformed record is dropped and logged; the rest of the page is still served.
+    [Fact]
+    public void ToSummaries_DropsAndLogsAMalformedRecord_AndKeepsTheRest()
+    {
+        var good = Application();
+        var noRegistration = Application(configure: a => a.RegistrationReference = null);
+        var noAccreditation = Application(configure: a => a.AccreditationReference = " ");
+        var noOrganisation = Application(configure: a => a.OrgId = null);
+        foreach (var malformed in new[] { noRegistration, noAccreditation, noOrganisation })
+            malformed.Id = ObjectId.GenerateNewId();
+        var logger = new CapturingLogger<AccreditationApiMapperTests>();
+
+        var summaries = AccreditationApiMapper.ToSummaries(
+            [noRegistration, good, noAccreditation, noOrganisation],
+            DateTimeOffset.UtcNow,
+            logger
+        );
+
+        summaries.Should().ContainSingle().Which.AccreditationNumber.Should().Be("A27ER5000270063PL");
+        logger
+            .Entries.Select(e => (e.LogLevel, e.Message))
+            .Should()
+            .BeEquivalentTo(
+                [
+                    (LogLevel.Warning, Dropped(noRegistration, "no registration number")),
+                    (LogLevel.Warning, Dropped(noAccreditation, "no accreditation number")),
+                    (LogLevel.Warning, Dropped(noOrganisation, "no organisation number")),
+                ]
+            );
+    }
+
+    private static string Dropped(AccreditationApplicationModel application, string reason) =>
+        $"Dropped a malformed accreditation from the response: applicationId={application.Id} reason={reason}";
+
+    [Fact]
+    public void ToSummaries_LogsNothingWhenEveryRecordIsWellFormed()
+    {
+        var logger = new CapturingLogger<AccreditationApiMapperTests>();
+
+        var summaries = AccreditationApiMapper.ToSummaries(
+            [Application()],
+            DateTimeOffset.UtcNow,
+            logger
+        );
+
+        summaries.Should().HaveCount(1);
+        logger.Entries.Should().BeEmpty();
     }
 
     [Theory]

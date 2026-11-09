@@ -75,8 +75,8 @@ Accreditations for 2027 onwards are served.
 
 | Route | Returns |
 | --- | --- |
-| `GET /v1/accreditations?year=2027&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100; `year` optional) |
-| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the accreditation, with status and tonnage band history and signatories |
+| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100). `year`, `organisationNumber` and `registrationNumber` are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404 |
+| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}?includeWithdrawn=false` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20&includeWithdrawn=false` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}?includeWithdrawn=false` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
 
@@ -109,9 +109,23 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 401 troubleshooting: check clock skew first, then that the payload has exactly two empty lines
 and no trailing newline, then that you use the secret for this client and environment.
 
+## What's new
+
+- `GET /v1/accreditations` can be filtered by `organisationNumber` and `registrationNumber` as well
+  as `year`. The filters combine with AND.
+- Getting an accreditation now returns the complete accreditation: an exporter's accredited
+  overseas sites, with their interim sites and status history, are in the same response under
+  `overseasSites`, so one request is enough. `includeWithdrawn=true` includes withdrawn interim
+  sites. The separate overseas-site routes are unchanged.
+- A record that cannot be addressed by its organisation, registration and accreditation numbers is
+  left out of the response and logged by us, so one bad record does not fail a page.
+
+Existing calls keep working. If your client rejects fields it does not know, allow `overseasSites`
+on the accreditation.
+
 ## Test data
 
-The same four fixed records exist in dev, test and ext-test. They are test data, owned by us,
+The same nine fixed records exist in dev, test and ext-test. They are test data, owned by us,
 and are put back to this state whenever the service starts. Do not rely on them in prod.
 
 | Organisation | Registration | Accreditation | Year | What it is |
@@ -120,6 +134,10 @@ and are put back to this state whenever the service starts. Do not rely on them 
 | `990002` | `R26EX9900020002FB` | `A27EX9900020002FB` | 2027 | exporter, fibre, 10 overseas sites (`001` to `010`) each with 2 interim sites |
 | `990003` | `R26ER9900030000PL` | `A27ER9900030000PL` | 2027 | reprocessor, plastic |
 | `990004` | `R26ER9900040000ST` | `A27ER9900040000ST` | 2027 | reprocessor, steel (the metal example) |
+| `990005` | `R26EX9900050002WD` | `A27EX9900050002WD` | 2027 | exporter, wood, 3 registered overseas sites of which only `001` and `002` are accredited, and a withdrawn interim site on `001` (returned only with `includeWithdrawn=true`). `003` is a 404 |
+| `990006` | `R26ER9900060000AL` | `A27ER9900060000AL` and `A28ER9900060000AL` | 2027 and 2028 | reprocessor, aluminium, one registration accredited in two years. Search by `registrationNumber` or `organisationNumber` returns both |
+| `990007` | `R26ER9900070000PL` | none | 2027 | an application that was submitted but never granted. It is not served: a lookup is a 404 and a search finds nothing |
+| `990008` | `R26ER9900080000ST` | `A26ER9900080000ST` | 2026 | approved, but before 2027, so not served: a lookup is a 404 |
 
 For example: `GET /v1/organisations/990002/registrations/R26EX9900020002FB/accreditations/2027/overseas-sites`.
 

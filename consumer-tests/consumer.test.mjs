@@ -75,6 +75,61 @@ test("searches accreditations as a page", live, async () => {
     assert.ok(body.items.every((item) => !("signatories" in item)));
 });
 
+test("search filters by organisation and registration number", live, async () => {
+    const res = await get(
+        `/v1/accreditations?organisationNumber=${ORG}&registrationNumber=${REG}`,
+        mine(),
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.items.length >= 1);
+    assert.ok(
+        body.items.every(
+            (item) =>
+                String(item.organisationNumber) === String(ORG) &&
+                item.registrationNumber === REG,
+        ),
+    );
+});
+
+test("a search filter that matches nothing is an empty page", live, async () => {
+    const res = await get(
+        "/v1/accreditations?registrationNumber=NO-SUCH-REG",
+        mine(),
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.totalItems, 0);
+    assert.deepEqual(body.items, []);
+});
+
+test("an invalid search filter is 400", live, async () => {
+    await assertProblem(
+        await get("/v1/accreditations?organisationNumber=abc", mine()),
+        400,
+        "invalid_organisation_number",
+    );
+});
+
+test("the accreditation carries its overseas sites only if it is an exporter", live, async () => {
+    const res = await get(path, mine());
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    if (body.wasteProcessingType === "exporter") {
+        assert.ok(Array.isArray(body.overseasSites));
+        assert.ok(
+            body.overseasSites.every(
+                (site) =>
+                    site.orsId &&
+                    Array.isArray(site.statusHistory) &&
+                    Array.isArray(site.interimSites),
+            ),
+        );
+    } else {
+        assert.ok(!("overseasSites" in body));
+    }
+});
+
 test("lists overseas sites as a page", live, async () => {
     const res = await get(`${path}/overseas-sites`, mine());
     assert.equal(res.status, 200);

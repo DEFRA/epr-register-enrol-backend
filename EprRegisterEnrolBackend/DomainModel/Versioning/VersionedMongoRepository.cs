@@ -228,7 +228,7 @@ public class VersionedMongoRepository<T>(
     {
         if (value is BsonDocument nested && BsonClassMap.IsClassMapRegistered(type))
         {
-            RemoveExcluded(nested, BsonClassMap.LookupClassMap(type));
+            RemoveExcluded(nested, BsonClassMap.LookupClassMap(StoredType(nested, type)));
         }
         else if (value is BsonArray items && ItemType(type) is { } itemType)
         {
@@ -238,6 +238,13 @@ public class VersionedMongoRepository<T>(
             }
         }
     }
+
+    // A polymorphic member (the Application's details) declares its base type but stores a subclass, named by its
+    // discriminator: walk the subclass's map, or the subclass's own excluded fields would count as changes.
+    private static Type StoredType(BsonDocument nested, Type declared) =>
+        nested.TryGetValue("_t", out var discriminator)
+            ? BsonSerializer.LookupActualType(declared, discriminator)
+            : declared;
 
     private static Type? ItemType(Type type) =>
         type.GetInterfaces()

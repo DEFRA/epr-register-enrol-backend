@@ -1,6 +1,7 @@
 using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Status;
+using Microsoft.Extensions.Logging;
 
 namespace EprRegisterEnrolBackend.AccreditationApi;
 
@@ -20,9 +21,58 @@ public static class AccreditationApiMapper
         DateTimeOffset now
     ) => Summary(application, now, StatusHistory(application, null));
 
+    // RA-647: a record that cannot be addressed by its business references (organisation number,
+    // registration number, accreditation number) cannot honour the contract, so it is dropped from
+    // the response and logged, and the rest of the page is still served. The persistence query
+    // already leaves such records out, so this is the second line of defence, and the log line is
+    // how an operator learns that one exists.
+    public static IReadOnlyList<AccreditationSummaryDto> ToSummaries(
+        IEnumerable<AccreditationApplicationModel> applications,
+        DateTimeOffset now,
+        ILogger logger
+    )
+    {
+        var summaries = new List<AccreditationSummaryDto>();
+        foreach (var application in applications)
+        {
+            var problem = MalformedReason(application);
+            if (problem is not null)
+            {
+                logger.LogWarning(
+                    "Dropped a malformed accreditation from the response: applicationId={ApplicationId} reason={Reason}",
+                    application.Id,
+                    problem
+                );
+                continue;
+            }
+
+            summaries.Add(ToSummary(application, now));
+        }
+
+        return summaries;
+    }
+
+    private static string? MalformedReason(AccreditationApplicationModel application)
+    {
+        if (application.OrgId is null)
+            return "no organisation number";
+        if (string.IsNullOrWhiteSpace(application.RegistrationReference))
+            return "no registration number";
+        if (string.IsNullOrWhiteSpace(application.AccreditationReference))
+            return "no accreditation number";
+        return null;
+    }
+
+    // Only the sites included in the accreditation. A site the organisation registered but did
+    // not select for it is not on the accreditation, so it is not served.
+    public static IEnumerable<OverseasSiteModel> AccreditedSites(
+        AccreditationApplicationModel application
+    ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
+
     public static AccreditationDto ToAccreditation(
         AccreditationApplicationModel application,
-        DateTimeOffset now
+        DateTimeOffset now,
+        bool includeWithdrawn = false
     )
     {
         var history = StatusHistory(application, null);
@@ -48,6 +98,13 @@ public static class AccreditationApiMapper
                 })
                 .ToList(),
             StatusHistory = history,
+            OverseasSites = IsExporter(application)
+                ? AccreditedSites(application)
+                    .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+                    .ThenBy(site => site.SiteId)
+                    .Select(site => ToOverseasSite(application, site, includeWithdrawn, now))
+                    .ToList()
+                : null,
             TonnageBandHistory = summary.TonnageBand is null
                 ? []
                 :

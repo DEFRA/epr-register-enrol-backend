@@ -629,12 +629,16 @@ public sealed class ApplicationGroupMigrator(
             var entries = (application.OverseasSites?.Sites ?? [])
                 .Select(site => SiteEntry(application, site))
                 .ToList();
+            // The migration only ever projects legacy applications, which the mapper makes accreditation applications.
             var entity = LegacyApplicationMapper.ToEntity(
                 application,
                 _registration?.EntityId,
                 entries
             );
-            entity.AccreditationId = _accreditations.TryGetValue(entity.EntityId, out var id)
+            entity.AsAccreditation().AccreditationId = _accreditations.TryGetValue(
+                entity.EntityId,
+                out var id
+            )
                 ? id
                 : null;
             await stores.Applications.Versions.InsertAsync(

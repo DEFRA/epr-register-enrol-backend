@@ -42,7 +42,8 @@ public static partial class AccreditationApiEndpoints
     private static async Task<IResult> SearchAccreditations(
         HttpContext http,
         IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        IOptions<ServiceClientsConfig> config,
+        ILoggerFactory loggerFactory
     )
     {
         var query = http.Request.Query;
@@ -73,9 +74,46 @@ public static partial class AccreditationApiEndpoints
             year = parsedYear;
         }
 
+        int? organisationNumber = null;
+        if (query.TryGetValue("organisationNumber", out var organisationValue))
+        {
+            if (
+                !int.TryParse(
+                    organisationValue.ToString(),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var parsedOrganisation
+                )
+                || parsedOrganisation < 1
+            )
+            {
+                return new ServiceProblemResult(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_organisation_number",
+                    "organisationNumber must be a whole number, for example 500027."
+                );
+            }
+
+            organisationNumber = parsedOrganisation;
+        }
+
+        string? registrationNumber = null;
+        if (query.TryGetValue("registrationNumber", out var registrationValue))
+        {
+            registrationNumber = registrationValue.ToString();
+            if (!RegistrationNumberPattern().IsMatch(registrationNumber))
+            {
+                return new ServiceProblemResult(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_registration_number",
+                    "registrationNumber must be letters, digits, hyphens or underscores, up to 40 characters."
+                );
+            }
+        }
+
         var now = DateTimeOffset.UtcNow;
         var (items, total) = await persistence.SearchGrantedAccreditationsAsync(
-            year,
+            new GrantedAccreditationFilter(year, organisationNumber, registrationNumber),
             config.Value.FirstAccreditationYear,
             (paging.PageNumber - 1) * paging.Limit,
             paging.Limit
@@ -87,7 +125,11 @@ public static partial class AccreditationApiEndpoints
                 PageNumber = paging.PageNumber,
                 Limit = paging.Limit,
                 TotalItems = (int)total,
-                Items = items.Select(a => AccreditationApiMapper.ToSummary(a, now)).ToList(),
+                Items = AccreditationApiMapper.ToSummaries(
+                    items,
+                    now,
+                    loggerFactory.CreateLogger("EprRegisterEnrolBackend.AccreditationApi")
+                ),
             }
         );
     }
@@ -96,10 +138,15 @@ public static partial class AccreditationApiEndpoints
         string organisationNumber,
         string registrationNumber,
         string year,
+        HttpContext http,
         IAccreditationApplicationPersistence persistence,
         IOptions<ServiceClientsConfig> config
     )
     {
+        var withdrawn = ParseIncludeWithdrawn(http.Request.Query["includeWithdrawn"]);
+        if (withdrawn.Problem is not null)
+            return withdrawn.Problem;
+
         var lookup = await Resolve(
             organisationNumber,
             registrationNumber,
@@ -108,7 +155,13 @@ public static partial class AccreditationApiEndpoints
             config
         );
         return lookup.Problem
-            ?? Results.Ok(AccreditationApiMapper.ToAccreditation(lookup.Application!, DateTimeOffset.UtcNow));
+            ?? Results.Ok(
+                AccreditationApiMapper.ToAccreditation(
+                    lookup.Application!,
+                    DateTimeOffset.UtcNow,
+                    withdrawn.Include
+                )
+            );
     }
 
     private static async Task<IResult> ListOverseasSites(
@@ -141,7 +194,8 @@ public static partial class AccreditationApiEndpoints
 
         var application = lookup.Application!;
         var now = DateTimeOffset.UtcNow;
-        var sites = AccreditedSites(application)
+        var sites = AccreditationApiMapper
+            .AccreditedSites(application)
             .OrderBy(site => site.OrsId, StringComparer.Ordinal)
             .ThenBy(site => site.SiteId)
             .ToList();
@@ -202,7 +256,7 @@ public static partial class AccreditationApiEndpoints
             return lookup.Problem;
 
         var application = lookup.Application!;
-        var site = AccreditedSites(application).FirstOrDefault(s =>
+        var site = AccreditationApiMapper.AccreditedSites(application).FirstOrDefault(s =>
             string.Equals(s.OrsId, orsId, StringComparison.Ordinal)
         );
 
@@ -221,12 +275,6 @@ public static partial class AccreditationApiEndpoints
                 )
             );
     }
-
-    // Only the sites included in the accreditation. A site the organisation registered but did
-    // not select for it is not on the accreditation, so it is not served.
-    private static IEnumerable<OverseasSiteModel> AccreditedSites(
-        AccreditationApplicationModel application
-    ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
 
     private sealed record Withdrawn(bool Include, IResult? Problem);
 

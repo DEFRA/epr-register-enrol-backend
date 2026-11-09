@@ -213,7 +213,10 @@ public sealed class ApplicationModelSyncTests : IDisposable
     ) => _applications.GetByIdAsync(ReExOrganisationId, application.Id.ToString()!);
 
     private static ApplicationOverseasSiteEntry Entry(ApplicationEntity application, int siteId) =>
-        Assert.Single(application.ApplicationOverseasSites, e => e.SiteId == siteId);
+        Assert.Single(
+            application.AsAccreditation().ApplicationOverseasSites,
+            e => e.SiteId == siteId
+        );
 
     // --- tests ----------------------------------------------------------------------------------------------------
 
@@ -363,7 +366,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
         Assert.Equal(ChangeReason.ProposedSiteDiscarded, ors.LastChange.Reason);
         Assert.Equal(OverseasSiteStatus.Active, (await CurrentSiteAsync("001")).Status);
         Assert.DoesNotContain(
-            (await CurrentApplicationAsync(application)).ApplicationOverseasSites,
+            (await CurrentApplicationAsync(application)).AsAccreditation().ApplicationOverseasSites,
             e => e.SiteId == 2
         );
     }
@@ -781,6 +784,48 @@ public sealed class ApplicationModelSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplicationClosed_ProposalAnOpenOrsChangeHolds_StaysProposed()
+    {
+        // An in-year ORS change is an application too: while it is open, the site and interim site it touches are
+        // held, so a reapplication closing on the same registration must not discard them. A tonnage change on the
+        // same registration holds no site, and its being there must not disturb the reapplication's sync.
+        var closing = await MigratedApplicationAsync(
+            ApplicationStatus.Submitted,
+            WithInterims(Site(1, "001", "ReEx Site"), Interim(2, "001", "Quay")),
+            Site(3, "002", "Added", isNew: true)
+        );
+        var registrationId = (await CurrentApplicationAsync(closing)).RegistrationId!.Value;
+        var proposedBefore = await CurrentSiteAsync("002");
+        var activeBefore = await CurrentSiteAsync("001");
+        foreach (
+            var details in new ApplicationDetails[]
+            {
+                DomainModelBuilders.OrsChangeDetails(proposedBefore.EntityId),
+                DomainModelBuilders.OrsChangeDetails(activeBefore.EntityId, null, "001"),
+                DomainModelBuilders.TonnageChangeDetails(),
+            }
+        )
+        {
+            await _stores.Applications.Versions.InsertAsync(
+                DomainModelBuilders.Application(registrationId, details),
+                new ChangeInfo { Reason = ChangeReason.ApplicationEdited },
+                cancellationToken: Ct
+            );
+        }
+
+        await EditAsync(closing, a => a.ApplicationStatus = ApplicationStatus.Rejected);
+        await SyncAsync(closing);
+
+        var proposed = await CurrentSiteAsync("002");
+        Assert.Equal(proposedBefore.Version, proposed.Version);
+        Assert.Equal(OverseasSiteStatus.Proposed, proposed.Status);
+        var active = await CurrentSiteAsync("001");
+        Assert.Equal(activeBefore.Version, active.Version);
+        Assert.Equal(InterimSiteStatus.Proposed, InterimEntry(active, "001").Status);
+        Assert.Equal(ApplicationStatus.Rejected, (await CurrentApplicationAsync(closing)).Status);
+    }
+
+    [Fact]
     public async Task ApplicationClosed_LastHolderOfAnotherApplicationsProposal_DiscardsIt()
     {
         // The first application proposed the sites and closed while the second still held them. When the second
@@ -899,7 +944,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
 
         var entity = await CurrentApplicationAsync(application);
         Assert.Equal(ApplicationStatus.Approved, entity.Status);
-        Assert.Equal(accreditation.EntityId, entity.AccreditationId);
+        Assert.Equal(accreditation.EntityId, entity.AsAccreditation().AccreditationId);
         Assert.Null(Entry(entity, 1).ProposedChanges);
         Assert.Null(InterimEntry(entity, 1, "001").ProposedChanges);
         Assert.Equal(
@@ -964,7 +1009,7 @@ public sealed class ApplicationModelSyncTests : IDisposable
         await SyncAsync(second);
 
         Assert.Single(await CurrentAccreditationsAsync());
-        Assert.Null((await CurrentApplicationAsync(second)).AccreditationId);
+        Assert.Null((await CurrentApplicationAsync(second)).AsAccreditation().AccreditationId);
     }
 
     [Fact]

@@ -61,16 +61,64 @@ public class AccreditationApiTestDataSeederTests
     }
 
     [Fact]
-    public void EveryScenario_IsAnApproved2027Accreditation_ThatTheApiWillServe()
+    public void ExporterWithdrawnAndUnaccredited_HasThreeSites_OnlyTwoAccredited_AndAWithdrawnInterimSite()
     {
-        foreach (var scenario in AccreditationApiTestData.All)
+        var sites = Built(AccreditationApiTestData.ExporterWithdrawnAndUnaccredited)
+            .OverseasSites!
+            .Sites;
+
+        sites.Select(s => (s.OrsId, s.Selected)).Should().Equal(("001", true), ("002", true), ("003", false));
+        sites[0].InterimSites.Select(i => i.RemovedAt is not null).Should().Equal(false, true);
+        sites[1].InterimSites.Should().OnlyContain(i => i.RemovedAt == null);
+    }
+
+    [Fact]
+    public void ReprocessorAluminium_IsAccreditedInTwoYears_ForOneRegistration()
+    {
+        var first = AccreditationApiTestData.ReprocessorAluminium2027;
+        var second = AccreditationApiTestData.ReprocessorAluminium2028;
+
+        second.OrgId.Should().Be(first.OrgId);
+        second.RegistrationReference.Should().Be(first.RegistrationReference);
+        (first.AccreditationYear, second.AccreditationYear).Should().Be((2027, 2028));
+        second.AccreditationReference.Should().NotBe(first.AccreditationReference);
+        second.Build().Year.Should().Be(2028);
+    }
+
+    [Fact]
+    public void ReprocessorNotGranted_HasNoAccreditationNumber_AndIsNotServed()
+    {
+        var scenario = AccreditationApiTestData.ReprocessorNotGranted;
+
+        scenario.IsServed.Should().BeFalse();
+        var application = scenario.Build();
+        application.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
+        application.AccreditationReference.Should().BeNull();
+    }
+
+    [Fact]
+    public void ReprocessorBefore2027_IsApproved_ButNotServed()
+    {
+        var scenario = AccreditationApiTestData.ReprocessorBefore2027;
+
+        scenario.IsServed.Should().BeFalse();
+        var application = scenario.Build();
+        application.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
+        application.Year.Should().Be(2026);
+        application.AccreditationReference.Should().StartWith("A26");
+    }
+
+    [Fact]
+    public void EveryServedScenario_IsAnApprovedAccreditationFrom2027_ThatTheApiWillServe()
+    {
+        foreach (var scenario in AccreditationApiTestData.Served)
         {
             var application = scenario.Build();
             application.ApplicationStatus.Should().Be(ApplicationStatus.Approved, scenario.Name);
             application.AccreditationReference.Should().NotBeNullOrWhiteSpace(scenario.Name);
             application.RegistrationReference.Should().NotBeNullOrWhiteSpace(scenario.Name);
             application.OrgId.Should().Be(scenario.OrgId, scenario.Name);
-            application.Year.Should().Be(2027, scenario.Name);
+            application.Year.Should().BeGreaterThanOrEqualTo(2027, scenario.Name);
         }
     }
 
@@ -80,9 +128,14 @@ public class AccreditationApiTestDataSeederTests
         var all = AccreditationApiTestData.All;
 
         all.Select(s => s.Id).Distinct().Should().HaveCount(all.Count);
-        all.Select(s => s.OrgId).Distinct().Should().HaveCount(all.Count);
-        all.Select(s => s.RegistrationReference).Distinct().Should().HaveCount(all.Count);
-        all.Select(s => s.AccreditationReference).Distinct().Should().HaveCount(all.Count);
+        // One registration can be accredited in more than one year, so a record is told apart by
+        // its organisation, registration and year.
+        all.Select(s => (s.OrgId, s.RegistrationReference, s.AccreditationYear))
+            .Distinct()
+            .Should()
+            .HaveCount(all.Count);
+        var numbers = all.Select(s => s.AccreditationReference).Where(n => n is not null).ToList();
+        numbers.Distinct().Should().HaveCount(numbers.Count);
     }
 
     [Fact]
@@ -103,12 +156,12 @@ public class AccreditationApiTestDataSeederTests
         await _seeder.SeedAsync();
         await _seeder.SeedAsync();
 
-        foreach (var scenario in AccreditationApiTestData.All)
+        foreach (var scenario in AccreditationApiTestData.Served)
         {
             var found = await _persistence.GetGrantedAccreditationAsync(
                 scenario.OrgId,
                 scenario.RegistrationReference,
-                2027,
+                scenario.AccreditationYear,
                 2027
             );
             found.Should().NotBeNull(scenario.Name);
@@ -220,14 +273,14 @@ public class AccreditationApiTestDataApiTests : IDisposable
     }
 
     private static string AccreditationPath(TestScenario s) =>
-        $"/v1/organisations/{s.OrgId}/registrations/{s.RegistrationReference}/accreditations/2027";
+        $"/v1/organisations/{s.OrgId}/registrations/{s.RegistrationReference}/accreditations/{s.AccreditationYear}";
 
     [Fact]
     public async Task EveryScenario_IsServedByTheApi_OnceSeeded()
     {
         await Seeder.SeedAsync();
 
-        foreach (var scenario in AccreditationApiTestData.All)
+        foreach (var scenario in AccreditationApiTestData.Served)
         {
             var body = await GetJson(AccreditationPath(scenario));
             body.GetProperty("accreditationNumber").GetString().Should().Be(scenario.AccreditationReference);
@@ -274,6 +327,67 @@ public class AccreditationApiTestDataApiTests : IDisposable
             var page = await GetJson($"{AccreditationPath(scenario)}/overseas-sites");
             page.GetProperty("totalItems").GetInt32().Should().Be(0, scenario.Name);
         }
+    }
+
+    [Fact]
+    public async Task ExporterWithdrawnAndUnaccredited_ServesOnlyAccreditedSites_AndWithdrawnOnRequest()
+    {
+        await Seeder.SeedAsync();
+        var path = AccreditationPath(AccreditationApiTestData.ExporterWithdrawnAndUnaccredited);
+
+        var accreditation = await GetJson(path);
+        var withWithdrawn = await GetJson($"{path}?includeWithdrawn=true");
+        await GetJson($"{path}/overseas-sites/003", HttpStatusCode.NotFound);
+
+        accreditation.GetProperty("overseasSites").EnumerateArray()
+            .Select(s => s.GetProperty("orsId").GetString()).Should().Equal("001", "002");
+        accreditation.GetProperty("overseasSites")[0].GetProperty("interimSites").GetArrayLength()
+            .Should().Be(1);
+        withWithdrawn.GetProperty("overseasSites")[0].GetProperty("interimSites").GetArrayLength()
+            .Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ReprocessorAluminium_IsFoundAcrossYears_ByRegistrationAndByOrganisation()
+    {
+        await Seeder.SeedAsync();
+        var scenario = AccreditationApiTestData.ReprocessorAluminium2027;
+
+        var byRegistration = await GetJson(
+            $"/v1/accreditations?registrationNumber={scenario.RegistrationReference}"
+        );
+        var byOrganisation = await GetJson($"/v1/accreditations?organisationNumber={scenario.OrgId}");
+        await GetJson(AccreditationPath(AccreditationApiTestData.ReprocessorAluminium2028));
+
+        foreach (var body in new[] { byRegistration, byOrganisation })
+        {
+            body.GetProperty("items").EnumerateArray()
+                .Select(i => i.GetProperty("accreditationYear").GetInt32()).Should().Equal(2027, 2028);
+        }
+    }
+
+    [Fact]
+    public async Task ReprocessorNotGranted_IsA404_AndNotInSearch()
+    {
+        await Seeder.SeedAsync();
+        var scenario = AccreditationApiTestData.ReprocessorNotGranted;
+
+        await GetJson(AccreditationPath(scenario), HttpStatusCode.NotFound);
+        var search = await GetJson($"/v1/accreditations?organisationNumber={scenario.OrgId}");
+
+        search.GetProperty("totalItems").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ReprocessorBefore2027_IsA404_AndNotInSearch()
+    {
+        await Seeder.SeedAsync();
+        var scenario = AccreditationApiTestData.ReprocessorBefore2027;
+
+        await GetJson(AccreditationPath(scenario), HttpStatusCode.NotFound);
+        var search = await GetJson($"/v1/accreditations?organisationNumber={scenario.OrgId}");
+
+        search.GetProperty("totalItems").GetInt32().Should().Be(0);
     }
 
     [Fact]
