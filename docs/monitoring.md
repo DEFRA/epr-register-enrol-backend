@@ -2,40 +2,62 @@
 
 RA-651. How to see, per consumer, how the accreditation API for service clients (ReEx and others)
 is behaving, and what to alert on. Production is watched through logs and Grafana alerts, so
-everything here comes from structured log lines. Nothing is exported as a metric.
+everything here comes from log lines. Nothing is exported as a metric.
 
 Dashboards and alert rules are created in Grafana, not in this repo. This page is the definition to
-build them from, and the list of log fields they depend on. Tests pin those fields
-(`AccreditationApiEndpointTests`, `AccreditationApiMapperTests`,
-`UnservableAccreditationCheckServiceTests`), so renaming one fails a build instead of quietly
-emptying a panel.
+build them from.
+
+## What CDP keeps from a log line
+
+CDP does not index every field the service logs. It keeps a fixed, trimmed set of ECS fields
+(see the CDP "Logging" guide); anything else, including our own structured values such as
+`ClientName`, is **dropped** before it reaches OpenSearch. The values we log as `labels.*` and
+`metadata.*` therefore **cannot be queried**. Only the fields below can, plus the rendered
+`message` text, which is always indexed.
+
+Checked against a real export of the access log from dev (the fields in the first column are what
+is actually there).
+
+| Field | Holds | Notes |
+| --- | --- | --- |
+| `log.logger` | the logger name | filter by it to pick an event |
+| `log.level` | the level, in lower case | `info` is confirmed in dev; check the exact value for warnings and errors in Explore (probably `warn` and `error`) |
+| `message` | the rendered log line | searchable as text |
+| `user.id` | the client id, for example `epr-ReEx-Client` | **the way to split by consumer** |
+| `http.response.status_code` | the response status, a number | reliable on the access log line only |
+| `http.request.method`, `url.path` | the request | `url.path` contains the organisation and registration numbers |
+| `event.duration` | the time taken, in **nanoseconds**, a number | on the access log line once RA-651 is deployed (see below) |
+| `service.version`, `trace.id`, `span.id`, `container_name` | the build and the trace | |
+
+Not available, so do not build on them: `labels.*`, `metadata.*`, `ClientName`, `Route`, a duration
+or status field of our own. The client name is also partly masked in the message text.
 
 ## What the service logs
 
-Structured values appear in the JSON log in two places: **text** values under `labels.<Name>` and
-**numbers** under `metadata.<Name>` (so `Status` and `DurationMs` are `metadata.Status` and
-`metadata.DurationMs`, and the check's counts are under `metadata`). The logger is `log.logger` and
-the level is `log.level`. The table below lists each field by its plain name. This is how the
-fields looked in the service's own test output, so confirm the exact paths in Explore before
-building a panel or alert, and use whichever the log line shows. The access log line also carries
-the client id as `client.user.id`.
-
-| Event | Logger | Level | Fields (`labels.*`) |
+| Event | `log.logger` | Level | What to filter on |
 | --- | --- | --- | --- |
-| One line per authenticated service client request | `EprRegisterEnrolBackend.ServiceClientAccess` | Information | `ClientId`, `ClientName`, `Method`, `Route`, `OrganisationNumber`, `RegistrationNumber`, `Year`, `Status` (number), `DurationMs` (number) |
-| A request refused at authentication, message starts `Service client auth failed` | `EprRegisterEnrolBackend.Auth.ServiceClientAuthenticationHandler` | Warning | `Code`, `Reason`, `ClientId` (as claimed, `(none)` if absent), `CorrelationId` |
-| A record dropped from a response, message starts `Dropped a malformed accreditation` | `EprRegisterEnrolBackend.AccreditationApi` | Warning | `ApplicationId`, `Reason` |
-| The unservable check found records, message starts `Approved accreditations the accreditation API cannot serve` | `EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService` | **Error** | `NoOrganisationNumber`, `NoRegistrationNumber`, `NoAccreditationNumber`, `FromYear` |
-| The unservable check found nothing | same | Information | `FromYear` |
+| One line per authenticated service client request | `EprRegisterEnrolBackend.ServiceClientAccess` | info | `user.id`, `http.response.status_code`, `event.duration`; message `Service client request: clientId=... route=... status=200 durationMs=4` |
+| A request refused at authentication | `EprRegisterEnrolBackend.Auth.ServiceClientAuthenticationHandler` | warning | message starts `Service client auth failed:` and carries the code and the claimed `clientId=`. It has **no** `user.id` (the caller is not authenticated) and its status field is not reliable |
+| A record dropped from a response | `EprRegisterEnrolBackend.AccreditationApi` | warning | message starts `Dropped a malformed accreditation from the response:` with the application id and the reason |
+| The unservable-records check found records | `EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService` | **error** | message `Approved accreditations the accreditation API cannot serve: noOrganisationNumber=N noRegistrationNumber=N noAccreditationNumber=N fromYear=2027` |
+| The check found nothing | same | info | message `Every approved accreditation from 2027 can be served...` |
 
-Auth failure `Code` values: `missing_header`, `invalid_signature`, `expired_timestamp`,
-`reused_nonce` and the other codes in `docs/reex-api-onboarding.md`.
+Auth failure codes: `missing_header`, `invalid_signature`, `expired_timestamp`, `reused_nonce` and
+the others in `docs/reex-api-onboarding.md`. They appear in the message text.
 
-A request refused at authentication has no access-log line (the access log runs after
+A request refused at authentication has no access log line (the access log runs after
 authentication), so auth failures and requests are counted from different events.
 
-The unauthenticated `ClientId` is whatever the caller claimed. It is not a secret, and the secret,
-signature and nonce are never logged.
+### Latency: `event.duration`
+
+The access log line writes the time taken as a property named `ElapsedMilliseconds`. The ECS log
+formatter turns exactly that name into `event.duration`, in nanoseconds, which is a field CDP
+keeps. Any other name would be dropped. A test (`AccessLogEcsMappingTests`) pins the name, so
+renaming it fails a build instead of silently emptying a latency panel.
+
+Lines logged before this change is deployed have the duration only inside the message text
+(`durationMs=4`), so they cannot be charted. The latency panels fill in from the first request
+after the deploy. In Grafana set the unit to nanoseconds (or convert: 2 seconds is 2,000,000,000).
 
 ## The check for records the API cannot serve
 
@@ -44,15 +66,14 @@ every response by the query, with no line per request, so a consumer would just 
 `UnservableAccreditationCheckService` counts them, by reason, 30 seconds after start-up and then
 once a day, and logs the counts only, never anything about an application.
 
-- Any finding is logged at **Error**, so the existing `5xx and Errors` alert reports it with no new
+- Any finding is logged at **error**, so the existing `5xx and Errors` alert reports it with no new
   rule. A repeat of the same finding each day is intended: the data is still wrong.
-- The counts are per reason. An application missing two numbers is counted under both.
+- The counts are in the message text. An application missing two numbers is counted under both.
 - It runs on every instance, so expect one line per instance per run.
 - Settings, under `AccreditationApiMonitoring`: `Enabled` (default `true`), `InitialDelay`
-  (default 30 seconds) and `Interval` (default 1 day). A failure to count is a Warning, not an
-  Error, and the next run retries.
-- Only an Error is produced if the data is genuinely wrong, so a clean environment has no start-up
-  Error (see RA-733).
+  (default 30 seconds) and `Interval` (default 1 day). A failure to count is a warning, not an
+  error, and the next run retries.
+- A clean environment has no start-up error (see RA-733).
 
 To act on an alert: the counts say how many and why. Find the applications in Mongo (approved,
 year from 2027, missing the named reference) and fix the data, or tell the owner of the process that
@@ -81,55 +102,55 @@ Follows the CDP monitoring guide
   query to Lucene by clicking the DQL link on the right of the query bar. A query copied from
   OpenSearch Dashboards will not work as it is.
 
-Examples in Lucene, to check against the index in Explore (the field types decide whether the range
-form works):
+Queries in Lucene, using only fields CDP keeps. Check them in Explore first.
 
 | Use | Lucene |
 | --- | --- |
 | Access log lines | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess"` |
-| Server errors | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess" AND metadata.Status:[500 TO *]` |
-| Auth failures | `log.logger:"EprRegisterEnrolBackend.Auth.ServiceClientAuthenticationHandler" AND log.level:Warning` |
-| Records the API cannot serve | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND log.level:Error` |
-| A record dropped from a response | `log.logger:"EprRegisterEnrolBackend.AccreditationApi" AND log.level:Warning AND message:"Dropped a malformed accreditation"` |
-
-For the per-consumer panels, group by `labels.ClientName` (or `labels.ClientId` for auth failures).
+| Server errors | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess" AND http.response.status_code:[500 TO 599]` |
+| Client errors | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess" AND http.response.status_code:[400 TO 499]` |
+| One consumer | add `AND user.id:"epr-ReEx-Client"` |
+| Auth failures | `log.logger:"EprRegisterEnrolBackend.Auth.ServiceClientAuthenticationHandler" AND message:"Service client auth failed"` |
+| One auth failure code | add `AND message:"invalid_signature"` (or `expired_timestamp`, `reused_nonce`, `missing_header`) |
+| Auth failures for one client | add `AND message:"epr-ReEx-Client"` |
+| A record dropped from a response | `log.logger:"EprRegisterEnrolBackend.AccreditationApi" AND message:"Dropped a malformed accreditation"` |
+| Records the API cannot serve | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND message:"cannot serve"` |
 
 ## Dashboard: one row per consumer
 
-Group every panel by `labels.ClientName`.
+Split every request panel by `user.id`.
 
-| Panel | Source | Calculation |
+| Panel | Query | Metric and grouping |
 | --- | --- | --- |
-| Request rate | access log | count of lines, per minute, by `ClientName` |
-| Server errors | access log | count where `metadata.Status` >= 500, and as a share of requests |
-| Client errors | access log | count where `metadata.Status` is 400 to 499, by `Status` (404 and 400 are normal for a consumer's mistakes, so keep them apart from 5xx) |
-| Latency | access log | p50, p95, p99 of `metadata.DurationMs`, by `ClientName`, and by `Route` |
-| Slowest routes | access log | p95 of `DurationMs` by `Route` |
-| Auth failures | auth failure line | count by `Code` and by `ClientId` |
-| Unservable records | check line | latest `NoOrganisationNumber`, `NoRegistrationNumber`, `NoAccreditationNumber` |
-| Dropped from a response | drop line | count by `Reason` |
+| Request rate | access log lines | Count, group by Terms `user.id`, then Date histogram |
+| Server errors | server errors | Count, same grouping |
+| Client errors | client errors | Count, group by Terms `http.response.status_code`. 404 and 400 are normal for a consumer's mistakes, so keep them apart from 5xx |
+| Latency | access log lines | Percentiles (50, 95, 99) of `event.duration`, group by Terms `user.id`, then Date histogram. Unit nanoseconds. Fills in after the deploy |
+| Auth failures | auth failures | Count, then Date histogram; add a second panel per code if useful |
+| Unservable records | the check's lines | Logs visualisation, to read the counts in the message |
+| Dropped from a response | dropped record lines | Logs visualisation, to read the reason |
 
 ## Alerts
 
 Built the same way as the existing ones: named `epr-register-enrol-backend - <what>`, in the
-`Playground/epr-register-enrol-backend-monitoring` folder, sent to the team Slack channel
-(`#epr-register-enrol-team-alerts-non-prod` for dev, test and the other non-production
-environments, and `#epr-register-enrol-team-alerts-prod` for production).
-The existing rules use a sum over a window against a threshold, and fire at 1.
+`Playground/epr-register-enrol-backend-monitoring` folder. They go to the team Slack channels:
+`#epr-register-enrol-team-alerts-non-prod` for dev, test and the other non-production environments,
+and `#epr-register-enrol-team-alerts-prod` for production. The existing rules use a sum over a
+window against a threshold, and fire at 1.
 
 | Alert | Fires when | Notes |
 | --- | --- | --- |
-| `5xx and Errors` (exists) | any 5xx or any Error-level line | Also reports **records the API cannot serve**, since that check logs at Error |
-| `Auth failures` (new) | more than 10 lines starting `Service client auth failed` in 5 minutes for one `ClientId` | A wrong secret, an expired timestamp, or a replay. A burst for one client usually means it was given the wrong secret or its clock is out |
-| `Slow requests` (new) | p95 of `DurationMs` above 2000 for 5 minutes, with at least 20 requests, for a `ClientName` | Per consumer, so a slow client does not hide another |
-| `Dropped records` (new, optional) | any line starting `Dropped a malformed accreditation` in 5 minutes | Rarely fires, because the query already leaves most such records out. The daily check is the main signal |
+| `5xx and Errors` (exists) | any 5xx or any error-level line | Also reports **records the API cannot serve**, since that check logs at error |
+| `Auth failures` (new) | more than 10 auth failure lines in 5 minutes | Filter by `message:"epr-ReEx-Client"` for one consumer. A burst usually means a wrong secret or a clock that is out |
+| `Slow requests` (new) | p95 of `event.duration` above 2,000,000,000 (2 seconds) for 5 minutes, per `user.id` | Only works after the deploy. Add a count condition (at least 20 requests) so a quiet period does not trigger it |
+| `Dropped records` (new, optional) | any dropped record line in 5 minutes | Rarely fires, because the query already leaves most such records out. The daily check is the main signal |
 
-The thresholds above (10 failures, 2 seconds, 20 requests) are proposals to confirm, not measured
+The thresholds (10 failures, 2 seconds, 20 requests) are proposals to confirm, not measured
 values. Tune them after a week of real traffic.
 
-## Where the numbers come from
+## Where the lines are enabled
 
 The access log line is enabled by an override in `appsettings.json`
 (`EprRegisterEnrolBackend.ServiceClientAccess: Information`), because the default log level is
-Warning. The check's Information heartbeat has its own override in the same place. Without them the
-lines would not be written.
+Warning. The check's heartbeat has its own override in the same place. Without them the lines would
+not be written.

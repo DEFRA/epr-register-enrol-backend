@@ -1044,7 +1044,7 @@ public class AccreditationApiEndpointTests : IDisposable
             "/v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}"
         );
         access[0].Properties["Status"].Should().Be(200);
-        access[0].Properties["DurationMs"].Should().BeOfType<long>();
+        access[0].Properties["ElapsedMilliseconds"].Should().BeOfType<long>();
         access[0].LogLevel.Should().Be(LogLevel.Information);
 
         var everything = string.Join('\n', logs.Entries.Select(e => e.Message));
