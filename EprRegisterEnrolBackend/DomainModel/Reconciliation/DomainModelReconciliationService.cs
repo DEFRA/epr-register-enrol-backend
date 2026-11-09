@@ -93,6 +93,15 @@ public sealed class DomainModelReconciliationService(
             );
         }
 
+        foreach (var (field, applications) in report.ModelOnlyByField)
+        {
+            logger.LogWarning(
+                "DomainModelReconciliation value only in the model, no legacy value to explain it: field {Field}, applications {Applications}",
+                field,
+                applications
+            );
+        }
+
         if (report.SampleApplicationIds.Count > 0)
         {
             logger.LogWarning(

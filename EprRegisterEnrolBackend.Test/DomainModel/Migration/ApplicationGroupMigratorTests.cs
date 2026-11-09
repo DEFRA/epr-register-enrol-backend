@@ -633,6 +633,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
             new DateTime(2019, 3, 1, 0, 0, 0, DateTimeKind.Utc),
             (await CurrentSiteAsync("001")).FirstApprovedAt
         );
+        Assert.Equal(FirstApprovalSource.ReEx, (await CurrentSiteAsync("001")).FirstApprovalSource);
     }
 
     [Fact]
@@ -678,7 +679,9 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
 
         await MigrateAsync(application);
 
-        Assert.Equal(Day2, (await CurrentSiteAsync("001")).FirstApprovedAt);
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(Day2, site.FirstApprovedAt);
+        Assert.Equal(FirstApprovalSource.ThisService, site.FirstApprovalSource);
     }
 
     [Fact]

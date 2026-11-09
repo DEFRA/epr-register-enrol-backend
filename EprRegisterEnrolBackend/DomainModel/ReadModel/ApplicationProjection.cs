@@ -151,6 +151,10 @@ public static class ApplicationProjection
                 : null,
             IsEu = fields["isEu"].AsBoolean,
             IsOecd = fields["isOecd"].AsBoolean,
+            ValidFrom =
+                ors.FirstApprovalSource == FirstApprovalSource.ReEx
+                    ? FormatApprovalDate(ors.FirstApprovedAt)
+                    : null,
             Selected = entry.Selected,
             BesEvidence = Convert<BesEvidenceModel>(entry.BesEvidence),
             IsNewSite = entry.IsNewSite,
@@ -163,6 +167,14 @@ public static class ApplicationProjection
         InterimSiteSync.SyncMirror(site);
         return site;
     }
+
+    /// <summary>A site's approval date in the one form the read model serves it, to the millisecond Mongo keeps.</summary>
+    public static string? FormatApprovalDate(DateTime? date) =>
+        date is { } value
+            ? new BsonDateTime(value)
+                .ToUniversalTime()
+                .ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+            : null;
 
     private static InterimSiteModel ToInterimSite(
         ApplicationInterimSiteEntry entry,

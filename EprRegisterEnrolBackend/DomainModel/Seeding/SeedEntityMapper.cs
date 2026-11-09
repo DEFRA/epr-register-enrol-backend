@@ -94,7 +94,12 @@ public static class SeedEntityMapper
         target.IsEu = site.IsEu;
         target.IsOecd = site.IsOecd;
         target.Coordinates = site.Coordinates;
-        target.FirstApprovedAt ??= ParseApprovalDate(site.ValidFrom);
+        if (target.FirstApprovedAt is null && ParseApprovalDate(site.ValidFrom) is { } approved)
+        {
+            target.FirstApprovedAt = approved;
+            target.FirstApprovalSource = Entities.FirstApprovalSource.ReEx;
+        }
+
         target.BaselOecdCodes = new[] { site.Code1, site.Code2, site.Code3 }
             .Where(code => !string.IsNullOrWhiteSpace(code))
             .Select(code => code!)

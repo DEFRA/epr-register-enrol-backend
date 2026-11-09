@@ -394,11 +394,14 @@ public sealed class ApplicationReconcilerTests : IDisposable
         report.ToLogLine().Should().NotContain("SECRET");
     }
 
-    [Fact]
-    public async Task Run_ASiteValidFrom_IsNotCompared()
+    [Theory]
+    [InlineData("2026-01-01T00:00:00.000Z")]
+    [InlineData("2026-01-01")]
+    [InlineData("2026-01-01T01:00:00+01:00")]
+    public async Task Run_ASiteValidFrom_MatchesAsTheSameInstant(string validFrom)
     {
         var site = Site(1, "001", "Plant");
-        site.ValidFrom = "2026-01-01";
+        site.ValidFrom = validFrom;
         var id = await CreateAsync(Application(sites: site));
         await MigrateAsync(id);
 
@@ -406,6 +409,93 @@ public sealed class ApplicationReconcilerTests : IDisposable
 
         report.Matching.Should().Be(1);
         report.DifferencesByField.Should().BeEmpty();
+        report.ModelOnlyByField.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Run_ASiteValidFromChangedOnlyInLegacy_IsADifference()
+    {
+        var site = Site(1, "001", "Plant");
+        site.ValidFrom = "2026-01-01T00:00:00.000Z";
+        var id = await CreateAsync(Application(sites: site));
+        await MigrateAsync(id);
+        await EditLegacyAsync(
+            id,
+            new BsonDocument("overseasSites.sites.0.validFrom", "2026-06-01T00:00:00.000Z")
+        );
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.DifferencesByField.Should().ContainKey("overseasSites.sites[].validFrom");
+    }
+
+    [Fact]
+    public async Task Run_AnApprovalHereWithNoReExDate_IsNotServedAsALegacyDate()
+    {
+        var site = Site(1, "001", "Plant");
+        var application = Application(ApplicationStatus.Approved, sites: site);
+        var id = await CreateAsync(application);
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.ModelOnlyByField.Should().BeEmpty();
+        report.Matching.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Run_AnOlderApplicationWithABlankCopy_IsFlaggedAsModelOnly()
+    {
+        var older = Application(ApplicationStatus.Started, Day1, 2026, Site(1, "001", "Plant"));
+        older.PermitNumbers = [];
+        older.SubmitterContactDetails = null;
+        var newer = Application(
+            ApplicationStatus.Started,
+            Day1.AddDays(1),
+            2027,
+            Site(1, "001", "Plant")
+        );
+        await CreateAsync(older);
+        var id = await CreateAsync(newer);
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report
+            .ModelOnlyByField.Should()
+            .BeEquivalentTo(
+                new Dictionary<string, long>
+                {
+                    ["permitNumbers"] = 1,
+                    ["submitterContactDetails"] = 1,
+                }
+            );
+        report.WithDifferences.Should().Be(1);
+        report.SampleApplicationIds.Should().Equal(older.Id!.Value);
+    }
+
+    [Fact]
+    public async Task Run_AValueOnlyInTheModel_IsNotAcceptedEvenWhenListedAsAConflict()
+    {
+        var older = Application(ApplicationStatus.Started, Day1, 2026, Site(1, "001", "Plant"));
+        older.CompanyRegisteredAddress = "Older address";
+        older.PermitNumbers = [];
+        var newer = Application(
+            ApplicationStatus.Started,
+            Day1.AddDays(1),
+            2027,
+            Site(1, "001", "Plant")
+        );
+        await CreateAsync(older);
+        var id = await CreateAsync(newer);
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.AcceptedConflicts.Should().Be(0);
+        report.WithDifferences.Should().Be(1);
+        report.ModelOnlyByField.Should().ContainKey("permitNumbers");
+        report.DifferencesByField.Should().ContainKey("companyRegisteredAddress");
     }
 
     [Fact]

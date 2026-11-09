@@ -47,6 +47,10 @@ public class OverseasSiteEntity : VersionedEntityBase
     /// </summary>
     public DateTime? FirstApprovedAt { get; set; }
 
+    /// <summary>Where <see cref="FirstApprovedAt"/> came from. Only ReEx's date was ever on the legacy application.</summary>
+    [BsonRepresentation(BsonType.String)]
+    public FirstApprovalSource? FirstApprovalSource { get; set; }
+
     public List<InterimSiteEntry> InterimSites { get; set; } = [];
 
     /// <summary>

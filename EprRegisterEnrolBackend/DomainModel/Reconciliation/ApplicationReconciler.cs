@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -35,8 +36,6 @@ public sealed class ApplicationReconciler(
         "registrationEntityId",
         "accreditationEntityId",
         "overseasSites.sites[].overseasSiteEntityId",
-        // ReEx's approval date, used only to set Selected at seed time.
-        "overseasSites.sites[].validFrom",
         "overseasSites.sites[].previousSites[].overseasSiteEntityId",
     ];
 
@@ -112,20 +111,21 @@ public sealed class ApplicationReconciler(
         }
     }
 
-    private static HashSet<string> Differences(
+    private static DocumentDifferences Differences(
         AccreditationApplicationModel legacy,
         ApplicationSources sources
     )
     {
-        NormaliseInterimSites(legacy, sources);
-        return BsonDifferences.Paths(
+        NormaliseSites(legacy, sources);
+        return BsonDifferences.Compare(
             legacy.ToBsonDocument(),
             ApplicationProjection.ToLegacy(sources).ToBsonDocument()
         );
     }
 
-    // Two things the migration does on purpose: promote a pre-RA-603 singular interim site, and renumber once (Q30b).
-    private static void NormaliseInterimSites(
+    // What the migration does on purpose: promote a pre-RA-603 singular interim site, renumber once (Q30b), and turn
+    // ReEx's raw date string into a date, so the same instant written differently is not a difference.
+    private static void NormaliseSites(
         AccreditationApplicationModel legacy,
         ApplicationSources sources
     )
@@ -141,6 +141,11 @@ public sealed class ApplicationReconciler(
         foreach (var site in legacy.OverseasSites?.Sites ?? [])
         {
             InterimSiteSync.Normalise(site);
+            if (SeedEntityMapper.ParseApprovalDate(site.ValidFrom) is { } approved)
+            {
+                site.ValidFrom = ApplicationProjection.FormatApprovalDate(approved);
+            }
+
             foreach (
                 var interim in site.InterimSites.Append(site.InterimSite).OfType<InterimSiteModel>()
             )
@@ -156,6 +161,7 @@ public sealed class ApplicationReconciler(
     private sealed class Tally
     {
         private readonly Dictionary<string, long> _differences = [];
+        private readonly Dictionary<string, long> _modelOnly = [];
         private readonly List<ObjectId> _sample = [];
         private long _matching;
         private long _withDifferences;
@@ -166,16 +172,20 @@ public sealed class ApplicationReconciler(
         public long Applications { get; set; }
         public long NotMigrated { get; set; }
 
-        public void Record(ObjectId id, HashSet<string> paths, bool listedAsConflict)
+        public void Record(ObjectId id, DocumentDifferences differences, bool listedAsConflict)
         {
+            var paths = differences.Paths;
             paths.ExceptWith(s_ignored);
+            var modelOnly = differences.ModelOnly;
+            modelOnly.IntersectWith(paths);
             if (paths.Count == 0)
             {
                 _matching++;
                 return;
             }
 
-            if (listedAsConflict)
+            // A value only the model holds is never accepted: nothing on the legacy side explains it.
+            if (listedAsConflict && modelOnly.Count == 0)
             {
                 _acceptedConflicts++;
                 return;
@@ -183,7 +193,8 @@ public sealed class ApplicationReconciler(
 
             foreach (var path in paths)
             {
-                _differences[path] = _differences.GetValueOrDefault(path) + 1;
+                var counts = modelOnly.Contains(path) ? _modelOnly : _differences;
+                counts[path] = counts.GetValueOrDefault(path) + 1;
             }
 
             _withDifferences++;
@@ -216,6 +227,7 @@ public sealed class ApplicationReconciler(
                 _unreadable,
                 _unreadableKinds,
                 _differences,
+                _modelOnly,
                 _sample
             );
     }
