@@ -197,6 +197,26 @@ public sealed class AccreditationReferenceCorrectionMigrationTests : IDisposable
         _logger.Entries.Should().BeEmpty();
     }
 
+    // Run as the host runs it: a failure is logged rather than escaping ExecuteAsync and
+    // stopping the host. Enabled with no persistence registered makes resolving it throw.
+    [Fact]
+    public async Task Failure_during_the_hosted_run_is_logged_and_does_not_escape()
+    {
+        var migration = CreateMigration(enabled: true, registerPersistence: false);
+
+        await migration.StartAsync(TestContext.Current.CancellationToken);
+        await migration.ExecuteTask!;
+
+        migration.ExecuteTask.IsCompletedSuccessfully.Should().BeTrue();
+        _logger
+            .Entries.Should()
+            .Contain(e =>
+                e.LogLevel == LogLevel.Error
+                && e.Message == "RA-691/RA-763 accreditation reference correction failed"
+                && e.Exception is InvalidOperationException
+            );
+    }
+
     [Fact]
     public async Task Dry_run_logs_exactly_the_four_changes_and_writes_nothing()
     {
