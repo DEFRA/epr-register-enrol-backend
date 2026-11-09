@@ -93,8 +93,11 @@ public abstract class ChangeRequestItem
     [BsonGuidRepresentation(GuidRepresentation.Standard)]
     public Guid ItemId { get; set; } = Guid.NewGuid();
 
-    /// <summary>One of the change-type constants on <see cref="AccreditationChangeRequest"/>.</summary>
-    public string ChangeType { get; set; }
+    /// <summary>
+    /// One of the change-type constants on <see cref="AccreditationChangeRequest"/>, fixed once the item is made. A
+    /// string, not an enum, because the stored and API values are those constants' kebab-case strings.
+    /// </summary>
+    public string ChangeType { get; init; }
 
     protected ChangeRequestItem(string changeType) => ChangeType = changeType;
 

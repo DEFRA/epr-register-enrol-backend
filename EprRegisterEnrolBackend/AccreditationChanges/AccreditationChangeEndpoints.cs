@@ -102,15 +102,11 @@ public static class AccreditationChangeEndpoints
         return created ? Results.Created(string.Empty, view) : Results.Ok(view);
     }
 
+    // RA-697: any granted accreditation, as the GET reads a reprocessor's (tonnage) requests too.
     private static async Task<(
         IResult? Error,
         AccreditationApplicationModel? Accreditation
-    )> LoadGrantedAsync(
-        string organisationId,
-        string applicationId,
-        ChangeServices services,
-        bool exporterOnly = true
-    )
+    )> LoadGrantedAsync(string organisationId, string applicationId, ChangeServices services)
     {
         if (!ObjectId.TryParse(applicationId, out _))
             return (Results.NotFound(), null);
@@ -125,14 +121,24 @@ public static class AccreditationChangeEndpoints
                 Results.Conflict("Change requests can only be made to a granted (Approved) accreditation."),
                 null
             );
-        if (exporterOnly && !accreditation.IsExporter)
+        return (null, accreditation);
+    }
+
+    // Every write adds or changes overseas sites, which only an exporter has.
+    private static async Task<(
+        IResult? Error,
+        AccreditationApplicationModel? Accreditation
+    )> LoadGrantedExporterAsync(string organisationId, string applicationId, ChangeServices services)
+    {
+        var (error, accreditation) = await LoadGrantedAsync(organisationId, applicationId, services);
+        if (error is null && !accreditation!.IsExporter)
             return (
                 Results.Conflict(
                     "Overseas sites can only be added in-year to a granted (Approved) exporter accreditation."
                 ),
                 null
             );
-        return (null, accreditation);
+        return (error, accreditation);
     }
 
     private static async Task<(
@@ -141,7 +147,7 @@ public static class AccreditationChangeEndpoints
         AccreditationChangeRequest? Draft
     )> LoadDraftAsync(string organisationId, string applicationId, ChangeServices services)
     {
-        var (error, accreditation) = await LoadGrantedAsync(organisationId, applicationId, services);
+        var (error, accreditation) = await LoadGrantedExporterAsync(organisationId, applicationId, services);
         if (error is not null)
             return (error, null, null);
         var draft = await services.Requests.GetDraftAsync(
@@ -159,12 +165,7 @@ public static class AccreditationChangeEndpoints
     )
     {
         // RA-697: a reprocessor reads its (tonnage) requests too; it has no overseas sites.
-        var (error, accreditation) = await LoadGrantedAsync(
-            organisationId,
-            applicationId,
-            services,
-            exporterOnly: false
-        );
+        var (error, accreditation) = await LoadGrantedAsync(organisationId, applicationId, services);
         if (error is not null)
             return error;
 
@@ -355,7 +356,7 @@ public static class AccreditationChangeEndpoints
         [AsParameters] ChangeServices services
     )
     {
-        var (error, accreditation) = await LoadGrantedAsync(organisationId, applicationId, services);
+        var (error, accreditation) = await LoadGrantedExporterAsync(organisationId, applicationId, services);
         if (error is not null)
             return error;
 

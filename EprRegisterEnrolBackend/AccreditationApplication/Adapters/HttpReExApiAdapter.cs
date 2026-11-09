@@ -664,34 +664,15 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
     // Postcode are deliberately not included: OverseasSiteModel has no fields for them and
     // neither does the frontend's own field set for a main (non-interim) overseas site.
     private static string? FormatSiteAddress(OverseasSiteAddressDto? addr) =>
-        addr is null
-            ? null
-            : string.Join(
-                ", ",
-                new[] { addr.Line1, addr.Line2, addr.TownOrCity }.Where(s =>
-                    !string.IsNullOrWhiteSpace(s)
-                )
-            );
+        addr is null ? null : AddressFormatting.Join(addr.Line1, addr.Line2, addr.TownOrCity);
 
     private static string? FormatAddress(SiteAddressDto? addr) =>
-        addr is null
-            ? null
-            : string.Join(
-                ", ",
-                new[] { addr.Line1, addr.Town, addr.Postcode }.Where(s =>
-                    !string.IsNullOrWhiteSpace(s)
-                )
-            );
+        addr is null ? null : AddressFormatting.Join(addr.Line1, addr.Town, addr.Postcode);
 
     private static string? FormatAddress(RegisteredAddressDto? addr) =>
         addr is null
             ? null
-            : string.Join(
-                ", ",
-                new[] { addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode }.Where(s =>
-                    !string.IsNullOrWhiteSpace(s)
-                )
-            );
+            : AddressFormatting.Join(addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode);
 
     // RA-526: "mappable" means at least one field is non-null/non-empty - an address object
     // with every field null or "" carries nothing worth mapping, and is treated the same as no

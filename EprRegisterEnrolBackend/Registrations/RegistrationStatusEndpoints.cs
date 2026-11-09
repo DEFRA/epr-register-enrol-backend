@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.Utils;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
@@ -77,18 +78,13 @@ public static class RegistrationStatusEndpoints
         );
     }
 
-    // As an accreditation application's site address is.
+    // As an accreditation application's site address is (Line1, town, postcode). An address with nothing in it
+    // is no address, so null rather than "".
     private static string? SiteAddress(PostalAddress? address)
     {
-        if (address is null)
-            return null;
-
-        var joined = string.Join(
-            ", ",
-            new[] { address.Line1, address.TownOrCity, address.Postcode }.Where(part =>
-                !string.IsNullOrWhiteSpace(part)
-            )
-        );
+        var joined = address is null
+            ? ""
+            : AddressFormatting.Join(address.Line1, address.TownOrCity, address.Postcode);
         return joined.Length == 0 ? null : joined;
     }
 }

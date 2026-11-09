@@ -1,17 +1,21 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MongoDB.Bson;
+using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.Registrations;
 
@@ -224,6 +228,42 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
         (await Json(response)).GetProperty("siteAddress").GetString()
             .Should()
             .Be("Green Works, Leeds, LS10 1AB");
+    }
+
+    // RA-697: ReEx answering anything but "found" or 404 (here a server error) for the holder check.
+    private static WebApplicationFactory<Program> WithReExFailing(WebApplicationFactory<Program> factory)
+    {
+        var reEx = Substitute.For<IReExApiAdapter>();
+        reEx.GetRegistrationHolderNameAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ReExResult<string?>.Fail(new ReExError(ReExErrorKind.ServerError), 500));
+        return factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton(reEx))
+        );
+    }
+
+    // Any other ReEx failure leaves the organisation name out rather than failing the status, which every manage
+    // page needs.
+    [Fact]
+    public async Task ReExFailing_ReturnsTheStatusWithNoOrganisationName()
+    {
+        using var baseFactory = Factory(expandEnabled: true);
+        using var factory = WithReExFailing(baseFactory);
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", FrontendSecret);
+        await factory
+            .Services.GetRequiredService<RegistrationVersionStore>()
+            .Versions.InsertAsync(
+                Registration(RegistrationStatus.Approved),
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+
+        var response = await client.GetAsync(HeldStatusPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("organisationName").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("status").GetString().Should().Be("Approved");
     }
 
     // RA-697: without the organisation there is no ReEx check that it holds the registration.

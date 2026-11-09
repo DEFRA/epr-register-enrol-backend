@@ -185,7 +185,7 @@ public static class ChangeRequestRules
             sites,
             sites.Count > 0 && sites.All(s => s.IsComplete),
             Charge(request.Sites.Count),
-            request.TonnageBandUpgrade
+            request.TonnageBandUpgrade is { } tonnage ? TonnageBandUpgradeView.From(tonnage) : null
         );
     }
 }
@@ -221,8 +221,22 @@ public sealed record ChangeRequestView(
     List<ChangeRequestSiteView> Sites,
     bool IsComplete,
     ChargeView Charge,
-    TonnageBandUpgradeItem? TonnageBandUpgrade
+    TonnageBandUpgradeView? TonnageBandUpgrade
 );
+
+/// <summary>RA-697: the API's shape for a tonnage band upgrade item, kept apart from the stored model.</summary>
+public sealed record TonnageBandUpgradeView(
+    Guid ItemId,
+    string ChangeType,
+    ChangeItemStatus Status,
+    DateTime? ValidFrom,
+    DateTime? WithdrawnAt,
+    PlannedTonnageBand RequestedBand
+)
+{
+    public static TonnageBandUpgradeView From(TonnageBandUpgradeItem item) =>
+        new(item.ItemId, item.ChangeType, item.Status, item.ValidFrom, item.WithdrawnAt, item.RequestedBand);
+}
 
 public sealed record AccreditationChangeSiteView(
     int SiteId,
