@@ -12,8 +12,13 @@ emptying a panel.
 
 ## What the service logs
 
-Structured values appear in the JSON log under `labels.<Name>`; the logger is `log.logger` and the
-level is `log.level`.
+Structured values appear in the JSON log in two places: **text** values under `labels.<Name>` and
+**numbers** under `metadata.<Name>` (so `Status` and `DurationMs` are `metadata.Status` and
+`metadata.DurationMs`, and the check's counts are under `metadata`). The logger is `log.logger` and
+the level is `log.level`. The table below lists each field by its plain name. This is how the
+fields looked in the service's own test output, so confirm the exact paths in Explore before
+building a panel or alert, and use whichever the log line shows. The access log line also carries
+the client id as `client.user.id`.
 
 | Event | Logger | Level | Fields (`labels.*`) |
 | --- | --- | --- | --- |
@@ -82,7 +87,7 @@ form works):
 | Use | Lucene |
 | --- | --- |
 | Access log lines | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess"` |
-| Server errors | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess" AND labels.Status:[500 TO *]` |
+| Server errors | `log.logger:"EprRegisterEnrolBackend.ServiceClientAccess" AND metadata.Status:[500 TO *]` |
 | Auth failures | `log.logger:"EprRegisterEnrolBackend.Auth.ServiceClientAuthenticationHandler" AND log.level:Warning` |
 | Records the API cannot serve | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND log.level:Error` |
 | A record dropped from a response | `log.logger:"EprRegisterEnrolBackend.AccreditationApi" AND log.level:Warning AND message:"Dropped a malformed accreditation"` |
@@ -96,9 +101,9 @@ Group every panel by `labels.ClientName`.
 | Panel | Source | Calculation |
 | --- | --- | --- |
 | Request rate | access log | count of lines, per minute, by `ClientName` |
-| Server errors | access log | count where `labels.Status` >= 500, and as a share of requests |
-| Client errors | access log | count where `labels.Status` is 400 to 499, by `Status` (404 and 400 are normal for a consumer's mistakes, so keep them apart from 5xx) |
-| Latency | access log | p50, p95, p99 of `labels.DurationMs`, by `ClientName`, and by `Route` |
+| Server errors | access log | count where `metadata.Status` >= 500, and as a share of requests |
+| Client errors | access log | count where `metadata.Status` is 400 to 499, by `Status` (404 and 400 are normal for a consumer's mistakes, so keep them apart from 5xx) |
+| Latency | access log | p50, p95, p99 of `metadata.DurationMs`, by `ClientName`, and by `Route` |
 | Slowest routes | access log | p95 of `DurationMs` by `Route` |
 | Auth failures | auth failure line | count by `Code` and by `ClientId` |
 | Unservable records | check line | latest `NoOrganisationNumber`, `NoRegistrationNumber`, `NoAccreditationNumber` |
