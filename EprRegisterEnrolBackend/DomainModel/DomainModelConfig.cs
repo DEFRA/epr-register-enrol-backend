@@ -29,6 +29,13 @@ public class DomainModelConfig
     public bool DualWrite { get; set; }
 
     /// <summary>
+    /// Phase 4, "Migrate": move every legacy application not yet in the domain model, one registration group per
+    /// transaction, in the background at each startup. Needs <see cref="DualWrite"/>, so no write can slip past a
+    /// group once it is migrated. Turn it on a few days after dual-write, and off again to stop it.
+    /// </summary>
+    public bool MigrateEnabled { get; set; }
+
+    /// <summary>
     /// Run the B0 transaction smoke test and the B1 legacy-data survey once at startup. Only for test
     /// environments, where the data is test data (R15).
     /// </summary>

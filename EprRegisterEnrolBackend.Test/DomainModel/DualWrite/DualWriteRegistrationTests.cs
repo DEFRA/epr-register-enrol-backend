@@ -83,4 +83,51 @@ public class DualWriteRegistrationTests
 
         Assert.Contains("DomainModel:DualWrite needs DomainModel:ExpandEnabled", ex.Message);
     }
+
+    [Fact]
+    public void AddDomainModel_MigrateWithoutDualWrite_RefusesToStart()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Register(
+                new()
+                {
+                    ["DomainModel:ExpandEnabled"] = "true",
+                    ["DomainModel:MigrateEnabled"] = "true",
+                }
+            )
+        );
+
+        Assert.Contains("DomainModel:MigrateEnabled needs DomainModel:DualWrite", ex.Message);
+    }
+
+    [Fact]
+    public void AddDomainModel_MigrateOff_RegistersNoMigration()
+    {
+        var services = Register(
+            new() { ["DomainModel:ExpandEnabled"] = "true", ["DomainModel:DualWrite"] = "true" }
+        );
+
+        Assert.DoesNotContain(
+            services,
+            d => d.ImplementationType == typeof(DomainModelMigrationService)
+        );
+    }
+
+    [Fact]
+    public void AddDomainModel_MigrateOn_RegistersTheBackgroundMigration()
+    {
+        var services = Register(
+            new()
+            {
+                ["DomainModel:ExpandEnabled"] = "true",
+                ["DomainModel:DualWrite"] = "true",
+                ["DomainModel:MigrateEnabled"] = "true",
+            }
+        );
+
+        Assert.Contains(
+            services,
+            d => d.ImplementationType == typeof(DomainModelMigrationService)
+        );
+    }
 }

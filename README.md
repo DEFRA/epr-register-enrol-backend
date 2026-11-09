@@ -84,7 +84,11 @@ alone in a rollback. See §6 of the design doc for the release plan.
 - `DomainModel__DualWrite=true` (phase 3, needs `ExpandEnabled`; the service refuses to start without it) makes
   every write path write the legacy application and the domain model in one transaction. A failed model write
   fails the request and rolls the legacy write back. Turning it off is the rollback; the model is then stale until
-  the migration is re-run.
+  it is truncated and the migration re-run.
+- `DomainModel__MigrateEnabled=true` (phase 4, needs `DualWrite`; the service refuses to start without it) migrates
+  every legacy application not yet in the domain model, one organisation and registration group per transaction, in
+  the background at each startup. It skips what dual-write has already migrated and picks up where it stopped. A group
+  it can't migrate shows as Degraded on `/health/ready` and is tried again at the next startup.
 - `DomainModel__DiagnosticsEnabled=true` (test environments only) runs the diagnostics below.
 
 #### Domain model diagnostics (test environments only)

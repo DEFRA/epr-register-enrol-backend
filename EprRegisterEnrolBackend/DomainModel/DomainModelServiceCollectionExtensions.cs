@@ -25,6 +25,7 @@ public static class DomainModelServiceCollectionExtensions
         var config = section.Get<DomainModelConfig>() ?? new DomainModelConfig();
         RequireExpand(config.DualWriteSeed, "DualWriteSeed", config);
         RequireExpand(config.DualWrite, "DualWrite", config);
+        RequireDualWrite(config);
 
         services.Configure<DomainModelConfig>(section);
         services.AddHostedService<DomainModelDiagnosticsService>();
@@ -36,6 +37,7 @@ public static class DomainModelServiceCollectionExtensions
 
         AddSeedDualWrite(services, config.DualWriteSeed);
         AddDualWrite(services, config.DualWrite);
+        AddMigration(services, config.MigrateEnabled);
 
         return services;
     }
@@ -98,6 +100,32 @@ public static class DomainModelServiceCollectionExtensions
         services.AddSingleton<IModelInterimSiteNumbers, ModelInterimSiteNumbers>();
         services.AddSingleton<IRegistrationNumberRules, RegistrationNumberRules>();
         services.AddSingleton<IDualWriteUnitOfWork, DualWriteUnitOfWork>();
+    }
+
+    // Phase 4: the background migration, and the readiness signal that shows a group it could not migrate.
+    private static void AddMigration(IServiceCollection services, bool enabled)
+    {
+        if (!enabled)
+        {
+            return;
+        }
+
+        services.AddSingleton<DomainModelMigrationPersistence>();
+        services.AddSingleton<IDomainModelMigrationStatus, DomainModelMigrationStatus>();
+        services
+            .AddHealthChecks()
+            .AddCheck<DomainModelMigrationHealthCheck>("domain-model-migration", tags: ["ready"]);
+        services.AddHostedService<DomainModelMigrationService>();
+    }
+
+    private static void RequireDualWrite(DomainModelConfig config)
+    {
+        if (config.MigrateEnabled && !config.DualWrite)
+        {
+            throw new InvalidOperationException(
+                "DomainModel:MigrateEnabled needs DomainModel:DualWrite: without it a migrated application goes stale."
+            );
+        }
     }
 
     private static void RequireExpand(bool flag, string name, DomainModelConfig config)
