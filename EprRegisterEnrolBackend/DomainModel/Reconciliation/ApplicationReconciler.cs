@@ -102,7 +102,7 @@ public sealed class ApplicationReconciler(
                 return;
             }
 
-            tally.Record(id, comparison.Differences, comparison.ListedAsConflict);
+            tally.Record(id, comparison.Found, comparison.ListedAsConflict);
         }
         // One document that cannot be read or projected is a finding for the report, not a reason to lose the report.
         catch (Exception ex)
@@ -113,7 +113,7 @@ public sealed class ApplicationReconciler(
         }
     }
 
-    private sealed record Comparison(DocumentDifferences Differences, bool ListedAsConflict);
+    private sealed record Comparison(DocumentDifferences Found, bool ListedAsConflict);
 
     // Null when the application has not been migrated. Conflicts are only looked up for an application that differs.
     private async Task<Comparison?> CompareInSnapshotAsync(
