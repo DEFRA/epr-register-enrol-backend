@@ -7,6 +7,7 @@ using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using FluentAssertions;
@@ -354,19 +355,21 @@ public sealed class RegistrationChangeRequestsEndpointTests(MongoIntegrationFixt
         (await client.GetAsync(Path, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
-    // Any other ReEx failure leaves the organisation name out rather than failing the view.
-    [Fact]
-    public async Task ReExFailing_ReturnsTheViewWithNoOrganisationName()
+    // Fails closed: with no answer from ReEx on whether the organisation holds the registration there is no view,
+    // 502 for an upstream failure and 503 for any other, as the accreditation application endpoints answer.
+    [Theory]
+    [InlineData(ReExErrorKind.ServerError, HttpStatusCode.BadGateway)]
+    [InlineData(ReExErrorKind.Timeout, HttpStatusCode.BadGateway)]
+    [InlineData(ReExErrorKind.AuthError, HttpStatusCode.ServiceUnavailable)]
+    [InlineData(ReExErrorKind.ClientError, HttpStatusCode.ServiceUnavailable)]
+    public async Task ReExFailing_FailsTheView(ReExErrorKind kind, HttpStatusCode expected)
     {
         using var baseFactory = Factory();
-        using var factory = baseFactory.WithReExFailing();
+        using var factory = baseFactory.WithReExFailing(kind);
         using var client = FrontendClient(factory);
         await SeedRegistration(factory);
 
-        var view = await GetView(client);
-
-        view.GetProperty("organisationName").ValueKind.Should().Be(JsonValueKind.Null);
-        view.GetProperty("registrationReference").GetString().Should().Be("R26EX0500030001PL");
+        (await client.GetAsync(Path, Ct)).StatusCode.Should().Be(expected);
     }
 
     // As the registration status endpoint: the URL's organisation must hold the registration.

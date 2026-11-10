@@ -60,8 +60,9 @@ public static class RegistrationStatusEndpoints
         var holder = await reEx.GetRegistrationHolderNameAsync(organisationId, registrationId, cancellationToken);
         if (holder.IsNotFound)
             return Results.NotFound();
-        // Any other failure leaves the name out rather than failing the status, which every manage page
-        // needs; the frontend shows no registration-only page without it.
+        // Fails open, deliberately: any other failure leaves the name out rather than failing the status, which
+        // every manage page needs, accredited ones included, so failing closed would take them all down in a ReEx
+        // blip. The frontend shows no registration-only page without the name.
         var organisationName = holder.IsSuccess ? holder.Value : null;
 
         return Results.Ok(

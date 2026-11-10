@@ -209,7 +209,8 @@ public static class AccreditationChangeEndpoints
 
     // RA-697: the registration's current version, its Active domain-model ORSs as Registered sites (an exporter's
     // only), and its registration-only requests for the backend clock's year. 404 for an unknown registration,
-    // another material, or an organisation ReEx says does not hold it; 409 if it is not Approved.
+    // another material, or an organisation ReEx says does not hold it; 502/503 if ReEx cannot say; 409 if it is
+    // not Approved.
     private static async Task<IResult> GetForRegistration(
         string organisationId,
         string registrationId,
@@ -237,8 +238,12 @@ public static class AccreditationChangeEndpoints
             registrationId,
             cancellationToken
         );
-        if (holder.IsNotFound)
-            return Results.NotFound();
+        // Fails closed, unlike the registration status endpoint: this view leads on to raising change requests, so
+        // without ReEx saying the organisation holds the registration there is none.
+        if (!holder.IsSuccess)
+            return holder.IsNotFound
+                ? Results.NotFound()
+                : Results.Problem(statusCode: holder.IsUpstreamFailure ? 502 : 503);
         if (registration.Status != RegistrationStatus.Approved)
             return Results.Conflict("Change requests can only be read for an Approved registration.");
 
@@ -265,8 +270,7 @@ public static class AccreditationChangeEndpoints
                 new AccreditationChangesView(
                     organisationId,
                     null,
-                    // Any other ReEx failure leaves the name out, as the registration status endpoint does.
-                    holder.IsSuccess ? holder.Value : null,
+                    holder.Value,
                     registrationId,
                     registration.Material,
                     year,
