@@ -216,6 +216,8 @@ Base path: `api/v1/accreditation-applications/{organisationId}`
 
 Base path: `api/v1/accreditation-changes/{organisationId}/{applicationId}`, where `applicationId` is an **Approved** exporter accreditation application. A change request (`accreditationChangeRequests` collection, `InProgress` → `Submitted`) adds existing registered overseas sites (`selected: false`) to that accreditation; it reuses each site's `siteId` and ORS id and never modifies the approved application, so the sites stay registered until a regulator decision. At most one `InProgress` request exists per accreditation and it may hold several sites. The charge is £328 per site with no tonnage fee.
 
+With `AccreditationChanges__SubmitToCaseManagement` on, submit creates the `add-overseas-site` work item and stores the reference management-be returns as `caseManagementReference`. management-be owns that reference. It is an in-year change reference, `IYC-ORS-<yyyy>-<nnnnn>` (for example `IYC-ORS-2026-00021`): the year is the accreditation year and the number is a sequence per change type per year. It is not an application `AP…` reference. `StubCaseWorkingApiAdapter` (`CaseWorking__UseStub`) mirrors that format with an in-process counter that restarts at `00001` with the app.
+
 | Method   | Path | Description |
 | -------- | ---- | ----------- |
 | `GET`    | _(base path)_ | Accreditation header, every site with `accreditationStatus`/`lockedFields`/pending request, the draft, every request, and `pendingOrsIds` |

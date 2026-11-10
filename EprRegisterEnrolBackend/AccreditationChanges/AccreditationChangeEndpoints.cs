@@ -563,7 +563,7 @@ public static class AccreditationChangeEndpoints
             );
         }
 
-        draft.CaseManagementReference = result.ApplicationReference;
+        draft.CaseManagementReference = result.Reference;
         draft.CaseManagementWorkItemId = result.WorkItemId;
         // Nothing else writes a Submitted request, so this only fails if the store does; the
         // submission itself has succeeded either way.
@@ -571,7 +571,7 @@ public static class AccreditationChangeEndpoints
             logger.LogError(
                 "Change request {RequestId} was sent to Case Management as {Reference} but the reference was not saved",
                 draft.RequestId,
-                result.ApplicationReference
+                result.Reference
             );
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
     }

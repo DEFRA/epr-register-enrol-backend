@@ -22,6 +22,9 @@ public class HttpCaseWorkingApiAdapterTests
     private const string TestClientId = "epr-register-enrol-backend";
     private const string TestApplicationReference = "APP26EA123451AAPL";
 
+    // RA-492: ManagementBe's in-year change reference format, IYC-{code}-{yyyy}-{seq:D5}.
+    private const string TestChangeRequestReference = "IYC-ORS-2026-00021";
+
     private static AccreditationApplicationModel CreateTestApplication()
     {
         return new AccreditationApplicationModel
@@ -62,7 +65,8 @@ public class HttpCaseWorkingApiAdapterTests
     ) CreateAdapter(
         string? url = TestUrl,
         string clientId = TestClientId,
-        string? sharedSecret = null
+        string? sharedSecret = null,
+        string responseReference = TestApplicationReference
     )
     {
         var config = Options.Create(
@@ -82,7 +86,7 @@ public class HttpCaseWorkingApiAdapterTests
                 typeId = "re-accreditation",
                 stateId = "submitted",
                 payload = new { },
-                applicationReference = TestApplicationReference,
+                applicationReference = responseReference,
             }
         );
 
@@ -106,7 +110,7 @@ public class HttpCaseWorkingApiAdapterTests
             CreateTestApplication(),
             TestContext.Current.CancellationToken
         );
-        result.ApplicationReference.Should().Be(TestApplicationReference);
+        result.Reference.Should().Be(TestApplicationReference);
     }
 
     [Fact]
@@ -339,7 +343,7 @@ public class HttpCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Be(TestApplicationReference);
+        result.Reference.Should().Be(TestApplicationReference);
         result.WorkItemId.Should().BeNull();
     }
 
@@ -2258,7 +2262,10 @@ public class HttpCaseWorkingApiAdapterTests
     [Fact]
     public async Task SubmitChangeRequestAsync_PostsAnAddOverseasSiteWorkItemWithTheEffectiveSiteValues()
     {
-        var (adapter, handler) = CreateAdapter(sharedSecret: "secret");
+        var (adapter, handler) = CreateAdapter(
+            sharedSecret: "secret",
+            responseReference: TestChangeRequestReference
+        );
         var (request, accreditation) = CreateChangeRequest();
 
         var result = await adapter.SubmitChangeRequestAsync(
@@ -2267,7 +2274,7 @@ public class HttpCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Be(TestApplicationReference);
+        result.Reference.Should().Be(TestChangeRequestReference);
         handler.CapturedRequest!.RequestUri!.ToString().Should().Be($"{TestUrl}/work-items");
         handler.CapturedRequest.Headers.GetValues("x-cdp-user-id").Single().Should().Be("jane@example.com");
         handler.CapturedRequest.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
@@ -2277,8 +2284,9 @@ public class HttpCaseWorkingApiAdapterTests
         payload["operatorRequestId"]!.GetValue<string>().Should().Be(request.RequestId);
         payload["accreditationReference"]!.GetValue<string>().Should().Be("A26EX0500190001PL");
         payload["chargePence"]!.GetValue<int>().Should().Be(32800);
+        payload["changeType"]!.GetValue<string>().Should().Be("add-overseas-site");
+        payload["accreditationYear"]!.GetValue<int>().Should().Be(2026);
         payload["wasteProcessingType"]!.GetValue<string>().Should().Be("exporter");
-        payload["companyRegisterAddressPostcode"]!.GetValue<string>().Should().Be("HU1 1AA");
         payload["operatorOrgNumber"]!.GetValue<int>().Should().Be(50019);
         var site = payload["sites"]![0]!;
         site["orsId"]!.GetValue<string>().Should().Be("007");
@@ -2287,6 +2295,27 @@ public class HttpCaseWorkingApiAdapterTests
         site["operationCodes"]![0]!.GetValue<string>().Should().Be("R3");
         site["suppliedFields"]!.AsArray().Select(n => n!.GetValue<string>())
             .Should().Equal("operationCodes", "conditionsOfExport");
+    }
+
+    // ManagementBe builds the IYC reference from typeId and accreditationYear alone, so the
+    // postcodes its AP generator needed are no longer sent with a change request.
+    [Fact]
+    public async Task SubmitChangeRequestAsync_DoesNotSendTheApplicationReferencePostcodes()
+    {
+        var (adapter, handler) = CreateAdapter(responseReference: TestChangeRequestReference);
+        var (request, accreditation) = CreateChangeRequest();
+        accreditation.SiteAddress = "1 Dock Road, Hull, HU1 2BB";
+        accreditation.CompanyRegisterAddressPostcode.Should().NotBeNullOrWhiteSpace();
+
+        await adapter.SubmitChangeRequestAsync(
+            request,
+            accreditation,
+            TestContext.Current.CancellationToken
+        );
+
+        var payload = JsonNode.Parse(handler.CapturedRequestBody!)!["payload"]!.AsObject();
+        payload.ContainsKey("companyRegisterAddressPostcode").Should().BeFalse();
+        payload.ContainsKey("siteAddressPostcode").Should().BeFalse();
     }
 
     [Fact]
@@ -2467,7 +2496,7 @@ public class HttpCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Be(TestApplicationReference);
+        result.Reference.Should().Be(TestApplicationReference);
 
         var payload = JsonDocument
             .Parse(handler.CapturedRequestBody!)

@@ -49,7 +49,7 @@ public class StubCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().NotBeNullOrWhiteSpace();
+        result.Reference.Should().NotBeNullOrWhiteSpace();
         result.WorkItemId.Should().NotBeNull();
     }
 
@@ -66,7 +66,7 @@ public class StubCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Be("AP26EA5005001AAPL");
+        result.Reference.Should().Be("AP26EA5005001AAPL");
     }
 
     // The E2E specs give each disposable application a made-up year in 3000-3999 on one
@@ -92,9 +92,9 @@ public class StubCaseWorkingApiAdapterTests
             ct
         );
 
-        first.ApplicationReference.Should().NotBe(second.ApplicationReference);
-        first.ApplicationReference.Should().StartWith("AP3039");
-        real.ApplicationReference.Should().StartWith("AP39");
+        first.Reference.Should().NotBe(second.Reference);
+        first.Reference.Should().StartWith("AP3039");
+        real.Reference.Should().StartWith("AP39");
     }
 
     // RA-503: the reference must embed the operator/regulator-safe numeric OrgId, never
@@ -109,8 +109,8 @@ public class StubCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Contain("500500");
-        result.ApplicationReference.Should().NotContain("6A74A6");
+        result.Reference.Should().Contain("500500");
+        result.Reference.Should().NotContain("6A74A6");
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class StubCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Be("AP26EA1AAPL");
+        result.Reference.Should().Be("AP26EA1AAPL");
     }
 
     [Theory]
@@ -143,7 +143,7 @@ public class StubCaseWorkingApiAdapterTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Contain(expectedAgencyCode);
+        result.Reference.Should().Contain(expectedAgencyCode);
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class StubCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.ApplicationReference.Should().Contain("EA");
+        result.Reference.Should().Contain("EA");
     }
 
     // Covers MaterialPrefix's `material.Length <= 2` true branch. Every defined MaterialType
@@ -175,7 +175,7 @@ public class StubCaseWorkingApiAdapterTests
         );
 
         result
-            .ApplicationReference.Should()
+            .Reference.Should()
             .EndWith(
                 "9",
                 because: "MaterialPrefix takes the whole raw value verbatim when it's already <= 2 characters"
@@ -258,26 +258,137 @@ public class StubCaseWorkingApiAdapterTests
         await act.Should().NotThrowAsync();
     }
 
-    [Fact]
-    public async Task SubmitChangeRequestAsync_ReturnsAnApplicationFormatReferenceAndWorkItemId()
+    // RA-492: ManagementBe gives a change request an in-year change reference,
+    // IYC-{code}-{yyyy}-{seq:D5} (add-overseas-site -> ORS), numbered per code per year.
+    private static AccreditationChangeRequest CreateChangeRequest(
+        int year = 2026,
+        string changeType = AccreditationChangeRequest.AddOverseasSiteChangeType
+    )
     {
-        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, 2026);
-        var request = new AccreditationChangeRequest
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(
+            DevExporterOrg.InYearChange,
+            2026
+        );
+        return new AccreditationChangeRequest
         {
+            ChangeType = changeType,
             OrganisationId = accreditation.OrganisationId,
             ApplicationId = accreditation.ApplicationId!,
             MaterialType = accreditation.MaterialType,
-            Year = accreditation.Year,
+            Year = year,
         };
+    }
 
-        var result = await BuildSut().SubmitChangeRequestAsync(
+    private static Task<CaseWorkingSubmissionResult> SubmitChange(
+        StubCaseWorkingApiAdapter sut,
+        AccreditationChangeRequest request
+    ) =>
+        sut.SubmitChangeRequestAsync(
             request,
-            accreditation,
+            DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, 2026),
             TestContext.Current.CancellationToken
         );
 
-        // Same AP format as SubmitApplicationAsync: year 26, EA, org 050019, no site postcode, plastic.
-        result.ApplicationReference.Should().Be("AP26EA050019PL");
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_ReturnsAnInYearChangeReferenceForTheRequestYear()
+    {
+        var result = await SubmitChange(BuildSut(), CreateChangeRequest(year: 2026));
+
+        result.Reference.Should().Be("IYC-ORS-2026-00001");
         result.WorkItemId.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_NumbersEachChangeInTurn_ZeroPaddedToFiveDigits()
+    {
+        var sut = BuildSut();
+
+        var references = new List<string>();
+        for (var i = 0; i < 12; i++)
+            references.Add((await SubmitChange(sut, CreateChangeRequest())).Reference);
+
+        references[0].Should().Be("IYC-ORS-2026-00001");
+        references[1].Should().Be("IYC-ORS-2026-00002");
+        references[11].Should().Be("IYC-ORS-2026-00012");
+        references.Should().OnlyContain(r => System.Text.RegularExpressions.Regex.IsMatch(
+            r,
+            "^IYC-ORS-2026-[0-9]{5}$"
+        ));
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_NumbersEachYearSeparately()
+    {
+        var sut = BuildSut();
+
+        var first2026 = await SubmitChange(sut, CreateChangeRequest(year: 2026));
+        var first2027 = await SubmitChange(sut, CreateChangeRequest(year: 2027));
+        var second2026 = await SubmitChange(sut, CreateChangeRequest(year: 2026));
+
+        first2026.Reference.Should().Be("IYC-ORS-2026-00001");
+        first2027.Reference.Should().Be("IYC-ORS-2027-00001");
+        second2026.Reference.Should().Be("IYC-ORS-2026-00002");
+    }
+
+    // ManagementBe falls back to the current UTC year when accreditationYear is not a four-digit
+    // year; the stub does the same.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(999)]
+    [InlineData(10000)]
+    public async Task SubmitChangeRequestAsync_YearNotFourDigits_UsesTheCurrentUtcYear(int year)
+    {
+        var sut = new StubCaseWorkingApiAdapter(
+            EnabledNullLogger<StubCaseWorkingApiAdapter>.Instance,
+            new FixedTimeProvider(new DateTimeOffset(2031, 12, 31, 23, 0, 0, TimeSpan.FromHours(-5)))
+        );
+
+        var result = await SubmitChange(sut, CreateChangeRequest(year: year));
+
+        // 23:00 at UTC-5 on 31 Dec 2031 is already 2032 in UTC.
+        result.Reference.Should().Be("IYC-ORS-2032-00001");
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_ConcurrentSubmissions_EachGetADifferentNumber()
+    {
+        var sut = BuildSut();
+
+        var results = await Task.WhenAll(
+            Enumerable.Range(0, 200).Select(_ => Task.Run(() => SubmitChange(sut, CreateChangeRequest())))
+        );
+
+        results
+            .Select(r => r.Reference)
+            .Should()
+            .BeEquivalentTo(Enumerable.Range(1, 200).Select(n => $"IYC-ORS-2026-{n:D5}"));
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_UnknownChangeType_Throws()
+    {
+        var act = () => SubmitChange(BuildSut(), CreateChangeRequest(changeType: "remove-overseas-site"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*remove-overseas-site*");
+    }
+
+    // The change-request numbering must not leak into application references.
+    [Fact]
+    public async Task SubmitApplicationAsync_AfterAChangeRequest_StillReturnsTheApFormat()
+    {
+        var sut = BuildSut();
+        await SubmitChange(sut, CreateChangeRequest());
+
+        var result = await sut.SubmitApplicationAsync(
+            CreateApplication(orgId: 500500),
+            TestContext.Current.CancellationToken
+        );
+
+        result.Reference.Should().Be("AP26EA5005001AAPL");
     }
 }

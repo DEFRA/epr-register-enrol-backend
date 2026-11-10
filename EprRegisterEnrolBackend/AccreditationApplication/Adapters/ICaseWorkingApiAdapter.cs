@@ -10,8 +10,8 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
-    // RA-492: creates an add-overseas-site work item for a submitted in-year change request.
-    // Allowed to throw - the caller only marks the request Submitted once this succeeds.
+    // RA-492: creates an add-overseas-site work item for a submitted in-year change request and
+    // returns ManagementBe's IYC-ORS-{yyyy}-{seq:D5} reference for it. Allowed to throw - the caller only marks the request Submitted once this succeeds.
     Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
@@ -66,9 +66,11 @@ public interface ICaseWorkingApiAdapter
     );
 }
 
-// WorkItemId is null when ManagementBe's response didn't carry a usable id (e.g. unparseable
-// body) — that must not fail the submission, since ApplicationReference is already known locally.
-public sealed record CaseWorkingSubmissionResult(string ApplicationReference, Guid? WorkItemId);
+// Reference is ManagementBe's case reference: an application's AP reference, or a change
+// request's IYC-{code}-{yyyy}-{seq:D5} in-year change reference. WorkItemId is null when
+// ManagementBe's response didn't carry a usable id (e.g. unparseable body) — that must not fail
+// the submission, since the reference is already known.
+public sealed record CaseWorkingSubmissionResult(string Reference, Guid? WorkItemId);
 
 public sealed record NotificationStatusResult(string? NotificationStatus, DateTime? SlaDueDate);
 

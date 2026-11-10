@@ -1,12 +1,30 @@
+using System.Collections.Concurrent;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationChanges;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
 // Stub implementation — swapped for a real HTTP adapter once the Case Working Service contract is defined.
-public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger)
-    : ICaseWorkingApiAdapter
+public class StubCaseWorkingApiAdapter(
+    ILogger<StubCaseWorkingApiAdapter> logger,
+    TimeProvider? timeProvider = null
+) : ICaseWorkingApiAdapter
 {
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
+    // RA-492: mirrors ManagementBe's in-year change reference, IYC-{code}-{yyyy}-{seq:D5}, where
+    // the code names the change type. Unknown change types are rejected, as ManagementBe rejects
+    // a work-item type it has not registered.
+    private static readonly Dictionary<string, string> s_changeTypeCodes = new()
+    {
+        [AccreditationChangeRequest.AddOverseasSiteChangeType] = "ORS",
+    };
+
+    // Stub only: ManagementBe owns the real sequence, per change code per year. This in-process
+    // counter is thread-safe but restarts at 00001 with the app and is not shared between
+    // instances. One adapter is registered as a singleton, so a running app never repeats a number.
+    private readonly ConcurrentDictionary<(string Code, int Year), int> _changeSequences = new();
+
     // RA-318: mirrors ManagementBe's ApplicationReferenceGenerator format so local/dev
     // testing sees realistic references — there is no real ManagementBe to call here, so
     // the stub must fabricate one itself rather than leaving it to a downstream service.
@@ -74,7 +92,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     )
     {
         var workItemId = Guid.NewGuid();
-        var reference = GenerateReference(accreditation);
+        var reference = GenerateChangeReference(changeRequest);
 
         if (logger.IsEnabled(LogLevel.Information))
         {
@@ -170,6 +188,25 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         }
 
         return Task.CompletedTask;
+    }
+
+    private string GenerateChangeReference(AccreditationChangeRequest changeRequest)
+    {
+        if (!s_changeTypeCodes.TryGetValue(changeRequest.ChangeType, out var code))
+        {
+            throw new InvalidOperationException(
+                $"No in-year change reference code for change type '{changeRequest.ChangeType}'."
+            );
+        }
+
+        // As ManagementBe does: the accreditation year when it is a four-digit year, otherwise the
+        // current UTC year.
+        var year = changeRequest.Year is >= 1000 and <= 9999
+            ? changeRequest.Year
+            : _timeProvider.GetUtcNow().UtcDateTime.Year;
+        var sequence = _changeSequences.AddOrUpdate((code, year), 1, (_, current) => current + 1);
+
+        return $"IYC-{code}-{year:D4}-{sequence:D5}";
     }
 
     // RA-503: mirrors the org segment fix applied to ManagementBe's real ApplicationReferenceGenerator
