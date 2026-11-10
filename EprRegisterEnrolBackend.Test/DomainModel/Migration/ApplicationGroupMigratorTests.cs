@@ -660,6 +660,85 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Migrate_CopiesOfASiteWithDifferentReExDates_RecordsTheLaterOnesAsAConflict()
+    {
+        var older = NewApplication(
+            ApplicationStatus.Started,
+            Day1,
+            ApprovedSite("2019-03-01T00:00:00Z")
+        );
+        older.Year = 2026;
+        var newer = NewApplication(
+            ApplicationStatus.Started,
+            Day2,
+            ApprovedSite("2024-06-01T00:00:00Z")
+        );
+        await _applications.CreateAsync(older);
+        await _applications.CreateAsync(newer);
+
+        var result = await MigrateAsync(newer);
+
+        var conflict = Assert.Single(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.SiteApprovalDatesDiffer
+        );
+        Assert.Equal([newer.Id!.Value], conflict.ApplicationIds);
+        Assert.Equal("001", conflict.OrsId);
+    }
+
+    [Fact]
+    public async Task Migrate_CopiesOfASiteWithTheSameReExDate_RecordNoDateConflict()
+    {
+        var older = NewApplication(
+            ApplicationStatus.Started,
+            Day1,
+            ApprovedSite("2019-03-01T00:00:00Z")
+        );
+        older.Year = 2026;
+        var newer = NewApplication(ApplicationStatus.Started, Day2, ApprovedSite("2019-03-01"));
+        await _applications.CreateAsync(older);
+        await _applications.CreateAsync(newer);
+
+        var result = await MigrateAsync(newer);
+
+        Assert.DoesNotContain(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.SiteApprovalDatesDiffer
+        );
+    }
+
+    [Theory]
+    [InlineData("Acme Recycling (Old Name) Ltd", null)]
+    [InlineData(null, "07654321")]
+    public async Task Migrate_AnOlderApplicationFromBeforeACompanyRename_RecordsSeededDetailsDiffer(
+        string? oldName,
+        string? oldNumber
+    )
+    {
+        var older = NewApplication(ApplicationStatus.Approved, Day1);
+        older.Year = 2026;
+        older.CompaniesHouseNumber = oldNumber ?? "01234567";
+        older.OrganisationName = oldName ?? "Acme Recycling Ltd";
+        var newer = NewApplication(ApplicationStatus.Started, Day2);
+        newer.CompaniesHouseNumber = "01234567";
+        await _applications.CreateAsync(older);
+        await _applications.CreateAsync(newer);
+
+        var result = await MigrateAsync(newer);
+
+        var conflict = Assert.Single(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.SeededDetailsDiffer
+        );
+        Assert.Equal([older.Id!.Value], conflict.ApplicationIds);
+        var organisation = Assert.Single(
+            await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations)
+        );
+        Assert.Equal("Acme Recycling Ltd", organisation.Name);
+        Assert.Equal("01234567", organisation.CompaniesHouseNumber);
+    }
+
+    [Fact]
     public async Task Migrate_AnExistingSiteWithoutADate_IsFilled()
     {
         var registration = await SeededRegistrationAsync();
@@ -754,6 +833,36 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
                 .FormattedRegisteredAddress
         );
         Assert.Contains(first.Conflicts, c => c.Kind == MigrationConflictKind.SeededDetailsDiffer);
+    }
+
+    // The newer registration first: it creates the Organisation from the newest details, and the older one, migrated
+    // second, only fills blanks and records that its own copy differs.
+    [Fact]
+    public async Task Migrate_TwoRegistrationsOfOneOrganisation_NewerFirst_KeepsTheNewestAndFillsBlanks()
+    {
+        var older = NewApplication(ApplicationStatus.Started, Day1);
+        older.CompanyRegisteredAddress = "Old address";
+        older.CompanyRegisterAddressPostcode = "LS1 1AA";
+        var newer = NewApplication(ApplicationStatus.Started, Day2);
+        newer.RegistrationId = "6512a0f0c0ffee0000000003";
+        newer.RegistrationReference = "R27EX7654321P";
+        newer.CompanyRegisteredAddress = "New address";
+        await _applications.CreateAsync(older);
+        await _applications.CreateAsync(newer);
+
+        await MigrateAsync(newer);
+        var second = await MigrateAsync(older);
+
+        var organisation = Assert.Single(
+            await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations)
+        );
+        Assert.Equal("New address", organisation.FormattedRegisteredAddress);
+        Assert.Equal("LS1 1AA", organisation.RegisteredAddress?.Postcode);
+        var conflict = Assert.Single(
+            second.Conflicts,
+            c => c.Kind == MigrationConflictKind.SeededDetailsDiffer
+        );
+        Assert.Equal([older.Id!.Value], conflict.ApplicationIds);
     }
 
     [Fact]

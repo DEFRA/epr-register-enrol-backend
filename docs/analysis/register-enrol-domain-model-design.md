@@ -21,14 +21,19 @@
   customer many years ago. It comes from ReEx's site `validFrom` at seed, the earliest date across the group at migration,
   or the approval here for a site with no ReEx date. It is not the versioning `validFrom`, which is when a version was
   recorded. `firstApprovalSource` says which of those it was, because only ReEx's date was ever on the legacy application.
+  An application whose copy of the site held a different ReEx date is listed as `SiteApprovalDatesDiffer`, which
+  explains its `validFrom` difference.
 - **Reconciliation accepts only the differences a listed conflict explains**, each kind of conflict covering its own
   fields, and counts an application as accepted only when every difference on it is explained.
 - **A value only the model holds is flagged and never accepted.** If legacy is blank and the model has a value, the report
   lists it as model-only, because something has to explain where it came from.
 - **Organisation and Registration keep one copy.** The Organisation's details come from its newest application across
   all its registrations, and a Registration's from its newest approved application, otherwise its newest. Blanks are
-  filled, and a seed's values are kept. An application that took a different copy at seed time is listed in
-  `migrationConflicts` as `SeededDetailsDiffer`, and shows as a reconciliation difference.
+  filled, and a seed's values are kept. An application that took a different copy at seed time, including an older
+  name or Companies House number from before a company rename, is listed in `migrationConflicts` as
+  `SeededDetailsDiffer`, which explains those fields in the reconciliation report.
+- **A legacy document whose `_id` isn't an ObjectId** is skipped by the migration with a warning, and counted as
+  unreadable (`NonObjectIdId`) in the reconciliation report, so the report can't read as ready while one is unmigrated.
 - **To decide before phase 5:** where `version`, `createdAt` and `updatedAt` come from. The projection doesn't set them and
   reconciliation ignores them, so a clean report says nothing about them, and `version` is the submit path's concurrency
   token (§5.1).

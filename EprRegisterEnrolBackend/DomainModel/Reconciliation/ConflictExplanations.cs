@@ -64,8 +64,11 @@ internal static class ConflictExplanations
             "registrationReference",
             "previousRegistrationNumbers",
         ],
+        [MigrationConflictKind.SiteApprovalDatesDiffer] = [Site + "validFrom"],
         [MigrationConflictKind.SeededDetailsDiffer] =
         [
+            "organisationName",
+            "companiesHouseNumber",
             "companyRegisteredAddress",
             "companyRegisterAddressPostcode",
             "isUkRegisteredAddress",

@@ -274,7 +274,13 @@ public sealed class ApplicationGroupMigrator(
             AccreditationApplicationModel application,
             OrganisationEntity organisation
         ) =>
-            Differs(application.CompanyRegisteredAddress, organisation.FormattedRegisteredAddress)
+            // An application from before a company rename holds the old name or number; the newest one's is kept.
+            Differs(application.OrganisationName, organisation.Name)
+            || Differs(application.CompaniesHouseNumber, organisation.CompaniesHouseNumber)
+            || Differs(
+                application.CompanyRegisteredAddress,
+                organisation.FormattedRegisteredAddress
+            )
             || Differs(
                 application.CompanyRegisterAddressPostcode,
                 organisation.RegisteredAddress?.Postcode
@@ -506,6 +512,7 @@ public sealed class ApplicationGroupMigrator(
             {
                 await SaveSiteAsync(registrationId, plan);
                 RecordSiteDifferences(plan);
+                RecordApprovalDateDifferences(plan);
             }
         }
 
@@ -710,7 +717,8 @@ public sealed class ApplicationGroupMigrator(
             plan
                 .Holdings.Select(ApprovalOf)
                 .Where(approval => approval is not null)
-                .OrderBy(approval => approval!.Value.Source)
+                // Spelt out rather than ordering by the enum, so reordering FirstApprovalSource can't change the winner.
+                .OrderBy(approval => approval!.Value.Source == FirstApprovalSource.ReEx ? 0 : 1)
                 .ThenBy(approval => approval!.Value.At)
                 .FirstOrDefault();
 
@@ -764,6 +772,40 @@ public sealed class ApplicationGroupMigrator(
                         losers.Distinct().ToList(),
                         fromWinner ? plan.Holdings[0].ApplicationId : null,
                         plan.OrsId
+                    )
+                );
+            }
+        }
+
+        // The ORS keeps one ReEx date and serves it to every application, so an application whose copy of the site held
+        // a different one would show validFrom as a difference with nothing to explain it.
+        private void RecordApprovalDateDifferences(SitePlan plan)
+        {
+            var ors = plan.Saved ?? plan.Existing!;
+            if (
+                ors.FirstApprovalSource != FirstApprovalSource.ReEx
+                || ors.FirstApprovedAt is not { } kept
+            )
+            {
+                return;
+            }
+
+            var differing = plan
+                .Holdings.Where(h =>
+                    _pendingIds.Contains(h.ApplicationId)
+                    && SiteApprovalDate.Parse(h.Site.ValidFrom) is { } held
+                    && held != kept
+                )
+                .Select(h => h.ApplicationId)
+                .Distinct()
+                .ToList();
+            if (differing.Count > 0)
+            {
+                Conflicts.Add(
+                    Conflict(
+                        MigrationConflictKind.SiteApprovalDatesDiffer,
+                        differing,
+                        orsId: plan.OrsId
                     )
                 );
             }

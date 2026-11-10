@@ -28,7 +28,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
 
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
-    private readonly string _connectionString;
+    private readonly TestMongoDbClientFactory _readingFromSecondaries;
     private readonly AccreditationApplicationPersistence _applications;
     private readonly ApplicationGroupMigrator _migrator;
     private readonly ApplicationReconciler _reconciler;
@@ -37,7 +37,10 @@ public sealed class ApplicationReconcilerTests : IDisposable
     public ApplicationReconcilerTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("reconcile");
-        _connectionString = fixture.ConnectionString;
+        _readingFromSecondaries = TestMongoDbClientFactory.ReadingFromSecondaries(
+            fixture.ConnectionString,
+            _databaseName
+        );
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
         var logs = NullLoggerFactory.Instance;
@@ -330,13 +333,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
     {
         var id = await CreateAsync(Application(sites: Site(1, "001", "Plant")));
         await MigrateAsync(id);
-        var secondaries = new TestMongoDbClientFactory(
-            new MongoUrlBuilder(_connectionString)
-            {
-                ReadPreference = ReadPreference.SecondaryPreferred,
-            }.ToString(),
-            _databaseName
-        );
+        var secondaries = _readingFromSecondaries;
         var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
         var logs = NullLoggerFactory.Instance;
         var stores = new ApplicationGroupStores(
@@ -711,6 +708,73 @@ public sealed class ApplicationReconcilerTests : IDisposable
 
         report.AcceptedConflicts.Should().Be(0);
         report.DifferencesByField.Should().ContainKey("permitNumbers");
+    }
+
+    [Fact]
+    public async Task Run_AnOlderApplicationFromBeforeACompanyRename_IsAnAcceptedConflict()
+    {
+        var older = Application(ApplicationStatus.Approved, Day1, 2026, Site(1, "001", "Plant"));
+        older.OrganisationName = "Acme Recycling (Old Name) Ltd";
+        older.CompaniesHouseNumber = "07654321";
+        var newer = Application(
+            ApplicationStatus.Started,
+            Day1.AddDays(1),
+            2027,
+            Site(1, "001", "Plant")
+        );
+        var id = await CreateAsync(older);
+        await CreateAsync(newer);
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.DifferencesByField.Should().BeEmpty();
+        report.AcceptedConflicts.Should().Be(1);
+        report.Matching.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Run_CopiesOfASiteWithDifferentReExDates_AreAcceptedConflicts()
+    {
+        var olderSite = Site(1, "001", "Plant");
+        olderSite.ValidFrom = "2019-03-01T00:00:00.000Z";
+        var newerSite = Site(1, "001", "Plant");
+        newerSite.ValidFrom = "2024-06-01T00:00:00.000Z";
+        var id = await CreateAsync(Application(ApplicationStatus.Approved, Day1, 2026, olderSite));
+        await CreateAsync(Application(ApplicationStatus.Started, Day1.AddDays(1), 2027, newerSite));
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.DifferencesByField.Should().BeEmpty();
+        report.AcceptedConflicts.Should().Be(1);
+        report.Matching.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Run_ALegacyDocumentWithANonObjectIdId_IsCountedAsUnreadable()
+    {
+        await _factory
+            .GetCollection<BsonDocument>(LegacyCollection)
+            .InsertOneAsync(
+                new BsonDocument
+                {
+                    { "_id", "legacy-1" },
+                    { "organisationId", ReExOrganisationId },
+                },
+                cancellationToken: Ct
+            );
+        var fine = await CreateAsync(Application(sites: Site(1, "001", "Plant")));
+        await MigrateAsync(fine);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.Applications.Should().Be(2);
+        report.Unreadable.Should().Be(1);
+        report
+            .UnreadableByKind.Should()
+            .Equal(new Dictionary<string, long> { [ApplicationReconciler.OtherIdKind] = 1 });
+        report.Matching.Should().Be(1);
     }
 
     [Fact]

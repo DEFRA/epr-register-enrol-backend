@@ -39,6 +39,9 @@ public sealed class ApplicationReconciler(
         "overseasSites.sites[].previousSites[].overseasSiteEntityId",
     ];
 
+    /// <summary>The unreadable kind for a legacy document whose <c>_id</c> isn't an ObjectId.</summary>
+    internal const string OtherIdKind = "NonObjectIdId";
+
     internal int BatchSize { get; init; } = 100;
 
     /// <summary>Between batches, so a report doesn't hammer a shared test database.</summary>
@@ -58,6 +61,9 @@ public sealed class ApplicationReconciler(
 
             if (ids.Count < BatchSize)
             {
+                tally.RecordOtherIds(
+                    await LegacyApplicationWalk.CountOtherIdsAsync(clientFactory, cancellationToken)
+                );
                 return tally.ToReport();
             }
 
@@ -91,12 +97,9 @@ public sealed class ApplicationReconciler(
                 .StartSessionAsync(cancellationToken: cancellationToken);
             var comparison = await session.WithTransactionAsync(
                 (s, token) => CompareInSnapshotAsync(id, s, token),
-                // Primary, because the driver refuses any read in a transaction that doesn't read from the primary,
-                // and a deployed connection string can send reads to secondaries.
-                new TransactionOptions(
-                    readConcern: ReadConcern.Snapshot,
-                    readPreference: ReadPreference.Primary
-                ),
+                // The shared options (primary reads, see DomainModelTransactions), with a snapshot so every
+                // collection is read at one point in time.
+                DomainModelTransactions.Options.With(readConcern: ReadConcern.Snapshot),
                 cancellationToken
             );
             if (comparison is null)
@@ -248,6 +251,20 @@ public sealed class ApplicationReconciler(
             var kind = MongoErrors.Kind(ex);
             _unreadableKinds[kind] = _unreadableKinds.GetValueOrDefault(kind) + 1;
             Sample(id);
+        }
+
+        // Legacy documents the walk can't reach because their _id isn't an ObjectId. The migration skips them too, so
+        // they are unmigrated, and counting them as unreadable stops the report reading as ready while they exist.
+        public void RecordOtherIds(long count)
+        {
+            if (count == 0)
+            {
+                return;
+            }
+
+            Applications += count;
+            _unreadable += count;
+            _unreadableKinds[OtherIdKind] = _unreadableKinds.GetValueOrDefault(OtherIdKind) + count;
         }
 
         private void Sample(ObjectId id)

@@ -342,8 +342,6 @@ public class AccreditationApplicationPersistence(
             )
             .FirstOrDefaultAsync(cancellationToken);
 
-    // Filters on OrganisationId as well as RegistrationId so the read uses the OrganisationId index:
-    // RegistrationId has none of its own.
     public async Task<AccreditationApplicationModel?> GetNewestForOrganisationAsync(
         string organisationId,
         IClientSessionHandle session,
@@ -372,6 +370,8 @@ public class AccreditationApplicationPersistence(
             )
             .FirstOrDefaultAsync(cancellationToken);
 
+    // Filters on OrganisationId as well as RegistrationId so the read uses the OrganisationId index:
+    // RegistrationId has none of its own.
     public async Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
         string organisationId,
         string registrationId,
