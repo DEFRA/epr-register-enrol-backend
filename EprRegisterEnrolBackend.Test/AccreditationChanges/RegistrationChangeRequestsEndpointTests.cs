@@ -10,10 +10,12 @@ using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
@@ -370,6 +372,35 @@ public sealed class RegistrationChangeRequestsEndpointTests(MongoIntegrationFixt
         await SeedRegistration(factory);
 
         (await client.GetAsync(Path, Ct)).StatusCode.Should().Be(expected);
+    }
+
+    // An ORS without a numeric ORS id cannot be keyed as a site, so it is left out, but not silently: a warning
+    // says how many were left out for which registration, and nothing about the sites themselves.
+    [Fact]
+    public async Task AnOrsWithoutANumericOrsId_IsLeftOutWithAWarning()
+    {
+        var logs = new CapturingLoggerFactory();
+        using var baseFactory = Factory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton<ILoggerFactory>(logs))
+        );
+        using var client = FrontendClient(factory);
+        var registration = await SeedRegistration(factory);
+        await SeedOrs(
+            factory,
+            Ors(registration.EntityId, "003", "Braga Reciclagem"),
+            Ors(registration.EntityId, "ORS-X", "Unkeyable Site")
+        );
+
+        var view = await GetView(client);
+
+        view.GetProperty("sites").EnumerateArray().Select(s => s.GetProperty("orsId").GetString())
+            .Should()
+            .Equal("003");
+        var warning = logs.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("numeric ORS id"))
+            .Subject;
+        warning.Message.Should().Contain("Left 1 ").And.Contain(RegistrationId).And.NotContain("Unkeyable");
     }
 
     // As the registration status endpoint: the URL's organisation must hold the registration.

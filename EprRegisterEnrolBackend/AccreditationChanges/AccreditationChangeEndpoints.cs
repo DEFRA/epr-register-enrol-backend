@@ -65,7 +65,8 @@ public static class AccreditationChangeEndpoints
         RegistrationVersionStore Registrations,
         OverseasSiteVersionStore OverseasSites,
         IReExApiAdapter ReEx,
-        TimeProvider Clock
+        TimeProvider Clock,
+        ILoggerFactory LoggerFactory
     );
 
     internal sealed record ChangeServices(
@@ -249,12 +250,7 @@ public static class AccreditationChangeEndpoints
 
         var sites =
             registration.WasteProcessingType == WasteProcessingKind.Exporter
-                ? RegisteredSiteMapper.ToSites(
-                    await services.OverseasSites.FindActiveByRegistrationAsync(
-                        registration.EntityId,
-                        cancellationToken
-                    )
-                )
+                ? await RegisteredSitesAsync(registration, services, cancellationToken)
                 : [];
         var year = services.Clock.GetUtcNow().Year;
         var requests = await requestStore.ListForRegistrationAsync(
@@ -285,6 +281,30 @@ public static class AccreditationChangeEndpoints
                 requests
             )
         );
+    }
+
+    // RA-697: the registration's Active ORSs as sites. One without a numeric ORS id cannot be keyed and is left out,
+    // with a warning so the gap is seen: the count and registration only, nothing about the sites.
+    private static async Task<List<OverseasSiteModel>> RegisteredSitesAsync(
+        RegistrationEntity registration,
+        RegistrationServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        var overseasSites = await services.OverseasSites.FindActiveByRegistrationAsync(
+            registration.EntityId,
+            cancellationToken
+        );
+        var sites = RegisteredSiteMapper.ToSites(overseasSites);
+        if (sites.Count < overseasSites.Count)
+            services
+                .LoggerFactory.CreateLogger(typeof(AccreditationChangeEndpoints))
+                .LogWarning(
+                    "Left {Count} Active ORS without a numeric ORS id out of registration {RegistrationId}'s sites",
+                    overseasSites.Count - sites.Count,
+                    registration.ReExRegistrationId
+                );
+        return sites;
     }
 
     private static bool HoldsActiveItemFor(AccreditationChangeRequest request, OverseasSiteModel site) =>
