@@ -69,7 +69,7 @@ public class MongoErrorsTests
     }
 
     [Fact]
-    public async Task Origin_ThrownInASyncMethod_IsThatMethodsName()
+    public async Task Origin_ThrownInASynchronousMethod_IsThatMethodsName()
     {
         var ex = await CaughtAsync(() =>
         {
@@ -81,7 +81,7 @@ public class MongoErrorsTests
     }
 
     [Fact]
-    public async Task Origin_ThrownInALambda_IsTheNamedMethodAroundIt()
+    public async Task Origin_ThrownInALambda_IsTheNearestNamedCaller()
     {
         var ex = await CaughtAsync(async () =>
         {
@@ -90,6 +90,34 @@ public class MongoErrorsTests
         });
 
         Assert.Equal("MongoErrorsTests.CaughtAsync", MongoErrors.Origin(ex));
+    }
+
+    private static class Generic<T>
+    {
+        public static async Task ThrowAsync()
+        {
+            await Task.Yield();
+            throw new InvalidOperationException(typeof(T).Name);
+        }
+    }
+
+    [Fact]
+    public async Task Origin_ThrownInAGenericType_LeavesOutTheArity()
+    {
+        var ex = await CaughtAsync(Generic<string>.ThrowAsync);
+
+        Assert.Equal("Generic.ThrowAsync", MongoErrors.Origin(ex));
+    }
+
+    [Fact]
+    public async Task Describe_AnyException_IsTheKindAtTheOrigin()
+    {
+        var ex = await CaughtAsync(ThrowAfterAwaitAsync);
+
+        Assert.Equal(
+            "InvalidOperationException at MongoErrorsTests.ThrowAfterAwaitAsync",
+            MongoErrors.Describe(ex)
+        );
     }
 
     [Fact]

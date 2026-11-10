@@ -11,14 +11,17 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
 {
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
-    private readonly string _connectionString;
+    private readonly TestMongoDbClientFactory _readingFromSecondaries;
     private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
     private readonly VersionedMongoRepository<WidgetVersion> _sut;
 
     public VersionedMongoRepositoryTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("versioned");
-        _connectionString = fixture.ConnectionString;
+        _readingFromSecondaries = TestMongoDbClientFactory.ReadingFromSecondaries(
+            fixture.ConnectionString,
+            _databaseName
+        );
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         var collection = _factory.GetCollection<WidgetVersion>("widgetVersions");
         collection.Indexes.CreateMany(VersionedIndexes.Identity<WidgetVersion>());
@@ -107,13 +110,9 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
     public async Task UpdateAsync_ClientReadsFromSecondaries_StillUpdatesInItsOwnTransaction()
     {
         var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
-        var secondaries = new TestMongoDbClientFactory(
-            MongoConnectionStrings.ReadingFromSecondaries(_connectionString),
-            _databaseName
-        );
         var sut = new VersionedMongoRepository<WidgetVersion>(
-            secondaries.GetClient(),
-            secondaries.GetCollection<WidgetVersion>("widgetVersions"),
+            _readingFromSecondaries.GetClient(),
+            _readingFromSecondaries.GetCollection<WidgetVersion>("widgetVersions"),
             _clock
         );
 

@@ -27,7 +27,7 @@ public sealed class SeedDualWriterTests : IDisposable
 
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
-    private readonly string _connectionString;
+    private readonly TestMongoDbClientFactory _readingFromSecondaries;
     private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
     private readonly OrganisationPersistence _organisations;
     private readonly RegistrationPersistence _registrations;
@@ -41,7 +41,10 @@ public sealed class SeedDualWriterTests : IDisposable
     public SeedDualWriterTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("seeddualwrite");
-        _connectionString = fixture.ConnectionString;
+        _readingFromSecondaries = TestMongoDbClientFactory.ReadingFromSecondaries(
+            fixture.ConnectionString,
+            _databaseName
+        );
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _organisations = new OrganisationPersistence(_factory, NullLoggerFactory.Instance);
         _registrations = new RegistrationPersistence(_factory, NullLoggerFactory.Instance, _clock);
@@ -205,10 +208,7 @@ public sealed class SeedDualWriterTests : IDisposable
     {
         var reEx = ReEx();
         var application = await LegacyApplicationAsync(reEx);
-        var secondaries = new TestMongoDbClientFactory(
-            MongoConnectionStrings.ReadingFromSecondaries(_connectionString),
-            _databaseName
-        );
+        var secondaries = _readingFromSecondaries;
         var writer = new SeedDualWriter(
             secondaries,
             new SeedModelStores(
@@ -585,7 +585,10 @@ public sealed class SeedDualWriterTests : IDisposable
         var entry = Assert.Single(_logger.Entries);
         Assert.Equal(LogLevel.Error, entry.LogLevel);
         Assert.Contains(seeded.Id.ToString()!, entry.Message);
-        Assert.Contains(nameof(ApplicationGroupTooLargeException), entry.Message);
+        Assert.Contains(
+            $"{nameof(ApplicationGroupTooLargeException)} at SeedDualWriter.AccreditedOrsIdsAsync",
+            entry.Message
+        );
     }
 
     [Fact]

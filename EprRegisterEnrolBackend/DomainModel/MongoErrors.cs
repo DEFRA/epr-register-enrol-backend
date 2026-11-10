@@ -29,9 +29,21 @@ internal static class MongoErrors
         };
 
     /// <summary>
+    /// <see cref="Kind"/> and <see cref="Origin"/> together, as <c>Kind at Type.Method</c>: what a failure log
+    /// line says about the error. One call, so no log line can carry one without the other.
+    /// </summary>
+    public static string Describe(Exception ex) => $"{Kind(ex)} at {Origin(ex)}";
+
+    /// <summary>
     /// The innermost method of this service the exception passed through, as <c>Type.Method</c>, or <c>unknown</c>.
-    /// With <see cref="Kind"/> it places a failure without the message: method names hold no data. An async
-    /// method runs as a compiler-generated state machine, so that frame is named after the method it came from.
+    /// With <see cref="Kind"/> it places a failure without the message: method names hold no data.
+    /// <list type="bullet">
+    /// <item>An async method runs as a compiler-generated state machine, so that frame is named after the method
+    /// it came from.</item>
+    /// <item>A lambda has no name of its own, so a throw inside one reports the nearest named method that called
+    /// it. For a dual-write's work that is <c>InsertRaceRetry.RunInTransactionAsync</c>.</item>
+    /// <item>In a Release build a small synchronous method can be inlined, and then its caller is named.</item>
+    /// </list>
     /// </summary>
     public static string Origin(Exception ex)
     {
@@ -39,6 +51,7 @@ internal static class MongoErrors
         {
             var method = frame.GetMethod();
             var type = method?.DeclaringType;
+            // A prefix match, so the test assembly's namespace (EprRegisterEnrolBackend.Test) counts as ours too.
             if (type?.Namespace?.StartsWith(OwnNamespace, StringComparison.Ordinal) != true)
             {
                 continue;
@@ -50,7 +63,7 @@ internal static class MongoErrors
                 // A lambda's state machine has no method name of its own; keep looking for a named one.
                 if (name.Length > 0 && !name.Contains('<'))
                 {
-                    return $"{owner.Name}.{name}";
+                    return $"{WithoutArity(owner.Name)}.{name}";
                 }
 
                 continue;
@@ -58,12 +71,16 @@ internal static class MongoErrors
 
             if (!method!.Name.Contains('<') && !type.Name.Contains('<'))
             {
-                return $"{type.Name}.{method.Name}";
+                return $"{WithoutArity(type.Name)}.{method.Name}";
             }
         }
 
         return "unknown";
     }
 
-    private const string OwnNamespace = "EprRegisterEnrolBackend";
+    // A generic type's name carries its arity, as in VersionedMongoRepository`1.
+    private static string WithoutArity(string typeName) =>
+        typeName.IndexOf('`') is var tick and >= 0 ? typeName[..tick] : typeName;
+
+    private static readonly string OwnNamespace = typeof(MongoErrors).Namespace!.Split('.')[0];
 }

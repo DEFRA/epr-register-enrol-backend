@@ -55,13 +55,12 @@ public sealed class DualWriteUnitOfWork(
         catch (Exception ex)
         {
             metrics.RecordFailure(operation);
-            // Ids, the error kind and where it was thrown only; the exception is not logged (see MongoErrors.Kind).
+            // Ids, the error kind and the method that threw only; the exception is not logged (see MongoErrors.Kind).
             logger.LogError(
-                "Dual-write {Operation} failed and was rolled back: application {ApplicationId}, error {ErrorKind} at {ErrorOrigin}",
+                "Dual-write {Operation} failed and was rolled back: application {ApplicationId}, error {Error}",
                 operation,
                 applicationId,
-                MongoErrors.Kind(ex),
-                MongoErrors.Origin(ex)
+                MongoErrors.Describe(ex)
             );
             return Results.Problem(
                 statusCode: StatusCodes.Status500InternalServerError,
