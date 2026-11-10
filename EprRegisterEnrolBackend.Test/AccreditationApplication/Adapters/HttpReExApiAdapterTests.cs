@@ -1595,6 +1595,59 @@ public class HttpReExApiAdapterTests
         result.StatusCode.Should().Be(500);
     }
 
+    // ---------------- RA-697: an organisation whose registrations are null holds none ----------------
+
+    private const string OrganisationJsonNullRegistrations = """
+        {
+          "id": "6a2fcd74e16883c137d01188",
+          "companyDetails": { "name": "Test Recycling Solutions Ltd" },
+          "registrations": null
+        }
+        """;
+
+    [Fact]
+    public async Task GetRegistrationHolderNameAsync_NullRegistrations_ReturnsNotFound()
+    {
+        var sut = BuildSut(OrganisationJsonNullRegistrations);
+
+        var result = await sut.GetRegistrationHolderNameAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsNotFound.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetNationAsync_NullRegistrations_ReturnsNotFound()
+    {
+        var sut = BuildSut(OrganisationJsonNullRegistrations);
+
+        var result = await sut.GetNationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsNotFound.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetAccreditationAsync_NullRegistrations_ReturnsNotFound()
+    {
+        var sut = BuildSut(OrganisationJsonNullRegistrations);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-exporter-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsNotFound.Should().BeTrue();
+    }
+
     // Realistic redacted ReEx organisation payload — companyDetails deliberately has no
     // registrationNumber key, matching the real API. Mirrors the fixture used in
     // ReExOrganisationFixtureTests.cs.

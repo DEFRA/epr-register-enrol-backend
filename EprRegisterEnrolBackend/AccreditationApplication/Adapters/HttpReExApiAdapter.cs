@@ -77,7 +77,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         var org = orgResult.Value!;
 
         // Locate the registration matching the requested registrationId
-        var registration = org.Registrations.FirstOrDefault(r => r.Id == registrationId);
+        var registration = (org.Registrations ?? []).FirstOrDefault(r => r.Id == registrationId);
         if (registration is null)
         {
             logger.LogWarning(
@@ -465,7 +465,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         }
 
         var org = orgResult.Value!;
-        if (!org.Registrations.Any(r => r.Id == registrationId))
+        if (!(org.Registrations ?? []).Any(r => r.Id == registrationId))
         {
             logger.LogWarning(
                 "ReEx organisation {OrganisationId} does not hold registration {RegistrationId}",
@@ -504,7 +504,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             return ReExResult<Nation>.Fail(orgResult.Error!, orgResult.StatusCode);
         }
 
-        var registration = orgResult.Value!.Registrations.FirstOrDefault(r =>
+        var registration = (orgResult.Value!.Registrations ?? []).FirstOrDefault(r =>
             r.Id == registrationId
         );
         if (registration is null)

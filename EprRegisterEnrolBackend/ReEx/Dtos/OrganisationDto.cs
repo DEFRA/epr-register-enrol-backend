@@ -38,6 +38,7 @@ public class OrganisationDto
     /// </summary>
     public string? SubmittedToRegulator { get; init; }
     public LinkedDefraOrganisationDto? LinkedDefraOrganisation { get; init; }
+    // An explicit "registrations": null deserialises to null despite the default; readers treat it as none.
     public List<RegistrationBaseDto> Registrations { get; init; } = [];
     public List<AccreditationDto> Accreditations { get; init; } = [];
 }
