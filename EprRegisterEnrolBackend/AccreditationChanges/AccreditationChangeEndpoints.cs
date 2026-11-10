@@ -241,10 +241,10 @@ public static class AccreditationChangeEndpoints
         );
         // Fails closed, unlike the registration status endpoint: this view leads on to raising change requests, so
         // without ReEx saying the organisation holds the registration there is none.
+        if (holder.IsNotFound)
+            return Results.NotFound();
         if (!holder.IsSuccess)
-            return holder.IsNotFound
-                ? Results.NotFound()
-                : Results.Problem(statusCode: holder.IsUpstreamFailure ? 502 : 503);
+            return Results.Problem(statusCode: holder.IsUpstreamFailure ? 502 : 503);
         if (registration.Status != RegistrationStatus.Approved)
             return Results.Conflict("Change requests can only be read for an Approved registration.");
 

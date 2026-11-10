@@ -65,10 +65,7 @@ public class ChangeRequestItemBackfill(
     private const string StatusField = "status";
     private const string VersionField = "version";
 
-    private static readonly IReadOnlyDictionary<string, string> ItemStatusForRequestStatus = new Dictionary<
-        string,
-        string
-    >
+    private static readonly Dictionary<string, string> ItemStatusForRequestStatus = new()
     {
         [nameof(ChangeRequestStatus.InProgress)] = nameof(ChangeItemStatus.InProgress),
         [nameof(ChangeRequestStatus.Submitted)] = nameof(ChangeItemStatus.Submitted),
