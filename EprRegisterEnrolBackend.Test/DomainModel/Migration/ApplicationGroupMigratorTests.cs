@@ -895,6 +895,40 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal(FirstApprovalSource.ThisService, site.FirstApprovalSource);
     }
 
+    // A later seed can bring a site approved here back with a ReEx date. The ORS keeps its first date, from here, so it
+    // serves no validFrom and the later copy's date is a difference to record.
+    [Fact]
+    public async Task Migrate_ASiteApprovedHereThatALaterCopyGivesAReExDate_RecordsADateConflict()
+    {
+        var approved = NewApplication(
+            ApplicationStatus.Approved,
+            Day1,
+            Site(1, "001", "Plant", isNew: true)
+        );
+        approved.AccreditationReference = "A27EX2";
+        approved.CaseManagementStatusUpdatedAt = Day2;
+        await _applications.CreateAsync(approved);
+        await MigrateAsync(approved);
+        var later = NewApplication(
+            ApplicationStatus.Started,
+            Day2,
+            ApprovedSite("2026-01-01T00:00:00Z")
+        );
+        later.Year = 2028;
+        await _applications.CreateAsync(later);
+
+        var result = await MigrateAsync(later);
+
+        var conflict = Assert.Single(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.SiteApprovalDatesDiffer
+        );
+        Assert.Equal([later.Id!.Value], conflict.ApplicationIds);
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(Day2, site.FirstApprovedAt);
+        Assert.Equal(FirstApprovalSource.ThisService, site.FirstApprovalSource);
+    }
+
     [Fact]
     public async Task Migrate_ASiteNeverApproved_HasNoFirstApprovedDate()
     {

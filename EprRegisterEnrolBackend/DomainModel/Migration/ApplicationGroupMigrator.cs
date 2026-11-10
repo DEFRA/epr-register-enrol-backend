@@ -779,22 +779,19 @@ public sealed class ApplicationGroupMigrator(
 
         // The ORS keeps one ReEx date and serves it to every application, so an application whose copy of the site held
         // a different one would show validFrom as a difference with nothing to explain it.
+        // When the ORS's date isn't ReEx's (a site approved here that a later seed brought back with a ReEx date), it
+        // serves no validFrom at all, so every copy holding a ReEx date differs.
         private void RecordApprovalDateDifferences(SitePlan plan)
         {
             var ors = plan.Saved ?? plan.Existing!;
-            if (
-                ors.FirstApprovalSource != FirstApprovalSource.ReEx
-                || ors.FirstApprovedAt is not { } kept
-            )
-            {
-                return;
-            }
+            DateTime? served =
+                ors.FirstApprovalSource == FirstApprovalSource.ReEx ? ors.FirstApprovedAt : null;
 
             var differing = plan
                 .Holdings.Where(h =>
                     _pendingIds.Contains(h.ApplicationId)
                     && SiteApprovalDate.Parse(h.Site.ValidFrom) is { } held
-                    && held != kept
+                    && held != served
                 )
                 .Select(h => h.ApplicationId)
                 .Distinct()

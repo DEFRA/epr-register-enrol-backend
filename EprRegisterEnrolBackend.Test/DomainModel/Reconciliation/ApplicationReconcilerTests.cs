@@ -484,6 +484,27 @@ public sealed class ApplicationReconcilerTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_ASiteApprovedHereThatALaterCopyGivesAReExDate_IsAnAcceptedConflict()
+    {
+        var approved = await CreateAsync(
+            Application(ApplicationStatus.Approved, Day1, 2026, Site(1, "001", "Plant"))
+        );
+        await MigrateAsync(approved);
+        var datedByReEx = Site(1, "001", "Plant");
+        datedByReEx.ValidFrom = "2026-01-01T00:00:00.000Z";
+        var later = await CreateAsync(
+            Application(ApplicationStatus.Started, Day1.AddDays(1), 2027, datedByReEx)
+        );
+        await MigrateAsync(later);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.DifferencesByField.Should().BeEmpty();
+        report.Matching.Should().Be(1);
+        report.AcceptedConflicts.Should().Be(1);
+    }
+
+    [Fact]
     public async Task Run_AnOlderApplicationWithABlankCopy_IsFlaggedAsModelOnly()
     {
         var older = Application(ApplicationStatus.Started, Day1, 2026, Site(1, "001", "Plant"));

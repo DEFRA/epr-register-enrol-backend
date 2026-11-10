@@ -22,7 +22,8 @@
   or the approval here for a site with no ReEx date. It is not the versioning `validFrom`, which is when a version was
   recorded. `firstApprovalSource` says which of those it was, because only ReEx's date was ever on the legacy application.
   An application whose copy of the site held a different ReEx date is listed as `SiteApprovalDatesDiffer`, which
-  explains its `validFrom` difference.
+  explains its `validFrom` difference. So is any copy holding a ReEx date for a site whose date came from an approval
+  here, such as one a later seed brought back from ReEx, because the read model serves no `validFrom` for it.
 - **Reconciliation accepts only the differences a listed conflict explains**, each kind of conflict covering its own
   fields, and counts an application as accepted only when every difference on it is explained.
 - **A value only the model holds is flagged and never accepted.** If legacy is blank and the model has a value, the report
