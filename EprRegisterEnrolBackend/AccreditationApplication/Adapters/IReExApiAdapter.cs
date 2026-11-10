@@ -37,6 +37,18 @@ public interface IReExApiAdapter
     );
 
     /// <summary>
+    /// RA-697: the company name of the ReEx organisation holding the registration, for a registration-only
+    /// operator's manage pages, which have no accreditation to read it from or to tie the registration to the
+    /// organisation. Fails NotFound when the organisation is unknown or doesn't hold the registration.
+    /// <c>Value</c> is null when ReEx has no name recorded.
+    /// </summary>
+    Task<ReExResult<string?>> GetRegistrationHolderNameAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// RA-526: the Nation a single registration belongs to, derived from that
     /// registration's own <c>submittedToRegulator</c> via
     /// <see cref="EprRegisterEnrolBackend.AccreditationApplication.Models.RegulatorNationMapper"/>

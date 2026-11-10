@@ -137,4 +137,19 @@ public class ChangeRequestRulesTests
         requestSite.BesEvidence.BesEvidenceUploads.RemoveAt(1);
         ChangeRequestRules.MissingFields(site, requestSite).Should().BeEmpty();
     }
+
+    // RA-697: granted, refused and withdrawn are final; every other item status is still in flight.
+    [Theory]
+    [InlineData(ChangeItemStatus.InProgress, true)]
+    [InlineData(ChangeItemStatus.Submitted, true)]
+    [InlineData(ChangeItemStatus.Queried, true)]
+    [InlineData(ChangeItemStatus.Updated, true)]
+    [InlineData(ChangeItemStatus.DulyMade, true)]
+    [InlineData(ChangeItemStatus.Approved, false)]
+    [InlineData(ChangeItemStatus.Rejected, false)]
+    [InlineData(ChangeItemStatus.Withdrawn, false)]
+    public void ItemStatus_IsActiveUnlessFinal(ChangeItemStatus status, bool active)
+    {
+        status.IsActive().Should().Be(active);
+    }
 }

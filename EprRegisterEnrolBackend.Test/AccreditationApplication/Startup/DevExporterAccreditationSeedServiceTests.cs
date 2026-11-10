@@ -32,12 +32,14 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
     private readonly TestMongoDbClientFactory _mongo;
     private readonly string _databaseName;
     private readonly RegistrationVersionStore _registrations;
+    private readonly OverseasSiteVersionStore _overseasSites;
 
     public DevExporterAccreditationSeedServiceTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("dev_exporter_seed");
         _mongo = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _registrations = new RegistrationVersionStore(() => null, _mongo, Clock2026);
+        _overseasSites = new OverseasSiteVersionStore(() => null, _mongo, Clock2026);
     }
 
     public void Dispose() => _mongo.GetClient().DropDatabase(_databaseName);
@@ -51,6 +53,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         new(
             persistence,
             _registrations,
+            _overseasSites,
             clock ?? Clock2026,
             NullLogger<DevExporterAccreditationSeedService>.Instance
         );
@@ -63,18 +66,27 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
     private Task<RegistrationEntity?> ExporterRegistrationVersion() =>
         _registrations.FindCurrentByReExRegistrationIdAsync(ExporterRegistration, Ct);
 
-    private async Task<AccreditationApplicationModel> SeedOnce(
+    private async Task<List<AccreditationApplicationModel>> SeedApplications(
         TimeProvider? clock = null,
         string organisationId = ExporterOrg
     )
     {
         var persistence = new FakeAccreditationApplicationPersistence();
         await CreateSut(persistence, clock).SeedAsync(Ct);
-        return (await ExporterApplications(persistence, organisationId))
-            .Should()
-            .ContainSingle()
-            .Subject;
+        return await ExporterApplications(persistence, organisationId);
     }
+
+    private async Task<AccreditationApplicationModel> SeedOnce(
+        TimeProvider? clock = null,
+        string organisationId = ExporterOrg
+    ) =>
+        (await SeedApplications(clock, organisationId))
+            .Should()
+            .ContainSingle(a => a.IsExporter)
+            .Subject;
+
+    private async Task<AccreditationApplicationModel> SeedReprocessor(TimeProvider? clock = null) =>
+        (await SeedApplications(clock)).Should().ContainSingle(a => !a.IsExporter).Subject;
 
     private static OverseasSiteModel Ors(AccreditationApplicationModel application, string orsId) =>
         application.OverseasSites!.Sites.Single(s => s.OrsId == orsId);
@@ -118,6 +130,186 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         sites.Where(s => !s.Selected).Select(s => s.OrsId).Should().Equal("004");
         sites.Should().OnlyContain(s => !s.IsNewSite);
         sites.Should().OnlyContain(s => s.Country != null && s.AddressLine1 != null);
+    }
+
+    // RA-697: org 50018's glass reprocessor, the frontend stub's, so its manage dashboard and tonnage
+    // change requests load against the real backend.
+    [Fact]
+    public async Task SeedAsync_AddsTheManageOrgsApprovedGlassReprocessorAccreditation()
+    {
+        var seeded = await SeedReprocessor();
+
+        seeded.Id.Should().Be(ObjectId.Parse("b20260000000000000050018"));
+        seeded.Year.Should().Be(2026);
+        seeded.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
+        seeded.RegistrationId.Should().Be("bbb000000000000000050018");
+        seeded.MaterialType.Should().Be(MaterialType.Glass);
+        seeded.GlassRecyclingProcess.Should().Be(GlassRecyclingProcess.Remelt);
+        seeded.IsExporter.Should().BeFalse();
+        seeded.WasteProcessingType.Should().Be("reprocessor");
+        seeded.OrganisationName.Should().Be("Manage Accreditation Test Ltd");
+        seeded.SiteAddress.Should().Be("Unit 18, Furnace Lane, Doncaster, DN4 5HT");
+        seeded.AccreditationReference.Should().Be("A26ER0500180002GR");
+        seeded.RegistrationReference.Should().Be("R26ER0500180002GR");
+        seeded.OverseasSites.Should().BeNull();
+
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "bbb000000000000000050018",
+            Ct
+        );
+        registration!.Status.Should().Be(RegistrationStatus.Approved);
+        registration.WasteProcessingType.Should().Be(WasteProcessingKind.Reprocessor);
+        registration.Material.Should().Be(MaterialType.Glass);
+        registration.RegistrationNumber.Should().Be("R26ER0500180002GR");
+        registration.EntityId.Should().NotBe((await ExporterRegistrationVersion())!.EntityId);
+    }
+
+    [Fact]
+    public async Task SeedAsync_InALaterYear_SeedsTheReprocessorForThatYear()
+    {
+        var seeded = await SeedReprocessor(
+            new TestClock(new DateTime(2031, 1, 1, 0, 0, 0, DateTimeKind.Utc))
+        );
+
+        seeded.Id.Should().Be(ObjectId.Parse("b20310000000000000050018"));
+        seeded.AccreditationReference.Should().Be("A31ER0500180002GR");
+    }
+
+    // RA-697: org 50020, an Approved exporter with no change requests, for the empty states.
+    [Fact]
+    public async Task SeedAsync_SeedsTheNoChangeRequestsExporterForTheClocksYear()
+    {
+        var seeded = await SeedOnce(organisationId: "50020");
+
+        seeded.Id.Should().Be(ObjectId.Parse("a20260000000000000050020"));
+        seeded.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
+        seeded.RegistrationId.Should().Be("aaa000000000000000050020");
+        seeded.MaterialType.Should().Be(MaterialType.Plastic);
+        seeded.OrganisationName.Should().Be("No Change Requests Ltd");
+        seeded.AccreditationReference.Should().Be("A26EX0500200001PL");
+        seeded.OverseasSites!.Sites.Select(s => (s.OrsId, s.Selected))
+            .Should()
+            .Equal(("001", true), ("002", false));
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050020",
+            Ct
+        );
+        registration!.Status.Should().Be(RegistrationStatus.Approved);
+    }
+
+    // RA-697: org 50021, an Approved exporter registration with no accreditation in any year, for the
+    // registration-only manage pages.
+    [Fact]
+    public async Task SeedAsync_GivesTheRegistrationOnlyExporterAnApprovedRegistrationAndNoAccreditation()
+    {
+        (await SeedApplications(organisationId: "50021")).Should().BeEmpty();
+
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050021",
+            Ct
+        );
+        registration!.Status.Should().Be(RegistrationStatus.Approved);
+        registration.WasteProcessingType.Should().Be(WasteProcessingKind.Exporter);
+        registration.Material.Should().Be(MaterialType.Plastic);
+        registration.RegistrationNumber.Should().Be("R26EX0500210001PL");
+        registration.EntityId.Should().Be(ObjectId.Parse("0e0000000000000000050021"));
+    }
+
+    // RA-697 task 011: org 50021's registered ORSs, which its registration-only change requests view lists.
+    [Fact]
+    public async Task SeedAsync_GivesTheRegistrationOnlyExporterFourActiveOrsRecordsWithInterimSites()
+    {
+        await SeedApplications(organisationId: "50021");
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050021",
+            Ct
+        );
+
+        var sites = await _overseasSites.FindActiveByRegistrationAsync(registration!.EntityId, Ct);
+
+        sites.OrderBy(s => s.OrsId)
+            .Select(s => (s.OrsId, s.SiteName, s.Country, s.InterimSites.Count))
+            .Should()
+            .Equal(
+                ("001", "Porto Plasticos Lda", "Portugal", 2),
+                ("002", "Milano Riciclo SpA", "Italy", 1),
+                ("003", "Penang Polymers Sdn Bhd", "Malaysia", 0),
+                ("004", "Jakarta Daur Ulang PT", "Indonesia", 0)
+            );
+        sites.Should().OnlyContain(s => s.Status == OverseasSiteStatus.Active);
+        sites.SelectMany(s => s.InterimSites).Should().OnlyContain(i => i.Status == InterimSiteStatus.Active);
+        sites.SelectMany(s => s.InterimSites).Select(i => i.SiteNumber).Should().OnlyHaveUniqueItems();
+        sites.Should().OnlyContain(s => s.Contact != null && s.Coordinates != null && s.OperationCodes.Count > 0);
+    }
+
+    [Fact]
+    public async Task SeedAsync_RunTwice_SeedsTheRegistrationOnlyExportersOrsRecordsOnce()
+    {
+        await SeedApplications(organisationId: "50021");
+        await SeedApplications(organisationId: "50021");
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050021",
+            Ct
+        );
+
+        (await _overseasSites.FindActiveByRegistrationAsync(registration!.EntityId, Ct))
+            .Should()
+            .HaveCount(4);
+    }
+
+    // RA-697: org 50022, registered with no accreditation and no ORSs, for the overseas-sites page's empty tabs.
+    [Fact]
+    public async Task SeedAsync_GivesTheNoOverseasSitesExporterAnApprovedRegistrationWithNoAccreditationOrOrsRecords()
+    {
+        (await SeedApplications(organisationId: "50022")).Should().BeEmpty();
+
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050022",
+            Ct
+        );
+        registration!.Status.Should().Be(RegistrationStatus.Approved);
+        registration.WasteProcessingType.Should().Be(WasteProcessingKind.Exporter);
+        (await _overseasSites.FindActiveByRegistrationAsync(registration.EntityId, Ct)).Should().BeEmpty();
+
+        var org = await new FakeOrganisationPersistence(Clock2026, includeDevExporters: true).GetByOrgIdAsync(50022);
+        org!.CompanyDetails!.Name.Should().Be("No Overseas Sites Exports Ltd");
+        org.Registrations!.Should().ContainSingle().Which.Id.ToString().Should().Be(registration.ReExRegistrationId);
+    }
+
+    // The accredited orgs' ORSs come from their accreditations, as before; only 50021's are domain-model records.
+    [Fact]
+    public async Task SeedAsync_GivesTheAccreditedExportersNoOrsRecords()
+    {
+        await SeedApplications();
+        var registration = await ExporterRegistrationVersion();
+
+        (await _overseasSites.FindActiveByRegistrationAsync(registration!.EntityId, Ct))
+            .Should()
+            .BeEmpty();
+    }
+
+    // Guards drift: the stub ReEx registry's org 50021 is the registration the seed writes.
+    [Fact]
+    public async Task StubOrganisationStore_MatchesTheSeededRegistrationOnlyExporter()
+    {
+        await SeedApplications(organisationId: "50021");
+        var seeded = await _registrations.FindCurrentByReExRegistrationIdAsync(
+            "aaa000000000000000050021",
+            Ct
+        );
+        var org = await new FakeOrganisationPersistence(
+            Clock2026,
+            includeDevExporters: true
+        ).GetByOrgIdAsync(50021);
+
+        org!.CompanyDetails!.Name.Should().Be("Registration Only Exports Ltd");
+        org.CompanyDetails.TradingName.Should().Be("Registration Only Exports");
+        org.CompanyDetails.RegistrationNumber.Should().Be(seeded!.RegistrationNumber);
+        org.WasteProcessingTypes.Should().Equal("exporter");
+        var registration = org.Registrations!.Should().ContainSingle().Subject;
+        registration.Id.ToString().Should().Be(seeded.ReExRegistrationId);
+        registration.Material.Should().Be("plastic");
+        registration.WasteProcessingType.Should().Be("exporter");
     }
 
     // RA-492: org 50019, for the in-year "add a registered ORS to your accreditation" journey.
@@ -236,11 +428,15 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         await sut.SeedAsync(CancellationToken.None);
         await sut.SeedAsync(CancellationToken.None);
 
-        (await ExporterApplications(persistence)).Should().ContainSingle();
-        var registration = await ExporterRegistrationVersion();
-        (await _registrations.Versions.GetVersionsAsync(registration!.EntityId, cancellationToken: Ct))
-            .Should()
-            .ContainSingle();
+        // The exporter and the reprocessor, once each.
+        (await ExporterApplications(persistence)).Should().HaveCount(2);
+        foreach (var reExRegistrationId in new[] { ExporterRegistration, "bbb000000000000000050018" })
+        {
+            var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(reExRegistrationId, Ct);
+            (await _registrations.Versions.GetVersionsAsync(registration!.EntityId, cancellationToken: Ct))
+                .Should()
+                .ContainSingle();
+        }
     }
 
     [Fact]
@@ -313,7 +509,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
 
         await CreateSut(persistence).SeedAsync(CancellationToken.None);
 
-        var only = (await ExporterApplications(persistence)).Should().ContainSingle().Subject;
+        var only = (await ExporterApplications(persistence)).Should().ContainSingle(a => a.IsExporter).Subject;
         only.AccreditationReference.Should().Be("A26EX0500189999PL");
     }
 
@@ -331,8 +527,11 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         var act = () => CreateSut(persistence).SeedAsync(CancellationToken.None);
 
         await act.Should().NotThrowAsync();
-        await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50018));
+        await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50018 && a.IsExporter));
+        await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50018 && !a.IsExporter));
         await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50019));
+        await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50020));
+        await persistence.DidNotReceive().CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50021));
         (await ExporterRegistrationVersion()).Should().NotBeNull();
     }
 
@@ -375,15 +574,16 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         await sut.ExecuteTask!;
         await sut.StopAsync(CancellationToken.None);
 
-        (await ExporterApplications(persistence)).Should().ContainSingle();
+        (await ExporterApplications(persistence)).Should().HaveCount(2);
         (await ExporterRegistrationVersion()).Should().NotBeNull();
     }
 
-    // Guards drift: the stub ReEx registry's orgs 50018 and 50019 are the organisations,
+    // Guards drift: the stub ReEx registry's orgs 50018, 50019 and 50020 are the organisations,
     // registrations and ORSs the seed writes.
     [Theory]
     [InlineData(50018)]
     [InlineData(50019)]
+    [InlineData(50020)]
     public async Task StubOrganisationStore_MatchesTheSeededExporter(int orgId)
     {
         var seeded = await SeedOnce(organisationId: orgId.ToString());
@@ -395,14 +595,34 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         org!.CompanyDetails!.Name.Should().Be(seeded.OrganisationName);
         org.CompanyDetails.RegistrationNumber.Should().Be(seeded.RegistrationReference);
         org.CompanyDetails.CompaniesHouseNumber.Should().Be(seeded.CompaniesHouseNumber);
-        org.WasteProcessingTypes.Should().Equal("exporter");
-        var registration = org.Registrations!.Should().ContainSingle().Subject;
+        org.WasteProcessingTypes.Should().Contain("exporter");
+        var registration = org.Registrations!.Single(r => r.WasteProcessingType == "exporter");
         registration.Id.ToString().Should().Be(seeded.RegistrationId);
         registration.Material.Should().Be("plastic");
         registration.WasteProcessingType.Should().Be("exporter");
         // The registration lists every seeded ORS but a never-registered one (org 50019's 901913).
         registration.OverseasSites.Should()
             .Equal(seeded.OverseasSites!.Sites.Where(s => !s.IsNewSite).Select(s => s.SiteId.ToString()));
+        registration.WasteManagementPermits!.Select(p => p.PermitNumber)
+            .Should()
+            .Equal(seeded.PermitNumbers);
+    }
+
+    // Guards drift: org 50018's reprocessor registration in the stub ReEx registry is the one seeded.
+    [Fact]
+    public async Task StubOrganisationStore_MatchesTheSeededReprocessor()
+    {
+        var seeded = await SeedReprocessor();
+        var org = await new FakeOrganisationPersistence(
+            Clock2026,
+            includeDevExporters: true
+        ).GetByOrgIdAsync(50018);
+
+        org!.WasteProcessingTypes.Should().Equal("exporter", "reprocessor");
+        var registration = org.Registrations!.Single(r => r.WasteProcessingType == "reprocessor");
+        registration.Id.ToString().Should().Be(seeded.RegistrationId);
+        registration.Material.Should().Be("glass");
+        registration.OverseasSites.Should().BeNullOrEmpty();
         registration.WasteManagementPermits!.Select(p => p.PermitNumber)
             .Should()
             .Equal(seeded.PermitNumbers);

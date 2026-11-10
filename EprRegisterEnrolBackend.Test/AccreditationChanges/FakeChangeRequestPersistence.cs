@@ -1,10 +1,11 @@
 using System.Text.Json;
+using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationChanges;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
 // In-memory IChangeRequestPersistence with the same contract as the Mongo one: one InProgress
-// request per accreditation and optimistic concurrency on Version. Stores deep copies so a test
+// request per accreditation (none for registration-only requests) and optimistic concurrency on Version. Stores deep copies so a test
 // can't pass by mutating the object an endpoint handed back.
 public class FakeChangeRequestPersistence : IChangeRequestPersistence
 {
@@ -59,12 +60,37 @@ public class FakeChangeRequestPersistence : IChangeRequestPersistence
             );
     }
 
+    public Task<List<AccreditationChangeRequest>> ListForRegistrationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        int year,
+        CancellationToken ct = default
+    )
+    {
+        lock (_lock)
+            return Task.FromResult(
+                _requests
+                    .Where(r =>
+                        r.OrganisationId == organisationId
+                        && r.RegistrationId == registrationId
+                        && r.MaterialType == materialType
+                        && r.Year == year
+                        && r.ApplicationId is null
+                    )
+                    .OrderByDescending(r => r.CreatedAt)
+                    .Select(Copy)
+                    .ToList()
+            );
+    }
+
     public Task<bool> InsertAsync(AccreditationChangeRequest request, CancellationToken ct = default)
     {
         lock (_lock)
         {
             if (
-                _requests.Exists(r =>
+                request.ApplicationId is not null
+                && _requests.Exists(r =>
                     r.OrganisationId == request.OrganisationId
                     && r.ApplicationId == request.ApplicationId
                     && r.Status == ChangeRequestStatus.InProgress
@@ -98,6 +124,7 @@ public class FakeChangeRequestPersistence : IChangeRequestPersistence
                 return Task.FromResult(false);
             if (
                 request.Status == ChangeRequestStatus.InProgress
+                && request.ApplicationId is not null
                 && _requests.Exists(r =>
                     r.RequestId != request.RequestId
                     && r.OrganisationId == request.OrganisationId
