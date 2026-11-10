@@ -5,13 +5,9 @@ using EprRegisterEnrolBackend.AccreditationChanges;
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
 // Stub implementation — swapped for a real HTTP adapter once the Case Working Service contract is defined.
-public class StubCaseWorkingApiAdapter(
-    ILogger<StubCaseWorkingApiAdapter> logger,
-    TimeProvider? timeProvider = null
-) : ICaseWorkingApiAdapter
+public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger)
+    : ICaseWorkingApiAdapter
 {
-    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
-
     // RA-492: mirrors ManagementBe's in-year change reference, IYC-{code}-{yyyy}-{seq:D5}, where
     // the code names the change type. Unknown change types are rejected, as ManagementBe rejects
     // a work-item type it has not registered.
@@ -24,9 +20,13 @@ public class StubCaseWorkingApiAdapter(
     };
 
     // Stub only: ManagementBe owns the real sequence, per change code per year. This in-process
-    // counter is thread-safe but restarts at 00001 with the app and is not shared between
-    // instances. One adapter is registered as a singleton, so a running app never repeats a number.
-    private readonly ConcurrentDictionary<(string Code, int Year), int> _changeSequences = new();
+    // counter is thread-safe but restarts at 00000 with the app and is not shared between
+    // instances. One adapter is registered as a singleton.
+    private readonly ConcurrentDictionary<(string Code, int Year), long> _changeSequences = new();
+
+    // The sequence segment is always five digits (Tom, 10 Nov 2026): the counter keeps
+    // increasing, and the reference shows it modulo 100000, so 99999 is followed by 00000.
+    private const long ChangeSequenceModulus = 100_000;
 
     // RA-318: mirrors ManagementBe's ApplicationReferenceGenerator format so local/dev
     // testing sees realistic references — there is no real ManagementBe to call here, so
@@ -202,15 +202,19 @@ public class StubCaseWorkingApiAdapter(
             );
         }
 
-        // As ManagementBe does: the accreditation year when it is a four-digit year, otherwise the
-        // current UTC year.
-        var year = changeRequest.Year is >= 1000 and <= 9999
-            ? changeRequest.Year
-            : _timeProvider.GetUtcNow().UtcDateTime.Year;
-        var sequence = _changeSequences.AddOrUpdate((code, year), 1, (_, current) => current + 1);
+        // The accreditation year is always present on a change request (Tom, 10 Nov 2026), so
+        // it is used as it is, with no fallback. Numbering starts at 00000.
+        var sequence = _changeSequences.AddOrUpdate(
+            (code, changeRequest.Year),
+            0,
+            (_, current) => current + 1
+        );
 
-        return $"IYC-{code}-{year:D4}-{sequence:D5}";
+        return FormatChangeReference(code, changeRequest.Year, sequence);
     }
+
+    internal static string FormatChangeReference(string code, int year, long sequence) =>
+        $"IYC-{code}-{year:D4}-{sequence % ChangeSequenceModulus:D5}";
 
     // RA-503: mirrors the org segment fix applied to ManagementBe's real ApplicationReferenceGenerator
     // - uses the numeric, operator/regulator-safe OrgId (e.g. 500500) rather than OrganisationId

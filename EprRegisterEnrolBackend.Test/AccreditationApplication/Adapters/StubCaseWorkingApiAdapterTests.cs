@@ -259,7 +259,8 @@ public class StubCaseWorkingApiAdapterTests
     }
 
     // RA-492: ManagementBe gives a change request an in-year change reference,
-    // IYC-{code}-{yyyy}-{seq:D5} (add-overseas-site -> ORS), numbered per code per year.
+    // IYC-{code}-{yyyy}-{seq:D5} (add-overseas-site -> ORS), numbered per code per year from
+    // 00000 and wrapping to 00000 after 99999.
     private static AccreditationChangeRequest CreateChangeRequest(
         int year = 2026,
         string changeType = AccreditationChangeRequest.AddOverseasSiteChangeType
@@ -289,22 +290,17 @@ public class StubCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => utcNow;
-    }
-
     [Fact]
     public async Task SubmitChangeRequestAsync_ReturnsAnInYearChangeReferenceForTheRequestYear()
     {
         var result = await SubmitChange(BuildSut(), CreateChangeRequest(year: 2026));
 
-        result.Reference.Should().Be("IYC-ORS-2026-00001");
+        result.Reference.Should().Be("IYC-ORS-2026-00000");
         result.WorkItemId.Should().NotBeNull();
     }
 
     [Fact]
-    public async Task SubmitChangeRequestAsync_NumbersEachChangeInTurn_ZeroPaddedToFiveDigits()
+    public async Task SubmitChangeRequestAsync_NumbersEachChangeInTurnFromZero_ZeroPaddedToFiveDigits()
     {
         var sut = BuildSut();
 
@@ -312,9 +308,9 @@ public class StubCaseWorkingApiAdapterTests
         for (var i = 0; i < 12; i++)
             references.Add((await SubmitChange(sut, CreateChangeRequest())).Reference);
 
-        references[0].Should().Be("IYC-ORS-2026-00001");
-        references[1].Should().Be("IYC-ORS-2026-00002");
-        references[11].Should().Be("IYC-ORS-2026-00012");
+        references[0].Should().Be("IYC-ORS-2026-00000");
+        references[1].Should().Be("IYC-ORS-2026-00001");
+        references[11].Should().Be("IYC-ORS-2026-00011");
         references.Should().OnlyContain(r => System.Text.RegularExpressions.Regex.IsMatch(
             r,
             "^IYC-ORS-2026-[0-9]{5}$"
@@ -330,48 +326,20 @@ public class StubCaseWorkingApiAdapterTests
         var first2027 = await SubmitChange(sut, CreateChangeRequest(year: 2027));
         var second2026 = await SubmitChange(sut, CreateChangeRequest(year: 2026));
 
-        first2026.Reference.Should().Be("IYC-ORS-2026-00001");
-        first2027.Reference.Should().Be("IYC-ORS-2027-00001");
-        second2026.Reference.Should().Be("IYC-ORS-2026-00002");
+        first2026.Reference.Should().Be("IYC-ORS-2026-00000");
+        first2027.Reference.Should().Be("IYC-ORS-2027-00000");
+        second2026.Reference.Should().Be("IYC-ORS-2026-00001");
     }
 
-    // The four-digit bounds are accepted as the year itself.
+    // The counter keeps increasing; the reference shows it modulo 100000.
     [Theory]
-    [InlineData(1000, "IYC-ORS-1000-00001")]
-    [InlineData(9999, "IYC-ORS-9999-00001")]
-    public async Task SubmitChangeRequestAsync_FourDigitYearBounds_UseTheRequestYear(
-        int year,
-        string expected
-    )
-    {
-        var sut = new StubCaseWorkingApiAdapter(
-            EnabledNullLogger<StubCaseWorkingApiAdapter>.Instance,
-            new FixedTimeProvider(new DateTimeOffset(2031, 6, 1, 0, 0, 0, TimeSpan.Zero))
-        );
-
-        var result = await SubmitChange(sut, CreateChangeRequest(year: year));
-
-        result.Reference.Should().Be(expected);
-    }
-
-    // ManagementBe falls back to the current UTC year when accreditationYear is not a four-digit
-    // year; the stub does the same.
-    [Theory]
-    [InlineData(0)]
-    [InlineData(999)]
-    [InlineData(10000)]
-    public async Task SubmitChangeRequestAsync_YearNotFourDigits_UsesTheCurrentUtcYear(int year)
-    {
-        var sut = new StubCaseWorkingApiAdapter(
-            EnabledNullLogger<StubCaseWorkingApiAdapter>.Instance,
-            new FixedTimeProvider(new DateTimeOffset(2031, 12, 31, 23, 0, 0, TimeSpan.FromHours(-5)))
-        );
-
-        var result = await SubmitChange(sut, CreateChangeRequest(year: year));
-
-        // 23:00 at UTC-5 on 31 Dec 2031 is already 2032 in UTC.
-        result.Reference.Should().Be("IYC-ORS-2032-00001");
-    }
+    [InlineData(99_998L, "IYC-ORS-2026-99998")]
+    [InlineData(99_999L, "IYC-ORS-2026-99999")]
+    [InlineData(100_000L, "IYC-ORS-2026-00000")]
+    [InlineData(100_001L, "IYC-ORS-2026-00001")]
+    [InlineData(200_000L, "IYC-ORS-2026-00000")]
+    public void FormatChangeReference_WrapsTheSequenceToFiveDigits(long sequence, string expected) =>
+        StubCaseWorkingApiAdapter.FormatChangeReference("ORS", 2026, sequence).Should().Be(expected);
 
     [Fact]
     public async Task SubmitChangeRequestAsync_ConcurrentSubmissions_EachGetADifferentNumber()
@@ -385,7 +353,7 @@ public class StubCaseWorkingApiAdapterTests
         results
             .Select(r => r.Reference)
             .Should()
-            .BeEquivalentTo(Enumerable.Range(1, 200).Select(n => $"IYC-ORS-2026-{n:D5}"));
+            .BeEquivalentTo(Enumerable.Range(0, 200).Select(n => $"IYC-ORS-2026-{n:D5}"));
     }
 
     [Fact]
