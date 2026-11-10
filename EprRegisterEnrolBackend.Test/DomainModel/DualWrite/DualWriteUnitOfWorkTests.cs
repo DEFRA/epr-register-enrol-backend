@@ -197,7 +197,11 @@ public sealed class DualWriteUnitOfWorkTests : IDisposable
         Assert.Null(entry.Exception);
         Assert.Contains(Operation, entry.Message);
         Assert.Contains(application.Id.ToString()!, entry.Message);
-        Assert.Contains(nameof(InvalidOperationException), entry.Message);
+        // The work is a lambda, so the nearest named method on the stack is the one that ran it.
+        Assert.Contains(
+            $"{nameof(InvalidOperationException)} at InsertRaceRetry.RunInTransactionAsync",
+            entry.Message
+        );
         Assert.DoesNotContain("Jane", entry.Message);
         Assert.DoesNotContain("jane@example.com", entry.Message);
     }

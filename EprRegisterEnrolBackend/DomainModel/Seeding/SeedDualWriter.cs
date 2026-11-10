@@ -36,14 +36,14 @@ public sealed class SeedDualWriter(
         catch (Exception ex)
         {
             metrics.RecordFailure();
-            // Ids and the error kind only. The exception is not logged: a driver message can quote document
-            // values, and logs must hold no personal data (design doc §6.1).
+            // Ids, the error kind and the method that threw only. The exception is not logged: a driver message
+            // can quote document values, and logs must hold no personal data (design doc §6.1).
             logger.LogError(
-                "Seed dual-write failed and was rolled back: application {ApplicationId}, organisation {ReExOrganisationId}, registration {ReExRegistrationId}, error {ErrorKind}",
+                "Seed dual-write failed and was rolled back: application {ApplicationId}, organisation {ReExOrganisationId}, registration {ReExRegistrationId}, error {Error}",
                 seed.Application.Id,
                 seed.ReExOrganisationId,
                 seed.ReExRegistrationId,
-                MongoErrors.Kind(ex)
+                MongoErrors.Describe(ex)
             );
         }
     }
