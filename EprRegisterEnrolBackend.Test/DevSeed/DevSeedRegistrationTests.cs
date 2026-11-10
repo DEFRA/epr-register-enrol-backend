@@ -1,4 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using EprRegisterEnrolBackend.AccreditationChanges;
+using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.Registrations;
 using EprRegisterEnrolBackend.Test.TestSupport;
@@ -57,6 +59,35 @@ public sealed class DevSeedRegistrationTests(MongoIntegrationFixture fixture)
             )
             .Should()
             .Equal(typeof(DevExporterAccreditationSeedService));
+    }
+
+    // RA-697: the change requests need the in-year change store, which exists only with its flag on.
+    [Fact]
+    public void ManageExporterAndInYearChangesEnabled_AlsoRegistersTheChangeRequestSeed()
+    {
+        DevSeedsRegistered(
+                Environments.Development,
+                new()
+                {
+                    [DevExporterAccreditationSeedService.ConfigKey] = "true",
+                    [FeatureFlags.InYearChangesEnabledKey] = "true",
+                }
+            )
+            .Should()
+            .BeEquivalentTo(
+                [typeof(DevExporterAccreditationSeedService), typeof(DevChangeRequestSeedService)]
+            );
+    }
+
+    [Fact]
+    public void InYearChangesEnabledWithoutADevSeedFlag_RegistersNoDevSeed()
+    {
+        DevSeedsRegistered(
+                Environments.Development,
+                new() { [FeatureFlags.InYearChangesEnabledKey] = "true" }
+            )
+            .Should()
+            .BeEmpty();
     }
 
     [Fact]

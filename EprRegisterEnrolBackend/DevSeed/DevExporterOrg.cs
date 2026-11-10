@@ -9,15 +9,20 @@ namespace EprRegisterEnrolBackend.DevSeed;
 /// A dedicated dev and e2e exporter: an org in the stub ReEx registry
 /// (<see cref="Organisation.Services.FakeOrganisationPersistence"/>) that
 /// <see cref="AccreditationApplication.Startup.DevExporterAccreditationSeedService"/> gives an Approved current-year
-/// registration and plastic accreditation. Both use these values, so the two agree.
+/// registration and, unless it is not <see cref="IsAccredited"/>, plastic accreditation, plus the same for its
+/// <see cref="Reprocessor"/> if it has one. Both use these values, so the two agree.
 /// </summary>
 /// <remarks>
 /// The frontend mirrors these ids and names in src/server/common/constants/test-orgs.js, and the numbers in its
-/// stub (stub-manage-accreditations.js); keep the two in step.
+/// stub (stub-manage-accreditations.js), as do the fe-tests fixtures (test/fixtures/manage-exporter-org.js and
+/// in-year-change-org.js); keep all three in step.
 /// </remarks>
 internal sealed class DevExporterOrg
 {
-    /// <summary>RA-425: the material dashboard pages (/manage) and their ra-425 e2e journey.</summary>
+    /// <summary>
+    /// RA-425: the material dashboard pages (/manage) and their ra-425 e2e journey. RA-697: also a glass
+    /// reprocessor, and both accreditations have seeded change requests (AccreditationChanges.DevChangeRequestSeedService).
+    /// </summary>
     internal static readonly DevExporterOrg Manage = new()
     {
         OrgId = 50018,
@@ -28,6 +33,16 @@ internal sealed class DevExporterOrg
         AddressLine1 = "18 Harbour Road",
         Town = "Felixstowe",
         Postcode = "IP11 3AB",
+        Reprocessor = new DevReprocessorRegistration
+        {
+            OrgId = 50018,
+            Material = MaterialType.Glass,
+            GlassRecyclingProcess = GlassRecyclingProcess.Remelt,
+            Sequence = 2,
+            AddressLine1 = "Unit 18, Furnace Lane",
+            Town = "Doncaster",
+            Postcode = "DN4 5HT",
+        },
     };
 
     /// <summary>
@@ -46,7 +61,61 @@ internal sealed class DevExporterOrg
         Postcode = "HU1 1AA",
     };
 
-    internal static readonly IReadOnlyList<DevExporterOrg> All = [Manage, InYearChange];
+    /// <summary>RA-697: an Approved exporter with no change requests, for the in-year change pages' empty states.</summary>
+    internal static readonly DevExporterOrg NoChangeRequests = new()
+    {
+        OrgId = 50020,
+        Name = "No Change Requests Ltd",
+        TradingName = "No Change Requests",
+        Email = "info@nochangerequests.co.uk",
+        CompaniesHouseNumber = "12345020",
+        AddressLine1 = "20 Dock Street",
+        Town = "Grimsby",
+        Postcode = "DN31 3AA",
+    };
+
+    /// <summary>
+    /// RA-697: an Approved exporter registration with no accreditation in any year, for the registration-only
+    /// manage pages.
+    /// </summary>
+    internal static readonly DevExporterOrg RegistrationOnly = new()
+    {
+        OrgId = 50021,
+        Name = "Registration Only Exports Ltd",
+        TradingName = "Registration Only Exports",
+        Email = "info@registrationonlyexports.co.uk",
+        CompaniesHouseNumber = "12345021",
+        AddressLine1 = "21 Quay Road",
+        Town = "Southampton",
+        Postcode = "SO14 3AA",
+        IsAccredited = false,
+    };
+
+    /// <summary>
+    /// RA-697: an Approved exporter registration with no accreditation and no registered ORSs, for the
+    /// overseas-sites page's empty Accredited and Registered tabs.
+    /// </summary>
+    internal static readonly DevExporterOrg NoOverseasSites = new()
+    {
+        OrgId = 50022,
+        Name = "No Overseas Sites Exports Ltd",
+        TradingName = "No Overseas Sites Exports",
+        Email = "info@nooverseassitesexports.co.uk",
+        CompaniesHouseNumber = "12345022",
+        AddressLine1 = "22 Wharf Street",
+        Town = "Liverpool",
+        Postcode = "L3 4AA",
+        IsAccredited = false,
+    };
+
+    internal static readonly IReadOnlyList<DevExporterOrg> All =
+    [
+        Manage,
+        InYearChange,
+        NoChangeRequests,
+        RegistrationOnly,
+        NoOverseasSites,
+    ];
 
     private DevExporterOrg() { }
 
@@ -65,6 +134,12 @@ internal sealed class DevExporterOrg
     internal required string Town { get; init; }
     internal required string Postcode { get; init; }
     internal string RegisteredAddress => $"{AddressLine1}, {Town}, {Postcode}";
+
+    /// <summary>RA-697: false for an org the seed gives a registration but no accreditation.</summary>
+    internal bool IsAccredited { get; init; } = true;
+
+    /// <summary>The org's reprocessor registration, if it has one besides its exporter registration.</summary>
+    internal DevReprocessorRegistration? Reprocessor { get; init; }
 
     internal static DevExporterOrg? Find(int orgId) => All.FirstOrDefault(o => o.OrgId == orgId);
 
@@ -85,6 +160,49 @@ internal sealed class DevExporterOrg
             .RegistrationNumber(sequence: 1);
 
     // Derived from the registration number, as a real accreditation number is, e.g. A26EX0500180001PL.
+    internal string AccreditationNumberFor(int year) =>
+        AccreditationReferenceDerivation
+            .Derive(RegistrationNumberFor(year), AccreditationReferenceSourceKind.Registration, year)
+            .Reference!;
+}
+
+/// <summary>
+/// RA-697: a dedicated org's reprocessor registration, which the seed accredits alongside its exporter one. Its own
+/// ReEx registration id (bbb + org id), registration sequence and application id, so the two never collide.
+/// </summary>
+internal sealed class DevReprocessorRegistration
+{
+    internal required int OrgId { get; init; }
+
+    // e.g. bbb000000000000000050018.
+    internal ObjectId RegistrationId => ObjectId.Parse($"bbb{OrgId:D21}");
+    internal required MaterialType Material { get; init; }
+    internal GlassRecyclingProcess? GlassRecyclingProcess { get; init; }
+
+    // The exporter registration is sequence 1.
+    internal required int Sequence { get; init; }
+    internal required string AddressLine1 { get; init; }
+    internal required string Town { get; init; }
+    internal required string Postcode { get; init; }
+    internal string SiteAddress => $"{AddressLine1}, {Town}, {Postcode}";
+
+    // e.g. R26ER0500180002GR.
+    internal string RegistrationNumberFor(int year) =>
+        RegulatoryNumberFormat
+            .For(
+                new RegulatoryNumberSpec
+                {
+                    Nation = Nation.England,
+                    IsExporter = false,
+                    OrgId = OrgId,
+                    Material = Material,
+                    GlassRecyclingProcess = GlassRecyclingProcess,
+                    Year = year,
+                }
+            )
+            .RegistrationNumber(Sequence);
+
+    // e.g. A26ER0500180002GR.
     internal string AccreditationNumberFor(int year) =>
         AccreditationReferenceDerivation
             .Derive(RegistrationNumberFor(year), AccreditationReferenceSourceKind.Registration, year)

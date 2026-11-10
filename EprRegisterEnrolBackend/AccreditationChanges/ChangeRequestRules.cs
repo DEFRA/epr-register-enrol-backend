@@ -130,15 +130,28 @@ public static class ChangeRequestRules
     public static OverseasSiteModel? FindSite(AccreditationApplicationModel accreditation, int siteId) =>
         accreditation.OverseasSites?.Sites.FirstOrDefault(s => s.SiteId == siteId);
 
+    /// <summary>
+    /// RA-697: a registration-only item's SiteId is its ORS id's integer value, which need not be the
+    /// accreditation's key for the same ORS, so the ORS id is the match whenever the item and the site both have one.
+    /// </summary>
+    public static bool IsForSite(ChangeRequestSite item, OverseasSiteModel site) =>
+        item.OrsId is not null && site.OrsId is not null ? item.OrsId == site.OrsId : item.SiteId == site.SiteId;
+
     public static ChangeRequestView ToView(
         AccreditationChangeRequest request,
         AccreditationApplicationModel accreditation
+    ) => ToView(request, accreditation.OverseasSites?.Sites ?? []);
+
+    /// <summary>RA-697: against a registration's sites, for a registration-only request.</summary>
+    public static ChangeRequestView ToView(
+        AccreditationChangeRequest request,
+        IReadOnlyList<OverseasSiteModel> orsSites
     )
     {
         var sites = request
             .Sites.Select(requestSite =>
             {
-                var site = FindSite(accreditation, requestSite.SiteId);
+                var site = orsSites.FirstOrDefault(s => IsForSite(requestSite, s));
                 var effective = Effective(site, requestSite.Answers);
                 var missing = MissingFields(site, requestSite);
                 return new ChangeRequestSiteView(
@@ -150,7 +163,12 @@ public static class ChangeRequestRules
                     IsBesEvidenceRequired(site, effective),
                     requestSite.BesEvidence,
                     missing,
-                    missing.Count == 0
+                    missing.Count == 0,
+                    requestSite.ItemId,
+                    requestSite.ChangeType,
+                    requestSite.Status,
+                    requestSite.ValidFrom,
+                    requestSite.WithdrawnAt
                 );
             })
             .ToList();
@@ -166,7 +184,8 @@ public static class ChangeRequestRules
             request.CaseManagementReference,
             sites,
             sites.Count > 0 && sites.All(s => s.IsComplete),
-            Charge(request.Sites.Count)
+            Charge(request.Sites.Count),
+            request.TonnageBandUpgrade is { } tonnage ? TonnageBandUpgradeView.From(tonnage) : null
         );
     }
 }
@@ -182,7 +201,12 @@ public sealed record ChangeRequestSiteView(
     bool BesEvidenceRequired,
     BesEvidenceModel? BesEvidence,
     List<string> MissingFields,
-    bool IsComplete
+    bool IsComplete,
+    Guid ItemId,
+    string ChangeType,
+    ChangeItemStatus Status,
+    DateTime? ValidFrom,
+    DateTime? WithdrawnAt
 );
 
 public sealed record ChangeRequestView(
@@ -196,8 +220,23 @@ public sealed record ChangeRequestView(
     string? CaseManagementReference,
     List<ChangeRequestSiteView> Sites,
     bool IsComplete,
-    ChargeView Charge
+    ChargeView Charge,
+    TonnageBandUpgradeView? TonnageBandUpgrade
 );
+
+/// <summary>RA-697: the API's shape for a tonnage band upgrade item, kept apart from the stored model.</summary>
+public sealed record TonnageBandUpgradeView(
+    Guid ItemId,
+    string ChangeType,
+    ChangeItemStatus Status,
+    DateTime? ValidFrom,
+    DateTime? WithdrawnAt,
+    PlannedTonnageBand RequestedBand
+)
+{
+    public static TonnageBandUpgradeView From(TonnageBandUpgradeItem item) =>
+        new(item.ItemId, item.ChangeType, item.Status, item.ValidFrom, item.WithdrawnAt, item.RequestedBand);
+}
 
 public sealed record AccreditationChangeSiteView(
     int SiteId,
@@ -209,9 +248,10 @@ public sealed record AccreditationChangeSiteView(
     OverseasSiteModel Site
 );
 
+/// <summary>RA-697: <see cref="ApplicationId"/> and <see cref="AccreditationReference"/> are null for a registration-only view.</summary>
 public sealed record AccreditationChangesView(
     string OrganisationId,
-    string ApplicationId,
+    string? ApplicationId,
     string? OrganisationName,
     string? RegistrationId,
     MaterialType MaterialType,
