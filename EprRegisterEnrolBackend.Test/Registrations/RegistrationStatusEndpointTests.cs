@@ -17,11 +17,11 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolBackend.Test.Registrations;
 
 // RA-425: the frontend asks for a registration's current status before showing any of the
-// material dashboard pages. Driven through the real host and auth pipeline (outside Development,
-// where the Frontend scheme's bypass would hide a missing gate), against a real ephemeral Mongo,
-// with the domain model's Expand flag both off and on. Mapped only with FeatureFlags:InYearChangesEnabled.
-// Outside Development that flag needs DomainModel:DualWrite, which needs Expand, so the Expand-off runs
-// use Development: the only place in-year changes can run without dual-write.
+// material dashboard pages. Driven through the real host and auth pipeline against a real ephemeral
+// Mongo, with the domain model's Expand flag both off and on. Mapped only with
+// FeatureFlags:InYearChangesEnabled. The Expand-on runs, including every auth test, are outside
+// Development, where the Frontend scheme's bypass would hide a missing gate. The Expand-off runs use
+// Development: elsewhere the flag needs DomainModel:DualWrite, which needs Expand.
 public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixture)
 {
     private const string FrontendSecret = "integration-frontend-secret";

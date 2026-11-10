@@ -22,9 +22,9 @@ namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
 // RA-697: a registration-only operator's change requests, read by organisation, registration and material for the
 // backend clock's year, with the registration's domain-model ORSs as its sites. Through the real host and auth
-// pipeline (outside Development) against an ephemeral Mongo, with the domain model's Expand flag both off and on.
-// Outside Development the in-year changes flag needs DomainModel:DualWrite, which needs Expand, so the Expand-off
-// runs use Development: the only place in-year changes can run without dual-write.
+// pipeline against an ephemeral Mongo, with the domain model's Expand flag both off and on. The Expand-on runs are
+// outside Development; the Expand-off runs use Development, because elsewhere the in-year changes flag needs
+// DomainModel:DualWrite, which needs Expand.
 // The stub ReEx registry's org 50003 (Delta Green) holds registration Reg50003.
 public sealed class RegistrationChangeRequestsEndpointTests(MongoIntegrationFixture fixture)
 {

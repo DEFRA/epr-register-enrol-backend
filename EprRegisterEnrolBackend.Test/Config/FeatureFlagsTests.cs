@@ -19,7 +19,7 @@ public class FeatureFlagsTests
             )
             .Build();
 
-    private sealed class Host(string environmentName) : IHostEnvironment
+    private sealed class FakeHostEnvironment(string environmentName) : IHostEnvironment
     {
         public string EnvironmentName { get; set; } = environmentName;
         public string ApplicationName { get; set; } = "test";
@@ -33,7 +33,7 @@ public class FeatureFlagsTests
         var act = () =>
             FeatureFlags.EnsureInYearChangesHasDualWrite(
                 Settings(inYearChanges: true, dualWrite: false),
-                new Host(Environments.Production)
+                new FakeHostEnvironment(Environments.Production)
             );
 
         act.Should()
@@ -50,7 +50,7 @@ public class FeatureFlagsTests
         var act = () =>
             FeatureFlags.EnsureInYearChangesHasDualWrite(
                 Settings(inYearChanges, dualWrite),
-                new Host(Environments.Production)
+                new FakeHostEnvironment(Environments.Production)
             );
 
         act.Should().NotThrow();
@@ -63,7 +63,7 @@ public class FeatureFlagsTests
         var act = () =>
             FeatureFlags.EnsureInYearChangesHasDualWrite(
                 Settings(inYearChanges: true, dualWrite: false),
-                new Host(Environments.Development)
+                new FakeHostEnvironment(Environments.Development)
             );
 
         act.Should().NotThrow();

@@ -133,10 +133,10 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+    FeatureFlags.EnsureInYearChangesHasDualWrite(builder.Configuration, builder.Environment);
     // RA-492: in-year change requests (add registered ORS to a granted accreditation). Registered only
     // with the in-year changes flag, like the routes that use them, so with it off the change-request
     // collection and its indexes are never touched.
-    FeatureFlags.EnsureInYearChangesHasDualWrite(builder.Configuration, builder.Environment);
     if (builder.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
     {
         builder.Services.AddSingleton<IChangeRequestPersistence, ChangeRequestPersistence>();

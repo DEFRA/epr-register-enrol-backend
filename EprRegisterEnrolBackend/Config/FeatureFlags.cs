@@ -2,7 +2,9 @@ using EprRegisterEnrolBackend.DomainModel;
 
 namespace EprRegisterEnrolBackend.Config;
 
-/// <summary>Configuration keys of the feature flags under <c>FeatureFlags</c>.</summary>
+/// <summary>
+/// Configuration keys of the feature flags under <c>FeatureFlags</c>, and the startup checks of what each needs.
+/// </summary>
 public static class FeatureFlags
 {
     /// <summary>
@@ -15,8 +17,10 @@ public static class FeatureFlags
 
     /// <summary>
     /// RA-697: the in-year changes routes read the domain model's registrations and ORSs. On CDP only dual-write
-    /// fills those, so with the flag on and dual-write off the pages would quietly show nothing; refuse to start
-    /// instead. Development is exempt: there the dev seeds write the domain model directly.
+    /// (<c>DualWrite</c>, and <c>DualWriteSeed</c> for seeded ones) fills those, so with the flag on and
+    /// <c>DualWrite</c> off the pages would quietly show nothing; refuse to start instead. Necessary, not
+    /// sufficient: a registration still only appears once it has been written with dual-write on. Development is
+    /// exempt: there the dev seeds write the domain model directly.
     /// </summary>
     public static void EnsureInYearChangesHasDualWrite(
         IConfiguration configuration,
@@ -31,7 +35,7 @@ public static class FeatureFlags
         {
             throw new InvalidOperationException(
                 $"{InYearChangesEnabledKey} needs {DualWriteKey} outside Development: the in-year changes routes read "
-                    + "the domain model, which only dual-write fills."
+                    + "the domain model, which on CDP only dual-write fills."
             );
         }
     }
