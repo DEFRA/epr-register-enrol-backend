@@ -11,12 +11,14 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
 {
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
+    private readonly string _connectionString;
     private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
     private readonly VersionedMongoRepository<WidgetVersion> _sut;
 
     public VersionedMongoRepositoryTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("versioned");
+        _connectionString = fixture.ConnectionString;
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         var collection = _factory.GetCollection<WidgetVersion>("widgetVersions");
         collection.Indexes.CreateMany(VersionedIndexes.Identity<WidgetVersion>());
@@ -99,6 +101,31 @@ public sealed class VersionedMongoRepositoryTests : IDisposable
         Assert.Equal(ChangeReason.Suspended, versions[1].LastChange.Reason);
         Assert.Equal(v1.EntityId, versions[1].EntityId);
         Assert.NotEqual(versions[0].Id, versions[1].Id);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ClientReadsFromSecondaries_StillUpdatesInItsOwnTransaction()
+    {
+        var v1 = await _sut.InsertAsync(Widget("first"), Change(), cancellationToken: Ct);
+        var secondaries = new TestMongoDbClientFactory(
+            MongoConnectionStrings.ReadingFromSecondaries(_connectionString),
+            _databaseName
+        );
+        var sut = new VersionedMongoRepository<WidgetVersion>(
+            secondaries.GetClient(),
+            secondaries.GetCollection<WidgetVersion>("widgetVersions"),
+            _clock
+        );
+
+        var result = await sut.UpdateAsync(
+            Widget("second", v1.EntityId),
+            expectedVersion: 1,
+            Change(),
+            cancellationToken: Ct
+        );
+
+        Assert.True(result.Changed);
+        Assert.Equal(2, result.Entity.Version);
     }
 
     [Fact]

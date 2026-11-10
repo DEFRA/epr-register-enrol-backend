@@ -27,6 +27,7 @@ public sealed class SeedDualWriterTests : IDisposable
 
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
+    private readonly string _connectionString;
     private readonly TestClock _clock = new(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
     private readonly OrganisationPersistence _organisations;
     private readonly RegistrationPersistence _registrations;
@@ -40,6 +41,7 @@ public sealed class SeedDualWriterTests : IDisposable
     public SeedDualWriterTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("seeddualwrite");
+        _connectionString = fixture.ConnectionString;
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _organisations = new OrganisationPersistence(_factory, NullLoggerFactory.Instance);
         _registrations = new RegistrationPersistence(_factory, NullLoggerFactory.Instance, _clock);
@@ -194,6 +196,42 @@ public sealed class SeedDualWriterTests : IDisposable
         );
         Assert.Equal(application.Version, stamped.Version);
         Assert.Equal(0, Interlocked.Read(ref _failures));
+    }
+
+    // The seed's first step inside its transaction is a read, which the driver refuses unless the transaction
+    // reads from the primary. In test the CDP connection string sent reads elsewhere and every seed failed.
+    [Fact]
+    public async Task WriteAsync_ClientReadsFromSecondaries_StillWritesTheModel()
+    {
+        var reEx = ReEx();
+        var application = await LegacyApplicationAsync(reEx);
+        var secondaries = new TestMongoDbClientFactory(
+            MongoConnectionStrings.ReadingFromSecondaries(_connectionString),
+            _databaseName
+        );
+        var writer = new SeedDualWriter(
+            secondaries,
+            new SeedModelStores(
+                new OrganisationPersistence(secondaries, NullLoggerFactory.Instance),
+                new RegistrationPersistence(secondaries, NullLoggerFactory.Instance, _clock),
+                new OverseasSitePersistence(secondaries, NullLoggerFactory.Instance, _clock),
+                new MigrationConflictPersistence(secondaries, NullLoggerFactory.Instance)
+            ),
+            new AccreditationApplicationPersistence(secondaries, NullLoggerFactory.Instance),
+            new SeedDualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
+            _clock,
+            _logger
+        );
+
+        await writer.WriteAsync(Seed(reEx, application), Ct);
+
+        Assert.DoesNotContain(_logger.Entries, e => e.LogLevel == LogLevel.Error);
+        Assert.Single(await RegistrationVersionsAsync());
+        var stamped = await _applications.GetByIdAsync(
+            ReExOrganisationId,
+            application.Id!.Value.ToString()
+        );
+        Assert.NotNull(stamped!.RegistrationEntityId);
     }
 
     [Fact]

@@ -37,4 +37,70 @@ public class MongoErrorsTests
     [Fact]
     public void Kind_CommandError_IsTheTypeAndCodeOnly() =>
         Assert.Equal("MongoCommandException:11000", MongoErrors.Kind(CommandError(11000)));
+
+    private static async Task ThrowAfterAwaitAsync()
+    {
+        await Task.Yield();
+        throw new InvalidOperationException("holds a document value");
+    }
+
+    private static void ThrowNow() => throw new InvalidOperationException("holds a document value");
+
+    private static async Task<Exception> CaughtAsync(Func<Task> act)
+    {
+        try
+        {
+            await act();
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
+
+        throw new InvalidOperationException("Expected an exception.");
+    }
+
+    [Fact]
+    public async Task Origin_ThrownInAnAsyncMethod_IsThatMethodsName()
+    {
+        var ex = await CaughtAsync(ThrowAfterAwaitAsync);
+
+        Assert.Equal("MongoErrorsTests.ThrowAfterAwaitAsync", MongoErrors.Origin(ex));
+    }
+
+    [Fact]
+    public async Task Origin_ThrownInASyncMethod_IsThatMethodsName()
+    {
+        var ex = await CaughtAsync(() =>
+        {
+            ThrowNow();
+            return Task.CompletedTask;
+        });
+
+        Assert.Equal("MongoErrorsTests.ThrowNow", MongoErrors.Origin(ex));
+    }
+
+    [Fact]
+    public async Task Origin_ThrownInALambda_IsTheNamedMethodAroundIt()
+    {
+        var ex = await CaughtAsync(async () =>
+        {
+            await Task.Yield();
+            throw new InvalidOperationException("holds a document value");
+        });
+
+        Assert.Equal("MongoErrorsTests.CaughtAsync", MongoErrors.Origin(ex));
+    }
+
+    [Fact]
+    public void Origin_NeverThrown_IsUnknown() =>
+        Assert.Equal("unknown", MongoErrors.Origin(new InvalidOperationException("x")));
+
+    [Fact]
+    public async Task Origin_AnyException_NeverQuotesTheMessage()
+    {
+        var ex = await CaughtAsync(ThrowAfterAwaitAsync);
+
+        Assert.DoesNotContain("document value", MongoErrors.Origin(ex));
+    }
 }

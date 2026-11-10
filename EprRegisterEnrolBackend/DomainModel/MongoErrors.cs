@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.DomainModel;
@@ -26,4 +27,43 @@ internal static class MongoErrors
             MongoCommandException command => $"{ex.GetType().Name}:{command.Code}",
             _ => ex.GetType().Name,
         };
+
+    /// <summary>
+    /// The innermost method of this service the exception passed through, as <c>Type.Method</c>, or <c>unknown</c>.
+    /// With <see cref="Kind"/> it places a failure without the message: method names hold no data. An async
+    /// method runs as a compiler-generated state machine, so that frame is named after the method it came from.
+    /// </summary>
+    public static string Origin(Exception ex)
+    {
+        foreach (var frame in new StackTrace(ex, fNeedFileInfo: false).GetFrames())
+        {
+            var method = frame.GetMethod();
+            var type = method?.DeclaringType;
+            if (type?.Namespace?.StartsWith(OwnNamespace, StringComparison.Ordinal) != true)
+            {
+                continue;
+            }
+
+            if (type.Name.StartsWith('<') && type.DeclaringType is { } owner)
+            {
+                var name = type.Name[1..type.Name.IndexOf('>')];
+                // A lambda's state machine has no method name of its own; keep looking for a named one.
+                if (name.Length > 0 && !name.Contains('<'))
+                {
+                    return $"{owner.Name}.{name}";
+                }
+
+                continue;
+            }
+
+            if (!method!.Name.Contains('<') && !type.Name.Contains('<'))
+            {
+                return $"{type.Name}.{method.Name}";
+            }
+        }
+
+        return "unknown";
+    }
+
+    private const string OwnNamespace = "EprRegisterEnrolBackend";
 }

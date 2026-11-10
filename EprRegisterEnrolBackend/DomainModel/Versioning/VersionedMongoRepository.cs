@@ -87,7 +87,8 @@ public class VersionedMongoRepository<T>(
         // writers into one winner plus one VersionConflictException on the re-read.
         return await own.WithTransactionAsync(
             (s, token) => UpdateCoreAsync(s, entity, expectedVersion, change, token),
-            cancellationToken: cancellationToken
+            DomainModelTransactions.Options,
+            cancellationToken
         );
     }
 
