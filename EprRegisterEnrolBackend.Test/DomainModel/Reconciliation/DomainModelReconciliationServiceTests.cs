@@ -71,7 +71,10 @@ public class DomainModelReconciliationServiceTests
 
         var line = _logger.Entries.Should().ContainSingle().Subject;
         line.LogLevel.Should().Be(LogLevel.Error);
-        line.Message.Should().Contain(nameof(InvalidOperationException));
+        line.Message.Should()
+            .Contain(
+                $"{nameof(InvalidOperationException)} at DomainModelReconciliationService.ReportOnceAsync"
+            );
         line.Exception.Should().BeNull();
     }
 

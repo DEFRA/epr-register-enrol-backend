@@ -351,6 +351,9 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
             .ContainSingle(e => e.LogLevel == LogLevel.Error)
             .Subject;
         line.Message.Should().Contain(failing.ToString()).And.NotContain("someone's name");
+        // The throw is in a lambda, so the nearest named method is the migrator that ran it.
+        line.Message.Should()
+            .Contain($"{nameof(InvalidOperationException)} at SpyMigrator.EnsureMigratedAsync");
         line.Exception.Should().BeNull();
     }
 
@@ -624,6 +627,13 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
         await service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
         _status.Result.Status.Should().Be(HealthStatus.Degraded);
-        _logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error);
+        // The provider has no migrator, so resolving one throws inside RunAsync.
+        _logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error)
+            .Subject.Message.Should()
+            .Contain(
+                $"{nameof(InvalidOperationException)} at DomainModelMigrationService.RunAsync"
+            );
     }
 }

@@ -72,12 +72,15 @@ public sealed class DomainModelMigrationService(
         }
     }
 
-    // The error kind only: a driver's message can quote document values, and logs must hold no personal data.
+    // The error kind and the method that threw only: a driver's message can quote document values, and logs must
+    // hold no personal data. The status keeps the kind alone.
     private void RecordStopped(Exception ex)
     {
-        var kind = MongoErrors.Kind(ex);
-        _status.RecordStopped(kind);
-        _logger.LogError("DomainModelMigration stopped: step run, error {ErrorKind}", kind);
+        _status.RecordStopped(MongoErrors.Kind(ex));
+        _logger.LogError(
+            "DomainModelMigration stopped: step run, error {Error}",
+            MongoErrors.Describe(ex)
+        );
     }
 
     // Extracted so tests can await it deterministically.
@@ -295,13 +298,14 @@ public sealed class DomainModelMigrationService(
                     || !cancellationToken.IsCancellationRequested
                 )
             {
-                RecordFailure(candidate, MongoErrors.Kind(ex));
+                RecordFailure(candidate, ex);
             }
 
             return await SaveAsync(cancellationToken);
         }
 
-        private void RecordFailure(Candidate candidate, string errorKind)
+        // The failure record keeps the error kind alone; the log line also names the method that threw.
+        private void RecordFailure(Candidate candidate, Exception ex)
         {
             var attempts =
                 (
@@ -314,15 +318,15 @@ public sealed class DomainModelMigrationService(
                 Group = candidate.Group,
                 ApplicationId = candidate.Id,
                 Attempts = attempts,
-                LastErrorKind = errorKind,
+                LastErrorKind = MongoErrors.Kind(ex),
                 LastFailedAt = service._clock.GetUtcNow().UtcDateTime,
             };
             service._status.RecordFailedGroups(CurrentFailures().Count);
             service._logger.LogError(
-                "DomainModelMigration failed: step ensure-migrated, application {ApplicationId}, attempts {Attempts}, error {ErrorKind}",
+                "DomainModelMigration failed: step ensure-migrated, application {ApplicationId}, attempts {Attempts}, error {Error}",
                 candidate.Id,
                 attempts,
-                errorKind
+                MongoErrors.Describe(ex)
             );
         }
 

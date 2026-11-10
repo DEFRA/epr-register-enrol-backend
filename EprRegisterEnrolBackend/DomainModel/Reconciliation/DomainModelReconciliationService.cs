@@ -70,11 +70,12 @@ public sealed class DomainModelReconciliationService(
         }
     }
 
-    // The error kind only: a driver's message can quote document values, and logs must hold no personal data.
+    // The error kind and the method that threw only: a driver's message can quote document values, and logs must
+    // hold no personal data.
     private void LogFailure(Exception ex) =>
         logger.LogError(
-            "DomainModelReconciliation failed: error {ErrorKind}",
-            MongoErrors.Kind(ex)
+            "DomainModelReconciliation failed: error {Error}",
+            MongoErrors.Describe(ex)
         );
 
     private void Log(ReconciliationReport report)
