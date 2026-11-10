@@ -3514,7 +3514,7 @@ public static class AccreditationApplicationEndpoints
                 detail: "The case working service did not respond in time. Please try again."
             );
         }
-        application.ApplicationReference = submissionResult.Reference;
+        application.ApplicationReference = submissionResult.CaseReference;
         application.CaseManagementWorkItemId = submissionResult.WorkItemId;
 
         // RA-644 B8g: only the save runs in the unit of work, so a transaction never waits on
@@ -3641,7 +3641,7 @@ public static class AccreditationApplicationEndpoints
 
         ApplySubmission(application, submission.Request, submission.SubmittedAt);
         application.OrgId = submission.OrgId;
-        application.ApplicationReference = submission.CaseWorking.Reference;
+        application.ApplicationReference = submission.CaseWorking.CaseReference;
         application.CaseManagementWorkItemId = submission.CaseWorking.WorkItemId;
 
         var updated = await persistence.UpdateAsync(application, session);

@@ -100,8 +100,9 @@ public class HttpCaseWorkingApiAdapter(
     // RA-492: the in-year "add a registered ORS to an accreditation" change request. Only called
     // when AccreditationChanges:SubmitToCaseManagement is on - ManagementBe must register the
     // add-overseas-site work-item type before that flag is switched on. ManagementBe returns an
-    // in-year change reference (IYC-ORS-{yyyy}-{seq:D5}) in the same applicationReference field
-    // an application's AP reference comes back in.
+    // in-year change reference (format: see "Application reference" in ManagementBe's
+    // docs/work-items.md) in the same applicationReference field an application's AP reference
+    // comes back in.
     public async Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
@@ -157,7 +158,7 @@ public class HttpCaseWorkingApiAdapter(
             // management-fe reads these two from every work item's payload, whatever its type:
             // wasteProcessingType for the worklist's applicant type (absent reads as
             // "Reprocessor") and operatorOrgNumber for the Org ID on the card, case header and
-            // audit log. ManagementBe's IYC reference uses only typeId and accreditationYear.
+            // audit log. ManagementBe's in-year change reference uses only typeId and accreditationYear.
             wasteProcessingType = accreditation.WasteProcessingType,
             operatorOrgNumber = accreditation.OrgId,
             chargePence = changeRequest.ChargePence,

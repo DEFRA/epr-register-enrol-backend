@@ -22,7 +22,7 @@ public class HttpCaseWorkingApiAdapterTests
     private const string TestClientId = "epr-register-enrol-backend";
     private const string TestApplicationReference = "APP26EA123451AAPL";
 
-    // RA-492: ManagementBe's in-year change reference format, IYC-{code}-{yyyy}-{seq:D5}.
+    // RA-492: an in-year change reference as ManagementBe returns one for add-overseas-site.
     private const string TestChangeRequestReference = "IYC-ORS-2026-00021";
 
     private static AccreditationApplicationModel CreateTestApplication()
@@ -66,7 +66,8 @@ public class HttpCaseWorkingApiAdapterTests
         string? url = TestUrl,
         string clientId = TestClientId,
         string? sharedSecret = null,
-        string responseReference = TestApplicationReference
+        string responseReference = TestApplicationReference,
+        string responseTypeId = "re-accreditation"
     )
     {
         var config = Options.Create(
@@ -83,7 +84,7 @@ public class HttpCaseWorkingApiAdapterTests
             new
             {
                 id = Guid.NewGuid(),
-                typeId = "re-accreditation",
+                typeId = responseTypeId,
                 stateId = "submitted",
                 payload = new { },
                 applicationReference = responseReference,
@@ -110,7 +111,7 @@ public class HttpCaseWorkingApiAdapterTests
             CreateTestApplication(),
             TestContext.Current.CancellationToken
         );
-        result.Reference.Should().Be(TestApplicationReference);
+        result.CaseReference.Should().Be(TestApplicationReference);
     }
 
     [Fact]
@@ -343,7 +344,7 @@ public class HttpCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.Reference.Should().Be(TestApplicationReference);
+        result.CaseReference.Should().Be(TestApplicationReference);
         result.WorkItemId.Should().BeNull();
     }
 
@@ -2264,7 +2265,8 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var (adapter, handler) = CreateAdapter(
             sharedSecret: "secret",
-            responseReference: TestChangeRequestReference
+            responseReference: TestChangeRequestReference,
+            responseTypeId: AccreditationChangeRequest.AddOverseasSiteChangeType
         );
         var (request, accreditation) = CreateChangeRequest();
 
@@ -2274,7 +2276,7 @@ public class HttpCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.Reference.Should().Be(TestChangeRequestReference);
+        result.CaseReference.Should().Be(TestChangeRequestReference);
         handler.CapturedRequest!.RequestUri!.ToString().Should().Be($"{TestUrl}/work-items");
         handler.CapturedRequest.Headers.GetValues("x-cdp-user-id").Single().Should().Be("jane@example.com");
         handler.CapturedRequest.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
@@ -2297,12 +2299,13 @@ public class HttpCaseWorkingApiAdapterTests
             .Should().Equal("operationCodes", "conditionsOfExport");
     }
 
-    // ManagementBe builds the IYC reference from typeId and accreditationYear alone, so the
+    // ManagementBe builds the in-year change reference from typeId and accreditationYear alone, so the
     // postcodes its AP generator needed are no longer sent with a change request.
     [Fact]
     public async Task SubmitChangeRequestAsync_DoesNotSendTheApplicationReferencePostcodes()
     {
-        var (adapter, handler) = CreateAdapter(responseReference: TestChangeRequestReference);
+        var (adapter, handler) = CreateAdapter(responseReference: TestChangeRequestReference,
+            responseTypeId: AccreditationChangeRequest.AddOverseasSiteChangeType);
         var (request, accreditation) = CreateChangeRequest();
         accreditation.SiteAddress = "1 Dock Road, Hull, HU1 2BB";
         accreditation.CompanyRegisterAddressPostcode.Should().NotBeNullOrWhiteSpace();
@@ -2496,7 +2499,7 @@ public class HttpCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.Reference.Should().Be(TestApplicationReference);
+        result.CaseReference.Should().Be(TestApplicationReference);
 
         var payload = JsonDocument
             .Parse(handler.CapturedRequestBody!)

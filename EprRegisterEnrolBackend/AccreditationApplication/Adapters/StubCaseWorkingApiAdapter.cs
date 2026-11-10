@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationChanges;
 
@@ -24,9 +25,13 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     // instances. One adapter is registered as a singleton.
     private readonly ConcurrentDictionary<(string Code, int Year), long> _changeSequences = new();
 
-    // The sequence segment is always five digits (Tom, 10 Nov 2026): the counter keeps
+    // The sequence segment is always five digits (RA-492): the counter keeps
     // increasing, and the reference shows it modulo 100000, so 99999 is followed by 00000.
     private const long ChangeSequenceModulus = 100_000;
+
+    // ManagementBe accepts only a whole four-digit accreditation year.
+    private const int MinChangeYear = 1000;
+    private const int MaxChangeYear = 9999;
 
     // RA-318: mirrors ManagementBe's ApplicationReferenceGenerator format so local/dev
     // testing sees realistic references — there is no real ManagementBe to call here, so
@@ -202,8 +207,18 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
             );
         }
 
-        // The accreditation year is always present on a change request (Tom, 10 Nov 2026), so
-        // it is used as it is, with no fallback. Numbering starts at 00000.
+        // The accreditation year is always present on a change request (RA-492), so there is no
+        // fallback. A year that is not four digits is refused with a 400, as ManagementBe
+        // refuses it. Numbering starts at 00000.
+        if (changeRequest.Year is < MinChangeYear or > MaxChangeYear)
+        {
+            throw new HttpRequestException(
+                $"ManagementBe work item submission failed: {(int)HttpStatusCode.BadRequest} (accreditation year {changeRequest.Year} is not a four-digit year)",
+                null,
+                HttpStatusCode.BadRequest
+            );
+        }
+
         var sequence = _changeSequences.AddOrUpdate(
             (code, changeRequest.Year),
             0,
