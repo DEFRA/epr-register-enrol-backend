@@ -28,6 +28,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
 
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
+    private readonly string _connectionString;
     private readonly AccreditationApplicationPersistence _applications;
     private readonly ApplicationGroupMigrator _migrator;
     private readonly ApplicationReconciler _reconciler;
@@ -36,6 +37,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
     public ApplicationReconcilerTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("reconcile");
+        _connectionString = fixture.ConnectionString;
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
         var logs = NullLoggerFactory.Instance;
@@ -319,6 +321,44 @@ public sealed class ApplicationReconcilerTests : IDisposable
         report.DifferencesByField.Should().BeEmpty();
         report.Matching.Should().Be(1);
         report.WithDifferences.Should().Be(0);
+    }
+
+    // Every comparison reads inside a snapshot transaction, which the driver refuses unless the transaction reads
+    // from the primary. A CDP connection string can send reads to secondaries.
+    [Fact]
+    public async Task Run_ClientReadsFromSecondaries_StillCompares()
+    {
+        var id = await CreateAsync(Application(sites: Site(1, "001", "Plant")));
+        await MigrateAsync(id);
+        var secondaries = new TestMongoDbClientFactory(
+            new MongoUrlBuilder(_connectionString)
+            {
+                ReadPreference = ReadPreference.SecondaryPreferred,
+            }.ToString(),
+            _databaseName
+        );
+        var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
+        var logs = NullLoggerFactory.Instance;
+        var stores = new ApplicationGroupStores(
+            new OrganisationPersistence(secondaries, logs),
+            new RegistrationPersistence(secondaries, logs, clock),
+            new OverseasSitePersistence(secondaries, logs, clock),
+            new ApplicationVersionPersistence(secondaries, logs, clock),
+            new AccreditationPersistence(secondaries, logs, clock),
+            new MigrationConflictPersistence(secondaries, logs)
+        );
+        var reconciler = new ApplicationReconciler(
+            secondaries,
+            new AccreditationApplicationPersistence(secondaries, logs),
+            new ApplicationReadModel(stores),
+            stores.Conflicts,
+            clock
+        );
+
+        var report = await reconciler.RunAsync(Ct);
+
+        report.Unreadable.Should().Be(0);
+        report.Matching.Should().Be(1);
     }
 
     [Fact]

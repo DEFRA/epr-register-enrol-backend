@@ -91,7 +91,12 @@ public sealed class ApplicationReconciler(
                 .StartSessionAsync(cancellationToken: cancellationToken);
             var comparison = await session.WithTransactionAsync(
                 (s, token) => CompareInSnapshotAsync(id, s, token),
-                new TransactionOptions(readConcern: ReadConcern.Snapshot),
+                // Primary, because the driver refuses any read in a transaction that doesn't read from the primary,
+                // and a deployed connection string can send reads to secondaries.
+                new TransactionOptions(
+                    readConcern: ReadConcern.Snapshot,
+                    readPreference: ReadPreference.Primary
+                ),
                 cancellationToken
             );
             if (comparison is null)
