@@ -72,6 +72,23 @@ public sealed class TestMongoDbClientFactory : IMongoDbClientFactory
         _database = _client.GetDatabase(databaseName);
     }
 
+    /// <summary>
+    /// A factory whose client sends reads to secondaries where there are any, as a CDP connection string may ask
+    /// for. The driver refuses a read inside a transaction unless the transaction reads from the primary, so this
+    /// is what shows a transaction has pinned it.
+    /// </summary>
+    public static TestMongoDbClientFactory ReadingFromSecondaries(
+        string connectionString,
+        string databaseName
+    ) =>
+        new(
+            new MongoUrlBuilder(connectionString)
+            {
+                ReadPreference = ReadPreference.SecondaryPreferred,
+            }.ToString(),
+            databaseName
+        );
+
     public IMongoClient GetClient() => _client;
 
     public IMongoCollection<T> GetCollection<T>(string collection) =>
