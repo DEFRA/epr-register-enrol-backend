@@ -142,6 +142,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Services.Configure<AccreditationChangesConfig>(
             builder.Configuration.GetSection(AccreditationChangesConfig.SectionName)
         );
+        // RA-697: one-off backfill of the item id and status of change requests stored before RA-697.
+        // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+        builder.Services.Configure<ChangeRequestItemBackfillOptions>(
+            builder.Configuration.GetSection(ChangeRequestItemBackfillOptions.SectionName)
+        );
+        builder.Services.AddHostedService<ChangeRequestItemBackfill>();
     }
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
