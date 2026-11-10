@@ -23,6 +23,16 @@ public class OrganisationEntity
     public string? CompanyRegistrationNumber { get; set; }
     public string? CompaniesHouseNumber { get; set; }
     public PostalAddress? RegisteredAddress { get; set; }
+
+    /// <summary>
+    /// The registered address as one string. Legacy applications hold only this, and it cannot be reliably split back
+    /// into <see cref="RegisteredAddress"/>, so the migration and the read model both need it.
+    /// </summary>
+    public string? FormattedRegisteredAddress { get; set; }
+
+    /// <summary>True when the address came from ReEx's registered address, false when it fell back to its address.</summary>
+    public bool? IsUkRegisteredAddress { get; set; }
+
     public PostalAddress? Address { get; set; }
     public string? BusinessType { get; set; }
     public Partnership? Partnership { get; set; }
