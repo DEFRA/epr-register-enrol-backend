@@ -151,24 +151,74 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
             .Be(HttpStatusCode.NotFound);
     }
 
-    [Theory]
-    [InlineData(ApplicationStatus.Submitted, true)]
-    [InlineData(ApplicationStatus.Withdrawn, true)]
-    [InlineData(ApplicationStatus.Approved, false)]
-    public async Task Get_AccreditationNotGrantedOrNotExporter_Returns409(
-        ApplicationStatus status,
-        bool isExporter
-    )
+    private string SeedOtherAccreditation(ApplicationStatus status, bool isExporter)
     {
         var other = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
         other.Id = MongoDB.Bson.ObjectId.GenerateNewId();
         other.ApplicationStatus = status;
         other.IsExporter = isExporter;
         _factory.FakePersistence.Seed(other);
+        return $"/api/v1/accreditation-changes/{Org}/{other.Id}";
+    }
 
-        var response = await _client.GetAsync($"/api/v1/accreditation-changes/{Org}/{other.Id}", Ct);
+    [Theory]
+    [InlineData(ApplicationStatus.Submitted, true)]
+    [InlineData(ApplicationStatus.Withdrawn, true)]
+    [InlineData(ApplicationStatus.Submitted, false)]
+    public async Task Get_AccreditationNotGranted_Returns409(ApplicationStatus status, bool isExporter)
+    {
+        var response = await _client.GetAsync(SeedOtherAccreditation(status, isExporter), Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // RA-697: a reprocessor's change requests (tonnage band upgrades) are listed, but it has no
+    // overseas sites to change, and every write stays exporter-only.
+    [Fact]
+    public async Task GrantedReprocessor_GetListsItsRequestsWithNoSites_ButEveryWriteReturns409()
+    {
+        var reprocessor = SeedOtherAccreditation(ApplicationStatus.Approved, isExporter: false);
+        _factory.FakeChangeRequests.Seed(
+            new AccreditationChangeRequest
+            {
+                OrganisationId = Org,
+                ApplicationId = reprocessor.Split('/')[^1],
+                MaterialType = MaterialType.Plastic,
+                Year = Year,
+                ChangeType = AccreditationChangeRequest.UpgradeTonnageBandChangeType,
+                Status = ChangeRequestStatus.Submitted,
+                TonnageBandUpgrade = new TonnageBandUpgradeItem
+                {
+                    Status = ChangeItemStatus.Submitted,
+                    RequestedBand = PlannedTonnageBand.UpTo5000,
+                },
+            }
+        );
+
+        var get = await _client.GetAsync(reprocessor, Ct);
+
+        get.StatusCode.Should().Be(HttpStatusCode.OK);
+        var view = await ReadJson(get);
+        view.GetProperty("sites").GetArrayLength().Should().Be(0);
+        view.GetProperty("pendingOrsIds").GetArrayLength().Should().Be(0);
+        view.GetProperty("requests").EnumerateArray().Single()
+            .GetProperty("tonnageBandUpgrade").GetProperty("requestedBand").GetString()
+            .Should().Be("UpTo5000");
+        var current = $"{reprocessor}/requests/current";
+        (await _client.PostAsJsonAsync($"{current}/sites", new { siteId = 901910 }, Ct))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await _client.PatchAsJsonAsync($"{current}/sites/901910", new { conditionsOfExport = true }, Ct))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await _client.DeleteAsync($"{current}/sites/901910", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await _client.PostAsJsonAsync(
+                $"{current}/bes-evidence/initiate",
+                new { redirectUrl = "http://frontend/back", s3Bucket = "bucket", s3Path = "ors/901910" },
+                Ct
+            ))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await _client.PostAsJsonAsync($"{current}/submit", Declaration, Ct))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        _factory.FakeChangeRequests.All.Should().ContainSingle().Which.TonnageBandUpgrade.Should().NotBeNull();
     }
 
     // ---------------------------------------------------------------- AC01 / AC10 add sites
@@ -205,6 +255,29 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         charge.GetProperty("chargePerSitePence").GetInt32().Should().Be(32800);
         charge.GetProperty("totalPence").GetInt32().Should().Be(65600);
         _factory.FakeChangeRequests.All.Should().ContainSingle();
+    }
+
+    // RA-697: each site on a request is an item with its own id, type and status.
+    [Fact]
+    public async Task AddSite_EachSiteIsAnInProgressAddOverseasSiteItemWithItsOwnId()
+    {
+        await AddSite(901911);
+        var request = await ReadJson(await AddSite(901912));
+
+        var items = new[] { SiteIn(request, 901911), SiteIn(request, 901912) };
+        foreach (var item in items)
+        {
+            Guid.TryParse(item.GetProperty("itemId").GetString(), out _).Should().BeTrue();
+            item.GetProperty("changeType").GetString().Should().Be("add-overseas-site");
+            item.GetProperty("status").GetString().Should().Be("InProgress");
+            item.GetProperty("validFrom").ValueKind.Should().Be(JsonValueKind.Null);
+            item.GetProperty("withdrawnAt").ValueKind.Should().Be(JsonValueKind.Null);
+        }
+        items[0].GetProperty("itemId").GetString().Should().NotBe(items[1].GetProperty("itemId").GetString());
+        request.GetProperty("tonnageBandUpgrade").ValueKind.Should().Be(JsonValueKind.Null);
+        _factory.FakeChangeRequests.All.Single().Sites.Select(s => s.ItemId.ToString())
+            .Should()
+            .Equal(items.Select(i => i.GetProperty("itemId").GetString()));
     }
 
     [Fact]
@@ -517,6 +590,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.InProgress);
         stored.SubmittedBy.Should().BeNull();
+        stored.Sites.Single().Status.Should().Be(ChangeItemStatus.InProgress);
     }
 
     [Fact]
@@ -580,6 +654,25 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Submit_SetsEveryItemToSubmitted()
+    {
+        await AddSite(901910);
+        await AddSite(901912);
+        await Patch(901912, new { operationCodes = R3, conditionsOfExport = false });
+
+        var response = await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadJson(response)).GetProperty("sites").EnumerateArray()
+            .Select(s => s.GetProperty("status").GetString())
+            .Should()
+            .Equal("Submitted", "Submitted");
+        _factory.FakeChangeRequests.All.Single().Sites.Select(s => s.Status)
+            .Should()
+            .Equal(ChangeItemStatus.Submitted, ChangeItemStatus.Submitted);
+    }
+
+    [Fact]
     public async Task AddSite_SiteInASubmittedRequest_Returns409_ButOtherSitesStartANewDraft()
     {
         await SubmitCompleteRequestFor901910();
@@ -590,6 +683,277 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         next.StatusCode.Should().Be(HttpStatusCode.Created);
         _factory.FakeChangeRequests.All.Should().HaveCount(2);
         Strings((await Get()).GetProperty("pendingOrsIds")).Should().BeEquivalentTo("005", "007");
+    }
+
+    // ---------------------------------------------------------------- RA-697 items
+
+    private static readonly DateTime GrantedOn = new(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime WithdrawnOn = new(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private static ChangeRequestSite Item(int siteId, string orsId, ChangeItemStatus status) =>
+        new() { SiteId = siteId, OrsId = orsId, SiteName = $"Site {orsId}", Status = status };
+
+    // Statuses beyond Submitted are only ever seeded until Case Management decides items.
+    private AccreditationChangeRequest SeedSubmitted(
+        DateTime createdAt,
+        List<ChangeRequestSite> sites,
+        TonnageBandUpgradeItem? tonnage = null
+    )
+    {
+        var request = new AccreditationChangeRequest
+        {
+            OrganisationId = Org,
+            ApplicationId = AppId,
+            MaterialType = MaterialType.Plastic,
+            Year = Year,
+            ChangeType = tonnage is null
+                ? AccreditationChangeRequest.AddOverseasSiteChangeType
+                : AccreditationChangeRequest.UpgradeTonnageBandChangeType,
+            Status = ChangeRequestStatus.Submitted,
+            Sites = sites,
+            TonnageBandUpgrade = tonnage,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            SubmittedAt = createdAt,
+            SubmittedBy = new SubmittedByModel { FullName = "Jane Smith", JobTitle = "Director" },
+            CaseManagementReference = $"CHG-{createdAt:MMdd}",
+        };
+        _factory.FakeChangeRequests.Seed(request);
+        return request;
+    }
+
+    private static JsonElement RequestIn(JsonElement view, string requestId) =>
+        view.GetProperty("requests").EnumerateArray()
+            .Single(r => r.GetProperty("requestId").GetString() == requestId);
+
+    [Fact]
+    public async Task Get_ReturnsEachRequestsItemsWithTheirStatusAndValidity_AndTheTonnageItem()
+    {
+        var granted = Item(901910, "005", ChangeItemStatus.Approved);
+        granted.ValidFrom = GrantedOn;
+        var withdrawn = Item(901911, "006", ChangeItemStatus.Withdrawn);
+        withdrawn.ValidFrom = GrantedOn;
+        withdrawn.WithdrawnAt = WithdrawnOn;
+        var sites = SeedSubmitted(GrantedOn, [granted, withdrawn]);
+        var tonnage = SeedSubmitted(
+            WithdrawnOn,
+            [],
+            new TonnageBandUpgradeItem { Status = ChangeItemStatus.Queried, RequestedBand = PlannedTonnageBand.UpTo10000 }
+        );
+
+        var view = await Get();
+
+        var siteRequest = RequestIn(view, sites.RequestId);
+        siteRequest.GetProperty("caseManagementReference").GetString().Should().Be("CHG-0301");
+        siteRequest.GetProperty("submittedBy").GetProperty("fullName").GetString().Should().Be("Jane Smith");
+        siteRequest.GetProperty("submittedAt").GetDateTime().Should().Be(GrantedOn);
+        siteRequest.GetProperty("tonnageBandUpgrade").ValueKind.Should().Be(JsonValueKind.Null);
+        var grantedView = SiteIn(siteRequest, 901910);
+        grantedView.GetProperty("itemId").GetGuid().Should().Be(granted.ItemId);
+        grantedView.GetProperty("changeType").GetString().Should().Be("add-overseas-site");
+        grantedView.GetProperty("status").GetString().Should().Be("Approved");
+        grantedView.GetProperty("validFrom").GetDateTime().Should().Be(GrantedOn);
+        grantedView.GetProperty("withdrawnAt").ValueKind.Should().Be(JsonValueKind.Null);
+        var withdrawnView = SiteIn(siteRequest, 901911);
+        withdrawnView.GetProperty("status").GetString().Should().Be("Withdrawn");
+        withdrawnView.GetProperty("withdrawnAt").GetDateTime().Should().Be(WithdrawnOn);
+
+        var tonnageRequest = RequestIn(view, tonnage.RequestId);
+        tonnageRequest.GetProperty("changeType").GetString().Should().Be("upgrade-tonnage-band");
+        tonnageRequest.GetProperty("sites").GetArrayLength().Should().Be(0);
+        var item = tonnageRequest.GetProperty("tonnageBandUpgrade");
+        item.GetProperty("itemId").GetGuid().Should().Be(tonnage.TonnageBandUpgrade!.ItemId);
+        item.GetProperty("changeType").GetString().Should().Be("upgrade-tonnage-band");
+        item.GetProperty("status").GetString().Should().Be("Queried");
+        item.GetProperty("requestedBand").GetString().Should().Be("UpTo10000");
+        item.GetProperty("validFrom").ValueKind.Should().Be(JsonValueKind.Null);
+        item.GetProperty("withdrawnAt").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // A granted, refused or withdrawn item is history: the site is not pending and can be added again.
+    [Fact]
+    public async Task SiteWhoseItemsAreAllFinal_IsNotPendingAndCanBeAddedAgain()
+    {
+        SeedSubmitted(GrantedOn, [Item(901910, "005", ChangeItemStatus.Approved)]);
+        SeedSubmitted(WithdrawnOn, [Item(901910, "005", ChangeItemStatus.Rejected), Item(901912, "007", ChangeItemStatus.Withdrawn)]);
+
+        var view = await Get();
+
+        foreach (var siteId in new[] { 901910, 901912 })
+        {
+            var site = SiteIn(view, siteId);
+            site.GetProperty("pendingRequestId").ValueKind.Should().Be(JsonValueKind.Null);
+            site.GetProperty("pendingRequestStatus").ValueKind.Should().Be(JsonValueKind.Null);
+        }
+        view.GetProperty("pendingOrsIds").GetArrayLength().Should().Be(0);
+        (await AddSite(901910)).StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    // Pending comes from the request whose item for the site is still active, even when a newer
+    // request holds a final item for it; the value is that request's lifecycle status.
+    [Fact]
+    public async Task SiteWithAnActiveItemInASubmittedRequest_IsPendingAndCannotBeAdded()
+    {
+        var active = SeedSubmitted(GrantedOn, [Item(901910, "005", ChangeItemStatus.Queried)]);
+        SeedSubmitted(WithdrawnOn, [Item(901910, "005", ChangeItemStatus.Rejected)]);
+
+        var view = await Get();
+
+        var site = SiteIn(view, 901910);
+        site.GetProperty("pendingRequestId").GetString().Should().Be(active.RequestId);
+        site.GetProperty("pendingRequestStatus").GetString().Should().Be("Submitted");
+        Strings(view.GetProperty("pendingOrsIds")).Should().Equal("005");
+        (await AddSite(901910)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // ---------------------------------------------------------------- RA-697 registration-only requests
+
+    private static readonly string RegistrationId = DevExporterOrg.InYearChange.RegistrationId.ToString();
+
+    private AccreditationChangeRequest SeedRegistrationOnly(
+        DateTime createdAt,
+        List<ChangeRequestSite> sites,
+        ChangeRequestStatus status = ChangeRequestStatus.Submitted,
+        string? registrationId = null,
+        MaterialType material = MaterialType.Plastic,
+        int year = Year,
+        string? organisationId = null
+    )
+    {
+        var request = new AccreditationChangeRequest
+        {
+            OrganisationId = organisationId ?? Org,
+            ApplicationId = null,
+            RegistrationId = registrationId ?? RegistrationId,
+            MaterialType = material,
+            Year = year,
+            ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,
+            Status = status,
+            Sites = sites,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            SubmittedAt = status == ChangeRequestStatus.Submitted ? createdAt : null,
+        };
+        _factory.FakeChangeRequests.Seed(request);
+        return request;
+    }
+
+    private static ChangeRequestSite SubmittedIndiaItem() => Item(901911, "006", ChangeItemStatus.Submitted);
+
+    private static List<string> RequestIds(JsonElement view) =>
+        view.GetProperty("requests").EnumerateArray().Select(r => r.GetProperty("requestId").GetString()!).ToList();
+
+    [Fact]
+    public async Task Get_MergesThisRegistrationsCurrentYearRegistrationOnlyRequests_NewestFirst()
+    {
+        var oldest = SeedSubmitted(GrantedOn, [Item(901912, "007", ChangeItemStatus.Approved)]);
+        var registrationOnly = SeedRegistrationOnly(GrantedOn.AddDays(10), [SubmittedIndiaItem()]);
+        var newest = SeedSubmitted(WithdrawnOn, [Item(901912, "007", ChangeItemStatus.Rejected)]);
+        // Not this accreditation's registration, material, year or organisation.
+        SeedRegistrationOnly(GrantedOn, [SubmittedIndiaItem()], registrationId: "aaa000000000000000099999");
+        SeedRegistrationOnly(GrantedOn, [SubmittedIndiaItem()], material: MaterialType.Glass);
+        SeedRegistrationOnly(GrantedOn, [SubmittedIndiaItem()], year: Year - 1);
+        SeedRegistrationOnly(GrantedOn, [SubmittedIndiaItem()], organisationId: "99999");
+
+        var view = await Get();
+
+        RequestIds(view).Should().Equal(newest.RequestId, registrationOnly.RequestId, oldest.RequestId);
+        var merged = RequestIn(view, registrationOnly.RequestId);
+        merged.GetProperty("changeType").GetString().Should().Be("update-overseas-site");
+        SiteIn(merged, 901911).GetProperty("status").GetString().Should().Be("Submitted");
+    }
+
+    [Fact]
+    public async Task Get_RegistrationOnlyRequestCountsTowardsPendingStatus()
+    {
+        var registrationOnly = SeedRegistrationOnly(GrantedOn, [Item(901911, "006", ChangeItemStatus.Queried)]);
+
+        var view = await Get();
+
+        var site = SiteIn(view, 901911);
+        site.GetProperty("pendingRequestId").GetString().Should().Be(registrationOnly.RequestId);
+        site.GetProperty("pendingRequestStatus").GetString().Should().Be("Submitted");
+        Strings(view.GetProperty("pendingOrsIds")).Should().Equal("006");
+    }
+
+    // A registration-only item is keyed by its ORS id's integer value (6 for ORS 006), not the
+    // accreditation's site key (901911), so it is matched to the site by ORS id.
+    private static ChangeRequestSite RegistrationKeyedIndiaItem(ChangeItemStatus status) => Item(6, "006", status);
+
+    [Fact]
+    public async Task Get_RegistrationOnlyItemKeyedByOrsNumber_CountsTowardsTheSitesPendingStatus()
+    {
+        var registrationOnly = SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Queried)]);
+
+        var view = await Get();
+
+        var site = SiteIn(view, 901911);
+        site.GetProperty("pendingRequestId").GetString().Should().Be(registrationOnly.RequestId);
+        site.GetProperty("pendingRequestStatus").GetString().Should().Be("Submitted");
+    }
+
+    [Fact]
+    public async Task Get_RegistrationOnlyItemKeyedByOrsNumber_TakesItsEffectiveAnswersFromTheMatchingSite()
+    {
+        var registrationOnly = SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Submitted)]);
+
+        var view = await Get();
+
+        var country = SiteIn(view, 901911).GetProperty("site").GetProperty("country").GetString();
+        country.Should().NotBeNullOrWhiteSpace();
+        var item = SiteIn(RequestIn(view, registrationOnly.RequestId), 6);
+        item.GetProperty("effective").GetProperty("country").GetString().Should().Be(country);
+    }
+
+    // Only one change per ORS can be active at a time, whichever kind of request holds it.
+    [Fact]
+    public async Task AddSite_RegistrationOnlyRequestHoldsAnActiveItemForTheOrs_Conflicts()
+    {
+        SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Submitted)]);
+
+        (await AddSite(901911)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddSite_RegistrationOnlyDraftHoldsTheOrs_Conflicts()
+    {
+        SeedRegistrationOnly(
+            GrantedOn,
+            [RegistrationKeyedIndiaItem(ChangeItemStatus.InProgress)],
+            ChangeRequestStatus.InProgress
+        );
+
+        (await AddSite(901911)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task AddSite_RegistrationOnlyRequestsItemForTheOrsIsFinal_CanBeAdded()
+    {
+        SeedRegistrationOnly(GrantedOn, [RegistrationKeyedIndiaItem(ChangeItemStatus.Rejected)]);
+
+        (await AddSite(901911)).StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    // RA-492's journey and payment page act only on the accreditation's own draft.
+    [Fact]
+    public async Task Get_RegistrationOnlyDraft_NeverBecomesTheActiveRequest()
+    {
+        var registrationDraft = SeedRegistrationOnly(
+            WithdrawnOn,
+            [Item(901911, "006", ChangeItemStatus.InProgress)],
+            ChangeRequestStatus.InProgress
+        );
+
+        var before = await Get();
+        before.GetProperty("activeRequest").ValueKind.Should().Be(JsonValueKind.Null);
+        RequestIds(before).Should().Contain(registrationDraft.RequestId);
+
+        var added = await AddSite(901910);
+        added.StatusCode.Should().Be(HttpStatusCode.Created);
+        var draftId = (await ReadJson(added)).GetProperty("requestId").GetString();
+        draftId.Should().NotBe(registrationDraft.RequestId);
+        var after = await Get();
+        after.GetProperty("activeRequest").GetProperty("requestId").GetString().Should().Be(draftId);
     }
 }
 
@@ -744,6 +1108,41 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.PaymentReference.Should().BeNull();
         stored.ChargePence.Should().BeNull();
         stored.CaseManagementReference.Should().BeNull();
+        stored.Sites.Single().Status.Should().Be(ChangeItemStatus.InProgress);
+    }
+
+    // Another draft was started while the request was Submitted: the one-draft rule refuses the
+    // reopen, so the stored request and its items stay Submitted.
+    [Fact]
+    public async Task Submit_FlagOn_CaseManagementFailsAndTheReopenIsRefused_LeavesTheItemsSubmitted()
+    {
+        _factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns<CaseWorkingSubmissionResult>(_ =>
+            {
+                _factory.FakeChangeRequests.Seed(
+                    new AccreditationChangeRequest
+                    {
+                        OrganisationId = Org,
+                        ApplicationId = AppId,
+                        MaterialType = MaterialType.Plastic,
+                        Year = Year,
+                        Sites = [new ChangeRequestSite { SiteId = 901912, OrsId = "007", SiteName = "Other" }],
+                    }
+                );
+                throw new HttpRequestException("unavailable");
+            });
+
+        var response = await AddAndSubmit();
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        var stored = _factory.FakeChangeRequests.All.Single(r => r.Sites.Exists(s => s.SiteId == 901910));
+        stored.Status.Should().Be(ChangeRequestStatus.Submitted);
+        stored.Sites.Single().Status.Should().Be(ChangeItemStatus.Submitted);
     }
 
     // Reopened, the request is the draft again: its site is not pending a regulator decision, more

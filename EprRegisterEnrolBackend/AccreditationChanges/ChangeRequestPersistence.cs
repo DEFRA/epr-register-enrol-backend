@@ -1,3 +1,5 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Driver;
 
@@ -16,6 +18,18 @@ public interface IChangeRequestPersistence
     Task<List<AccreditationChangeRequest>> ListAsync(
         string organisationId,
         string applicationId,
+        CancellationToken ct = default
+    );
+
+    /// <summary>
+    /// RA-697: the registration-only requests (no accreditation) for the organisation, registration, material and
+    /// year, newest first.
+    /// </summary>
+    Task<List<AccreditationChangeRequest>> ListForRegistrationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        int year,
         CancellationToken ct = default
     );
 
@@ -74,6 +88,24 @@ public class ChangeRequestPersistence
     ) =>
         Collection
             .Find(ForAccreditation(organisationId, applicationId))
+            .SortByDescending(r => r.CreatedAt)
+            .ToListAsync(ct);
+
+    public Task<List<AccreditationChangeRequest>> ListForRegistrationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        int year,
+        CancellationToken ct = default
+    ) =>
+        Collection
+            .Find(
+                Filter.Eq(r => r.OrganisationId, organisationId)
+                    & Filter.Eq(r => r.RegistrationId, registrationId)
+                    & Filter.Eq(r => r.MaterialType, materialType)
+                    & Filter.Eq(r => r.Year, year)
+                    & Filter.Eq(r => r.ApplicationId, null)
+            )
             .SortByDescending(r => r.CreatedAt)
             .ToListAsync(ct);
 
@@ -149,17 +181,17 @@ public class ChangeRequestPersistence
         [
             // At most one draft per accreditation: "Add another request" (AC10) adds a site to
             // the same draft rather than opening a second one, so one declaration and one charge
-            // cover every site the operator is adding.
+            // cover every site the operator is adding. RA-697: only where there is an accreditation, so
+            // registration-only drafts (ApplicationId null) never collide; their own rule is their journey's.
             new(
                 builder.Ascending(r => r.OrganisationId).Ascending(r => r.ApplicationId),
                 new CreateIndexOptions<AccreditationChangeRequest>
                 {
                     Name = OneDraftIndexName,
                     Unique = true,
-                    PartialFilterExpression = Filter.Eq(
-                        r => r.Status,
-                        ChangeRequestStatus.InProgress
-                    ),
+                    PartialFilterExpression =
+                        Filter.Eq(r => r.Status, ChangeRequestStatus.InProgress)
+                        & VersionedIndexes.StringPresent<AccreditationChangeRequest>(r => r.ApplicationId),
                 }
             ),
             new(
@@ -168,6 +200,13 @@ public class ChangeRequestPersistence
                     .Ascending(r => r.ApplicationId)
                     .Descending(r => r.CreatedAt),
                 new CreateIndexOptions { Name = "by_accreditation_newest_first" }
+            ),
+            new(
+                builder
+                    .Ascending(r => r.OrganisationId)
+                    .Ascending(r => r.RegistrationId)
+                    .Descending(r => r.CreatedAt),
+                new CreateIndexOptions { Name = "by_registration_newest_first" }
             ),
         ];
 }

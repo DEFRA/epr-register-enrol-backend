@@ -77,7 +77,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         var org = orgResult.Value!;
 
         // Locate the registration matching the requested registrationId
-        var registration = org.Registrations.FirstOrDefault(r => r.Id == registrationId);
+        var registration = (org.Registrations ?? []).FirstOrDefault(r => r.Id == registrationId);
         if (registration is null)
         {
             logger.LogWarning(
@@ -447,6 +447,40 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         return ReExResult<int?>.Success(orgNumber, 200);
     }
 
+    public async Task<ReExResult<string?>> GetRegistrationHolderNameAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var orgResult = await reExClient.GetOrganisationsAsync(organisationId, cancellationToken);
+        if (!orgResult.IsSuccess)
+        {
+            logger.LogWarning(
+                "ReEx GetOrganisations failed for organisationId={OrganisationId}: {Error}",
+                organisationId,
+                orgResult.Error?.Message
+            );
+            return ReExResult<string?>.Fail(orgResult.Error!, orgResult.StatusCode);
+        }
+
+        var org = orgResult.Value!;
+        if (!(org.Registrations ?? []).Any(r => r.Id == registrationId))
+        {
+            logger.LogWarning(
+                "ReEx organisation {OrganisationId} does not hold registration {RegistrationId}",
+                organisationId,
+                registrationId
+            );
+            return ReExResult<string?>.Fail(
+                new ReExError(ReExErrorKind.NotFound, $"Registration {registrationId} not found"),
+                404
+            );
+        }
+
+        return ReExResult<string?>.Success(org.CompanyDetails?.Name, 200);
+    }
+
     public async Task<ReExResult<Nation>> GetNationAsync(
         string organisationId,
         string registrationId,
@@ -470,7 +504,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             return ReExResult<Nation>.Fail(orgResult.Error!, orgResult.StatusCode);
         }
 
-        var registration = orgResult.Value!.Registrations.FirstOrDefault(r =>
+        var registration = (orgResult.Value!.Registrations ?? []).FirstOrDefault(r =>
             r.Id == registrationId
         );
         if (registration is null)
@@ -630,34 +664,15 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
     // Postcode are deliberately not included: OverseasSiteModel has no fields for them and
     // neither does the frontend's own field set for a main (non-interim) overseas site.
     private static string? FormatSiteAddress(OverseasSiteAddressDto? addr) =>
-        addr is null
-            ? null
-            : string.Join(
-                ", ",
-                new[] { addr.Line1, addr.Line2, addr.TownOrCity }.Where(s =>
-                    !string.IsNullOrWhiteSpace(s)
-                )
-            );
+        addr is null ? null : AddressFormatting.Join(addr.Line1, addr.Line2, addr.TownOrCity);
 
     private static string? FormatAddress(SiteAddressDto? addr) =>
-        addr is null
-            ? null
-            : string.Join(
-                ", ",
-                new[] { addr.Line1, addr.Town, addr.Postcode }.Where(s =>
-                    !string.IsNullOrWhiteSpace(s)
-                )
-            );
+        addr is null ? null : AddressFormatting.Join(addr.Line1, addr.Town, addr.Postcode);
 
     private static string? FormatAddress(RegisteredAddressDto? addr) =>
         addr is null
             ? null
-            : string.Join(
-                ", ",
-                new[] { addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode }.Where(s =>
-                    !string.IsNullOrWhiteSpace(s)
-                )
-            );
+            : AddressFormatting.Join(addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode);
 
     // RA-526: "mappable" means at least one field is non-null/non-empty - an address object
     // with every field null or "" carries nothing worth mapping, and is treated the same as no

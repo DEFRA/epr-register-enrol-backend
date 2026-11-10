@@ -303,6 +303,32 @@ public class StubReExApiAdapter(
         return Task.FromResult(ReExResult<int?>.Success(orgNumber, 200));
     }
 
+    // RA-697: a fixture org's name, as GetAccreditationAsync gives it. An E2E test organisation has no
+    // fixture, so holds any registration, as GetAccreditationAsync assumes.
+    public async Task<ReExResult<string?>> GetRegistrationHolderNameAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
+            return ReExResult<string?>.Success($"E2E Organisation {organisationId}", 200);
+
+        var org = int.TryParse(organisationId, out var orgIdInt)
+            ? await fakeOrgs.GetByOrgIdAsync(orgIdInt)
+            : null;
+        if (org?.Registrations?.Any(r => r.Id.ToString() == registrationId) != true)
+            return ReExResult<string?>.Fail(
+                new ReExError(
+                    ReExErrorKind.NotFound,
+                    $"Organisation {organisationId} does not hold registration {registrationId}"
+                ),
+                404
+            );
+
+        return ReExResult<string?>.Success(org.CompanyDetails?.Name, 200);
+    }
+
     public async Task<ReExResult<Nation>> GetNationAsync(
         string organisationId,
         string registrationId,

@@ -142,6 +142,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Services.Configure<AccreditationChangesConfig>(
             builder.Configuration.GetSection(AccreditationChangesConfig.SectionName)
         );
+        // RA-697: one-off backfill of the item id and status of change requests stored before RA-697.
+        // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+        builder.Services.Configure<ChangeRequestItemBackfillOptions>(
+            builder.Configuration.GetSection(ChangeRequestItemBackfillOptions.SectionName)
+        );
+        builder.Services.AddHostedService<ChangeRequestItemBackfill>();
     }
     builder.Services.ConfigureHttpJsonOptions(options =>
         options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
@@ -159,6 +165,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // RA-425: the domain model's registration versions, readable whatever the Expand flag, for the
     // registration status endpoint and the dev seeds.
     builder.Services.AddRegistrationVersionStore();
+    // RA-697: and their ORS versions, for the registration-only change requests view and the dev seed.
+    builder.Services.AddOverseasSiteVersionStore();
 
     // RA-448: registration/accreditation number generation
     builder.Services.AddSingleton<
@@ -340,12 +348,15 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
         builder.Services.AddHostedService<DevRegistrationSeedService>();
     }
 
-    // RA-425: the dedicated exporters (orgs 50018 and, for RA-492, 50019). Also seedable on their own,
+    // RA-425: the dedicated exporters (orgs 50018, 50019 for RA-492 and 50020 to 50022 for RA-697). Also seedable on their own,
     // for the fe-tests stack, whose other specs must not see the Delta Green data above. The same check
     // decides whether the stub ReEx registry has the orgs (see ReExApiAdapterRegistration).
     if (DevExporterAccreditationSeedService.IsEnabled(builder.Configuration, builder.Environment))
     {
         builder.Services.AddHostedService<DevExporterAccreditationSeedService>();
+        // RA-697: their change requests, which need the in-year change store registered above.
+        if (builder.Configuration.GetValue<bool>(FeatureFlags.InYearChangesEnabledKey))
+            builder.Services.AddHostedService<DevChangeRequestSeedService>();
     }
 }
 
