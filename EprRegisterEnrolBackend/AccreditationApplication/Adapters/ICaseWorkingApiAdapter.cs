@@ -11,7 +11,8 @@ public interface ICaseWorkingApiAdapter
     );
 
     // RA-492: creates an add-overseas-site work item for a submitted in-year change request and
-    // returns ManagementBe's IYC-ORS-{yyyy}-{seq:D5} reference for it. Allowed to throw - the caller only marks the request Submitted once this succeeds.
+    // returns ManagementBe's IYC-ORS-{yyyy}-{seq:D5} reference for it. Allowed to throw - the
+    // caller only marks the request Submitted once this succeeds.
     Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,

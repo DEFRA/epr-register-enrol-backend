@@ -15,6 +15,9 @@ public class StubCaseWorkingApiAdapter(
     // RA-492: mirrors ManagementBe's in-year change reference, IYC-{code}-{yyyy}-{seq:D5}, where
     // the code names the change type. Unknown change types are rejected, as ManagementBe rejects
     // a work-item type it has not registered.
+    // ManagementBe is the source of truth for these codes: each work-item type declares its own
+    // InYearChangeCode (documented in its docs/work-items.md, "Application reference"). Adding
+    // a change type means adding its code there and here.
     private static readonly Dictionary<string, string> s_changeTypeCodes = new()
     {
         [AccreditationChangeRequest.AddOverseasSiteChangeType] = "ORS",

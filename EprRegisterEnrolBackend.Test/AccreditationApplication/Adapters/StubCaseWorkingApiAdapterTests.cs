@@ -335,6 +335,25 @@ public class StubCaseWorkingApiAdapterTests
         second2026.Reference.Should().Be("IYC-ORS-2026-00002");
     }
 
+    // The four-digit bounds are accepted as the year itself.
+    [Theory]
+    [InlineData(1000, "IYC-ORS-1000-00001")]
+    [InlineData(9999, "IYC-ORS-9999-00001")]
+    public async Task SubmitChangeRequestAsync_FourDigitYearBounds_UseTheRequestYear(
+        int year,
+        string expected
+    )
+    {
+        var sut = new StubCaseWorkingApiAdapter(
+            EnabledNullLogger<StubCaseWorkingApiAdapter>.Instance,
+            new FixedTimeProvider(new DateTimeOffset(2031, 6, 1, 0, 0, 0, TimeSpan.Zero))
+        );
+
+        var result = await SubmitChange(sut, CreateChangeRequest(year: year));
+
+        result.Reference.Should().Be(expected);
+    }
+
     // ManagementBe falls back to the current UTC year when accreditationYear is not a four-digit
     // year; the stub does the same.
     [Theory]
