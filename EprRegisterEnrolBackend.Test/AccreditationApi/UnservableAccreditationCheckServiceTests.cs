@@ -147,7 +147,7 @@ public class UnservableAccreditationCheckServiceTests
 
         await _persistence
             .DidNotReceiveWithAnyArgs()
-            .CountUnservableApprovedAsync(default, default);
+            .CountUnservableApprovedAsync(default, Ct);
         _logs.Entries.Should().BeEmpty();
     }
 
@@ -175,14 +175,15 @@ public class UnservableAccreditationCheckServiceTests
 
     // The reviewer's point: an exception out of a hosted service stops the whole backend, and a
     // mistyped setting makes Task.Delay or PeriodicTimer throw. A bad value is replaced instead.
-    public static IEnumerable<object[]> OutOfRangeSettings() =>
-        [
-            ["InitialDelay", TimeSpan.FromSeconds(-1), TimeSpan.FromDays(1)],
-            ["InitialDelay", TimeSpan.FromDays(2), TimeSpan.FromDays(1)],
-            ["Interval", TimeSpan.FromHours(1), TimeSpan.Zero],
-            ["Interval", TimeSpan.FromHours(1), TimeSpan.FromSeconds(-1)],
-            ["Interval", TimeSpan.FromHours(1), TimeSpan.FromDays(31)],
-        ];
+    public static TheoryData<string, TimeSpan, TimeSpan> OutOfRangeSettings() =>
+        new()
+        {
+            { "InitialDelay", TimeSpan.FromSeconds(-1), TimeSpan.FromDays(1) },
+            { "InitialDelay", TimeSpan.FromDays(2), TimeSpan.FromDays(1) },
+            { "Interval", TimeSpan.FromHours(1), TimeSpan.Zero },
+            { "Interval", TimeSpan.FromHours(1), TimeSpan.FromSeconds(-1) },
+            { "Interval", TimeSpan.FromHours(1), TimeSpan.FromDays(31) },
+        };
 
     [Theory]
     [MemberData(nameof(OutOfRangeSettings))]

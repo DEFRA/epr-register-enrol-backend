@@ -54,10 +54,14 @@ public sealed class UnservableAccreditationCheckService(
             var counts = await persistence.CountUnservableApprovedAsync(firstYear, cancellationToken);
             if (!counts.Any)
             {
-                logger.LogInformation(
-                    "Every approved accreditation from {FromYear} can be served by the accreditation API",
-                    firstYear
-                );
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "Every approved accreditation from {FromYear} can be served by the accreditation API",
+                        firstYear
+                    );
+                }
+
                 return;
             }
 

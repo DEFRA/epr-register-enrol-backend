@@ -25,6 +25,8 @@ public class UnservableApprovedCountTests : IDisposable
         _persistence = _factory.Services.GetRequiredService<IAccreditationApplicationPersistence>();
     }
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     public void Dispose()
     {
         _factory.Dispose();
@@ -62,7 +64,7 @@ public class UnservableApprovedCountTests : IDisposable
         await Add(registration: ""); // no registration number
         await Add(registration: null, accreditation: null); // neither registration nor accreditation number
 
-        var counts = await _persistence.CountUnservableApprovedAsync(2027);
+        var counts = await _persistence.CountUnservableApprovedAsync(2027, Ct);
 
         counts.Should().Be(new UnservableApprovedCounts(1, 2, 1));
         counts.Any.Should().BeTrue();
@@ -74,7 +76,7 @@ public class UnservableApprovedCountTests : IDisposable
     {
         await Add(registration: "   ", accreditation: "\t ");
 
-        var counts = await _persistence.CountUnservableApprovedAsync(2027);
+        var counts = await _persistence.CountUnservableApprovedAsync(2027, Ct);
 
         counts.Should().Be(new UnservableApprovedCounts(0, 1, 1));
     }
@@ -85,7 +87,7 @@ public class UnservableApprovedCountTests : IDisposable
         await Add(year: 2026, orgId: null, registration: null, accreditation: null);
         await Add(status: ApplicationStatus.Submitted, orgId: null, registration: null, accreditation: null);
 
-        var counts = await _persistence.CountUnservableApprovedAsync(2027);
+        var counts = await _persistence.CountUnservableApprovedAsync(2027, Ct);
 
         counts.Should().Be(new UnservableApprovedCounts(0, 0, 0));
         counts.Any.Should().BeFalse();
@@ -94,7 +96,7 @@ public class UnservableApprovedCountTests : IDisposable
     [Fact]
     public async Task WithNothingStored_IsAllZero()
     {
-        (await _persistence.CountUnservableApprovedAsync(2027)).Any.Should().BeFalse();
+        (await _persistence.CountUnservableApprovedAsync(2027, Ct)).Any.Should().BeFalse();
     }
 
     [Fact]
