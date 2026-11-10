@@ -20,6 +20,8 @@ namespace EprRegisterEnrolBackend.Test.Registrations;
 // material dashboard pages. Driven through the real host and auth pipeline (outside Development,
 // where the Frontend scheme's bypass would hide a missing gate), against a real ephemeral Mongo,
 // with the domain model's Expand flag both off and on. Mapped only with FeatureFlags:InYearChangesEnabled.
+// Outside Development that flag needs DomainModel:DualWrite, which needs Expand, so the Expand-off runs
+// use Development: the only place in-year changes can run without dual-write.
 public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixture)
 {
     private const string FrontendSecret = "integration-frontend-secret";
@@ -31,11 +33,15 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private EphemeralMongoTestFactory Factory(bool expandEnabled, bool inYearChangesEnabled = true) =>
+    private EphemeralMongoTestFactory Factory(
+        bool expandEnabled,
+        bool inYearChangesEnabled = true,
+        bool? dualWrite = null
+    ) =>
         new(
             fixture,
             "registration_status",
-            Environments.Production,
+            expandEnabled ? Environments.Production : Environments.Development,
             new Dictionary<string, string?>
             {
                 ["AUTH_SHARED_SECRET:FRONTEND"] = FrontendSecret,
@@ -44,6 +50,7 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
                 // RA-697: the organisation name comes from the stub ReEx registry's org 50003.
                 ["ReExApi:UseStub"] = "true",
                 ["DomainModel:ExpandEnabled"] = expandEnabled ? "true" : "false",
+                ["DomainModel:DualWrite"] = (dualWrite ?? expandEnabled) ? "true" : "false",
                 [FeatureFlags.InYearChangesEnabledKey] = inYearChangesEnabled ? "true" : "false",
             }
         );
@@ -325,6 +332,20 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
         var response = await client.GetAsync(HeldStatusPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // On CDP only dual-write fills the domain model these routes read, so without it the host refuses to
+    // start rather than serve empty pages.
+    [Fact]
+    public void InYearChangesWithoutDualWrite_RefusesToStart()
+    {
+        using var factory = Factory(expandEnabled: true, dualWrite: false);
+
+        var act = () => factory.CreateClient();
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("FeatureFlags:InYearChangesEnabled needs DomainModel:DualWrite*");
     }
 
     [Fact]
