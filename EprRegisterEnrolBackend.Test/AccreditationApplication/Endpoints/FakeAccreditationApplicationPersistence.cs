@@ -198,7 +198,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                     && a.Year == year
                     && a.Year >= firstYear
                     && a.ApplicationStatus == ApplicationStatus.Approved
-                    && !string.IsNullOrEmpty(a.AccreditationReference)
+                    && !string.IsNullOrWhiteSpace(a.AccreditationReference)
                 )
                 .OrderByDescending(a => a.DateLastEdited)
                 .FirstOrDefault()
@@ -217,7 +217,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         var matches = _store
             .Where(a =>
                 a.OrgId is not null
-                && !string.IsNullOrEmpty(a.RegistrationReference)
+                && !string.IsNullOrWhiteSpace(a.RegistrationReference)
                 && a.Year >= firstYear
                 && (filter.Year is null || a.Year == filter.Year)
                 && (filter.OrganisationNumber is null || a.OrgId == filter.OrganisationNumber)
@@ -226,12 +226,29 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                     || a.RegistrationReference == filter.RegistrationNumber
                 )
                 && a.ApplicationStatus == ApplicationStatus.Approved
-                && !string.IsNullOrEmpty(a.AccreditationReference)
+                && !string.IsNullOrWhiteSpace(a.AccreditationReference)
             )
             .OrderBy(a => a.AccreditationReference, StringComparer.Ordinal)
             .ToList();
         return Task.FromResult<(IReadOnlyList<AccreditationApplicationModel>, long)>(
             (matches.Skip(skip).Take(limit).ToList(), matches.Count)
+        );
+    }
+
+    public Task<UnservableApprovedCounts> CountUnservableApprovedAsync(
+        int firstYear,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var approved = _store
+            .Where(a => a.ApplicationStatus == ApplicationStatus.Approved && a.Year >= firstYear)
+            .ToList();
+        return Task.FromResult(
+            new UnservableApprovedCounts(
+                approved.Count(a => a.OrgId is null),
+                approved.Count(a => string.IsNullOrWhiteSpace(a.RegistrationReference)),
+                approved.Count(a => string.IsNullOrWhiteSpace(a.AccreditationReference))
+            )
         );
     }
 

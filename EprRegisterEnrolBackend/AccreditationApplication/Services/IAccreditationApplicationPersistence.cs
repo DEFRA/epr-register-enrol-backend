@@ -100,6 +100,16 @@ public interface IAccreditationApplicationPersistence
         int limit
     );
 
+    /// <summary>
+    /// How many approved applications from <paramref name="firstYear"/> on cannot be served by the
+    /// accreditation API, by reason: no organisation, registration or accreditation number. Counts
+    /// only, so nothing about an application leaves the database. Read-only.
+    /// </summary>
+    Task<UnservableApprovedCounts> CountUnservableApprovedAsync(
+        int firstYear,
+        CancellationToken cancellationToken = default
+    );
+
     Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
         string registrationId,
         IClientSessionHandle? session = null

@@ -211,8 +211,7 @@ public class AccreditationApplicationPersistence(
             filters.Eq(a => a.Year, year),
             filters.Gte(a => a.Year, firstYear),
             filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
-            filters.Ne(a => a.AccreditationReference, null),
-            filters.Ne(a => a.AccreditationReference, string.Empty)
+            HasReference(a => a.AccreditationReference)
         );
 
         return await Collection
@@ -236,10 +235,8 @@ public class AccreditationApplicationPersistence(
             filters.Ne(a => a.OrgId, null),
             filters.Gte(a => a.Year, firstYear),
             filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
-            filters.Ne(a => a.AccreditationReference, null),
-            filters.Ne(a => a.AccreditationReference, string.Empty),
-            filters.Ne(a => a.RegistrationReference, null),
-            filters.Ne(a => a.RegistrationReference, string.Empty)
+            HasReference(a => a.AccreditationReference),
+            HasReference(a => a.RegistrationReference)
         );
         if (filter.Year is not null)
             granted = filters.And(granted, filters.Eq(a => a.Year, filter.Year.Value));
@@ -265,6 +262,56 @@ public class AccreditationApplicationPersistence(
             .ToListAsync();
         return (items, total);
     }
+
+    public async Task<UnservableApprovedCounts> CountUnservableApprovedAsync(
+        int firstYear,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        var approved = filters.And(
+            filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
+            filters.Gte(a => a.Year, firstYear)
+        );
+
+        // One count per reason. A daily check, so three round trips are cheaper than a facet
+        // pipeline that would have to be kept in step with the filters the API serves by.
+        async Task<int> Count(FilterDefinition<AccreditationApplicationModel> reason) =>
+            (int)
+                await Collection.CountDocumentsAsync(
+                    filters.And(approved, reason),
+                    cancellationToken: cancellationToken
+                );
+
+        return new UnservableApprovedCounts(
+            await Count(filters.Eq(a => a.OrgId, null)),
+            await Count(IsBlank(a => a.RegistrationReference)),
+            await Count(IsBlank(a => a.AccreditationReference))
+        );
+    }
+
+    // RA-651: a reference is missing when it is null, empty or only whitespace. This is the one
+    // rule the API's search, its lookup and the count of what it cannot serve all share, and it is
+    // the same one AccreditationApiMapper applies when it drops a record.
+    private static readonly BsonRegularExpression BlankPattern = new("^\\s*$");
+
+    private static FilterDefinition<AccreditationApplicationModel> IsBlank(
+        Expression<Func<AccreditationApplicationModel, string?>> reference
+    )
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        return filters.Or(
+            filters.Eq(reference, null),
+            filters.Regex(
+                new ExpressionFieldDefinition<AccreditationApplicationModel, string?>(reference),
+                BlankPattern
+            )
+        );
+    }
+
+    private static FilterDefinition<AccreditationApplicationModel> HasReference(
+        Expression<Func<AccreditationApplicationModel, string?>> reference
+    ) => Builders<AccreditationApplicationModel>.Filter.Not(IsBlank(reference));
 
     public async Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,

@@ -200,6 +200,12 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<AccreditationApiTestDataSeeder>();
     builder.Services.AddHostedService<AccreditationApiTestDataSeedingService>();
 
+    // RA-651: logs, at Error, any approved accreditation the accreditation API cannot serve.
+    builder.Services.Configure<AccreditationApiMonitoringConfig>(
+        builder.Configuration.GetSection(AccreditationApiMonitoringConfig.SectionName)
+    );
+    builder.Services.AddHostedService<UnservableAccreditationCheckService>();
+
     // CDP Uploader
     builder.Services.Configure<CdpUploaderConfig>(builder.Configuration.GetSection("CdpUploader"));
     builder.Services.Configure<AppConfig>(builder.Configuration.GetSection("App"));
