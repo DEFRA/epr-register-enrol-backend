@@ -51,6 +51,8 @@ public sealed class ServiceClientAccessLogFilter(ILoggerFactory loggerFactory) :
         // is deliberately named ElapsedMilliseconds: the ECS log formatter writes a property of
         // that name as event.duration (in nanoseconds), one of the few numeric fields CDP keeps in
         // OpenSearch. Any other name would be dropped, and a latency panel or alert could not use it.
+        // The text still reads durationMs=, kept so the message does not change; anyone searching for
+        // ElapsedMilliseconds will not find that label in the message, only the field event.duration.
         http.Response.OnCompleted(() =>
         {
             _logger.LogInformation(

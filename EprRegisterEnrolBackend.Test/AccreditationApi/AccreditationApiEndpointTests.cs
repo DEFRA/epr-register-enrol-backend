@@ -726,6 +726,25 @@ public class AccreditationApiEndpointTests : IDisposable
             .Equal("A27EX5000270012AL");
     }
 
+    // RA-651: a whitespace-only number is as unaddressable as a missing one, and the mapper, the
+    // count of what cannot be served and the query all treat it that way.
+    [Fact]
+    public async Task Search_LeavesOutARecordWhoseNumbersAreOnlyWhitespace()
+    {
+        await Seed(accreditation: "A27EX5000270012AL");
+        await Seed(accreditation: "A27EX5000270098AL", configure: a => a.RegistrationReference = "  ");
+        await Seed(accreditation: "  ", registration: "R27EX5000270014AL");
+
+        var body = await Json(await Get("/v1/accreditations"));
+
+        body.GetProperty("totalItems").GetInt32().Should().Be(1);
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("accreditationNumber").GetString())
+            .Should()
+            .Equal("A27EX5000270012AL");
+    }
+
     [Fact]
     public async Task Search_IsPaged()
     {

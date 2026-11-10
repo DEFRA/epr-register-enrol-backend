@@ -11,10 +11,20 @@ public class AccreditationApiMonitoringConfig
     /// <summary>Switches the check off, for a host that must not query the database.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>How long after start-up the first check waits, so it never delays start-up.</summary>
-    public TimeSpan InitialDelay { get; set; } = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan DefaultInitialDelay = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan DefaultInterval = TimeSpan.FromDays(1);
 
-    public TimeSpan Interval { get; set; } = TimeSpan.FromDays(1);
+    /// <summary>
+    /// How long after start-up the first check waits, so it never delays start-up. From zero to one
+    /// day; anything else is ignored with a warning and the default is used.
+    /// </summary>
+    public TimeSpan InitialDelay { get; set; } = DefaultInitialDelay;
+
+    /// <summary>
+    /// How often the check runs. Above zero and at most 30 days; anything else is ignored with a
+    /// warning and the default is used.
+    /// </summary>
+    public TimeSpan Interval { get; set; } = DefaultInterval;
 }
 
 /// <summary>
@@ -33,12 +43,15 @@ public sealed class UnservableAccreditationCheckService(
     ILogger<UnservableAccreditationCheckService> logger
 ) : BackgroundService
 {
-    public async Task RunOnceAsync()
+    private static readonly TimeSpan MaxInitialDelay = TimeSpan.FromDays(1);
+    private static readonly TimeSpan MaxInterval = TimeSpan.FromDays(30);
+
+    public async Task RunOnceAsync(CancellationToken cancellationToken = default)
     {
         var firstYear = clients.Value.FirstAccreditationYear;
         try
         {
-            var counts = await persistence.CountUnservableApprovedAsync(firstYear);
+            var counts = await persistence.CountUnservableApprovedAsync(firstYear, cancellationToken);
             if (!counts.Any)
             {
                 logger.LogInformation(
@@ -56,6 +69,10 @@ public sealed class UnservableAccreditationCheckService(
                 firstYear
             );
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Host is shutting down: a count cut short is not a failure to report.
+        }
         catch (Exception ex)
         {
             // Not an Error: failing to check is not itself a data problem, and the next run retries.
@@ -72,18 +89,48 @@ public sealed class UnservableAccreditationCheckService(
         if (!settings.Enabled)
             return;
 
+        // A mistyped setting must not stop the host: a negative or huge delay makes Task.Delay
+        // throw, and a zero, negative or huge interval makes PeriodicTimer throw, and an exception
+        // out of a hosted service stops the whole backend. So a bad value is replaced, with a warning.
+        var initialDelay = Valid(
+            settings.InitialDelay,
+            settings.InitialDelay >= TimeSpan.Zero && settings.InitialDelay <= MaxInitialDelay,
+            nameof(settings.InitialDelay),
+            AccreditationApiMonitoringConfig.DefaultInitialDelay
+        );
+        var interval = Valid(
+            settings.Interval,
+            settings.Interval > TimeSpan.Zero && settings.Interval <= MaxInterval,
+            nameof(settings.Interval),
+            AccreditationApiMonitoringConfig.DefaultInterval
+        );
+
         try
         {
-            await Task.Delay(settings.InitialDelay, stoppingToken);
-            using var timer = new PeriodicTimer(settings.Interval);
+            await Task.Delay(initialDelay, stoppingToken);
+            using var timer = new PeriodicTimer(interval);
             do
             {
-                await RunOnceAsync();
+                await RunOnceAsync(stoppingToken);
             } while (await timer.WaitForNextTickAsync(stoppingToken));
         }
         catch (OperationCanceledException)
         {
             // Host is shutting down.
         }
+    }
+
+    private TimeSpan Valid(TimeSpan value, bool isValid, string setting, TimeSpan fallback)
+    {
+        if (isValid)
+            return value;
+
+        logger.LogWarning(
+            "Ignoring AccreditationApiMonitoring:{Setting} {Value}, which is out of range; using {Default}",
+            setting,
+            value,
+            fallback
+        );
+        return fallback;
     }
 }

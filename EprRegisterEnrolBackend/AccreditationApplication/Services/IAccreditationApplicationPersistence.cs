@@ -105,7 +105,10 @@ public interface IAccreditationApplicationPersistence
     /// accreditation API, by reason: no organisation, registration or accreditation number. Counts
     /// only, so nothing about an application leaves the database. Read-only.
     /// </summary>
-    Task<UnservableApprovedCounts> CountUnservableApprovedAsync(int firstYear);
+    Task<UnservableApprovedCounts> CountUnservableApprovedAsync(
+        int firstYear,
+        CancellationToken cancellationToken = default
+    );
 
     Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
         string registrationId,

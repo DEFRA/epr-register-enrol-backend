@@ -41,6 +41,7 @@ or status field of our own. The client name is also partly masked in the message
 | A record dropped from a response | `EprRegisterEnrolBackend.AccreditationApi` | warning | message starts `Dropped a malformed accreditation from the response:` with the application id and the reason |
 | The unservable-records check found records | `EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService` | **error** | message `Approved accreditations the accreditation API cannot serve: noOrganisationNumber=N noRegistrationNumber=N noAccreditationNumber=N fromYear=2027` |
 | The check found nothing | same | info | message `Every approved accreditation from 2027 can be served...` |
+| The check itself failed (for example the database was unreachable) | same | warning | message starts `Checking for approved accreditations the accreditation API cannot serve failed`. This is **not** a data problem, and the next run retries, so keep it out of the "cannot serve" alert; it shares the logger and the words "cannot serve" with the error line |
 
 Auth failure codes: `missing_header`, `invalid_signature`, `expired_timestamp`, `reused_nonce` and
 the others in `docs/reex-api-onboarding.md`. They appear in the message text.
@@ -69,8 +70,12 @@ once a day, and logs the counts only, never anything about an application.
 - Any finding is logged at **error**, so the existing `5xx and Errors` alert reports it with no new
   rule. A repeat of the same finding each day is intended: the data is still wrong.
 - The counts are in the message text. An application missing two numbers is counted under both.
-- It runs on every instance, so expect one line per instance per run.
-- Settings, under `AccreditationApiMonitoring`: `Enabled` (default `true`), `InitialDelay`
+- It runs on every instance, so expect one Error line per instance per run.
+- If the count cannot run (for example the database is unreachable) it logs a **warning**, not the
+  error, so that does not read as a data problem. A setting out of range is replaced by its default
+  with a warning, and never stops the host.
+- Settings, under `AccreditationApiMonitoring` (the defaults are in `appsettings.json`; to switch the
+  check off set the environment variable `AccreditationApiMonitoring__Enabled=false`): `Enabled` (default `true`), `InitialDelay`
   (default 30 seconds) and `Interval` (default 1 day). A failure to count is a warning, not an
   error, and the next run retries.
 - A clean environment has no start-up error (see RA-733).
@@ -114,7 +119,8 @@ Queries in Lucene, using only fields CDP keeps. Check them in Explore first.
 | One auth failure code | add `AND message:"invalid_signature"` (or `expired_timestamp`, `reused_nonce`, `missing_header`) |
 | Auth failures for one client | add `AND message:"epr-ReEx-Client"` |
 | A record dropped from a response | `log.logger:"EprRegisterEnrolBackend.AccreditationApi" AND message:"Dropped a malformed accreditation"` |
-| Records the API cannot serve | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND message:"cannot serve"` |
+| Records the API cannot serve | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND message:"noOrganisationNumber"` (the counts are only in the error line, so this does not match the failure warning; add `AND log.level:error` once you have confirmed the exact value) |
+| The check failed to run | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND message:"Checking for approved accreditations"` |
 
 ## Dashboard: one row per consumer
 
