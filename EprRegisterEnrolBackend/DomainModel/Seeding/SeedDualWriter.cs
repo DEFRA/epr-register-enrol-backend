@@ -103,6 +103,7 @@ public sealed class SeedDualWriter(
         var conflicts = new List<MigrationConflict>();
         foreach (var site in seed.ReEx.OverseasSites)
         {
+            WarnIfApprovalDateUnreadable(seed, site);
             // ReEx keys its sites by orsId, so it is always set; a site without one has no key to upsert on.
             if (string.IsNullOrWhiteSpace(site.OrsId) || siteIds.ContainsKey(site.OrsId))
             {
@@ -214,6 +215,22 @@ public sealed class SeedDualWriter(
         );
         var replaced = oldNumber != result.Entity.RegistrationNumber ? oldNumber : null;
         return (result.Entity, replaced);
+    }
+
+    // One bad value must not fail a seed: the site just has no first approved date.
+    private void WarnIfApprovalDateUnreadable(SeedDualWrite seed, OverseasSiteModel site)
+    {
+        if (
+            !string.IsNullOrWhiteSpace(site.ValidFrom)
+            && SiteApprovalDate.Parse(site.ValidFrom) is null
+        )
+        {
+            logger.LogWarning(
+                "Seed dual-write could not read a site's approval date: registration {ReExRegistrationId}, site {OrsId}",
+                seed.ReExRegistrationId,
+                site.OrsId
+            );
+        }
     }
 
     private async Task<ObjectId> UpsertOverseasSiteAsync(

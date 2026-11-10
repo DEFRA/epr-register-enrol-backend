@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
@@ -17,8 +18,6 @@ public class DomainModelDiagnosticsService(
     ILogger<DomainModelDiagnosticsService> logger
 ) : BackgroundService
 {
-    private const string LegacyCollection = "accreditationApplications";
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Yield so host startup is never held up by anything below.
@@ -36,7 +35,9 @@ public class DomainModelDiagnosticsService(
 
         try
         {
-            var database = mongo.GetCollection<BsonDocument>(LegacyCollection).Database;
+            var database = mongo
+                .GetCollection<BsonDocument>(DomainModelCollections.LegacyApplications)
+                .Database;
 
             var smoke = await TransactionSmokeTest.RunAsync(database, cancellationToken);
             if (smoke.Supported)
@@ -54,7 +55,7 @@ public class DomainModelDiagnosticsService(
             }
 
             var report = await LegacyDataSurvey.RunAsync(
-                database.GetCollection<BsonDocument>(LegacyCollection),
+                database.GetCollection<BsonDocument>(DomainModelCollections.LegacyApplications),
                 cancellationToken
             );
             logger.LogInformation("DomainModelDiagnostics survey {Report}", report.ToLogLine());

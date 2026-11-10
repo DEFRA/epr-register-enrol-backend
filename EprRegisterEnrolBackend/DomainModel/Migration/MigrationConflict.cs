@@ -62,4 +62,10 @@ public enum MigrationConflictKind
 
     /// <summary>A seed's ReEx details differ from an accredited ORS, which a seed never changes.</summary>
     ReExDetailsDiffer,
+
+    /// <summary>An application holds a different name, Companies House number, address, contact or permit list from the one copy the Organisation or Registration keeps.</summary>
+    SeededDetailsDiffer,
+
+    /// <summary>Applications' copies of a site held different ReEx approval dates; the ORS keeps the earliest.</summary>
+    SiteApprovalDatesDiffer,
 }

@@ -3,6 +3,8 @@ using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
+using EprRegisterEnrolBackend.DomainModel.Reconciliation;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -25,6 +27,8 @@ public static class DomainModelServiceCollectionExtensions
         var config = section.Get<DomainModelConfig>() ?? new DomainModelConfig();
         RequireExpand(config.DualWriteSeed, "DualWriteSeed", config);
         RequireExpand(config.DualWrite, "DualWrite", config);
+        RequireDualWrite(config.MigrateEnabled, "MigrateEnabled", config);
+        RequireDualWrite(config.ReconcileEnabled, "ReconcileEnabled", config);
 
         services.Configure<DomainModelConfig>(section);
         services.AddHostedService<DomainModelDiagnosticsService>();
@@ -36,6 +40,8 @@ public static class DomainModelServiceCollectionExtensions
 
         AddSeedDualWrite(services, config.DualWriteSeed);
         AddDualWrite(services, config.DualWrite);
+        AddMigration(services, config.MigrateEnabled);
+        AddReconciliation(services, config.ReconcileEnabled);
 
         return services;
     }
@@ -98,6 +104,45 @@ public static class DomainModelServiceCollectionExtensions
         services.AddSingleton<IModelInterimSiteNumbers, ModelInterimSiteNumbers>();
         services.AddSingleton<IRegistrationNumberRules, RegistrationNumberRules>();
         services.AddSingleton<IDualWriteUnitOfWork, DualWriteUnitOfWork>();
+    }
+
+    // Phase 4: the background migration, and the readiness signal that shows a group it could not migrate.
+    private static void AddMigration(IServiceCollection services, bool enabled)
+    {
+        if (!enabled)
+        {
+            return;
+        }
+
+        services.AddSingleton<DomainModelMigrationPersistence>();
+        services.AddSingleton<IDomainModelMigrationStatus, DomainModelMigrationStatus>();
+        services
+            .AddHealthChecks()
+            .AddCheck<DomainModelMigrationHealthCheck>("domain-model-migration", tags: ["ready"]);
+        services.AddHostedService<DomainModelMigrationService>();
+    }
+
+    // Phase 4: the projection the reads will switch to, and the report comparing it with the legacy documents.
+    private static void AddReconciliation(IServiceCollection services, bool enabled)
+    {
+        if (!enabled)
+        {
+            return;
+        }
+
+        services.AddSingleton<ApplicationReadModel>();
+        services.AddSingleton<ApplicationReconciler>();
+        services.AddHostedService<DomainModelReconciliationService>();
+    }
+
+    private static void RequireDualWrite(bool flag, string name, DomainModelConfig config)
+    {
+        if (flag && !config.DualWrite)
+        {
+            throw new InvalidOperationException(
+                $"DomainModel:{name} needs DomainModel:DualWrite: without it a migrated application goes stale."
+            );
+        }
     }
 
     private static void RequireExpand(bool flag, string name, DomainModelConfig config)

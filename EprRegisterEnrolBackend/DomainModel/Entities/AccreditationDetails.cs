@@ -36,6 +36,15 @@ public sealed class AccreditationDetails : ApplicationDetails
 
     public string? ReservedAccreditationNumber { get; set; }
 
+    /// <summary>Numbers this application held before <see cref="ReservedAccreditationNumber"/>.</summary>
+    public List<string> PreviousReservedAccreditationNumbers { get; set; } = [];
+
+    /// <summary>ReEx's id for the prior-year accreditation this was seeded from. Copied to the Accreditation at approval.</summary>
+    public string? SourceReExAccreditationId { get; set; }
+
+    /// <summary>The year of the ReEx data this application was seeded from.</summary>
+    public int? SeedDataSourceYear { get; set; }
+
     /// <summary>Set when the application is approved: the Accreditation it created.</summary>
     public ObjectId? AccreditationId { get; set; }
 

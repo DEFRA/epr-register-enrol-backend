@@ -38,6 +38,7 @@ public class RegistrationEntity : VersionedEntityBase
     public Nation? Nation { get; set; }
 
     public RegistrationSite? Site { get; set; }
+    public List<string> PermitNumbers { get; set; } = [];
     public PostalAddress? NoticeAddress { get; set; }
     public ContactPerson? ContactDetails { get; set; }
     public ContactPerson? SubmitterContactDetails { get; set; }

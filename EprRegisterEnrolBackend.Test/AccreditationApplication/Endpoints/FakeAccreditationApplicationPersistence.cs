@@ -307,6 +307,19 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         return Task.FromResult(stored is null ? null : ShallowCopy(stored));
     }
 
+    public Task<AccreditationApplicationModel?> GetNewestForOrganisationAsync(
+        string organisationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult(
+            _store
+                .Where(a => a.OrganisationId == organisationId)
+                .OrderByDescending(a => a.UpdatedAt)
+                .Select(ShallowCopy)
+                .FirstOrDefault()
+        );
+
     public Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
         string organisationId,
         string registrationId,

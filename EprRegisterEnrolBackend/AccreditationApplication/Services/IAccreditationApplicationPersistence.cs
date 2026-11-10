@@ -152,6 +152,16 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
+    /// The organisation's most recently updated application, across all its registrations, holding only the organisation
+    /// details. Only those fields are read, so one old document elsewhere cannot fail the caller. Null when it has none.
+    /// </summary>
+    Task<AccreditationApplicationModel?> GetNewestForOrganisationAsync(
+        string organisationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// Every application under one ReEx registration of one organisation (the domain model's registration group,
     /// design doc §6.2), up to <paramref name="limit"/> of them, so a caller can tell a group that is too big.
     /// </summary>
