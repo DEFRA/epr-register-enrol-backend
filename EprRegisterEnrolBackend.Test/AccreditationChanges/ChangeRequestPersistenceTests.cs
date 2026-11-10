@@ -57,6 +57,44 @@ public sealed class ChangeRequestPersistenceTests : IDisposable
         (await _persistence.InsertAsync(NewRequest(), Ct)).Should().BeFalse();
     }
 
+    // RA-697: a database deployed before RA-697 holds the one-draft index by the same name with the old filter
+    // (InProgress only), so registration-only drafts would collide on a null ApplicationId. Starting up must
+    // replace it (Mongo's IndexOptionsConflict, code 85, reconciled by dropping and recreating).
+    [Fact]
+    public async Task Startup_ReplacesThePreRa697OneDraftIndex()
+    {
+        var indexes = _factory
+            .GetCollection<MongoDB.Bson.BsonDocument>(ChangeRequestPersistence.CollectionName)
+            .Indexes;
+        async Task<MongoDB.Bson.BsonDocument> OneDraftIndex() =>
+            (await (await indexes.ListAsync(Ct)).ToListAsync(Ct)).Single(index =>
+                index["name"] == ChangeRequestPersistence.OneDraftIndexName
+            );
+        var current = await OneDraftIndex();
+        await indexes.DropOneAsync(ChangeRequestPersistence.OneDraftIndexName, Ct);
+        await indexes.CreateOneAsync(
+            new CreateIndexModel<MongoDB.Bson.BsonDocument>(
+                Builders<MongoDB.Bson.BsonDocument>.IndexKeys.Ascending("organisationId").Ascending("applicationId"),
+                new CreateIndexOptions<MongoDB.Bson.BsonDocument>
+                {
+                    Name = ChangeRequestPersistence.OneDraftIndexName,
+                    Unique = true,
+                    PartialFilterExpression = new MongoDB.Bson.BsonDocument("status", "InProgress"),
+                }
+            ),
+            cancellationToken: Ct
+        );
+        (await OneDraftIndex())["partialFilterExpression"].AsBsonDocument.Contains("applicationId").Should().BeFalse();
+
+        var persistence = new ChangeRequestPersistence(_factory, NullLoggerFactory.Instance);
+
+        var reconciled = await OneDraftIndex();
+        reconciled["partialFilterExpression"].Should().Be(current["partialFilterExpression"]);
+        reconciled["partialFilterExpression"].AsBsonDocument.Contains("applicationId").Should().BeTrue();
+        (await persistence.InsertAsync(NewRequest(applicationId: null), Ct)).Should().BeTrue();
+        (await persistence.InsertAsync(NewRequest(applicationId: null), Ct)).Should().BeTrue();
+    }
+
     // RA-697: by organisation, registration, material and year, without an accreditation's requests.
     [Fact]
     public async Task ListForRegistrationAsync_ListsOnlyThatRegistrationsRegistrationOnlyRequestsForTheYear_NewestFirst()
