@@ -41,7 +41,40 @@ public class OverseasSiteEntity : VersionedEntityBase
 
     public ObjectId? ProposedByApplicationId { get; set; }
 
+    /// <summary>
+    /// When this site was first approved for the customer, which may be many years before this version. Written once
+    /// and never overwritten. Not the versioning <c>validFrom</c>, which is when this version was recorded.
+    /// </summary>
+    public DateTime? FirstApprovedAt { get; set; }
+
+    /// <summary>Where <see cref="FirstApprovedAt"/> came from. Only ReEx's date was ever on the legacy application.</summary>
+    [BsonRepresentation(BsonType.String)]
+    public FirstApprovalSource? FirstApprovalSource { get; set; }
+
     public List<InterimSiteEntry> InterimSites { get; set; } = [];
+
+    /// <summary>Sets the first approved date unless the site already has one: it is written once and never overwritten.</summary>
+    public void RecordFirstApproval(DateTime at, FirstApprovalSource source)
+    {
+        if (FirstApprovedAt is null)
+        {
+            FirstApprovedAt = at;
+            FirstApprovalSource = source;
+        }
+    }
+
+    /// <summary>
+    /// For a version being built from a legacy site, which sets the date that site holds: an earlier or better one
+    /// replaces it before the version is saved. Does nothing when there is none.
+    /// </summary>
+    public void AdoptFirstApproval(DateTime? at, FirstApprovalSource? source)
+    {
+        if (at is not null)
+        {
+            FirstApprovedAt = at;
+            FirstApprovalSource = source;
+        }
+    }
 
     /// <summary>
     /// Site numbers that appear more than once in this ORS's own <see cref="InterimSites"/>. The unique index

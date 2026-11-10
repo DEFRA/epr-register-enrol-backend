@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.ReEx;
+using EprRegisterEnrolBackend.ReEx.Dtos;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
@@ -90,6 +91,9 @@ public class ReExAccreditationDto
 
     public string? CompanyRegisterAddressPostcode { get; set; }
     public string? CompanyRegisteredAddress { get; set; }
+
+    // The address CompanyRegisteredAddress was flattened from, for the domain model.
+    public RegisteredAddressDto? CompanyAddress { get; set; }
 
     // RA-526: true when CompanyRegisteredAddress was mapped from CompanyDetails.RegisteredAddress
     // (the proper UK registered-office address); false when it fell back to CompanyDetails.Address.

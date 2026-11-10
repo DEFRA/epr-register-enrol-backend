@@ -1,6 +1,7 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -177,9 +178,29 @@ public sealed class ApplicationGroupMigrator(
 
         public async Task ExecuteAsync()
         {
+            // The organisation spans registration groups, and the walk reaches the oldest first, so its details come
+            // from its newest application anywhere, not from whichever group got here first.
+            var newestInOrganisation =
+                await applications.GetNewestForOrganisationAsync(
+                    Newest.OrganisationId,
+                    session,
+                    cancellationToken
+                ) ?? Newest;
             var organisationId = await stores.Organisations.GetOrCreateAsync(
                 Newest.OrganisationId,
-                NewOrganisation,
+                () => NewOrganisation(newestInOrganisation),
+                session,
+                cancellationToken
+            );
+            await stores.Organisations.FillMissingCompanyDetailsAsync(
+                organisationId,
+                NewOrganisation(newestInOrganisation),
+                session,
+                cancellationToken
+            );
+            var organisation = await stores.Organisations.FillMissingCompanyDetailsAsync(
+                organisationId,
+                NewOrganisation(Newest),
                 session,
                 cancellationToken
             );
@@ -194,6 +215,7 @@ public sealed class ApplicationGroupMigrator(
                 RecordDuplicateLiveApplications();
             }
 
+            RecordSeededDetailDifferences(organisation);
             foreach (var application in pending)
             {
                 await InsertApplicationVersionAsync(application);
@@ -205,16 +227,114 @@ public sealed class ApplicationGroupMigrator(
 
         // --- step 1: Organisation and Registration -------------------------------------------------------------------
 
-        private OrganisationEntity NewOrganisation() =>
+        private OrganisationEntity NewOrganisation(AccreditationApplicationModel source) =>
             new()
             {
-                ReExOrganisationId = Newest.OrganisationId,
-                Name = Newest.OrganisationName,
-                OrganisationNumber = Newest.OrgId,
-                CompaniesHouseNumber = Newest.CompaniesHouseNumber,
+                ReExOrganisationId = source.OrganisationId,
+                Name = source.OrganisationName,
+                OrganisationNumber = source.OrgId,
+                CompaniesHouseNumber = source.CompaniesHouseNumber,
+                FormattedRegisteredAddress = NullIfBlank(source.CompanyRegisteredAddress),
+                RegisteredAddress = NullIfBlank(source.CompanyRegisterAddressPostcode)
+                    is { } postcode
+                    ? new PostalAddress { Postcode = postcode }
+                    : null,
+                IsUkRegisteredAddress = source.IsUkRegisteredAddress,
+                SubmitterContactDetails = source.SubmitterContactDetails is { } contact
+                    ? new ContactPerson
+                    {
+                        FullName = contact.FullName,
+                        Email = contact.Email,
+                        Phone = contact.Phone,
+                        JobTitle = contact.JobTitle,
+                    }
+                    : null,
                 Source = new EntitySource { EnrichmentPending = true, ImportedAt = now },
                 UpdatedAt = now,
             };
+
+        private static string? NullIfBlank(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? null : value;
+
+        // The Organisation and Registration keep one copy, but each application took its own at seed time, so one can
+        // differ. An application holding nothing has nothing to disagree with.
+        private void RecordSeededDetailDifferences(OrganisationEntity organisation)
+        {
+            var differing = pending
+                .Where(a => DiffersFrom(a, organisation) || DiffersFrom(a, _registration))
+                .Select(a => a.Id!.Value)
+                .ToList();
+            if (differing.Count > 0)
+            {
+                Conflicts.Add(Conflict(MigrationConflictKind.SeededDetailsDiffer, differing));
+            }
+        }
+
+        private static bool DiffersFrom(
+            AccreditationApplicationModel application,
+            OrganisationEntity organisation
+        ) =>
+            // An application from before a company rename holds the old name or number; the newest one's is kept.
+            Differs(application.OrganisationName, organisation.Name)
+            || Differs(application.CompaniesHouseNumber, organisation.CompaniesHouseNumber)
+            || Differs(
+                application.CompanyRegisteredAddress,
+                organisation.FormattedRegisteredAddress
+            )
+            || Differs(
+                application.CompanyRegisterAddressPostcode,
+                organisation.RegisteredAddress?.Postcode
+            )
+            || (
+                organisation.IsUkRegisteredAddress is { } isUk
+                && !string.IsNullOrWhiteSpace(application.CompanyRegisteredAddress)
+                && isUk != application.IsUkRegisteredAddress
+            )
+            || Differs(
+                application.SubmitterContactDetails?.FullName,
+                organisation.SubmitterContactDetails?.FullName
+            )
+            || Differs(
+                application.SubmitterContactDetails?.Email,
+                organisation.SubmitterContactDetails?.Email
+            )
+            || Differs(
+                application.SubmitterContactDetails?.Phone,
+                organisation.SubmitterContactDetails?.Phone
+            )
+            || Differs(
+                application.SubmitterContactDetails?.JobTitle,
+                organisation.SubmitterContactDetails?.JobTitle
+            );
+
+        private static bool DiffersFrom(
+            AccreditationApplicationModel application,
+            RegistrationEntity? registration
+        ) =>
+            registration is not null
+            && (
+                Differs(application.SiteAddress, registration.Site?.FormattedAddress)
+                || (
+                    application.PermitNumbers.Count > 0
+                    && !application.PermitNumbers.SequenceEqual(registration.PermitNumbers)
+                )
+            );
+
+        private static bool Differs(string? held, string? kept) =>
+            !string.IsNullOrWhiteSpace(held) && held != kept;
+
+        // A registration seeded before these were copied has none, so the newest application's fills it in.
+        private RegistrationSite? WithSiteAddress(RegistrationSite? site)
+        {
+            if (site?.FormattedAddress is not null || NullIfBlank(Newest.SiteAddress) is null)
+            {
+                return site;
+            }
+
+            site ??= new RegistrationSite();
+            site.FormattedAddress = Newest.SiteAddress;
+            return site;
+        }
 
         private async Task<RegistrationEntity> EnsureRegistrationAsync(
             ObjectId organisationId,
@@ -248,6 +368,12 @@ public sealed class ApplicationGroupMigrator(
                 // Keep everything the seed copied from ReEx; only fill in the number it did not have and the older
                 // numbers the applications hold. A no-op, writing no version, when there are none to add.
                 current.RegistrationNumber ??= winner?.RegistrationReference;
+                current.Site = WithSiteAddress(current.Site);
+                if (current.PermitNumbers.Count == 0)
+                {
+                    current.PermitNumbers = [.. Newest.PermitNumbers];
+                }
+
                 current.PreviousRegistrationNumbers = OlderNumbers(
                     current.RegistrationNumber,
                     current.PreviousRegistrationNumbers
@@ -290,6 +416,8 @@ public sealed class ApplicationGroupMigrator(
                 ReExRegistrationId = reExRegistrationId,
                 RegistrationNumber = numberWinner?.RegistrationReference,
                 PreviousRegistrationNumbers = OlderNumbers(numberWinner?.RegistrationReference, []),
+                PermitNumbers = [.. Newest.PermitNumbers],
+                Site = WithSiteAddress(null),
                 Material = Newest.MaterialType,
                 Nation = Newest.Nation,
                 GlassRecyclingProcess = Newest.GlassRecyclingProcess,
@@ -384,6 +512,7 @@ public sealed class ApplicationGroupMigrator(
             {
                 await SaveSiteAsync(registrationId, plan);
                 RecordSiteDifferences(plan);
+                RecordApprovalDateDifferences(plan);
             }
         }
 
@@ -535,12 +664,20 @@ public sealed class ApplicationGroupMigrator(
                 plan.OrsId
             );
             var winner = plan.Holdings[0];
+            var firstApproval = FirstApproval(plan);
             if (plan.Existing is { } existing)
             {
+                var fillsFirstApproved =
+                    existing.FirstApprovedAt is null && firstApproval is not null;
+                if (firstApproval is { } approval)
+                {
+                    existing.RecordFirstApproval(approval.At, approval.Source);
+                }
+
                 // The newest approval wins over details the seed copied from ReEx, when it is being migrated now. One
                 // already migrated applied its details when it was approved, and an older one must not replace them.
                 plan.WinnerApplied = winner.Accredits && _pendingIds.Contains(winner.ApplicationId);
-                if (plan.WinnerApplied || plan.NewInterimSites.Count > 0)
+                if (plan.WinnerApplied || plan.NewInterimSites.Count > 0 || fillsFirstApproved)
                 {
                     existing.InterimSites.AddRange(plan.NewInterimSites);
                     plan.Saved = (
@@ -570,7 +707,33 @@ public sealed class ApplicationGroupMigrator(
             site.ProposedByApplicationId =
                 site.Origin == SiteOrigin.Operator ? winner.ApplicationId : null;
             site.InterimSites = plan.NewInterimSites;
+            site.AdoptFirstApproval(firstApproval?.At, firstApproval?.Source);
             plan.Saved = await versions.InsertAsync(site, change, session, cancellationToken);
+        }
+
+        // ReEx's earliest date for the site whenever any application holds one, because only that goes back out as
+        // validFrom. Otherwise the earliest approval here, for a site ReEx has no date for.
+        private static (DateTime At, FirstApprovalSource Source)? FirstApproval(SitePlan plan) =>
+            plan
+                .Holdings.Select(ApprovalOf)
+                .Where(approval => approval is not null)
+                // Spelt out rather than ordering by the enum, so reordering FirstApprovalSource can't change the winner.
+                .OrderBy(approval => approval!.Value.Source == FirstApprovalSource.ReEx ? 0 : 1)
+                .ThenBy(approval => approval!.Value.At)
+                .FirstOrDefault();
+
+        private static (DateTime At, FirstApprovalSource Source)? ApprovalOf(Holding holding)
+        {
+            if (SiteApprovalDate.Parse(holding.Site.ValidFrom) is { } fromReEx)
+            {
+                return (fromReEx, FirstApprovalSource.ReEx);
+            }
+
+            return
+                holding.Accredits
+                && holding.Application.CaseManagementStatusUpdatedAt is { } approvedHere
+                ? (approvedHere, FirstApprovalSource.ThisService)
+                : null;
         }
 
         // Where an application's copy of a site differs from the ORS: an in-flight application keeps its version as
@@ -609,6 +772,37 @@ public sealed class ApplicationGroupMigrator(
                         losers.Distinct().ToList(),
                         fromWinner ? plan.Holdings[0].ApplicationId : null,
                         plan.OrsId
+                    )
+                );
+            }
+        }
+
+        // The ORS keeps one ReEx date and serves it to every application, so an application whose copy of the site held
+        // a different one would show validFrom as a difference with nothing to explain it.
+        // When the ORS's date isn't ReEx's (a site approved here that a later seed brought back with a ReEx date), it
+        // serves no validFrom at all, so every copy holding a ReEx date differs.
+        private void RecordApprovalDateDifferences(SitePlan plan)
+        {
+            var ors = plan.Saved ?? plan.Existing!;
+            DateTime? served =
+                ors.FirstApprovalSource == FirstApprovalSource.ReEx ? ors.FirstApprovedAt : null;
+
+            var differing = plan
+                .Holdings.Where(h =>
+                    _pendingIds.Contains(h.ApplicationId)
+                    && SiteApprovalDate.Parse(h.Site.ValidFrom) is { } held
+                    && held != served
+                )
+                .Select(h => h.ApplicationId)
+                .Distinct()
+                .ToList();
+            if (differing.Count > 0)
+            {
+                Conflicts.Add(
+                    Conflict(
+                        MigrationConflictKind.SiteApprovalDatesDiffer,
+                        differing,
+                        orsId: plan.OrsId
                     )
                 );
             }

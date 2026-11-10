@@ -40,6 +40,8 @@ public static class LegacySiteMapper
         next.Status = current.Status;
         next.Origin = current.Origin;
         next.ProposedByApplicationId = current.ProposedByApplicationId;
+        next.AdoptFirstApproval(current.FirstApprovedAt, current.FirstApprovalSource);
+
         next.InterimSites = current.InterimSites;
         next.Coordinates ??= current.Coordinates;
         return next;
@@ -124,7 +126,7 @@ public static class LegacySiteMapper
     public static bool IsThreeDigitNumber(string? siteNumber) =>
         siteNumber is { Length: 3 } && siteNumber.All(char.IsAsciiDigit);
 
-    private static BsonDocument Details(OverseasSiteEntity site) =>
+    internal static BsonDocument Details(OverseasSiteEntity site) =>
         new()
         {
             { "siteName", Value(site.SiteName) },
@@ -144,7 +146,7 @@ public static class LegacySiteMapper
             },
         };
 
-    private static BsonDocument InterimDetails(InterimSiteEntry site) =>
+    internal static BsonDocument InterimDetails(InterimSiteEntry site) =>
         new()
         {
             { "siteName", Value(site.SiteName) },

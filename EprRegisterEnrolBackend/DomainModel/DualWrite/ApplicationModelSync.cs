@@ -539,6 +539,11 @@ public sealed class ApplicationModelSync(
                 }
 
                 var approved = LegacySiteMapper.WithDetailsOf(ors, site);
+                approved.RecordFirstApproval(
+                    clockAndLogger.Clock.GetUtcNow().UtcDateTime,
+                    FirstApprovalSource.ThisService
+                );
+
                 if (approved.Status != OverseasSiteStatus.Active)
                 {
                     OverseasSiteTransitions.Registered.EnsureCanTransition(
