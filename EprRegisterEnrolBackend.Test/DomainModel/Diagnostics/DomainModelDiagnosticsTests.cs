@@ -19,6 +19,7 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private readonly TestMongoDbClientFactory _factory;
+    private readonly TestMongoDbClientFactory _readingFromSecondaries;
     private readonly string _databaseName;
     private readonly IMongoCollection<BsonDocument> _applications;
 
@@ -26,6 +27,10 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("diagnostics");
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
+        _readingFromSecondaries = TestMongoDbClientFactory.ReadingFromSecondaries(
+            fixture.ConnectionString,
+            _databaseName
+        );
         _applications = _factory.GetCollection<BsonDocument>("accreditationApplications");
     }
 
@@ -52,6 +57,20 @@ public sealed class DomainModelDiagnosticsTests : IDisposable
         new("sites", new BsonArray(sites));
 
     // ---- B0
+
+    // The smoke test reads inside a transaction, as the dual-writes do, so a connection string that reads from
+    // secondaries fails it unless the transaction reads from the primary.
+    [Fact]
+    public async Task SmokeTest_ClientReadsFromSecondaries_Passes()
+    {
+        var result = await TransactionSmokeTest.RunAsync(
+            _readingFromSecondaries.GetCollection<BsonDocument>("x").Database,
+            Ct
+        );
+
+        result.Supported.Should().BeTrue();
+        result.ErrorKind.Should().BeNull();
+    }
 
     [Fact]
     public async Task SmokeTest_ReplicaSet_PassesAndLeavesNothingBehind()

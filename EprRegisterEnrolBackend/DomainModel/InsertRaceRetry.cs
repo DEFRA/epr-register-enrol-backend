@@ -32,7 +32,8 @@ internal static class InsertRaceRetry
             {
                 return await session.WithTransactionAsync(
                     work,
-                    cancellationToken: cancellationToken
+                    DomainModelTransactions.Options,
+                    cancellationToken
                 );
             }
             catch (MongoException ex) when (attempt < MaxAttempts && MongoErrors.IsDuplicateKey(ex))
