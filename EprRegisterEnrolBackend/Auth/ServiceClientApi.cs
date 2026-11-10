@@ -47,11 +47,16 @@ public sealed class ServiceClientAccessLogFilter(ILoggerFactory loggerFactory) :
             new Dictionary<string, object> { ["ClientId"] = clientId, ["ClientName"] = clientName }
         );
 
-        // The status is only known once the response has been written, so log then.
+        // The status is only known once the response has been written, so log then. The duration
+        // is deliberately named ElapsedMilliseconds: the ECS log formatter writes a property of
+        // that name as event.duration (in nanoseconds), one of the few numeric fields CDP keeps in
+        // OpenSearch. Any other name would be dropped, and a latency panel or alert could not use it.
+        // The text still reads durationMs=, kept so the message does not change; anyone searching for
+        // ElapsedMilliseconds will not find that label in the message, only the field event.duration.
         http.Response.OnCompleted(() =>
         {
             _logger.LogInformation(
-                "Service client request: clientId={ClientId} clientName={ClientName} method={Method} route={Route} organisationNumber={OrganisationNumber} registrationNumber={RegistrationNumber} year={Year} status={Status} durationMs={DurationMs}",
+                "Service client request: clientId={ClientId} clientName={ClientName} method={Method} route={Route} organisationNumber={OrganisationNumber} registrationNumber={RegistrationNumber} year={Year} status={Status} durationMs={ElapsedMilliseconds}",
                 clientId,
                 clientName,
                 http.Request.Method,

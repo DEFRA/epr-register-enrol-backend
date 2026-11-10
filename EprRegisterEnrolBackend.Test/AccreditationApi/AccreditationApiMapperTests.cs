@@ -145,6 +145,26 @@ public class AccreditationApiMapperTests
             );
     }
 
+    // The fields an operator searches the logs by when a record is dropped (RA-651).
+    [Fact]
+    public void ToSummaries_LogsADroppedRecordWithItsIdAndReason_AsStructuredFields()
+    {
+        var malformed = Application(configure: a => a.RegistrationReference = null);
+        malformed.Id = ObjectId.GenerateNewId();
+        var logs = new CapturingLoggerFactory();
+
+        AccreditationApiMapper.ToSummaries(
+            [malformed],
+            DateTimeOffset.UtcNow,
+            logs.CreateLogger("EprRegisterEnrolBackend.AccreditationApi")
+        );
+
+        var entry = logs.Entries.Should().ContainSingle().Subject;
+        entry.LogLevel.Should().Be(LogLevel.Warning);
+        entry.Properties["ApplicationId"].Should().Be(malformed.Id);
+        entry.Properties["Reason"].Should().Be("no registration number");
+    }
+
     private static string Dropped(AccreditationApplicationModel application, string reason) =>
         $"Dropped a malformed accreditation from the response: applicationId={application.Id} reason={reason}";
 
