@@ -742,6 +742,10 @@ public static class AccreditationChangeEndpoints
             // Whatever went wrong, the request goes back to InProgress, so its sites are not held
             // by a request the regulator never received. Only Case Management's own failures are
             // a 503; anything else is a defect and goes to the exception handler.
+            // RA-492: a timeout reopens the request too. ManagementBe replays on operatorRequestId,
+            // so a resubmit returns the original work item even if the sites were edited in
+            // between. Locking a request whose outcome is unknown is deferred to the Case
+            // Management service in-year change story.
             await ReopenAsync(draft, services, logger);
             if (
                 ex
@@ -763,7 +767,7 @@ public static class AccreditationChangeEndpoints
             );
         }
 
-        draft.CaseManagementReference = result.ApplicationReference;
+        draft.CaseManagementReference = result.CaseReference;
         draft.CaseManagementWorkItemId = result.WorkItemId;
         // Nothing else writes a Submitted request, so this only fails if the store does; the
         // submission itself has succeeded either way.
@@ -771,7 +775,7 @@ public static class AccreditationChangeEndpoints
             logger.LogError(
                 "Change request {RequestId} was sent to Case Management as {Reference} but the reference was not saved",
                 draft.RequestId,
-                result.ApplicationReference
+                result.CaseReference
             );
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
     }

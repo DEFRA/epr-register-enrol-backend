@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Net;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationChanges;
 
@@ -7,6 +9,30 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger)
     : ICaseWorkingApiAdapter
 {
+    // RA-492: mirrors ManagementBe's in-year change reference, IYC-{code}-{yyyy}-{seq:D5}, where
+    // the code names the change type. Unknown change types are rejected, as ManagementBe rejects
+    // a work-item type it has not registered.
+    // ManagementBe is the source of truth for these codes: each work-item type declares its own
+    // InYearChangeCode (documented in its docs/work-items.md, "Application reference"). Adding
+    // a change type means adding its code there and here.
+    private static readonly Dictionary<string, string> s_changeTypeCodes = new()
+    {
+        [AccreditationChangeRequest.AddOverseasSiteChangeType] = "ORS",
+    };
+
+    // Stub only: ManagementBe owns the real sequence, per change code per year. This in-process
+    // counter is thread-safe but restarts at 00000 with the app and is not shared between
+    // instances. One adapter is registered as a singleton.
+    private readonly ConcurrentDictionary<(string Code, int Year), long> _changeSequences = new();
+
+    // The sequence segment is always five digits (RA-492): the counter keeps
+    // increasing, and the reference shows it modulo 100000, so 99999 is followed by 00000.
+    private const long ChangeSequenceModulus = 100_000;
+
+    // ManagementBe accepts only a whole four-digit accreditation year.
+    private const int MinChangeYear = 1000;
+    private const int MaxChangeYear = 9999;
+
     // RA-318: mirrors ManagementBe's ApplicationReferenceGenerator format so local/dev
     // testing sees realistic references — there is no real ManagementBe to call here, so
     // the stub must fabricate one itself rather than leaving it to a downstream service.
@@ -74,7 +100,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     )
     {
         var workItemId = Guid.NewGuid();
-        var reference = GenerateReference(accreditation);
+        var reference = GenerateChangeReference(changeRequest);
 
         if (logger.IsEnabled(LogLevel.Information))
         {
@@ -171,6 +197,39 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
 
         return Task.CompletedTask;
     }
+
+    private string GenerateChangeReference(AccreditationChangeRequest changeRequest)
+    {
+        if (!s_changeTypeCodes.TryGetValue(changeRequest.ChangeType, out var code))
+        {
+            throw new InvalidOperationException(
+                $"No in-year change reference code for change type '{changeRequest.ChangeType}'."
+            );
+        }
+
+        // The accreditation year is always present on a change request (RA-492), so there is no
+        // fallback. A year that is not four digits is refused with a 400, as ManagementBe
+        // refuses it. Numbering starts at 00000.
+        if (changeRequest.Year is < MinChangeYear or > MaxChangeYear)
+        {
+            throw new HttpRequestException(
+                $"ManagementBe work item submission failed: {(int)HttpStatusCode.BadRequest} (accreditation year {changeRequest.Year} is not a four-digit year)",
+                null,
+                HttpStatusCode.BadRequest
+            );
+        }
+
+        var sequence = _changeSequences.AddOrUpdate(
+            (code, changeRequest.Year),
+            0,
+            (_, current) => current + 1
+        );
+
+        return FormatChangeReference(code, changeRequest.Year, sequence);
+    }
+
+    internal static string FormatChangeReference(string code, int year, long sequence) =>
+        $"IYC-{code}-{year:D4}-{sequence % ChangeSequenceModulus:D5}";
 
     // RA-503: mirrors the org segment fix applied to ManagementBe's real ApplicationReferenceGenerator
     // - uses the numeric, operator/regulator-safe OrgId (e.g. 500500) rather than OrganisationId

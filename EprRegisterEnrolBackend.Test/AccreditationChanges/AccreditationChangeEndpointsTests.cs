@@ -1005,14 +1005,14 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(new CaseWorkingSubmissionResult("CHG-1", workItemId));
+            .Returns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", workItemId));
 
         var response = await AddAndSubmit();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
-        stored.CaseManagementReference.Should().Be("CHG-1");
+        stored.CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
         stored.CaseManagementWorkItemId.Should().Be(workItemId);
         await _factory.MockCaseWorkingAdapter.Received(1).SubmitChangeRequestAsync(
             Arg.Is<AccreditationChangeRequest>(r =>
@@ -1056,7 +1056,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
             .Returns(_ =>
             {
                 storedWhenCalled = _factory.FakeChangeRequests.All.Single().Status;
-                return new CaseWorkingSubmissionResult("CHG-1", Guid.NewGuid());
+                return new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid());
             });
 
         (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -1067,7 +1067,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     [Fact]
     public async Task Submit_FlagOn_LostRace_Returns409AndNeverCallsCaseManagement()
     {
-        CaseManagementReturns(new CaseWorkingSubmissionResult("CHG-1", Guid.NewGuid()));
+        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid()));
         await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
         _factory.FakeChangeRequests.LoseUpdateWhen = r => r.Status == ChangeRequestStatus.Submitted;
 
@@ -1168,7 +1168,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         );
 
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
-        CaseManagementReturns(new CaseWorkingSubmissionResult("CHG-2", Guid.NewGuid()));
+        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00002", Guid.NewGuid()));
         (await _client.PostAsJsonAsync(
                 $"{Base}/requests/current/submit",
                 new { fullName = "Jane Smith", jobTitle = "Director" },
@@ -1181,7 +1181,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
         stored.Sites.Should().HaveCount(2);
         stored.ChargePence.Should().Be(65600);
-        stored.CaseManagementReference.Should().Be("CHG-2");
+        stored.CaseManagementReference.Should().Be("IYC-ORS-2026-00002");
     }
 
     // Not a Case Management failure: the request is still reopened, but the error is not dressed up
@@ -1201,7 +1201,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     [Fact]
     public async Task Submit_FlagOn_ReferenceNotSaved_StillSubmitted()
     {
-        CaseManagementReturns(new CaseWorkingSubmissionResult("CHG-1", Guid.NewGuid()));
+        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid()));
         _factory.FakeChangeRequests.LoseUpdateWhen = r => r.CaseManagementReference is not null;
 
         var response = await AddAndSubmit();
