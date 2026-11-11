@@ -24,7 +24,7 @@ public class OrganisationPersistence(
     /// organisation has none, such as one a seed wrote before it had them. What it already holds is left alone.
     /// Returns the organisation as stored.
     /// </summary>
-    public async Task<OrganisationEntity> FillMissingCompanyDetailsAsync(
+    public async Task<OrganisationEntity> FillMissingDetailsAsync(
         ObjectId organisationId,
         OrganisationEntity values,
         IClientSessionHandle session,
@@ -59,11 +59,7 @@ public class OrganisationPersistence(
             stored.SubmitterContactDetails = values.SubmitterContactDetails;
         }
 
-        var fillNumber = stored.OrganisationNumber is null && values.OrganisationNumber is not null;
-        if (fillNumber)
-        {
-            stored.OrganisationNumber = values.OrganisationNumber;
-        }
+        var fillNumber = stored.FillOrganisationNumber(values.OrganisationNumber);
 
         if (fillAddress || fillPostcode || fillSubmitter || fillNumber)
         {
@@ -79,22 +75,36 @@ public class OrganisationPersistence(
     }
 
     /// <summary>
-    /// Sets the organisation number of the organisation with <paramref name="reExOrganisationId"/> only while it has
-    /// none. ReEx's number for an organisation doesn't change, so one already held is never overwritten.
+    /// Gives the organisation with <paramref name="reExOrganisationId"/> its organisation number by
+    /// <see cref="OrganisationEntity.FillOrganisationNumber"/>, so only while it has none. A number another
+    /// organisation already holds fails on the unique index: two organisations sharing one is a data error to surface,
+    /// never to work around.
     /// </summary>
-    public Task FillMissingOrganisationNumberAsync(
+    public async Task FillMissingOrganisationNumberAsync(
         string reExOrganisationId,
         int organisationNumber,
         IClientSessionHandle session,
         CancellationToken cancellationToken = default
-    ) =>
-        Collection.UpdateOneAsync(
+    )
+    {
+        var organisation = await FindByReExOrganisationIdAsync(
+            reExOrganisationId,
             session,
-            Builders<OrganisationEntity>.Filter.Eq(x => x.ReExOrganisationId, reExOrganisationId)
+            cancellationToken
+        );
+        if (organisation?.FillOrganisationNumber(organisationNumber) != true)
+        {
+            return;
+        }
+
+        await Collection.UpdateOneAsync(
+            session,
+            Builders<OrganisationEntity>.Filter.Eq(x => x.Id, organisation.Id)
                 & Builders<OrganisationEntity>.Filter.Eq(x => x.OrganisationNumber, null),
             Builders<OrganisationEntity>.Update.Set(x => x.OrganisationNumber, organisationNumber),
             cancellationToken: cancellationToken
         );
+    }
 
     /// <summary>The organisation with <paramref name="reExOrganisationId"/>, or null.</summary>
     public async Task<OrganisationEntity?> FindByReExOrganisationIdAsync(

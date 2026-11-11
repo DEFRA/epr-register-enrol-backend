@@ -2855,11 +2855,7 @@ public class AccreditationApplicationEndpointsTests
                 a.Query = new AccreditationApplicationQuery
                 {
                     QueryNote = "clarify ORS and BES",
-                    QueriedSectionKeys =
-                    [
-                        "overseas-reprocessing-sites",
-                        "broadly-equivalent-standards",
-                    ],
+                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
                 };
             }
         );
@@ -5726,7 +5722,11 @@ public class AccreditationApplicationEndpointsTests
         AccreditationApplicationModel app
     )
     {
-        var fileUploadId = await SeedValidatedUpload("bes-new", "new.pdf", "bes-evidence/bes-new");
+        var fileUploadId = await SeedValidatedUpload(
+            "bes-new",
+            "new.pdf",
+            "bes-evidence/bes-new"
+        );
         return await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
             new AddBesEvidenceFileRequest { FileUploadId = fileUploadId },
@@ -6844,11 +6844,7 @@ public class AccreditationApplicationEndpointsTests
                 a.Query = new AccreditationApplicationQuery
                 {
                     QueryNote = "clarify ORS and BES",
-                    QueriedSectionKeys =
-                    [
-                        "overseas-reprocessing-sites",
-                        "broadly-equivalent-standards",
-                    ],
+                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
                 };
             }
         );
@@ -6926,11 +6922,7 @@ public class AccreditationApplicationEndpointsTests
                 a.Query = new AccreditationApplicationQuery
                 {
                     QueryNote = "clarify ORS and BES",
-                    QueriedSectionKeys =
-                    [
-                        "overseas-reprocessing-sites",
-                        "broadly-equivalent-standards",
-                    ],
+                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
                 };
             }
         );

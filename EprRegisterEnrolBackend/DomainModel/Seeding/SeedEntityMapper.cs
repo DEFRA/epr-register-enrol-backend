@@ -51,6 +51,7 @@ public static class SeedEntityMapper
             };
         }
 
+        target.FillOrganisationNumber(dto.OrganisationNumber);
         MarkFromReEx(target.Source);
     }
 

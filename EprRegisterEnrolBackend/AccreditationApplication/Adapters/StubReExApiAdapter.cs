@@ -226,7 +226,9 @@ public class StubReExApiAdapter(
             SubmitterContactDetails = new SubmitterContactDetailsDto
             {
                 FullName = "Stub Submitter",
-                Email = isTestOrganisation ? TestOrganisationEmail : "stub.submitter@example.com",
+                Email = isTestOrganisation
+                    ? TestOrganisationEmail
+                    : "stub.submitter@example.com",
                 Phone = "01234 567890",
                 JobTitle = "Stub Job Title",
             },
@@ -275,6 +277,15 @@ public class StubReExApiAdapter(
             );
         }
 
+        return Task.FromResult(
+            ReExResult<int?>.Success(StubOrganisationNumber(organisationId), 200)
+        );
+    }
+
+    // The stub's orgId for an organisation, given by both GetOrganisationNumberAsync and GetAccreditationAsync, as the
+    // real ReEx gives the same organisation document to both.
+    private static int? StubOrganisationNumber(string organisationId)
+    {
         // Stub: a numeric org id passes straight through so a locally-seeded
         // numeric organisation behaves exactly as the real ReEx would. Anything
         // else (the UUID a real ReEx organisation id actually is) reports "no
@@ -285,15 +296,6 @@ public class StubReExApiAdapter(
         // it behaves like a real ReEx organisation that has one recorded (e.g. Submit stamps
         // it as the application's OrgId). RA-690: accreditation-number no longer needs it -
         // that reference is derived from the registration reference.
-        return Task.FromResult(
-            ReExResult<int?>.Success(StubOrganisationNumber(organisationId), 200)
-        );
-    }
-
-    // The stub's orgId for an organisation, given by both GetOrganisationNumberAsync and GetAccreditationAsync, as the
-    // real ReEx gives the same organisation document to both.
-    private static int? StubOrganisationNumber(string organisationId)
-    {
         if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
             return TestOrganisationNumber(organisationId);
 

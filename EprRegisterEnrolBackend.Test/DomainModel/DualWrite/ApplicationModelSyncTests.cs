@@ -1277,6 +1277,30 @@ public sealed class ApplicationModelSyncTests : IDisposable
         Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
     }
 
+    // Two organisations sharing a public register "Org Id" should never happen, so it fails loudly on the unique index
+    // rather than being skipped.
+    [Fact]
+    public async Task Sync_NumberAnotherOrganisationHolds_FailsTheWrite()
+    {
+        await _factory
+            .GetCollection<OrganisationEntity>(DomainModelCollections.Organisations)
+            .InsertOneAsync(
+                new OrganisationEntity
+                {
+                    Id = ObjectId.GenerateNewId(),
+                    ReExOrganisationId = "6512a0f0c0ffee0000000099",
+                    OrganisationNumber = 520458,
+                },
+                cancellationToken: Ct
+            );
+        var application = await MigratedApplicationAsync(ApplicationStatus.Started);
+        await EditAsync(application, a => a.OrgId = 520458);
+
+        var ex = await Assert.ThrowsAsync<MongoWriteException>(() => SyncAsync(application));
+
+        Assert.Equal(ServerErrorCategory.DuplicateKey, ex.WriteError.Category);
+    }
+
     [Fact]
     public async Task Sync_OrganisationAlreadyHasANumber_KeepsIt()
     {

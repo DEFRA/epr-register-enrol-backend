@@ -201,22 +201,21 @@ public sealed class SeedDualWriterTests : IDisposable
         Assert.Equal(0, Interlocked.Read(ref _failures));
     }
 
-    private async Task<AccreditationApplicationModel> LegacyApplicationAsync(
-        ReExAccreditationDto reEx,
-        int? organisationNumber
-    )
-    {
-        var application = await LegacyApplicationAsync(reEx);
-        application.OrgId = organisationNumber;
-        return application;
-    }
-
-    [Fact]
-    public async Task WriteAsync_ApplicationWithAnOrganisationNumber_SetsItOnTheOrganisation()
+    // The seed's ReEx response, carrying the organisation's number (its public register "Org Id").
+    private static ReExAccreditationDto ReExWithOrgId(int? organisationNumber)
     {
         var reEx = ReEx();
+        reEx.OrganisationNumber = organisationNumber;
+        return reEx;
+    }
 
-        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, 520458)), Ct);
+    private async Task SeedAsync(ReExAccreditationDto reEx) =>
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+
+    [Fact]
+    public async Task WriteAsync_ReExGivesAnOrganisationNumber_SetsItOnTheOrganisation()
+    {
+        await SeedAsync(ReExWithOrgId(520458));
 
         Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
     }
@@ -224,11 +223,10 @@ public sealed class SeedDualWriterTests : IDisposable
     [Fact]
     public async Task WriteAsync_OrganisationWithoutANumber_IsFilledByALaterSeed()
     {
-        var reEx = ReEx();
-        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, null)), Ct);
+        await SeedAsync(ReExWithOrgId(null));
         Assert.Null(Assert.Single(await OrganisationsAsync()).OrganisationNumber);
 
-        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, 520458)), Ct);
+        await SeedAsync(ReExWithOrgId(520458));
 
         Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
     }
@@ -236,10 +234,9 @@ public sealed class SeedDualWriterTests : IDisposable
     [Fact]
     public async Task WriteAsync_OrganisationWithANumber_KeepsIt()
     {
-        var reEx = ReEx();
-        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, 520458)), Ct);
+        await SeedAsync(ReExWithOrgId(520458));
 
-        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, 999999)), Ct);
+        await SeedAsync(ReExWithOrgId(999999));
 
         Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
     }

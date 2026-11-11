@@ -33,7 +33,7 @@ public class AccreditationApplicationModel
     public ObjectId? AccreditationEntityId { get; set; }
 
     // RA-503: ReEx's numeric organisation number (e.g. 500500) - the value an operator or
-    // regulator should actually see. Distinct from OrganisationId above, which is ReEx's own
+    // regulator should actually see, and the public register's "Org Id". Distinct from OrganisationId above, which is ReEx's own
     // internal ObjectId and must never be surfaced to an operator or regulator (see
     // OrganisationDto.cs). Resolved once and persisted: Submit resolves it fresh on first
     // submission; GetById backfills it (and stores the result) for any application read

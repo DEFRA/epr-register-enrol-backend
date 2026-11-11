@@ -56,8 +56,8 @@ public sealed class ApplicationModelSync(
             return;
         }
 
-        // The number is looked up from ReEx after a seed and backfilled onto the legacy application, often by a read
-        // that isn't dual-written, so a write picks it up whenever the Organisation still has none.
+        // An organisation seeded before the seed carried the number got it later, on the legacy application only (by a
+        // read's backfill or at Submit), so a write fills it in while the Organisation still has none.
         if (legacy.OrgId is { } organisationNumber)
         {
             await stores.Organisations.FillMissingOrganisationNumberAsync(

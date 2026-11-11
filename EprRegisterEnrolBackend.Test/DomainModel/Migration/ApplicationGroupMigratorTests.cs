@@ -943,7 +943,12 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Null((await CurrentSiteAsync("001")).FirstApprovedAt);
     }
 
-    // What a seed writes: the Organisation, with no organisation number unless the seed's lookup found one.
+    private async Task<int?> OrganisationNumberAsync() =>
+        Assert
+            .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
+            .OrganisationNumber;
+
+    // What a seed writes: the Organisation, with no organisation number unless ReEx gave one.
     private Task SeededOrganisationAsync(int? organisationNumber) =>
         _factory
             .GetCollection<OrganisationEntity>(DomainModelCollections.Organisations)
@@ -967,12 +972,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
 
         await MigrateAsync(application);
 
-        Assert.Equal(
-            520458,
-            Assert
-                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
-                .OrganisationNumber
-        );
+        Assert.Equal(520458, await OrganisationNumberAsync());
     }
 
     [Fact]
@@ -985,12 +985,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
 
         await MigrateAsync(application);
 
-        Assert.Equal(
-            520458,
-            Assert
-                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
-                .OrganisationNumber
-        );
+        Assert.Equal(520458, await OrganisationNumberAsync());
     }
 
     [Fact]
@@ -1003,12 +998,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
 
         await MigrateAsync(application);
 
-        Assert.Equal(
-            520458,
-            Assert
-                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
-                .OrganisationNumber
-        );
+        Assert.Equal(520458, await OrganisationNumberAsync());
     }
 
     private async Task<RegistrationEntity> SeededRegistrationAsync(

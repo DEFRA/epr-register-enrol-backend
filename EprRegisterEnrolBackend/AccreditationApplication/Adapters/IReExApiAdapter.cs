@@ -82,8 +82,9 @@ public class ReExAccreditationDto
     public int Year { get; set; }
     public string? OrganisationName { get; set; }
 
-    // The organisation's numeric orgId (e.g. 500500), from the same organisation document, so a seed has it without a
-    // second ReEx call. Null when ReEx holds none.
+    // The organisation's numeric orgId, the public register's "Org Id" (e.g. 500027 in the Public register of
+    // reprocessors and exporters). From the same organisation document, so a seed has it without a second ReEx call.
+    // Null when ReEx holds none.
     public int? OrganisationNumber { get; set; }
 
     public string? RegistrationReference { get; set; }
