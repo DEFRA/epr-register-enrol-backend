@@ -5004,8 +5004,14 @@ public static class AccreditationApplicationEndpoints
         if (file is null)
             return Results.BadRequest("Missing file in callback payload.");
 
-        await pendingUploadService.CompleteAsync(fileUploadId, file, cancellationToken);
-        return Results.Ok();
+        // No record means nothing this service started is waiting on this id (expired, or not a
+        // real CDP callback). Non-2xx makes CDP keep the message and retry it later.
+        var completed = await pendingUploadService.CompleteAsync(
+            fileUploadId,
+            file,
+            cancellationToken
+        );
+        return completed ? Results.Ok() : Results.NotFound();
     }
 
     private static async Task<IResult> GetUploadStatus(

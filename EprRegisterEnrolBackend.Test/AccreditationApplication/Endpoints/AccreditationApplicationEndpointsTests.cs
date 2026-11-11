@@ -5792,34 +5792,6 @@ public class AccreditationApplicationEndpointsTests
     }
 
     [Fact]
-    public async Task UploadCompleted_ValidPayload_Returns200()
-    {
-        Reset();
-
-        var payload = new
-        {
-            form = new
-            {
-                file = new
-                {
-                    fileId = "file-xyz",
-                    filename = "plan.csv",
-                    fileStatus = "complete",
-                },
-            },
-            metadata = new Dictionary<string, string> { ["fileUploadId"] = "upload-abc" },
-        };
-
-        var response = await _client.PostAsJsonAsync(
-            "/api/v1/accreditation-applications/files/upload-completed",
-            payload,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-    }
-
-    [Fact]
     public async Task UploadCompleted_MissingFileUploadId_Returns400()
     {
         Reset();
@@ -5846,6 +5818,11 @@ public class AccreditationApplicationEndpointsTests
         var app = SeedApplication();
 
         var fileUploadId = "test-upload-id";
+        await _factory.FakePendingUploadService.CreateAsync(
+            fileUploadId,
+            "https://cdp.example/status",
+            ct: TestContext.Current.CancellationToken
+        );
         var callbackPayload = new
         {
             form = new
@@ -5859,11 +5836,12 @@ public class AccreditationApplicationEndpointsTests
             },
             metadata = new Dictionary<string, string> { ["fileUploadId"] = fileUploadId },
         };
-        await _client.PostAsJsonAsync(
+        var callback = await _client.PostAsJsonAsync(
             "/api/v1/accreditation-applications/files/upload-completed",
             callbackPayload,
             cancellationToken: TestContext.Current.CancellationToken
         );
+        callback.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var response = await _client.GetAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/{fileUploadId}/status",

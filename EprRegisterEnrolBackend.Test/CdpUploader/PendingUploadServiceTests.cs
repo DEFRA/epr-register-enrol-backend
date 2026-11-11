@@ -1,7 +1,9 @@
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Driver;
 
@@ -109,25 +111,69 @@ public sealed class PendingUploadServiceTests : IDisposable
         result.Form!.File!.FileId.Should().Be("file-r");
     }
 
+    // A callback for an id with no record (expired, or not a real CDP callback) must not
+    // create one: the old upsert stored whatever scan result the caller sent.
     [Fact]
-    public async Task CompleteAsync_WithoutPriorCreate_StillStoresResult()
+    public async Task CompleteAsync_UnknownId_StoresNothing_LogsErrorWithId_ReturnsFalse()
     {
+        var ct = TestContext.Current.CancellationToken;
+        var logs = new CapturingLoggerFactory();
+        var sut = new PendingUploadService(_factory, logs);
         var file = new CdpCallbackFile
         {
             FileId = "orphan",
             Filename = "orphan.pdf",
             FileStatus = "complete",
+            S3Bucket = "attacker-bucket",
+            S3Key = "attacker/key.pdf",
         };
 
-        await _sut.CompleteAsync("upload-orphan", file, TestContext.Current.CancellationToken);
+        var completed = await sut.CompleteAsync("upload-orphan", file, ct);
 
-        var result = await _sut.GetStatusAsync(
-            "upload-orphan",
-            TestContext.Current.CancellationToken
+        completed.Should().BeFalse();
+        (await Collection().CountDocumentsAsync(u => u.Id == "upload-orphan", cancellationToken: ct))
+            .Should()
+            .Be(0);
+        var error = logs.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Subject;
+        error.Category.Should().Be(typeof(PendingUploadService).FullName);
+        error.Properties["FileUploadId"].Should().Be("upload-orphan");
+        logs.Entries.Should()
+            .NotContain(e =>
+                e.Message.Contains("orphan.pdf")
+                || e.Message.Contains("attacker/key.pdf")
+                || e.Message.Contains("attacker-bucket")
+            );
+    }
+
+    [Fact]
+    public async Task CompleteAsync_KnownId_ReturnsTrue_KeepsCreateFields_LogsNoError()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var logs = new CapturingLoggerFactory();
+        var sut = new PendingUploadService(_factory, logs);
+        await sut.CreateAsync(
+            "upload-known",
+            "http://cdp/status/known",
+            cdpUploadId: "cdp-known",
+            s3Bucket: "bucket",
+            s3Path: "path",
+            ct: ct
         );
-        result.UploadStatus.Should().Be("ready");
-        result.ProcessingStatus.Should().Be("validated");
-        result.Form!.File!.FileId.Should().Be("orphan");
+        var created = await Collection().Find(u => u.Id == "upload-known").SingleAsync(ct);
+        var file = new CdpCallbackFile { FileId = "f-known", FileStatus = "complete" };
+
+        var completed = await sut.CompleteAsync("upload-known", file, ct);
+
+        completed.Should().BeTrue();
+        var stored = await Collection().Find(u => u.Id == "upload-known").SingleAsync(ct);
+        stored.Status.Should().Be(FileProcessingStatus.Validated);
+        stored.ScanResult.Should().BeEquivalentTo(file);
+        stored.CdpStatusUrl.Should().Be("http://cdp/status/known");
+        stored.CdpUploadId.Should().Be("cdp-known");
+        stored.S3Bucket.Should().Be("bucket");
+        stored.S3Path.Should().Be("path");
+        stored.ExpiresAt.Should().Be(created.ExpiresAt);
+        logs.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 
     [Fact]
@@ -140,11 +186,13 @@ public sealed class PendingUploadServiceTests : IDisposable
             new CdpCallbackFile { FileId = "first", FileStatus = "complete" },
             ct
         );
-        await _sut.CompleteAsync(
+        var secondCompleted = await _sut.CompleteAsync(
             "upload-3",
             new CdpCallbackFile { FileId = "second", FileStatus = "complete" },
             ct
         );
+
+        secondCompleted.Should().BeTrue();
 
         var result = await _sut.GetStatusAsync("upload-3", ct);
         result.Form!.File!.FileId.Should().Be("second");
@@ -265,6 +313,9 @@ public sealed class PendingUploadServiceTests : IDisposable
 
         ex.Should().BeNull();
     }
+
+    private IMongoCollection<PendingUploadDocument> Collection() =>
+        _factory.GetCollection<PendingUploadDocument>("pendingUploads");
 
     private async Task<List<MongoDB.Bson.BsonDocument>> ListIndexesAsync()
     {

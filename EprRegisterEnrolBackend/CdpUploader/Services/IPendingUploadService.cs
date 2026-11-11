@@ -19,7 +19,9 @@ public interface IPendingUploadService
         string? s3Path = null,
         CancellationToken ct = default
     );
-    Task CompleteAsync(
+    // Records the scan result against an existing pending upload. Returns false, and stores
+    // nothing, when no record exists for fileUploadId.
+    Task<bool> CompleteAsync(
         string fileUploadId,
         CdpCallbackFile fileResult,
         CancellationToken ct = default

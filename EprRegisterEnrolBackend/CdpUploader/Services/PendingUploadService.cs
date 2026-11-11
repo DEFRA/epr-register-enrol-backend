@@ -75,7 +75,7 @@ public class PendingUploadService : MongoService<PendingUploadDocument>, IPendin
         );
     }
 
-    public async Task CompleteAsync(
+    public async Task<bool> CompleteAsync(
         string fileUploadId,
         CdpCallbackFile fileResult,
         CancellationToken ct = default
@@ -86,19 +86,30 @@ public class PendingUploadService : MongoService<PendingUploadDocument>, IPendin
                 ? FileProcessingStatus.Validated
                 : FileProcessingStatus.Rejected;
 
-        // Set(...) always applies; SetOnInsert(...) only takes effect on the insert
-        // branch, mirroring the old AddOrUpdate's two branches - an update leaves
-        // CdpStatusUrl/CdpUploadId/S3Bucket/S3Path/ExpiresAt from the original
-        // Create untouched, an insert (a callback that raced ahead of Create)
-        // gets the same empty-string CdpStatusUrl the old code used.
+        // Update only, never insert: CreateAsync has always written the record before the
+        // upload URL reaches the browser, so CDP cannot call back for an id with no record.
+        // A miss means the record has expired (DocumentTtl) or the callback is not one CDP
+        // made for an upload this service started, and neither should create a record.
+        // CdpStatusUrl/CdpUploadId/S3Bucket/S3Path/ExpiresAt from Create are left untouched.
         var filter = Builders<PendingUploadDocument>.Filter.Eq(u => u.Id, fileUploadId);
         var update = Builders<PendingUploadDocument>
             .Update.Set(u => u.ScanResult, fileResult)
-            .Set(u => u.Status, newStatus)
-            .SetOnInsert(u => u.CdpStatusUrl, string.Empty)
-            .SetOnInsert(u => u.ExpiresAt, DateTime.UtcNow.Add(DocumentTtl));
+            .Set(u => u.Status, newStatus);
 
-        await Collection.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }, ct);
+        var result = await Collection.UpdateOneAsync(filter, update, cancellationToken: ct);
+
+        if (result.MatchedCount == 0)
+        {
+            if (Logger.IsEnabled(LogLevel.Error))
+            {
+                Logger.LogError(
+                    "Upload {FileUploadId} completion rejected: no pending upload record (expired or never created)",
+                    fileUploadId
+                );
+            }
+
+            return false;
+        }
 
         if (Logger.IsEnabled(LogLevel.Information))
         {
@@ -109,6 +120,8 @@ public class PendingUploadService : MongoService<PendingUploadDocument>, IPendin
                 fileResult.FileStatus
             );
         }
+
+        return true;
     }
 
     public async Task<IReadOnlyList<string>> GetPendingUploadIdsAsync(
