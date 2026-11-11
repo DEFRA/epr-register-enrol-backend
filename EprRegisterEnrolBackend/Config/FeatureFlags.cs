@@ -35,8 +35,9 @@ public static class FeatureFlags
         )
         {
             throw new InvalidOperationException(
-                $"{InYearChangesEnabledKey} needs {DualWriteKey} outside Development: the in-year changes routes read "
-                    + "the domain model, which on CDP only dual-write fills."
+                $"{InYearChangesEnabledKey} needs {DualWriteKey} outside Development: turn {DualWriteKey} on, or "
+                    + $"{InYearChangesEnabledKey} off. The in-year changes routes read the domain model, which on CDP "
+                    + "only dual-write fills."
             );
         }
     }
