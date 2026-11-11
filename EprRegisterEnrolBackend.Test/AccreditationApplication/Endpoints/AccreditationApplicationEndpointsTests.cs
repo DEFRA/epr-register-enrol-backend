@@ -188,6 +188,75 @@ public class AccreditationApplicationEndpointsTests
             );
     }
 
+    // The organisation number comes from the same ReEx call as everything else the seed copies, and goes on to the
+    // domain model's Organisation, which will be the only copy once the legacy application goes.
+    [Fact]
+    public async Task Seed_ValidRequest_CarriesTheReExOrganisationNumberToTheApplicationAndTheDualWriter()
+    {
+        Reset();
+        var adapterResult = MinimalAdapterSuccess();
+        adapterResult.Value!.OrganisationNumber = 520458;
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(adapterResult));
+        var writer = Substitute.For<ISeedDualWriter>();
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton(writer))
+        );
+
+        var response = await factory
+            .CreateClient()
+            .PostAsJsonAsync(
+                "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+                new SeedRequest { Year = 2026 },
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var created = (await _factory.FakePersistence.GetByOrganisationAsync("org-123")).Single();
+        created.OrgId.Should().Be(520458);
+        await writer
+            .Received(1)
+            .WriteAsync(
+                Arg.Is<SeedDualWrite>(s => s.Application.OrgId == 520458),
+                Arg.Any<CancellationToken>()
+            );
+        await _factory
+            .MockReExAdapter.DidNotReceive()
+            .GetOrganisationNumberAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Seed_ReExHoldsNoOrganisationNumber_CreatesTheApplicationWithoutOne()
+    {
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(MinimalAdapterSuccess()));
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            new SeedRequest { Year = 2026 },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await _factory.FakePersistence.GetByOrganisationAsync("org-123"))
+            .Single()
+            .OrgId.Should()
+            .BeNull();
+    }
+
     [Fact]
     public async Task Seed_WithPriorYearData_PrePopulatesFields()
     {

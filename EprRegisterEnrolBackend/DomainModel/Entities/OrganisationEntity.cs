@@ -15,8 +15,28 @@ public class OrganisationEntity
 
     public required string ReExOrganisationId { get; set; }
 
-    /// <summary>ReEx's numeric organisation number, the value a person actually sees.</summary>
+    /// <summary>
+    /// ReEx's numeric organisation number, the value a person actually sees: the public register's "Org Id"
+    /// (e.g. 500027 in the Public register of reprocessors and exporters). The legacy application holds it as
+    /// <c>orgId</c>.
+    /// </summary>
     public int? OrganisationNumber { get; set; }
+
+    /// <summary>
+    /// Takes <paramref name="organisationNumber"/> only while the organisation has none. ReEx never changes an
+    /// organisation's number, so one already held is kept. Every write path (seed, dual-write and migration) goes
+    /// through this rule. Returns whether the number was set.
+    /// </summary>
+    public bool FillOrganisationNumber(int? organisationNumber)
+    {
+        if (OrganisationNumber is not null || organisationNumber is null)
+        {
+            return false;
+        }
+
+        OrganisationNumber = organisationNumber;
+        return true;
+    }
 
     public string? Name { get; set; }
     public string? TradingName { get; set; }
