@@ -5844,7 +5844,7 @@ public class AccreditationApplicationEndpointsTests
         Reset();
         var app = SeedApplication();
 
-        var fileUploadId = "test-upload-id";
+        var fileUploadId = Guid.NewGuid().ToString();
         await _factory.FakePendingUploadService.CreateAsync(
             fileUploadId,
             "https://cdp.example/status",

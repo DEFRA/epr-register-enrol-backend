@@ -5001,6 +5001,12 @@ public static class AccreditationApplicationEndpoints
         if (string.IsNullOrWhiteSpace(fileUploadId))
             return Results.BadRequest("Missing fileUploadId in callback metadata.");
 
+        // StartCdpUploadAsync only ever issues a Guid. Refusing anything else here, before the
+        // lookup, keeps arbitrary caller-chosen text out of the Error log below (this route is
+        // unauthenticated), and CDP never sends one.
+        if (!Guid.TryParse(fileUploadId, out _))
+            return Results.BadRequest("Invalid fileUploadId in callback metadata.");
+
         var file = payload.Form?.File;
         if (file is null)
             return Results.BadRequest("Missing file in callback payload.");

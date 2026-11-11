@@ -147,7 +147,7 @@ window against a threshold, and fire at 1.
 
 | Alert | Fires when | Notes |
 | --- | --- | --- |
-| `5xx and Errors` (exists) | any 5xx or any error-level line | Also reports **records the API cannot serve**, since that check logs at error |
+| `5xx and Errors` (exists) | any 5xx or any error-level line | Also reports **records the API cannot serve**, since that check logs at error. Also reports a **CDP Uploader callback for an expired or unknown upload** (logged at error, answered 404). It repeats while CDP retries the 404, every SQS visibility timeout for up to a week |
 | `Auth failures` (new) | more than 10 auth failure lines in 5 minutes | Filter by `message:"epr-ReEx-Client"` for one consumer. A burst usually means a wrong secret or a clock that is out |
 | `Slow requests` (new) | p95 of `event.duration` above 2,000,000,000 (2 seconds) for 5 minutes, per `user.id` | Only works after the deploy. Add a count condition (at least 20 requests) so a quiet period does not trigger it |
 | `Dropped records` (new, optional) | any dropped record line in 5 minutes | Rarely fires, because the query already leaves most such records out. The daily check is the main signal |

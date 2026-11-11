@@ -92,6 +92,20 @@ public sealed class UploadCompletedEndpointTests : IDisposable
         error.Properties["FileUploadId"].Should().Be(fileUploadId);
     }
 
+    // Every id this service issues is a Guid; anything else is refused before the lookup so a
+    // caller cannot put its own text into the Error log (and the alert) on this open route.
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("<script>alert(1)</script>")]
+    public async Task MalformedFileUploadId_Returns400_StoresNothing_LogsNoError(string fileUploadId)
+    {
+        var response = await _client.PostAsJsonAsync(Route, CallbackFor(fileUploadId), Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await Collection().CountDocumentsAsync(_ => true, cancellationToken: Ct)).Should().Be(0);
+        _logs.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
+    }
+
     [Fact]
     public async Task KnownFileUploadId_Returns200_StoresScanResult()
     {
