@@ -148,7 +148,7 @@ For a `404` example, use any registration number that does not exist, for exampl
 ## Contact
 
 The Reg-Acc team owns this API. Ask them for access (a client id and secret), for help, and to report
-a problem.
+a problem. The Slack channel for questions from API clients is **#ws1-ws2-ws3-joint-project**.
 
 When you report a problem, include the `traceId` from the error response, the environment, the
 request path and the time of the request (UTC).
