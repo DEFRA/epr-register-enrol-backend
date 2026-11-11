@@ -970,19 +970,12 @@ public static class AccreditationApplicationEndpoints
 
         var priorYearData = adapterResult.Value!;
 
-        // ReEx's accreditation data has no organisation number, so it is looked up here for the application and the
-        // domain model's Organisation, which will be the only copy once the legacy application goes. A failed lookup
-        // leaves it null, as Submit does, and the later backfill or a dual-written write fills it.
-        var organisationNumber = await ResolveOrgNumberFromReExAsync(
-            organisationId,
-            reExAdapter,
-            CancellationToken.None
-        );
-
         var application = new AccreditationApplicationModel
         {
             OrganisationId = organisationId,
-            OrgId = organisationNumber,
+            // From the same ReEx call, and passed on to the domain model's Organisation, which will be the only copy
+            // once the legacy application goes. Null when ReEx holds none; Submit's lookup then tries again.
+            OrgId = priorYearData.OrganisationNumber,
             OrganisationName = priorYearData.OrganisationName,
             Year = request.Year,
             RegistrationId = registrationId,

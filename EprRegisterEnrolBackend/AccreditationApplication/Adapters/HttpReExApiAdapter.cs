@@ -340,6 +340,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 MaterialType = materialType,
                 Year = year,
                 OrganisationName = org.CompanyDetails?.Name,
+                OrganisationNumber = org.OrgId,
                 RegistrationReference = registration.RegistrationNumber,
                 SiteAddress = siteAddress,
                 IsExporter = isExporter,

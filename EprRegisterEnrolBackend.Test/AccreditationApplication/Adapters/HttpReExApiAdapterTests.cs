@@ -1405,6 +1405,23 @@ public class HttpReExApiAdapterTests
         result.StatusCode.Should().Be(500);
     }
 
+    // The seed takes the organisation number from this one call, rather than a second lookup of the same document.
+    [Fact]
+    public async Task GetAccreditationAsync_OrganisationWithAnOrgId_CarriesTheOrganisationNumber()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.OrganisationNumber.Should().Be(509193);
+    }
+
     // ---------------- RA-475: GetOrganisationNumberAsync ----------------
 
     [Fact]

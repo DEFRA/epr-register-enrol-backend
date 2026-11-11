@@ -188,12 +188,14 @@ public class AccreditationApplicationEndpointsTests
             );
     }
 
-    // ReEx's accreditation data has no organisation number, so Seed looks it up: the domain model's Organisation will
-    // be the only copy once the legacy application goes.
+    // The organisation number comes from the same ReEx call as everything else the seed copies, and goes on to the
+    // domain model's Organisation, which will be the only copy once the legacy application goes.
     [Fact]
     public async Task Seed_ValidRequest_CarriesTheReExOrganisationNumberToTheApplicationAndTheDualWriter()
     {
         Reset();
+        var adapterResult = MinimalAdapterSuccess();
+        adapterResult.Value!.OrganisationNumber = 520458;
         _factory
             .MockReExAdapter.GetAccreditationAsync(
                 Arg.Any<string>(),
@@ -201,10 +203,7 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<MaterialType>(),
                 Arg.Any<int>()
             )
-            .Returns(Task.FromResult(MinimalAdapterSuccess()));
-        _factory
-            .MockReExAdapter.GetOrganisationNumberAsync("org-123", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(ReExResult<int?>.Success(520458, 200)));
+            .Returns(Task.FromResult(adapterResult));
         var writer = Substitute.For<ISeedDualWriter>();
         using var factory = _factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services => services.AddSingleton(writer))
@@ -227,10 +226,13 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Is<SeedDualWrite>(s => s.Application.OrgId == 520458),
                 Arg.Any<CancellationToken>()
             );
+        await _factory
+            .MockReExAdapter.DidNotReceive()
+            .GetOrganisationNumberAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task Seed_OrganisationNumberLookupFails_StillCreatesTheApplicationWithoutOne()
+    public async Task Seed_ReExHoldsNoOrganisationNumber_CreatesTheApplicationWithoutOne()
     {
         Reset();
         _factory
@@ -241,13 +243,6 @@ public class AccreditationApplicationEndpointsTests
                 Arg.Any<int>()
             )
             .Returns(Task.FromResult(MinimalAdapterSuccess()));
-        _factory
-            .MockReExAdapter.GetOrganisationNumberAsync("org-123", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult(
-                    ReExResult<int?>.Fail(new ReExError(ReExErrorKind.ServerError, "down"), 500)
-                )
-            );
 
         var response = await _client.PostAsJsonAsync(
             "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",

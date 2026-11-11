@@ -180,6 +180,7 @@ public class StubReExApiAdapter(
             MaterialType = materialType,
             Year = year,
             OrganisationName = organisationName ?? "Stub Reprocessing Ltd",
+            OrganisationNumber = StubOrganisationNumber(organisationId),
             RegistrationReference = DerivedRegistrationReference(
                 organisationId,
                 registrationId,
@@ -225,9 +226,7 @@ public class StubReExApiAdapter(
             SubmitterContactDetails = new SubmitterContactDetailsDto
             {
                 FullName = "Stub Submitter",
-                Email = isTestOrganisation
-                    ? TestOrganisationEmail
-                    : "stub.submitter@example.com",
+                Email = isTestOrganisation ? TestOrganisationEmail : "stub.submitter@example.com",
                 Phone = "01234 567890",
                 JobTitle = "Stub Job Title",
             },
@@ -286,21 +285,26 @@ public class StubReExApiAdapter(
         // it behaves like a real ReEx organisation that has one recorded (e.g. Submit stamps
         // it as the application's OrgId). RA-690: accreditation-number no longer needs it -
         // that reference is derived from the registration reference.
-        if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
-            return Task.FromResult(
-                ReExResult<int?>.Success(TestOrganisationNumber(organisationId), 200)
-            );
+        return Task.FromResult(
+            ReExResult<int?>.Success(StubOrganisationNumber(organisationId), 200)
+        );
+    }
 
-        var orgNumber = int.TryParse(
+    // The stub's orgId for an organisation, given by both GetOrganisationNumberAsync and GetAccreditationAsync, as the
+    // real ReEx gives the same organisation document to both.
+    private static int? StubOrganisationNumber(string organisationId)
+    {
+        if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
+            return TestOrganisationNumber(organisationId);
+
+        return int.TryParse(
             organisationId,
             NumberStyles.Integer,
             CultureInfo.InvariantCulture,
             out var parsed
         )
             ? parsed
-            : (int?)null;
-
-        return Task.FromResult(ReExResult<int?>.Success(orgNumber, 200));
+            : null;
     }
 
     // RA-697: a fixture org's name, as GetAccreditationAsync gives it. An E2E test organisation has no
