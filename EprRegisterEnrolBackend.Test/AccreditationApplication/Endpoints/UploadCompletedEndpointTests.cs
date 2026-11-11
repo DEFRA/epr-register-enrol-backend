@@ -113,13 +113,18 @@ public sealed class UploadCompletedEndpointTests : IDisposable
         _logs.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 
-    [Fact]
-    public async Task KnownFileUploadId_Returns200_StoresScanResult()
+    // Guid.TryParseExact("D") ignores case, and the record is looked up by the parsed Guid's
+    // ToString(), so an upper-case id still completes the lower-case record it names.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task KnownFileUploadId_Returns200_StoresScanResult(bool upperCaseInCallback)
     {
         var fileUploadId = Guid.NewGuid().ToString();
         await _pendingUploads.CreateAsync(fileUploadId, "http://cdp/status", ct: Ct);
+        var callbackId = upperCaseInCallback ? fileUploadId.ToUpperInvariant() : fileUploadId;
 
-        var response = await _client.PostAsJsonAsync(Route, CallbackFor(fileUploadId), Ct);
+        var response = await _client.PostAsJsonAsync(Route, CallbackFor(callbackId), Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var stored = await Collection().Find(u => u.Id == fileUploadId).SingleAsync(Ct);
