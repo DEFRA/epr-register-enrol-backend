@@ -3103,6 +3103,33 @@ public class AccreditationApplicationEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // TryResolveScannedFileAsync: an id with no pending-upload record is refused like an
+    // unscanned one, never treated as a file.
+    [Fact]
+    public async Task AddFile_UnknownFileUploadId_Returns422()
+    {
+        Reset();
+        var app = SeedApplication();
+        var request = new FileUploadRequest
+        {
+            FileUploadId = "no-such-upload",
+            DocumentType = AccreditationFileDocumentType.SamplingPlan,
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files",
+            request,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var stored = await _factory.FakePersistence.GetByIdAsync(
+            "org-123",
+            app.Id!.Value.ToString()
+        );
+        stored!.SamplingPlan.Files.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task AddFile_InvalidFilename_Returns422()
     {
@@ -5862,9 +5889,14 @@ public class AccreditationApplicationEndpointsTests
     {
         Reset();
         var app = SeedApplication();
+        await _factory.FakePendingUploadService.CreateAsync(
+            "pending-upload-id",
+            "https://cdp.example/status",
+            ct: TestContext.Current.CancellationToken
+        );
 
         var response = await _client.GetAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/unknown-upload-id/status",
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/pending-upload-id/status",
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -5874,6 +5906,27 @@ public class AccreditationApplicationEndpointsTests
             cancellationToken: TestContext.Current.CancellationToken
         );
         body!.UploadStatus.Should().Be("pending");
+        body.ProcessingStatus.Should().Be("preprocessing");
+    }
+
+    // No record (never started here, or expired): 404 with no body, so the frontend stops
+    // polling instead of being told "pending" forever.
+    [Fact]
+    public async Task GetUploadStatus_UnknownId_Returns404WithNoBody()
+    {
+        Reset();
+        var app = SeedApplication();
+
+        var response = await _client.GetAsync(
+            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/files/unknown-upload-id/status",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
+            .Should()
+            .BeEmpty();
+        response.Content.Headers.ContentType.Should().BeNull();
     }
 
     // --- QueryFromCaseManagement ---

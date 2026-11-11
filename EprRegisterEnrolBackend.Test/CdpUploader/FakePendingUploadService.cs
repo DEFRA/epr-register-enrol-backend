@@ -101,21 +101,13 @@ public class FakePendingUploadService : IPendingUploadService
         return Task.FromResult(ids);
     }
 
-    public Task<CdpStatusResponse> GetStatusAsync(
+    public Task<CdpStatusResponse?> GetStatusAsync(
         string fileUploadId,
         CancellationToken ct = default
     )
     {
         if (!_uploads.TryGetValue(fileUploadId, out var upload))
-        {
-            return Task.FromResult(
-                new CdpStatusResponse
-                {
-                    UploadStatus = "pending",
-                    ProcessingStatus = "preprocessing",
-                }
-            );
-        }
+            return Task.FromResult<CdpStatusResponse?>(null);
 
         CdpStatusResponse response = upload.Status switch
         {
@@ -143,6 +135,6 @@ public class FakePendingUploadService : IPendingUploadService
             },
         };
 
-        return Task.FromResult(response);
+        return Task.FromResult<CdpStatusResponse?>(response);
     }
 }

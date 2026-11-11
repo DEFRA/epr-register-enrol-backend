@@ -870,10 +870,11 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
+        // No record (never started here, or expired) also lands in the 422 below.
         var status = await pendingUploadService.GetStatusAsync(fileUploadId, cancellationToken);
-        var file = status.Form?.File;
+        var file = status?.Form?.File;
         if (
-            status.ProcessingStatus != "validated"
+            status?.ProcessingStatus != "validated"
             || file is null
             || string.IsNullOrWhiteSpace(file.FileId)
             || string.IsNullOrWhiteSpace(file.Filename)
@@ -5020,7 +5021,9 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
+        // 404 when no record exists (never started here, or expired after DocumentTtl), so the
+        // frontend can stop polling instead of seeing "pending" forever.
         var status = await pendingUploadService.GetStatusAsync(fileUploadId, cancellationToken);
-        return Results.Ok(status);
+        return status is null ? Results.NotFound() : Results.Ok(status);
     }
 }

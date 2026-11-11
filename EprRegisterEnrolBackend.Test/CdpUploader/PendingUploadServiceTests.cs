@@ -33,16 +33,14 @@ public sealed class PendingUploadServiceTests : IDisposable
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
 
     [Fact]
-    public async Task GetStatusAsync_UnknownId_ReturnsPendingPreprocessing()
+    public async Task GetStatusAsync_UnknownId_ReturnsNull()
     {
         var result = await _sut.GetStatusAsync(
             "does-not-exist",
             TestContext.Current.CancellationToken
         );
 
-        result.UploadStatus.Should().Be("pending");
-        result.ProcessingStatus.Should().Be("preprocessing");
-        result.Form.Should().BeNull();
+        result.Should().BeNull();
     }
 
     [Fact]
@@ -56,7 +54,7 @@ public sealed class PendingUploadServiceTests : IDisposable
 
         var result = await _sut.GetStatusAsync("upload-1", TestContext.Current.CancellationToken);
 
-        result.UploadStatus.Should().Be("pending");
+        result!.UploadStatus.Should().Be("pending");
         result.ProcessingStatus.Should().Be("preprocessing");
         result.Form.Should().BeNull();
     }
@@ -82,7 +80,7 @@ public sealed class PendingUploadServiceTests : IDisposable
         await _sut.CompleteAsync("upload-2", file, TestContext.Current.CancellationToken);
 
         var result = await _sut.GetStatusAsync("upload-2", TestContext.Current.CancellationToken);
-        result.UploadStatus.Should().Be("ready");
+        result!.UploadStatus.Should().Be("ready");
         result.ProcessingStatus.Should().Be("validated");
         result.Form.Should().NotBeNull();
         result.Form!.File.Should().BeEquivalentTo(file);
@@ -106,7 +104,7 @@ public sealed class PendingUploadServiceTests : IDisposable
         await _sut.CompleteAsync("upload-r", file, TestContext.Current.CancellationToken);
 
         var result = await _sut.GetStatusAsync("upload-r", TestContext.Current.CancellationToken);
-        result.UploadStatus.Should().Be("ready");
+        result!.UploadStatus.Should().Be("ready");
         result.ProcessingStatus.Should().Be("rejected");
         result.Form!.File!.FileId.Should().Be("file-r");
     }
@@ -195,7 +193,7 @@ public sealed class PendingUploadServiceTests : IDisposable
         secondCompleted.Should().BeTrue();
 
         var result = await _sut.GetStatusAsync("upload-3", ct);
-        result.Form!.File!.FileId.Should().Be("second");
+        result!.Form!.File!.FileId.Should().Be("second");
         result.ProcessingStatus.Should().Be("validated");
     }
 
@@ -273,7 +271,7 @@ public sealed class PendingUploadServiceTests : IDisposable
             ct
         );
         var status = await _sut.GetStatusAsync("upload-shared", ct);
-        status.ProcessingStatus.Should().Be("validated");
+        status!.ProcessingStatus.Should().Be("validated");
     }
 
     // Proxy for "state survives a restart": a second instance constructed after the
@@ -289,7 +287,7 @@ public sealed class PendingUploadServiceTests : IDisposable
         var afterRestart = new PendingUploadService(_factory, NullLoggerFactory.Instance);
         var result = await afterRestart.GetStatusAsync("upload-restart", ct);
 
-        result.UploadStatus.Should().Be("pending");
+        result!.UploadStatus.Should().Be("pending");
         result.ProcessingStatus.Should().Be("preprocessing");
     }
 

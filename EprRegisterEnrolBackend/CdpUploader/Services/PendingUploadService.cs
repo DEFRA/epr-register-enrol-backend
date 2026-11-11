@@ -136,20 +136,14 @@ public class PendingUploadService : MongoService<PendingUploadDocument>, IPendin
         return await Collection.Find(filter).Project(u => u.Id).ToListAsync(ct);
     }
 
-    public async Task<CdpStatusResponse> GetStatusAsync(
+    public async Task<CdpStatusResponse?> GetStatusAsync(
         string fileUploadId,
         CancellationToken ct = default
     )
     {
         var upload = await Collection.Find(u => u.Id == fileUploadId).FirstOrDefaultAsync(ct);
         if (upload is null)
-        {
-            return new CdpStatusResponse
-            {
-                UploadStatus = "pending",
-                ProcessingStatus = "preprocessing",
-            };
-        }
+            return null;
 
         return upload.Status switch
         {
