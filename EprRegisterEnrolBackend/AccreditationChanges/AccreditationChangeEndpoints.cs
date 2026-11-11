@@ -725,7 +725,7 @@ public static class AccreditationChangeEndpoints
             return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
 
         var logger = submit.LoggerFactory.CreateLogger(typeof(AccreditationChangeEndpoints));
-        CaseWorkingSubmissionResult result;
+        ChangeRequestSubmissionResult result;
         try
         {
             // The payload's operatorRequestId is this request's id, the same on every attempt, so
@@ -767,15 +767,22 @@ public static class AccreditationChangeEndpoints
             );
         }
 
-        draft.CaseManagementReference = result.CaseReference;
-        draft.CaseManagementWorkItemId = result.WorkItemId;
+        // RA-739: each site is its own work item with its own reference; the adapter has checked
+        // that every submitted site has one.
+        draft.SubmissionReference = result.SubmissionReference;
+        foreach (var site in result.Sites)
+        {
+            var item = draft.Sites.Single(s => s.SiteId == site.SiteId);
+            item.CaseManagementReference = site.CaseReference;
+            item.CaseManagementWorkItemId = site.WorkItemId;
+        }
         // Nothing else writes a Submitted request, so this only fails if the store does; the
         // submission itself has succeeded either way.
         if (!await services.Requests.UpdateAsync(draft, services.CancellationToken))
             logger.LogError(
-                "Change request {RequestId} was sent to Case Management as {Reference} but the reference was not saved",
+                "Change request {RequestId} was sent to Case Management as {SubmissionReference} but its references were not saved",
                 draft.RequestId,
-                result.CaseReference
+                result.SubmissionReference
             );
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
     }
@@ -794,6 +801,12 @@ public static class AccreditationChangeEndpoints
         draft.SubmittedBy = null;
         draft.PaymentReference = null;
         draft.ChargePence = null;
+        draft.SubmissionReference = null;
+        foreach (var item in draft.Items)
+        {
+            item.CaseManagementReference = null;
+            item.CaseManagementWorkItemId = null;
+        }
         // Fails only if another draft was started for the accreditation in the moment the request
         // was Submitted, which the one-draft rule then refuses.
         if (!await services.Requests.UpdateAsync(draft, CancellationToken.None))

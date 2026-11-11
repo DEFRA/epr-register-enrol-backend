@@ -231,6 +231,14 @@ public class DevChangeRequestSeedService(
 
         var createdAt = On((seed.Month, seed.Day));
         var draft = items.Exists(i => i.Status == ChangeItemStatus.InProgress);
+        // RA-739: a submitted request's reference stands in for its submission reference, and each item gets its
+        // own, numbered within the request, e.g. CR26050018A008-1.
+        var reference = draft ? null : $"CR{year % 100:D2}{orgId:D6}{char.ToUpperInvariant(side)}{number:D3}";
+        if (reference is not null)
+        {
+            for (var index = 0; index < items.Count; index++)
+                items[index].CaseManagementReference = $"{reference}-{index + 1}";
+        }
         var submittedAt = draft ? (DateTime?)null : createdAt.AddHours(2);
         var updatedAt = items
             .SelectMany(i => new[] { i.ValidFrom, i.WithdrawnAt })
@@ -253,9 +261,7 @@ public class DevChangeRequestSeedService(
             UpdatedAt = updatedAt,
             SubmittedAt = submittedAt,
             SubmittedBy = draft ? null : Submitter,
-            CaseManagementReference = draft
-                ? null
-                : $"CR{year % 100:D2}{orgId:D6}{char.ToUpperInvariant(side)}{number:D3}",
+            SubmissionReference = reference,
         };
     }
 

@@ -168,7 +168,8 @@ public static class ChangeRequestRules
                     requestSite.ChangeType,
                     requestSite.Status,
                     requestSite.ValidFrom,
-                    requestSite.WithdrawnAt
+                    requestSite.WithdrawnAt,
+                    requestSite.CaseManagementReference
                 );
             })
             .ToList();
@@ -181,7 +182,6 @@ public static class ChangeRequestRules
             request.UpdatedAt,
             request.SubmittedAt,
             request.SubmittedBy,
-            request.CaseManagementReference,
             sites,
             sites.Count > 0 && sites.All(s => s.IsComplete),
             Charge(request.Sites.Count),
@@ -206,9 +206,14 @@ public sealed record ChangeRequestSiteView(
     string ChangeType,
     ChangeItemStatus Status,
     DateTime? ValidFrom,
-    DateTime? WithdrawnAt
+    DateTime? WithdrawnAt,
+    string? CaseManagementReference
 );
 
+/// <summary>
+/// RA-739: no request-level reference: each item carries its own Case Management reference, and the submission
+/// reference they share is not shown to the operator.
+/// </summary>
 public sealed record ChangeRequestView(
     string RequestId,
     string ChangeType,
@@ -217,7 +222,6 @@ public sealed record ChangeRequestView(
     DateTime UpdatedAt,
     DateTime? SubmittedAt,
     SubmittedByModel? SubmittedBy,
-    string? CaseManagementReference,
     List<ChangeRequestSiteView> Sites,
     bool IsComplete,
     ChargeView Charge,
@@ -231,11 +235,20 @@ public sealed record TonnageBandUpgradeView(
     ChangeItemStatus Status,
     DateTime? ValidFrom,
     DateTime? WithdrawnAt,
-    PlannedTonnageBand RequestedBand
+    PlannedTonnageBand RequestedBand,
+    string? CaseManagementReference
 )
 {
     public static TonnageBandUpgradeView From(TonnageBandUpgradeItem item) =>
-        new(item.ItemId, item.ChangeType, item.Status, item.ValidFrom, item.WithdrawnAt, item.RequestedBand);
+        new(
+            item.ItemId,
+            item.ChangeType,
+            item.Status,
+            item.ValidFrom,
+            item.WithdrawnAt,
+            item.RequestedBand,
+            item.CaseManagementReference
+        );
 }
 
 public sealed record AccreditationChangeSiteView(

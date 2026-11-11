@@ -99,11 +99,12 @@ public class HttpCaseWorkingApiAdapter(
 
     // RA-492: the in-year "add a registered ORS to an accreditation" change request. Only called
     // when AccreditationChanges:SubmitToCaseManagement is on - ManagementBe must register the
-    // add-overseas-site work-item type before that flag is switched on. ManagementBe returns an
-    // in-year change reference (format: see "Application reference" in ManagementBe's
-    // docs/work-items.md) in the same applicationReference field an application's AP reference
-    // comes back in.
-    public async Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+    // add-overseas-site work-item type before that flag is switched on.
+    // RA-739: ManagementBe splits the request into one work item per site, in one transaction,
+    // and answers { submissionReference, workItems: [{ siteId, id, applicationReference }] }:
+    // each site's in-year change reference (format: see "Application reference" in
+    // ManagementBe's docs/work-items.md) and the SUB reference they share.
+    public async Task<ChangeRequestSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
         CancellationToken cancellationToken = default
@@ -129,13 +130,119 @@ public class HttpCaseWorkingApiAdapter(
             );
         }
 
-        return await CreateWorkItemAsync(
+        using var response = await PostWorkItemAsync(
             endpoint,
             body,
             changeRequest.SubmittedBy?.Email ?? changeRequest.OrganisationId,
             changeRequest.SubmittedBy?.FullName,
             cancellationToken
         );
+
+        AddOverseasSiteResponseDto? result;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<AddOverseasSiteResponseDto>(
+                JsonOptions,
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to parse ManagementBe add-overseas-site response from {Endpoint}; cannot obtain the sites' references",
+                endpoint
+            );
+            throw new HttpRequestException(
+                $"Failed to parse ManagementBe work item response from {endpoint}.",
+                ex
+            );
+        }
+
+        return ToSubmissionResult(changeRequest, result, endpoint);
+    }
+
+    // Every submitted site must come back with its own reference: the operator is shown it, and a
+    // site without one would be a site the regulator may never have received.
+    private ChangeRequestSubmissionResult ToSubmissionResult(
+        AccreditationChangeRequest changeRequest,
+        AddOverseasSiteResponseDto? response,
+        string endpoint
+    )
+    {
+        if (string.IsNullOrWhiteSpace(response?.SubmissionReference))
+        {
+            logger.LogError(
+                "ManagementBe response from {Endpoint} did not include a submission reference",
+                endpoint
+            );
+            throw new HttpRequestException(
+                $"ManagementBe work item response from {endpoint} did not include a submission reference."
+            );
+        }
+
+        var bySite = new Dictionary<int, AddOverseasSiteWorkItemDto>();
+        foreach (var workItem in response.WorkItems ?? [])
+        {
+            if (
+                TryReadSiteId(workItem.SiteId, out var siteId)
+                && !string.IsNullOrWhiteSpace(workItem.ApplicationReference)
+            )
+                bySite.TryAdd(siteId, workItem);
+        }
+
+        var sites = new List<SiteWorkItemResult>(changeRequest.Sites.Count);
+        foreach (var site in changeRequest.Sites)
+        {
+            if (!bySite.TryGetValue(site.SiteId, out var workItem))
+            {
+                logger.LogError(
+                    "ManagementBe response from {Endpoint} did not include a reference for site {SiteId} of change request {RequestId}",
+                    endpoint,
+                    site.SiteId,
+                    changeRequest.RequestId
+                );
+                throw new HttpRequestException(
+                    $"ManagementBe work item response from {endpoint} did not include a reference for site {site.SiteId}."
+                );
+            }
+            sites.Add(
+                new SiteWorkItemResult(
+                    site.SiteId,
+                    workItem.ApplicationReference!,
+                    workItem.Id is { } id && id != Guid.Empty ? id : null
+                )
+            );
+        }
+
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Change request {RequestId} submitted as {SubmissionReference}: {References}",
+                changeRequest.RequestId,
+                response.SubmissionReference,
+                string.Join(',', sites.Select(s => s.CaseReference))
+            );
+        }
+
+        return new ChangeRequestSubmissionResult(response.SubmissionReference, sites);
+    }
+
+    // ManagementBe echoes siteId as the operator sent it: a number, or a string if it was one.
+    private static bool TryReadSiteId(JsonElement value, out int siteId)
+    {
+        siteId = 0;
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number => value.TryGetInt32(out siteId),
+            JsonValueKind.String => int.TryParse(
+                value.GetString(),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out siteId
+            ),
+            _ => false,
+        };
     }
 
     internal static object BuildChangeRequestPayload(
@@ -199,46 +306,13 @@ public class HttpCaseWorkingApiAdapter(
         CancellationToken cancellationToken
     )
     {
-        using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
-        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
-
-        HttpResponseMessage response;
-        try
-        {
-            response = await client.SendAsync(request, cancellationToken);
-        }
-        // The "DefaultClient" HttpClient carries an explicit 15s Timeout (Program.cs) so this
-        // call fails fast rather than hanging up to .NET's 100s default. HttpClient reports its
-        // own timeout as a TaskCanceledException indistinguishable by type from a caller-driven
-        // cancellation — the `when` clause is what tells them apart (mirrors ReExClient's same
-        // distinction). Surfaced as a dedicated exception type so the Submit endpoint can return
-        // a clear, distinguishable response instead of a generic unhandled-exception 500 (RA-311).
-        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            logger.LogError(
-                ex,
-                "Timed out waiting for ManagementBe at {Endpoint} (client timeout exceeded)",
-                endpoint
-            );
-            throw new CaseWorkingApiTimeoutException(
-                $"Timed out waiting for ManagementBe at {endpoint}.",
-                ex
-            );
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
-            throw;
-        }
-
-        if (!response.IsSuccessStatusCode)
-        {
-            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-            LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
-            throw new HttpRequestException(
-                $"ManagementBe work item submission failed: {(int)response.StatusCode}"
-            );
-        }
+        using var response = await PostWorkItemAsync(
+            endpoint,
+            body,
+            userId,
+            userName,
+            cancellationToken
+        );
 
         WorkItemResponseDto? result;
         try
@@ -291,6 +365,61 @@ public class HttpCaseWorkingApiAdapter(
         }
 
         return new CaseWorkingSubmissionResult(result.ApplicationReference, workItemId);
+    }
+
+    // Sends a POST /work-items and returns ManagementBe's 2xx response for the caller to parse.
+    // A timeout throws CaseWorkingApiTimeoutException and any other status HttpRequestException.
+    private async Task<HttpResponseMessage> PostWorkItemAsync(
+        string endpoint,
+        CreateWorkItemRequest body,
+        string userId,
+        string? userName,
+        CancellationToken cancellationToken
+    )
+    {
+        using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
+        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await client.SendAsync(request, cancellationToken);
+        }
+        // The "DefaultClient" HttpClient carries an explicit 15s Timeout (Program.cs) so this
+        // call fails fast rather than hanging up to .NET's 100s default. HttpClient reports its
+        // own timeout as a TaskCanceledException indistinguishable by type from a caller-driven
+        // cancellation — the `when` clause is what tells them apart (mirrors ReExClient's same
+        // distinction). Surfaced as a dedicated exception type so the Submit endpoint can return
+        // a clear, distinguishable response instead of a generic unhandled-exception 500 (RA-311).
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogError(
+                ex,
+                "Timed out waiting for ManagementBe at {Endpoint} (client timeout exceeded)",
+                endpoint
+            );
+            throw new CaseWorkingApiTimeoutException(
+                $"Timed out waiting for ManagementBe at {endpoint}.",
+                ex
+            );
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            throw;
+        }
+
+        if (response.IsSuccessStatusCode)
+            return response;
+
+        using (response)
+        {
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
+            throw new HttpRequestException(
+                $"ManagementBe work item submission failed: {(int)response.StatusCode}"
+            );
+        }
     }
 
     private static readonly NotificationStatusResult s_emptyNotificationStatus = new(null, null);
@@ -1007,6 +1136,21 @@ public class HttpCaseWorkingApiAdapter(
         public string? TypeId { get; init; }
         public string? StateId { get; init; }
         public JsonElement Payload { get; init; }
+        public string? ApplicationReference { get; init; }
+    }
+
+    // RA-739: ManagementBe's 201 (or idempotent replay) for an add-overseas-site submission.
+    internal sealed class AddOverseasSiteResponseDto
+    {
+        public string? SubmissionReference { get; init; }
+        public List<AddOverseasSiteWorkItemDto>? WorkItems { get; init; }
+    }
+
+    internal sealed class AddOverseasSiteWorkItemDto
+    {
+        // Echoed as sent, so a number or a string; read with TryReadSiteId.
+        public JsonElement SiteId { get; init; }
+        public Guid? Id { get; init; }
         public string? ApplicationReference { get; init; }
     }
 

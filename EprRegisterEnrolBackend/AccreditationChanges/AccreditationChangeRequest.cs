@@ -66,10 +66,11 @@ public class AccreditationChangeRequest
     /// <summary>The charge the operator confirmed, snapshotted at submit.</summary>
     public int? ChargePence { get; set; }
 
-    public string? CaseManagementReference { get; set; }
-
-    [BsonGuidRepresentation(GuidRepresentation.Standard)]
-    public Guid? CaseManagementWorkItemId { get; set; }
+    /// <summary>
+    /// RA-739: Case Management's <c>SUB-{yyyy}-{seq}</c> reference, shared by the work items one submission
+    /// created. Stored for support and not shown to the operator: each item holds its own application reference.
+    /// </summary>
+    public string? SubmissionReference { get; set; }
 
     /// <summary>Optimistic-concurrency token, bumped by every update.</summary>
     public long Version { get; set; }
@@ -108,6 +109,15 @@ public abstract class ChangeRequestItem
     public DateTime? ValidFrom { get; set; }
 
     public DateTime? WithdrawnAt { get; set; }
+
+    /// <summary>
+    /// RA-739: the application reference of this item's own Case Management work item, such as an add-ORS
+    /// item's <c>IYC-ORS-{yyyy}-{seq}</c>. Null until submitted, and while submission to Case Management is off.
+    /// </summary>
+    public string? CaseManagementReference { get; set; }
+
+    [BsonGuidRepresentation(GuidRepresentation.Standard)]
+    public Guid? CaseManagementWorkItemId { get; set; }
 }
 
 public class TonnageBandUpgradeItem : ChangeRequestItem

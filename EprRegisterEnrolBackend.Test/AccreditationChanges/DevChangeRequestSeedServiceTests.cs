@@ -106,13 +106,17 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
             .Be(("004", "Dragon Recyclers", AccreditationChangeRequest.AddOverseasSiteChangeType, ChangeItemStatus.InProgress));
         draft.TonnageBandUpgrade.Should().BeNull();
         draft.SubmittedAt.Should().BeNull();
-        draft.CaseManagementReference.Should().BeNull();
+        draft.SubmissionReference.Should().BeNull();
+        item.CaseManagementReference.Should().BeNull();
 
         var submitted = requests.Where(r => r != draft).ToList();
         submitted.Should().OnlyContain(r => r.Status == ChangeRequestStatus.Submitted);
         submitted.Should().OnlyContain(r => r.SubmittedAt != null && r.SubmittedBy != null);
-        submitted.Should().OnlyContain(r => !string.IsNullOrEmpty(r.CaseManagementReference));
-        submitted.Select(r => r.CaseManagementReference).Should().OnlyHaveUniqueItems();
+        submitted.Should().OnlyContain(r => !string.IsNullOrEmpty(r.SubmissionReference));
+        // RA-739: each item has its own reference, numbered within its request.
+        ItemsOf(submitted).Should().OnlyContain(i => !string.IsNullOrEmpty(i.CaseManagementReference));
+        ItemsOf(submitted).Select(i => i.CaseManagementReference).Should().OnlyHaveUniqueItems();
+        submitted.Select(r => r.SubmissionReference).Should().OnlyHaveUniqueItems();
         ItemsOf(submitted).Should().NotContain(i => i.Status == ChangeItemStatus.InProgress);
     }
 
@@ -219,7 +223,8 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
         requests.Should().NotBeEmpty();
         requests.Should().OnlyContain(r => r.Sites.Count == 0 && r.TonnageBandUpgrade != null);
         requests.Should().OnlyContain(r => r.ChangeType == AccreditationChangeRequest.UpgradeTonnageBandChangeType);
-        requests.Should().OnlyContain(r => r.Status == ChangeRequestStatus.Submitted && r.CaseManagementReference != null);
+        requests.Should().OnlyContain(r => r.Status == ChangeRequestStatus.Submitted && r.SubmissionReference != null);
+        requests.Should().OnlyContain(r => r.TonnageBandUpgrade!.CaseManagementReference == r.SubmissionReference + "-1");
         requests.Should().OnlyContain(r => r.MaterialType == MaterialType.Glass && r.RegistrationId == "bbb000000000000000050018");
         ItemsOf(requests).Where(i => i.Status.IsActive()).Should().ContainSingle();
     }
@@ -266,8 +271,9 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
         requests.Should().OnlyContain(r => r.ChangeType == AccreditationChangeRequest.UpdateOverseasSiteChangeType);
         requests.Should().OnlyContain(r => r.Sites.Count == 1 && r.TonnageBandUpgrade == null);
         requests.Should().OnlyContain(r => r.Status == ChangeRequestStatus.Submitted && r.SubmittedBy != null);
-        requests.Select(r => r.CaseManagementReference).Should().OnlyHaveUniqueItems().And.NotContainNulls();
-        requests.Should().OnlyContain(r => r.CaseManagementReference!.StartsWith("CR26050021A"));
+        requests.Select(r => r.SubmissionReference).Should().OnlyHaveUniqueItems().And.NotContainNulls();
+        requests.Should().OnlyContain(r => r.Sites.Single().CaseManagementReference == r.SubmissionReference + "-1");
+        requests.Should().OnlyContain(r => r.SubmissionReference!.StartsWith("CR26050021A"));
         var items = ItemsOf(requests).OfType<ChangeRequestSite>().ToList();
         items.Select(i => i.Status)
             .Should()
@@ -326,11 +332,12 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
         (request.ApplicationId, request.AccreditationReference).Should().Be((null, null));
         request.ChangeType.Should().Be(AccreditationChangeRequest.UpdateOverseasSiteChangeType);
         request.Status.Should().Be(ChangeRequestStatus.Submitted);
-        request.CaseManagementReference.Should().Be("CR26050018A012");
+        request.SubmissionReference.Should().Be("CR26050018A012");
         var item = request.Sites.Should().ContainSingle().Subject;
         (item.SiteId, item.OrsId, item.SiteName, item.Status)
             .Should()
             .Be((4, "004", "Dragon Recyclers", ChangeItemStatus.Rejected));
+        item.CaseManagementReference.Should().Be("CR26050018A012-1");
         (await _requests.ListAsync(Org, ExporterApp, Ct)).Should().NotContain(r => r.RequestId == request.RequestId);
     }
 

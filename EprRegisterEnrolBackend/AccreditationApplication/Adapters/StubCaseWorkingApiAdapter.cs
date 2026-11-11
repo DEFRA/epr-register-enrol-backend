@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationChanges;
@@ -20,14 +21,17 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         [AccreditationChangeRequest.AddOverseasSiteChangeType] = "ORS",
     };
 
-    // Stub only: ManagementBe owns the real sequence, per change code per year. This in-process
-    // counter is thread-safe but restarts at 00000 with the app and is not shared between
+    // Stub only: ManagementBe owns the real sequences, one per change code per year for the
+    // in-year change references and one per year for the submission references. These in-process
+    // counters are thread-safe but restart at 1 with the app and are not shared between
     // instances. One adapter is registered as a singleton.
     private readonly ConcurrentDictionary<(string Code, int Year), long> _changeSequences = new();
+    private readonly ConcurrentDictionary<int, long> _submissionSequences = new();
 
-    // The sequence segment is always five digits (RA-492): the counter keeps
-    // increasing, and the reference shows it modulo 100000, so 99999 is followed by 00000.
-    private const long ChangeSequenceModulus = 100_000;
+    // The in-year change sequence segment is always five digits (RA-492). As ManagementBe
+    // (RA-739), the counter keeps increasing from 1 and the reference cycles through 00001 to
+    // 99999, so 99999 is followed by 00001 and 00000 is never shown.
+    private const long MaxChangeSequence = 99_999;
 
     // ManagementBe accepts only a whole four-digit accreditation year.
     private const int MinChangeYear = 1000;
@@ -93,27 +97,44 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new CaseWorkingSubmissionResult(applicationReference, workItemId));
     }
 
-    public Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+    // RA-739: as ManagementBe, one work item per site, each with its own in-year change reference,
+    // and one submission reference they share.
+    public Task<ChangeRequestSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
         CancellationToken cancellationToken = default
     )
     {
-        var workItemId = Guid.NewGuid();
-        var reference = GenerateChangeReference(changeRequest);
+        var code = ChangeCodeFor(changeRequest);
+        var year = changeRequest.Year;
+        var submissionReference = FormatSubmissionReference(
+            year,
+            _submissionSequences.AddOrUpdate(year, 1, (_, current) => current + 1)
+        );
+        var sites = changeRequest
+            .Sites.Select(site => new SiteWorkItemResult(
+                site.SiteId,
+                FormatChangeReference(
+                    code,
+                    year,
+                    _changeSequences.AddOrUpdate((code, year), 1, (_, current) => current + 1)
+                ),
+                Guid.NewGuid()
+            ))
+            .ToList();
 
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "StubCaseWorkingApiAdapter.SubmitChangeRequestAsync called for requestId={RequestId} reference={Reference} workItemId={WorkItemId} org={OrganisationId}",
+                "StubCaseWorkingApiAdapter.SubmitChangeRequestAsync called for requestId={RequestId} submissionReference={SubmissionReference} references={References} org={OrganisationId}",
                 changeRequest.RequestId,
-                reference,
-                workItemId,
+                submissionReference,
+                string.Join(',', sites.Select(s => s.CaseReference)),
                 changeRequest.OrganisationId
             );
         }
 
-        return Task.FromResult(new CaseWorkingSubmissionResult(reference, workItemId));
+        return Task.FromResult(new ChangeRequestSubmissionResult(submissionReference, sites));
     }
 
     public Task<NotificationStatusResult> GetNotificationStatusAsync(
@@ -198,7 +219,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.CompletedTask;
     }
 
-    private string GenerateChangeReference(AccreditationChangeRequest changeRequest)
+    private static string ChangeCodeFor(AccreditationChangeRequest changeRequest)
     {
         if (!s_changeTypeCodes.TryGetValue(changeRequest.ChangeType, out var code))
         {
@@ -209,7 +230,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
 
         // The accreditation year is always present on a change request (RA-492), so there is no
         // fallback. A year that is not four digits is refused with a 400, as ManagementBe
-        // refuses it. Numbering starts at 00000.
+        // refuses it.
         if (changeRequest.Year is < MinChangeYear or > MaxChangeYear)
         {
             throw new HttpRequestException(
@@ -219,17 +240,20 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
             );
         }
 
-        var sequence = _changeSequences.AddOrUpdate(
-            (code, changeRequest.Year),
-            0,
-            (_, current) => current + 1
-        );
-
-        return FormatChangeReference(code, changeRequest.Year, sequence);
+        return code;
     }
 
+    // sequence counts from 1.
     internal static string FormatChangeReference(string code, int year, long sequence) =>
-        $"IYC-{code}-{year:D4}-{sequence % ChangeSequenceModulus:D5}";
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"IYC-{code}-{year:D4}-{(sequence - 1) % MaxChangeSequence + 1:D5}"
+        );
+
+    // RA-739: as ManagementBe, SUB-{yyyy}-{seq} with at least four digits; it grows past 9999
+    // rather than wrapping. sequence counts from 1.
+    internal static string FormatSubmissionReference(int year, long sequence) =>
+        string.Create(CultureInfo.InvariantCulture, $"SUB-{year:D4}-{sequence:D4}");
 
     // RA-503: mirrors the org segment fix applied to ManagementBe's real ApplicationReferenceGenerator
     // - uses the numeric, operator/regulator-safe OrgId (e.g. 500500) rather than OrganisationId

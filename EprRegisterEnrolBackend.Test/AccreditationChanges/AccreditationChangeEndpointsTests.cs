@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -639,7 +640,11 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         stored.ChargePence.Should().Be(32800);
         stored.PaymentReference.Should().Be("PAY-1");
         stored.SubmittedAt.Should().NotBeNull();
-        stored.CaseManagementReference.Should().BeNull();
+        // Flag off: no references, which the operator sees as "Not applicable".
+        stored.SubmissionReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementWorkItemId.Should().BeNull();
+        SiteIn(submitted, 901910).GetProperty("caseManagementReference").ValueKind.Should().Be(JsonValueKind.Null);
         await _factory.MockCaseWorkingAdapter.DidNotReceiveWithAnyArgs()
             .SubmitChangeRequestAsync(default!, default!, Ct);
 
@@ -716,7 +721,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
             UpdatedAt = createdAt,
             SubmittedAt = createdAt,
             SubmittedBy = new SubmittedByModel { FullName = "Jane Smith", JobTitle = "Director" },
-            CaseManagementReference = $"CHG-{createdAt:MMdd}",
+            SubmissionReference = $"SUB-{createdAt:MMdd}",
         };
         _factory.FakeChangeRequests.Seed(request);
         return request;
@@ -734,17 +739,25 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         var withdrawn = Item(901911, "006", ChangeItemStatus.Withdrawn);
         withdrawn.ValidFrom = GrantedOn;
         withdrawn.WithdrawnAt = WithdrawnOn;
+        granted.CaseManagementReference = "IYC-ORS-2026-00001";
+        withdrawn.CaseManagementReference = "IYC-ORS-2026-00002";
         var sites = SeedSubmitted(GrantedOn, [granted, withdrawn]);
         var tonnage = SeedSubmitted(
             WithdrawnOn,
             [],
-            new TonnageBandUpgradeItem { Status = ChangeItemStatus.Queried, RequestedBand = PlannedTonnageBand.UpTo10000 }
+            new TonnageBandUpgradeItem
+            {
+                Status = ChangeItemStatus.Queried,
+                RequestedBand = PlannedTonnageBand.UpTo10000,
+                CaseManagementReference = "IYC-TBU-2026-00001",
+            }
         );
 
         var view = await Get();
 
         var siteRequest = RequestIn(view, sites.RequestId);
-        siteRequest.GetProperty("caseManagementReference").GetString().Should().Be("CHG-0301");
+        siteRequest.TryGetProperty("caseManagementReference", out _).Should().BeFalse();
+        siteRequest.TryGetProperty("submissionReference", out _).Should().BeFalse();
         siteRequest.GetProperty("submittedBy").GetProperty("fullName").GetString().Should().Be("Jane Smith");
         siteRequest.GetProperty("submittedAt").GetDateTime().Should().Be(GrantedOn);
         siteRequest.GetProperty("tonnageBandUpgrade").ValueKind.Should().Be(JsonValueKind.Null);
@@ -754,9 +767,11 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         grantedView.GetProperty("status").GetString().Should().Be("Approved");
         grantedView.GetProperty("validFrom").GetDateTime().Should().Be(GrantedOn);
         grantedView.GetProperty("withdrawnAt").ValueKind.Should().Be(JsonValueKind.Null);
+        grantedView.GetProperty("caseManagementReference").GetString().Should().Be("IYC-ORS-2026-00001");
         var withdrawnView = SiteIn(siteRequest, 901911);
         withdrawnView.GetProperty("status").GetString().Should().Be("Withdrawn");
         withdrawnView.GetProperty("withdrawnAt").GetDateTime().Should().Be(WithdrawnOn);
+        withdrawnView.GetProperty("caseManagementReference").GetString().Should().Be("IYC-ORS-2026-00002");
 
         var tonnageRequest = RequestIn(view, tonnage.RequestId);
         tonnageRequest.GetProperty("changeType").GetString().Should().Be("upgrade-tonnage-band");
@@ -768,6 +783,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         item.GetProperty("requestedBand").GetString().Should().Be("UpTo10000");
         item.GetProperty("validFrom").ValueKind.Should().Be(JsonValueKind.Null);
         item.GetProperty("withdrawnAt").ValueKind.Should().Be(JsonValueKind.Null);
+        item.GetProperty("caseManagementReference").GetString().Should().Be("IYC-TBU-2026-00001");
     }
 
     // A granted, refused or withdrawn item is history: the site is not pending and can be added again.
@@ -995,6 +1011,10 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         );
     }
 
+    // Case Management's answer for AddAndSubmit's one site, 901910.
+    private static ChangeRequestSubmissionResult Sent((string Reference, Guid? WorkItemId) site) =>
+        new("SUB-2026-0001", [new SiteWorkItemResult(901910, site.Reference, site.WorkItemId)]);
+
     [Fact]
     public async Task Submit_FlagOn_SendsTheRequestToCaseManagementAndStoresItsReference()
     {
@@ -1005,15 +1025,16 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", workItemId));
+            .Returns(Sent(("IYC-ORS-2026-00001", workItemId)));
 
         var response = await AddAndSubmit();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
-        stored.CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
-        stored.CaseManagementWorkItemId.Should().Be(workItemId);
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.Sites.Single().CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
+        stored.Sites.Single().CaseManagementWorkItemId.Should().Be(workItemId);
         await _factory.MockCaseWorkingAdapter.Received(1).SubmitChangeRequestAsync(
             Arg.Is<AccreditationChangeRequest>(r =>
                 r.Sites.Single().OrsId == "005" && r.ChargePence == 32800 && r.SubmittedBy!.FullName == "Jane Smith"
@@ -1023,7 +1044,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         );
     }
 
-    private void CaseManagementReturns(CaseWorkingSubmissionResult result) =>
+    private void CaseManagementReturns(ChangeRequestSubmissionResult result) =>
         _factory
             .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
                 Arg.Any<AccreditationChangeRequest>(),
@@ -1056,7 +1077,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
             .Returns(_ =>
             {
                 storedWhenCalled = _factory.FakeChangeRequests.All.Single().Status;
-                return new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid());
+                return Sent(("IYC-ORS-2026-00001", null));
             });
 
         (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -1067,7 +1088,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     [Fact]
     public async Task Submit_FlagOn_LostRace_Returns409AndNeverCallsCaseManagement()
     {
-        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid()));
+        CaseManagementReturns(Sent(("IYC-ORS-2026-00001", null)));
         await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
         _factory.FakeChangeRequests.LoseUpdateWhen = r => r.Status == ChangeRequestStatus.Submitted;
 
@@ -1107,7 +1128,9 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.SubmittedBy.Should().BeNull();
         stored.PaymentReference.Should().BeNull();
         stored.ChargePence.Should().BeNull();
-        stored.CaseManagementReference.Should().BeNull();
+        stored.SubmissionReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementWorkItemId.Should().BeNull();
         stored.Sites.Single().Status.Should().Be(ChangeItemStatus.InProgress);
     }
 
@@ -1122,7 +1145,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns<CaseWorkingSubmissionResult>(_ =>
+            .Returns<ChangeRequestSubmissionResult>(_ =>
             {
                 _factory.FakeChangeRequests.Seed(
                     new AccreditationChangeRequest
@@ -1168,7 +1191,10 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         );
 
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
-        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00002", Guid.NewGuid()));
+        CaseManagementReturns(new ChangeRequestSubmissionResult(
+            "SUB-2026-0002",
+            [new SiteWorkItemResult(901910, "IYC-ORS-2026-00002", null), new SiteWorkItemResult(901912, "IYC-ORS-2026-00003", null)]
+        ));
         (await _client.PostAsJsonAsync(
                 $"{Base}/requests/current/submit",
                 new { fullName = "Jane Smith", jobTitle = "Director" },
@@ -1181,7 +1207,8 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
         stored.Sites.Should().HaveCount(2);
         stored.ChargePence.Should().Be(65600);
-        stored.CaseManagementReference.Should().Be("IYC-ORS-2026-00002");
+        stored.SubmissionReference.Should().Be("SUB-2026-0002");
+        stored.Sites.Select(s => s.CaseManagementReference).Should().Equal("IYC-ORS-2026-00002", "IYC-ORS-2026-00003");
     }
 
     // Not a Case Management failure: the request is still reopened, but the error is not dressed up
@@ -1201,14 +1228,180 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     [Fact]
     public async Task Submit_FlagOn_ReferenceNotSaved_StillSubmitted()
     {
-        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid()));
-        _factory.FakeChangeRequests.LoseUpdateWhen = r => r.CaseManagementReference is not null;
+        CaseManagementReturns(Sent(("IYC-ORS-2026-00001", null)));
+        _factory.FakeChangeRequests.LoseUpdateWhen = r => r.SubmissionReference is not null;
 
         var response = await AddAndSubmit();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
-        stored.CaseManagementReference.Should().BeNull();
+        stored.SubmissionReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementReference.Should().BeNull();
+    }
+}
+
+// RA-739: the hand-off flag on, through the real HTTP adapter, against a fake ManagementBe that
+// answers POST /work-items as ManagementBe answers an add-overseas-site submission.
+public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
+{
+    private const int Year = 2026;
+    private static readonly string Org = DevExporterOrg.InYearChange.OrganisationId;
+    private static readonly string AppId = DevExporterAccreditationSeedService.ApplicationIdFor(DevExporterOrg.InYearChange, Year).ToString();
+    private static readonly string Base = $"/api/v1/accreditation-changes/{Org}/{AppId}";
+    private static readonly string[] R3 = ["R3"];
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private readonly FakeManagementBe _managementBe = new();
+    private readonly AccreditationChangeTestFactory _factory;
+    private readonly HttpClient _client;
+
+    public AccreditationChangeCaseManagementHttpTests()
+    {
+        _factory = new(submitToCaseManagement: true, caseManagement: _managementBe);
+        _factory.FakePersistence.Seed(DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year));
+        _client = _factory.CreateClient();
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        _factory.Dispose();
+        _managementBe.Dispose();
+    }
+
+    // Three complete sites: France as it is, India and Turkey with their missing answers supplied.
+    private async Task<HttpResponseMessage> SubmitThreeSites()
+    {
+        foreach (var siteId in new[] { 901910, 901911, 901912 })
+            (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId }, Ct))
+                .StatusCode.Should().Be(HttpStatusCode.Created);
+        await _client.PatchAsJsonAsync(
+            $"{Base}/requests/current/sites/901911",
+            new { coordinates = "28.6139, 77.2090", operationCodes = R3, conditionsOfExport = true },
+            Ct
+        );
+        await _client.PatchAsJsonAsync(
+            $"{Base}/requests/current/sites/901912",
+            new { operationCodes = R3, conditionsOfExport = false },
+            Ct
+        );
+        return await _client.PostAsJsonAsync(
+            $"{Base}/requests/current/submit",
+            new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
+            Ct
+        );
+    }
+
+    // ManagementBe's 201: the sites in reverse order, each echoing the siteId number it was sent.
+    private static (HttpStatusCode, string) Created(JsonNode request, Func<JsonNode, object?>? reference = null)
+    {
+        var sites = request["payload"]!["sites"]!.AsArray();
+        var workItems = sites
+            .Select((site, index) => new
+            {
+                siteId = site!["siteId"]!.GetValue<int>(),
+                id = Guid.NewGuid(),
+                applicationReference = reference is null ? $"IYC-ORS-2026-{index + 1:D5}" : reference(site),
+            })
+            .Reverse();
+        return (HttpStatusCode.Created, JsonSerializer.Serialize(new { submissionReference = "SUB-2026-0001", workItems }));
+    }
+
+    [Fact]
+    public async Task Submit_ThreeSites_StoresOneSubmissionReferenceAndEachSitesOwnReferenceAndWorkItem()
+    {
+        _managementBe.Respond = request => Created(request);
+
+        var response = await SubmitThreeSites();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        _managementBe.Requests.Should().ContainSingle();
+        var sent = _managementBe.Requests.Single();
+        sent["typeId"]!.GetValue<string>().Should().Be("add-overseas-site");
+        sent["payload"]!["sites"]!.AsArray().Select(s => s!["siteId"]!.GetValue<int>())
+            .Should().Equal(901910, 901911, 901912);
+
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.Submitted);
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.Sites.Select(s => (s.SiteId, s.CaseManagementReference))
+            .Should().Equal((901910, "IYC-ORS-2026-00001"), (901911, "IYC-ORS-2026-00002"), (901912, "IYC-ORS-2026-00003"));
+        stored.Sites.Select(s => s.CaseManagementWorkItemId).Should().OnlyHaveUniqueItems().And.NotContainNulls();
+
+        // The operator's view shows each site's own reference, and not the submission reference.
+        var view = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        view.GetProperty("sites").EnumerateArray()
+            .Select(s => s.GetProperty("caseManagementReference").GetString())
+            .Should().Equal("IYC-ORS-2026-00001", "IYC-ORS-2026-00002", "IYC-ORS-2026-00003");
+        view.GetRawText().Should().NotContain("SUB-2026-0001");
+    }
+
+    public static TheoryData<string> Failures() =>
+        ["server error", "unparseable", "no submission reference", "a site without a reference", "a site missing", "timeout"];
+
+    // Any Case Management failure reopens the request, with nothing of the submission kept, and is a 503.
+    [Theory]
+    [MemberData(nameof(Failures))]
+    public async Task Submit_CaseManagementFails_Returns503AndReopensTheRequest(string failure)
+    {
+        _managementBe.Respond = request =>
+            failure switch
+            {
+                "server error" => (HttpStatusCode.InternalServerError, """{"title":"Error"}"""),
+                "unparseable" => (HttpStatusCode.Created, "<html>"),
+                "no submission reference" => (
+                    HttpStatusCode.Created,
+                    Created(request).Item2.Replace("\"submissionReference\":\"SUB-2026-0001\",", "", StringComparison.Ordinal)
+                ),
+                "a site without a reference" => Created(
+                    request,
+                    site => site["siteId"]!.GetValue<int>() == 901911 ? null : "IYC-ORS-2026-00009"
+                ),
+                "a site missing" => (
+                    HttpStatusCode.Created,
+                    """{"submissionReference":"SUB-2026-0001","workItems":[{"siteId":901910,"applicationReference":"IYC-ORS-2026-00001"}]}"""
+                ),
+                _ => throw new TaskCanceledException("timed out", new TimeoutException()),
+            };
+
+        var response = await SubmitThreeSites();
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        stored.SubmittedAt.Should().BeNull();
+        stored.SubmittedBy.Should().BeNull();
+        stored.PaymentReference.Should().BeNull();
+        stored.ChargePence.Should().BeNull();
+        stored.SubmissionReference.Should().BeNull();
+        stored.Sites.Should().HaveCount(3);
+        stored.Sites.Should().OnlyContain(s =>
+            s.Status == ChangeItemStatus.InProgress && s.CaseManagementReference == null && s.CaseManagementWorkItemId == null
+        );
+    }
+
+    private sealed class FakeManagementBe : HttpMessageHandler
+    {
+        public Func<JsonNode, (HttpStatusCode Status, string Body)> Respond { get; set; } =
+            _ => (HttpStatusCode.NotFound, "{}");
+
+        public List<JsonNode> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            request.RequestUri!.ToString().Should().Be($"{AccreditationChangeTestFactory.CaseManagementUrl}/work-items");
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!;
+            Requests.Add(body);
+            var (status, json) = Respond(body);
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            };
+        }
     }
 }
