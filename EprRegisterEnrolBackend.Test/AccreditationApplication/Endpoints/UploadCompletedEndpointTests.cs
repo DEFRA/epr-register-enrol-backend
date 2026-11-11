@@ -14,8 +14,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
 // The CDP Uploader callback route is unauthenticated, so anyone can call it. These run it
 // against the real Mongo-backed PendingUploadService to prove a callback for an id this
-// service never started (or whose record expired) stores nothing and logs an Error, while
-// still being acknowledged with 200 so CDP Uploader does not retry it.
+// service never started (or whose record expired) stores nothing and is refused.
 public sealed class UploadCompletedEndpointTests : IDisposable
 {
     private const string Route = "/api/v1/accreditation-applications/files/upload-completed";
@@ -81,13 +80,13 @@ public sealed class UploadCompletedEndpointTests : IDisposable
         };
 
     [Fact]
-    public async Task UnknownFileUploadId_Returns200_StoresNothing_LogsErrorWithId()
+    public async Task UnknownFileUploadId_Returns404_StoresNothing_LogsErrorWithId()
     {
         var fileUploadId = Guid.NewGuid().ToString();
 
         var response = await _client.PostAsJsonAsync(Route, CallbackFor(fileUploadId), Ct);
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await Collection().CountDocumentsAsync(_ => true, cancellationToken: Ct)).Should().Be(0);
         var error = _logs.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Subject;
         error.Properties["FileUploadId"].Should().Be(fileUploadId);

@@ -5004,14 +5004,14 @@ public static class AccreditationApplicationEndpoints
         if (file is null)
             return Results.BadRequest("Missing file in callback payload.");
 
-        // 200 even when no pending upload matched (the record expired, or the call is not a real
-        // CDP callback): CompleteAsync has stored nothing and already logged the Error. CDP
-        // Uploader keeps any callback that gets a non-2xx response on its queue and retries it
-        // until its own record expires, a week by default (cdp-uploader README "Callback delivery
-        // and retries"; src/server/callback/listener/handle-scan-results-callback.js @ 4a6e157),
-        // which would repeat the Error and the alert for an upload nothing can complete.
-        await pendingUploadService.CompleteAsync(fileUploadId, file, cancellationToken);
-        return Results.Ok();
+        // No record means nothing this service started is waiting on this id (expired, or not a
+        // real CDP callback). Non-2xx makes CDP keep the message and retry it later.
+        var completed = await pendingUploadService.CompleteAsync(
+            fileUploadId,
+            file,
+            cancellationToken
+        );
+        return completed ? Results.Ok() : Results.NotFound();
     }
 
     private static async Task<IResult> GetUploadStatus(
