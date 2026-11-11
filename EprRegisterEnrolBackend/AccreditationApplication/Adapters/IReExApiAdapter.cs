@@ -81,6 +81,12 @@ public class ReExAccreditationDto
     public MaterialType MaterialType { get; set; }
     public int Year { get; set; }
     public string? OrganisationName { get; set; }
+
+    // The organisation's numeric orgId, the public register's "Org Id" (e.g. 500027 in the Public register of
+    // reprocessors and exporters). From the same organisation document, so a seed has it without a second ReEx call.
+    // Null when ReEx holds none.
+    public int? OrganisationNumber { get; set; }
+
     public string? RegistrationReference { get; set; }
     public string? SiteAddress { get; set; }
     public bool IsExporter { get; set; }

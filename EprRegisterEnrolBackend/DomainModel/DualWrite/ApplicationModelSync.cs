@@ -56,6 +56,18 @@ public sealed class ApplicationModelSync(
             return;
         }
 
+        // An organisation seeded before the seed carried the number got it later, on the legacy application only (by a
+        // read's backfill or at Submit), so a write fills it in while the Organisation still has none.
+        if (legacy.OrgId is { } organisationNumber)
+        {
+            await stores.Organisations.FillMissingOrganisationNumberAsync(
+                legacy.OrganisationId,
+                organisationNumber,
+                session,
+                cancellationToken
+            );
+        }
+
         var run = new SyncRun(
             stores,
             applications,

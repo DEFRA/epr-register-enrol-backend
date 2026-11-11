@@ -974,6 +974,9 @@ public static class AccreditationApplicationEndpoints
         var application = new AccreditationApplicationModel
         {
             OrganisationId = organisationId,
+            // From the same ReEx call, and passed on to the domain model's Organisation, which will be the only copy
+            // once the legacy application goes. Null when ReEx holds none; Submit's lookup then tries again.
+            OrgId = priorYearData.OrganisationNumber,
             OrganisationName = priorYearData.OrganisationName,
             Year = request.Year,
             RegistrationId = registrationId,

@@ -201,6 +201,46 @@ public sealed class SeedDualWriterTests : IDisposable
         Assert.Equal(0, Interlocked.Read(ref _failures));
     }
 
+    // The seed's ReEx response, carrying the organisation's number (its public register "Org Id").
+    private static ReExAccreditationDto ReExWithOrgId(int? organisationNumber)
+    {
+        var reEx = ReEx();
+        reEx.OrganisationNumber = organisationNumber;
+        return reEx;
+    }
+
+    private async Task SeedAsync(ReExAccreditationDto reEx) =>
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+
+    [Fact]
+    public async Task WriteAsync_ReExGivesAnOrganisationNumber_SetsItOnTheOrganisation()
+    {
+        await SeedAsync(ReExWithOrgId(520458));
+
+        Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+    }
+
+    [Fact]
+    public async Task WriteAsync_OrganisationWithoutANumber_IsFilledByALaterSeed()
+    {
+        await SeedAsync(ReExWithOrgId(null));
+        Assert.Null(Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+
+        await SeedAsync(ReExWithOrgId(520458));
+
+        Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+    }
+
+    [Fact]
+    public async Task WriteAsync_OrganisationWithANumber_KeepsIt()
+    {
+        await SeedAsync(ReExWithOrgId(520458));
+
+        await SeedAsync(ReExWithOrgId(999999));
+
+        Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+    }
+
     // The seed's first step inside its transaction is a read, which the driver refuses unless the transaction
     // reads from the primary. In test the CDP connection string sent reads elsewhere and every seed failed.
     [Fact]

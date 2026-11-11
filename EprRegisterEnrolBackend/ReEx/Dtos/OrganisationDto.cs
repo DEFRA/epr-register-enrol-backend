@@ -16,7 +16,8 @@ public class OrganisationDto
 
     /// <summary>
     /// The numeric organisation number (e.g. 500500) — this is the value an
-    /// operator or regulator should actually see, and the one
+    /// operator or regulator should actually see (the public register's
+    /// "Org Id"), and the one
     /// RegulatoryNumberGenerator embeds into accreditation/registration
     /// numbers. Do not confuse with <see cref="Id"/> above (internal-only
     /// ObjectId) or with the identically-named but UUID-typed
