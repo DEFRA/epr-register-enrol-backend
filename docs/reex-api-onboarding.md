@@ -16,7 +16,8 @@ and versioned collections (RA-677) land; paths live under `/v1`.
 
 ## Credentials
 
-Each consumer gets its own **client id** and **secret** per environment. ReEx's client id is
+Each consumer gets its own **client id** and **secret** per environment. To get them for a new
+consumer, ask the Reg-Acc team (see Contact). ReEx's client id is
 `epr-ReEx-Client` (case-sensitive, the same in every environment). Secrets are created and
 rotated in CDP secrets. Never send a secret over Slack or email. To rotate, we add a `_NEXT`
 secret; both work until you have switched, then the old one is removed.
@@ -146,7 +147,11 @@ For a `404` example, use any registration number that does not exist, for exampl
 
 ## Contact
 
-ReEx team
+The Reg-Acc team owns this API. Ask them for access (a client id and secret), for help, and to report
+a problem.
+
+When you report a problem, include the `traceId` from the error response, the environment, the
+request path and the time of the request (UTC).
 
 ## Consumer tests
 
