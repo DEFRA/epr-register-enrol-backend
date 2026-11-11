@@ -97,6 +97,13 @@ public sealed class UploadCompletedEndpointTests : IDisposable
     [Theory]
     [InlineData("not-a-guid")]
     [InlineData("<script>alert(1)</script>")]
+    // Guid.TryParse accepts all of these; only the canonical "D" form StartCdpUploadAsync issues
+    // is allowed.
+    [InlineData("  3f2504e0-4f89-41d3-9a0c-0305e82c3301  ")]
+    [InlineData("\r\n3f2504e0-4f89-41d3-9a0c-0305e82c3301\r\n")]
+    [InlineData("3f2504e04f8941d39a0c0305e82c3301")]
+    [InlineData("{3f2504e0-4f89-41d3-9a0c-0305e82c3301}")]
+    [InlineData("{0x3f2504e0, 0x4f89,0x41d3,{0x9a,0x0c,0x03,0x05,0xe8,0x2c,0x33,0x01}}")]
     public async Task MalformedFileUploadId_Returns400_StoresNothing_LogsNoError(string fileUploadId)
     {
         var response = await _client.PostAsJsonAsync(Route, CallbackFor(fileUploadId), Ct);

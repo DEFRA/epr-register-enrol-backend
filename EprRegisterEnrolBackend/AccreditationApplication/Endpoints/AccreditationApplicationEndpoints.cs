@@ -5001,10 +5001,16 @@ public static class AccreditationApplicationEndpoints
         if (string.IsNullOrWhiteSpace(fileUploadId))
             return Results.BadRequest("Missing fileUploadId in callback metadata.");
 
-        // StartCdpUploadAsync only ever issues a Guid. Refusing anything else here, before the
-        // lookup, keeps arbitrary caller-chosen text out of the Error log below (this route is
-        // unauthenticated), and CDP never sends one.
-        if (!Guid.TryParse(fileUploadId, out _))
+        // StartCdpUploadAsync only ever issues Guid.NewGuid().ToString(), the canonical 36-char
+        // "D" form, so that is the only form accepted. Guid.TryParse would also take other forms
+        // and surrounding (or, for "X", embedded) whitespace of any length, and TryParseExact
+        // still trims surrounding whitespace, hence the length check. Only the re-formatted
+        // canonical value is looked up and logged, so a caller on this unauthenticated route
+        // cannot put text of its choosing into the Error log.
+        if (
+            fileUploadId.Length != 36
+            || !Guid.TryParseExact(fileUploadId, "D", out var uploadId)
+        )
             return Results.BadRequest("Invalid fileUploadId in callback metadata.");
 
         var file = payload.Form?.File;
@@ -5014,7 +5020,7 @@ public static class AccreditationApplicationEndpoints
         // No record means nothing this service started is waiting on this id (expired, or not a
         // real CDP callback). Non-2xx makes CDP keep the message and retry it later.
         var completed = await pendingUploadService.CompleteAsync(
-            fileUploadId,
+            uploadId.ToString(),
             file,
             cancellationToken
         );
