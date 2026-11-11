@@ -192,13 +192,13 @@ public sealed class ApplicationGroupMigrator(
                 session,
                 cancellationToken
             );
-            await stores.Organisations.FillMissingCompanyDetailsAsync(
+            await stores.Organisations.FillMissingDetailsAsync(
                 organisationId,
                 NewOrganisation(newestInOrganisation),
                 session,
                 cancellationToken
             );
-            var organisation = await stores.Organisations.FillMissingCompanyDetailsAsync(
+            var organisation = await stores.Organisations.FillMissingDetailsAsync(
                 organisationId,
                 NewOrganisation(Newest),
                 session,

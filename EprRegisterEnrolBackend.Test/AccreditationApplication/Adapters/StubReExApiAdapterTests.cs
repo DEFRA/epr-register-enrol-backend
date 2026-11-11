@@ -451,6 +451,33 @@ public class StubReExApiAdapterTests
         result.Value.IsExporter.Should().BeFalse();
     }
 
+    // As with the real ReEx, the seed's call and the separate lookup read the same organisation, so they agree.
+    [Theory]
+    [InlineData("e2e-c0ffee", "e2e-reg-c0ffee")]
+    [InlineData("999999", "reg-1")]
+    [InlineData("6a2fcd74e16883c137d01188", "reg-1")]
+    public async Task GetAccreditationAsync_OrganisationNumber_MatchesGetOrganisationNumberAsync(
+        string organisationId,
+        string registrationId
+    )
+    {
+        var sut = NewSut();
+
+        var accreditation = await sut.GetAccreditationAsync(
+            organisationId,
+            registrationId,
+            MaterialType.Plastic,
+            2025
+        );
+        var number = await sut.GetOrganisationNumberAsync(
+            organisationId,
+            TestContext.Current.CancellationToken
+        );
+
+        accreditation.IsSuccess.Should().BeTrue(because: accreditation.Error?.Message);
+        accreditation.Value!.OrganisationNumber.Should().Be(number.Value);
+    }
+
     [Fact]
     public async Task GetAccreditationAsync_TestOrganisation_UsesOnlyNotifySimulatedEmails()
     {
