@@ -188,6 +188,80 @@ public class AccreditationApplicationEndpointsTests
             );
     }
 
+    // ReEx's accreditation data has no organisation number, so Seed looks it up: the domain model's Organisation will
+    // be the only copy once the legacy application goes.
+    [Fact]
+    public async Task Seed_ValidRequest_CarriesTheReExOrganisationNumberToTheApplicationAndTheDualWriter()
+    {
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(MinimalAdapterSuccess()));
+        _factory
+            .MockReExAdapter.GetOrganisationNumberAsync("org-123", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<int?>.Success(520458, 200)));
+        var writer = Substitute.For<ISeedDualWriter>();
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton(writer))
+        );
+
+        var response = await factory
+            .CreateClient()
+            .PostAsJsonAsync(
+                "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+                new SeedRequest { Year = 2026 },
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var created = (await _factory.FakePersistence.GetByOrganisationAsync("org-123")).Single();
+        created.OrgId.Should().Be(520458);
+        await writer
+            .Received(1)
+            .WriteAsync(
+                Arg.Is<SeedDualWrite>(s => s.Application.OrgId == 520458),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Seed_OrganisationNumberLookupFails_StillCreatesTheApplicationWithoutOne()
+    {
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(MinimalAdapterSuccess()));
+        _factory
+            .MockReExAdapter.GetOrganisationNumberAsync("org-123", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult(
+                    ReExResult<int?>.Fail(new ReExError(ReExErrorKind.ServerError, "down"), 500)
+                )
+            );
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            new SeedRequest { Year = 2026 },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await _factory.FakePersistence.GetByOrganisationAsync("org-123"))
+            .Single()
+            .OrgId.Should()
+            .BeNull();
+    }
+
     [Fact]
     public async Task Seed_WithPriorYearData_PrePopulatesFields()
     {
@@ -2786,7 +2860,11 @@ public class AccreditationApplicationEndpointsTests
                 a.Query = new AccreditationApplicationQuery
                 {
                     QueryNote = "clarify ORS and BES",
-                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
+                    QueriedSectionKeys =
+                    [
+                        "overseas-reprocessing-sites",
+                        "broadly-equivalent-standards",
+                    ],
                 };
             }
         );
@@ -5653,11 +5731,7 @@ public class AccreditationApplicationEndpointsTests
         AccreditationApplicationModel app
     )
     {
-        var fileUploadId = await SeedValidatedUpload(
-            "bes-new",
-            "new.pdf",
-            "bes-evidence/bes-new"
-        );
+        var fileUploadId = await SeedValidatedUpload("bes-new", "new.pdf", "bes-evidence/bes-new");
         return await _client.PostAsJsonAsync(
             $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/overseas-sites/1/bes-evidence/files",
             new AddBesEvidenceFileRequest { FileUploadId = fileUploadId },
@@ -6775,7 +6849,11 @@ public class AccreditationApplicationEndpointsTests
                 a.Query = new AccreditationApplicationQuery
                 {
                     QueryNote = "clarify ORS and BES",
-                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
+                    QueriedSectionKeys =
+                    [
+                        "overseas-reprocessing-sites",
+                        "broadly-equivalent-standards",
+                    ],
                 };
             }
         );
@@ -6853,7 +6931,11 @@ public class AccreditationApplicationEndpointsTests
                 a.Query = new AccreditationApplicationQuery
                 {
                     QueryNote = "clarify ORS and BES",
-                    QueriedSectionKeys = ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
+                    QueriedSectionKeys =
+                    [
+                        "overseas-reprocessing-sites",
+                        "broadly-equivalent-standards",
+                    ],
                 };
             }
         );

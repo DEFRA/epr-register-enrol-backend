@@ -943,6 +943,74 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Null((await CurrentSiteAsync("001")).FirstApprovedAt);
     }
 
+    // What a seed writes: the Organisation, with no organisation number unless the seed's lookup found one.
+    private Task SeededOrganisationAsync(int? organisationNumber) =>
+        _factory
+            .GetCollection<OrganisationEntity>(DomainModelCollections.Organisations)
+            .InsertOneAsync(
+                new OrganisationEntity
+                {
+                    Id = ObjectId.GenerateNewId(),
+                    ReExOrganisationId = ReExOrganisationId,
+                    Name = "Acme Recycling Ltd",
+                    OrganisationNumber = organisationNumber,
+                },
+                cancellationToken: Ct
+            );
+
+    [Fact]
+    public async Task Migrate_NewOrganisation_TakesTheApplicationsOrganisationNumber()
+    {
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.OrgId = 520458;
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        Assert.Equal(
+            520458,
+            Assert
+                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
+                .OrganisationNumber
+        );
+    }
+
+    [Fact]
+    public async Task Migrate_SeededOrganisationWithoutANumber_IsFilledFromTheApplication()
+    {
+        await SeededOrganisationAsync(null);
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.OrgId = 520458;
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        Assert.Equal(
+            520458,
+            Assert
+                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
+                .OrganisationNumber
+        );
+    }
+
+    [Fact]
+    public async Task Migrate_SeededOrganisationWithANumber_KeepsIt()
+    {
+        await SeededOrganisationAsync(520458);
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.OrgId = 999999;
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        Assert.Equal(
+            520458,
+            Assert
+                .Single(await AllAsync<OrganisationEntity>(DomainModelCollections.Organisations))
+                .OrganisationNumber
+        );
+    }
+
     private async Task<RegistrationEntity> SeededRegistrationAsync(
         string number = "R27FROMREEX",
         params string[] previousNumbers

@@ -191,6 +191,42 @@ public sealed class DomainModelMigrationServiceTests : IDisposable
             .Find(FilterDefinition<DomainModelMigrationState>.Empty)
             .SingleAsync(Ct);
 
+    // The startup run fills the number on an Organisation a seed wrote without one, from the legacy application.
+    [Fact]
+    public async Task Run_SeededOrganisationWithoutANumber_IsFilledFromTheLegacyApplication()
+    {
+        await _factory
+            .GetCollection<OrganisationEntity>(DomainModelCollections.Organisations)
+            .InsertOneAsync(
+                new OrganisationEntity
+                {
+                    Id = ObjectId.GenerateNewId(),
+                    ReExOrganisationId = ReExOrganisationId,
+                },
+                cancellationToken: Ct
+            );
+        var id = await ApplicationAsync(Registration(1));
+        await _factory
+            .GetCollection<BsonDocument>(DomainModelCollections.LegacyApplications)
+            .UpdateOneAsync(
+                new BsonDocument("_id", id),
+                new BsonDocument("$set", new BsonDocument("orgId", 520458)),
+                cancellationToken: Ct
+            );
+
+        await Service().RunAsync(Ct);
+
+        (await MigratedAsync()).Should().Contain(id);
+        (
+            await _factory
+                .GetCollection<OrganisationEntity>(DomainModelCollections.Organisations)
+                .Find(FilterDefinition<OrganisationEntity>.Empty)
+                .SingleAsync(Ct)
+        )
+            .OrganisationNumber.Should()
+            .Be(520458);
+    }
+
     [Fact]
     public async Task Run_MigratesEveryApplication_AcrossBatches()
     {

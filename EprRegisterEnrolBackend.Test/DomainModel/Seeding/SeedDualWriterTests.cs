@@ -201,6 +201,49 @@ public sealed class SeedDualWriterTests : IDisposable
         Assert.Equal(0, Interlocked.Read(ref _failures));
     }
 
+    private async Task<AccreditationApplicationModel> LegacyApplicationAsync(
+        ReExAccreditationDto reEx,
+        int? organisationNumber
+    )
+    {
+        var application = await LegacyApplicationAsync(reEx);
+        application.OrgId = organisationNumber;
+        return application;
+    }
+
+    [Fact]
+    public async Task WriteAsync_ApplicationWithAnOrganisationNumber_SetsItOnTheOrganisation()
+    {
+        var reEx = ReEx();
+
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, 520458)), Ct);
+
+        Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+    }
+
+    [Fact]
+    public async Task WriteAsync_OrganisationWithoutANumber_IsFilledByALaterSeed()
+    {
+        var reEx = ReEx();
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, null)), Ct);
+        Assert.Null(Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, 520458)), Ct);
+
+        Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+    }
+
+    [Fact]
+    public async Task WriteAsync_OrganisationWithANumber_KeepsIt()
+    {
+        var reEx = ReEx();
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, 520458)), Ct);
+
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx, 999999)), Ct);
+
+        Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+    }
+
     // The seed's first step inside its transaction is a read, which the driver refuses unless the transaction
     // reads from the primary. In test the CDP connection string sent reads elsewhere and every seed failed.
     [Fact]

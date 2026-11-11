@@ -1259,4 +1259,34 @@ public sealed class ApplicationModelSyncTests : IDisposable
             )
         );
     }
+
+    private Task<List<OrganisationEntity>> OrganisationsAsync() =>
+        AllAsync(DomainModelCollections.Organisations, FilterDefinition<OrganisationEntity>.Empty);
+
+    // The number is looked up from ReEx after the seed and written onto the legacy application, often by a read that
+    // isn't dual-written, so a later dual-written write fills it in on the Organisation.
+    [Fact]
+    public async Task Sync_LegacyGainedAnOrganisationNumber_FillsItOnTheOrganisation()
+    {
+        var application = await MigratedApplicationAsync(ApplicationStatus.Started);
+        Assert.Null(Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+        await EditAsync(application, a => a.OrgId = 520458);
+
+        await SyncAsync(application);
+
+        Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+    }
+
+    [Fact]
+    public async Task Sync_OrganisationAlreadyHasANumber_KeepsIt()
+    {
+        var application = await MigratedApplicationAsync(ApplicationStatus.Started);
+        await EditAsync(application, a => a.OrgId = 520458);
+        await SyncAsync(application);
+        await EditAsync(application, a => a.OrgId = 999999);
+
+        await SyncAsync(application);
+
+        Assert.Equal(520458, Assert.Single(await OrganisationsAsync()).OrganisationNumber);
+    }
 }

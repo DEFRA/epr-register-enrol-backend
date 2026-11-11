@@ -85,7 +85,12 @@ public sealed class SeedDualWriter(
         var now = clock.GetUtcNow().UtcDateTime;
         var organisationId = await stores.Organisations.UpsertAsync(
             seed.ReExOrganisationId,
-            organisation => SeedEntityMapper.ApplyTo(organisation, seed.ReEx),
+            organisation =>
+            {
+                SeedEntityMapper.ApplyTo(organisation, seed.ReEx);
+                // ReEx's accreditation data has no organisation number; the seed looked it up separately.
+                organisation.OrganisationNumber ??= seed.Application.OrgId;
+            },
             now,
             session,
             cancellationToken
