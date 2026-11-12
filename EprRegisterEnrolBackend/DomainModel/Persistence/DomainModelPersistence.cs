@@ -30,7 +30,7 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
     )
         : base(connectionFactory, collectionName, loggerFactory)
     {
-        EnsureValidator();
+        TryApplyValidator();
     }
 
     public string CollectionName => Collection.CollectionNamespace.CollectionName;
@@ -95,14 +95,15 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
 
     // collMod works on a collection that already exists, whatever it holds, and changes none of its documents. The
     // index build normally creates the collection first; if it didn't, it is created with the validator, using the same
-    // settings. If another instance creates it in between (NamespaceExists), collMod is simply run again. A failure,
-    // such as a database user that may not run collMod, is logged and left for the schema check to report as
-    // Degraded: it must never stop the service starting. It is tried again at the next startup.
-    private void EnsureValidator()
+    // settings. If another instance creates it in between (NamespaceExists), collMod is simply run again. A failure is
+    // logged and returned, never thrown: it must never stop the service starting. MongoIndexInitializerService retries
+    // a Failed result with backoff for about 30 seconds; a NotPermitted one (a database user that may not run collMod)
+    // is left for the schema check to report as Degraded until the next startup (RA-746, RA-758).
+    public ValidatorApplyResult TryApplyValidator()
     {
         if (DefineValidator() is not { } validator)
         {
-            return;
+            return ValidatorApplyResult.NoValidator;
         }
 
         try
@@ -122,14 +123,19 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
                     RunWithValidation("collMod", validator);
                 }
             }
+
+            return ValidatorApplyResult.Applied;
         }
         catch (Exception ex) when (ex is MongoException or TimeoutException)
         {
+            var result = ValidatorApplyFailure.Classify(ex);
             Logger.LogWarning(
                 ex,
-                "The $jsonSchema validator could not be applied to {Collection}; the schema check reports it as Degraded",
-                CollectionName
+                "The $jsonSchema validator could not be applied to {Collection} ({ValidatorApplyResult}); the schema check reports it as Degraded",
+                CollectionName,
+                result
             );
+            return result;
         }
     }
 

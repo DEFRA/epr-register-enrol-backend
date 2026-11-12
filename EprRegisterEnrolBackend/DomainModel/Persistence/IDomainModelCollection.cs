@@ -21,4 +21,11 @@ public interface IDomainModelCollection
 
     /// <summary>The same three settings as the server has them now, or null when it has no validator.</summary>
     Task<BsonDocument?> GetValidationAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Applies the validator again (collMod, or create if the collection does not exist yet). Never throws: a failure is
+    /// logged and returned, so the caller can tell one worth retrying from one that is not (RA-758). Synchronous, like
+    /// the constructor that first applies it.
+    /// </summary>
+    ValidatorApplyResult TryApplyValidator();
 }
