@@ -1004,7 +1004,7 @@ public static class AccreditationApplicationEndpoints
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData.AccreditationId,
             SourceYear = request.Year - 1,
-            SourceAccreditationNumber = priorYearData.AccreditationNumber,
+            PreviousYearAccreditationReference = priorYearData.AccreditationNumber,
             OverseasSites = priorYearData.IsExporter
                 ? new AccreditationApplicationOverseasSites { Sites = priorYearData.OverseasSites }
                 : null,

@@ -722,7 +722,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             ApplicationStatus = src.ApplicationStatus,
             SourceReExAccreditationId = src.SourceReExAccreditationId,
             SourceYear = src.SourceYear,
-            SourceAccreditationNumber = src.SourceAccreditationNumber,
+            PreviousYearAccreditationReference = src.PreviousYearAccreditationReference,
             ApplicationReference = src.ApplicationReference,
             CaseManagementReference = src.CaseManagementReference,
             CaseManagementWorkItemId = src.CaseManagementWorkItemId,

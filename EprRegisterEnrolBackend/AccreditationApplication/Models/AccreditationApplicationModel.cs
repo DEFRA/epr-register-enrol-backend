@@ -86,10 +86,6 @@ public class AccreditationApplicationModel
 
     public int? SourceYear { get; set; }
 
-    // RA-763: the SourceYear accreditation's number, as ReEx issued it, stored at Seed (or
-    // backfilled from the public register). Null when the operator was registered-only.
-    public string? SourceAccreditationNumber { get; set; }
-
     public string? ApplicationReference { get; set; }
 
     // RA-503: the operator's real, nation-specific bank payment reference (buildPaymentReference
@@ -120,6 +116,10 @@ public class AccreditationApplicationModel
     // RA-690: derived from the registration reference, never from a counter, and
     // never regenerated once issued.
     public string? AccreditationReference { get; set; }
+
+    // RA-763: the operator's accreditation number for the previous year (e.g. A26ER5003240164PL
+    // on a 2027 application). Null when they were registered only that year.
+    public string? PreviousYearAccreditationReference { get; set; }
 
     // RA-448's "reapply for accreditation" regenerate history. RA-690 removed that
     // path, so nothing writes this any more; it stays so existing documents still
