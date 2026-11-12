@@ -2,7 +2,7 @@
 
 A read-only API for services (first consumer: ReEx) that need accreditation data held by the
 Operator Backend. Paths live under `/v1`. The data behind the API will move to a new data model
-(RA-677); we do not intend that to change what the API returns, and any change to it follows the
+(a planned change); we do not intend that to change what the API returns, and any change to it follows the
 [versioning and deprecation policy](#versioning-and-deprecation) below.
 
 ## Base URLs
@@ -79,7 +79,7 @@ twice is refused as `reused_nonce`.
   example 1, 2 then 4 seconds) and a limit of a few attempts.
 - Do not retry a `400` or a `404`: the same request gets the same answer.
 - On `expired_timestamp`, correct your clock, then sign a new request.
-- Keep your call rate sensible. A per-client rate limit is planned, so avoid tight polling loops.
+- Keep your call rate sensible. There is no rate limit today, but we may add a per-client one, so avoid tight polling loops.
 
 ## Endpoints
 
@@ -93,13 +93,11 @@ Accreditations for 2027 onwards are served.
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20&includeWithdrawn=false` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}?includeWithdrawn=false` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
 
-Notes: optional fields with no value are omitted. The shapes follow the v2 draft spec
-(`docs/openapi/registration-accreditation-api.v2.yaml`). `status` is the latest `statusHistory`
-entry effective today. Until effective-dated history is recorded, each history has one `approved`
-entry, and `tonnageBand` is the operator's planned band. Signatories are returned only when getting
-one accreditation, never in search. Only overseas sites included in the accreditation are served.
-Withdrawn interim sites (`removedAt` set) are returned only with `includeWithdrawn=true`. BES
-evidence is not served.
+Notes: the shapes follow the v2 draft spec (`docs/openapi/registration-accreditation-api.v2.yaml`).
+`tonnageBand` is the operator's planned band. Signatories are returned only when getting one
+accreditation, never in search. BES evidence is not served. The
+[Response reference](#response-reference) and [Common questions](#common-questions) below give the fields and rules, including which overseas
+sites and interim sites are returned.
 
 ## Response reference
 
@@ -120,7 +118,7 @@ are left out. The order of fields is not significant. **Ignore fields you do not
 | `status` | the status today (see below) |
 | `tonnageBand` | `up_to_500`, `up_to_5000`, `up_to_10000` or `over_10000` |
 
-### Accreditation detail adds
+### Accreditation detail: extra fields
 
 | Field | Meaning |
 | --- | --- |
@@ -134,8 +132,8 @@ An overseas site has `siteId`, `orsId`, `siteName`, `formattedAddress`, `address
 interim site has `siteId`, `siteNumber`, `siteName`, `address`, `contact`, `operationCodes`,
 `createdAt` and, if it was withdrawn, `removedAt`.
 
-**Personal data.** `signatories` and every `contact` hold a person's name, email and phone number.
-Treat them as personal data.
+**Personal data.** `signatories` hold a person's name and email, and every `contact` a name, email
+and phone number. Treat them as personal data.
 
 ### Status and dates
 
@@ -143,6 +141,9 @@ Treat them as personal data.
   every accreditation has the one status `approved`. The API is built to carry `suspended` and
   `cancelled`, which will appear when case management can send them. **Handle a status value you do
   not know.** The same goes for `tonnageBand`.
+- If no entry is effective yet (for example the only entry is effective in the future), `status`
+  is still `approved`: an accreditation that is served has been granted. In that case `status` and
+  `statusHistory` disagree, so use `statusHistory` for "what was it on date X".
 - `effectiveDate` is a UK calendar date (`yyyy-MM-dd`, Europe/London). `recordedAt`, `validFrom`
   and `createdAt` are UTC times.
 - Until effective-dated history is recorded, each history has one `approved` entry. For an
@@ -228,11 +229,14 @@ A reprocessor's detail is the same without `overseasSites`
 1. Fetch the accreditation (the detail route above).
 2. Read `statusHistory`, which is oldest first.
 3. Take the latest entry whose `effectiveDate` is on or before X. Its `status` is the answer.
-4. If no entry is on or before X, it had not been approved yet.
+4. If no entry is on or before X, the history has no status for that date. The accreditation's
+   current `status` still reads `approved` if its only entry starts later, as the example's overseas
+   site does (effective `2027-01-01`), so treat `null` as "not yet effective on X".
 
 ```js
 // history: the accreditation's statusHistory. date: 'yyyy-MM-dd', a UK calendar date.
-// ISO dates compare correctly as strings.
+// ISO dates compare correctly as strings. Returns null if no entry is effective on that date,
+// even when the response's current `status` says approved (see Status and dates).
 function statusOn(history, date) {
   const applicable = history.filter((entry) => entry.effectiveDate <= date)
   return applicable.length ? applicable[applicable.length - 1].status : null
