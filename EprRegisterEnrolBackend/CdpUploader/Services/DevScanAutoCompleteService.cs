@@ -106,7 +106,11 @@ public class DevScanAutoCompleteService(
             S3Key = s3Key,
         };
 
-        await pendingUploadService.CompleteAsync(fileUploadId, result, cancellationToken);
+        // False when the record expired between the read above and now; the service has
+        // already logged it, so there is nothing completed to report.
+        if (!await pendingUploadService.CompleteAsync(fileUploadId, result, cancellationToken))
+            return;
+
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
