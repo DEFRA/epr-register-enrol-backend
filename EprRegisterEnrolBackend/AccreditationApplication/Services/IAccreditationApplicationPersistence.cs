@@ -187,6 +187,17 @@ public interface IAccreditationApplicationPersistence
         string accreditationReference,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// RA-764: every application for ReEx organisation number <paramref name="orgId"/> applying
+    /// for <paramref name="year"/>, whatever its status. Used by OrganisationNameCorrectionMigration
+    /// to find every copy of the organisation's name it must correct.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
+        int orgId,
+        int year,
+        CancellationToken cancellationToken = default
+    );
     Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null

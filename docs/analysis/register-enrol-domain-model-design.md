@@ -1406,6 +1406,10 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   GetById backfills of `orgId` and `nation` write the legacy document outside the unit of work by decision, so
   a read never opens a transaction. Neither field is mapped onto the model, so they cause no drift. If either is
   ever mapped, the backfill must move into the unit of work.
+  The RA-764 organisation name correction (`OrganisationNameCorrectionMigration`, a one-off startup migration
+  renaming organisation 500069 on its 2027 data) is a second exception: it writes the legacy `organisationName`
+  and the Organisation `name` it maps onto, each with an update guarded on the old name, so it leaves no drift and
+  may run with `DualWrite` on.
 - **Approval** (`status` push `approved`), in one transaction:
   - set Application `Approved`
   - insert the Accreditation, unique on `applicationId`, so a retried push is a no-op, and taking
