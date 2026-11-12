@@ -77,6 +77,11 @@ public class LinkedDefraOrganisationResult
 public class ReExAccreditationDto
 {
     public string? AccreditationId { get; set; }
+
+    // RA-763: the prior-year accreditation's own number (e.g. A26ER5003240164PL), as ReEx
+    // issued it. Null when ReEx holds none. The next year's number is derived from this.
+    public string? AccreditationNumber { get; set; }
+
     public string? OrganisationId { get; set; }
     public MaterialType MaterialType { get; set; }
     public int Year { get; set; }

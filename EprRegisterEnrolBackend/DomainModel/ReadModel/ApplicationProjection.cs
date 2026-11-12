@@ -38,6 +38,7 @@ public static class ApplicationProjection
             PermitNumbers = registration?.PermitNumbers ?? [],
             SourceReExAccreditationId = details.SourceReExAccreditationId,
             SourceYear = details.SeedDataSourceYear,
+            SourceAccreditationNumber = details.SourceAccreditationNumber,
             PreviousAccreditationNumbers = details.PreviousReservedAccreditationNumbers,
             Year = details.Year,
             RegistrationId = application.ReExRegistrationId,

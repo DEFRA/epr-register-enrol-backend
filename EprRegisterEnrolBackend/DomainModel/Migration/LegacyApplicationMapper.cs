@@ -58,6 +58,7 @@ public static class LegacyApplicationMapper
             PreviousReservedAccreditationNumbers = [.. legacy.PreviousAccreditationNumbers],
             SourceReExAccreditationId = legacy.SourceReExAccreditationId,
             SeedDataSourceYear = legacy.SourceYear,
+            SourceAccreditationNumber = legacy.SourceAccreditationNumber,
             ApplicationOverseasSites = overseasSites,
             Prns = ToSection(legacy.Prns),
             BusinessPlan = ToSection(legacy.BusinessPlan),

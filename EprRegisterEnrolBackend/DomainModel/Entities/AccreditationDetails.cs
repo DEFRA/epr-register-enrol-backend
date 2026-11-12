@@ -45,6 +45,9 @@ public sealed class AccreditationDetails : ApplicationDetails
     /// <summary>The year of the ReEx data this application was seeded from.</summary>
     public int? SeedDataSourceYear { get; set; }
 
+    /// <summary>The number of the <see cref="SeedDataSourceYear"/> accreditation this was seeded from. Null when that year was registration only.</summary>
+    public string? SourceAccreditationNumber { get; set; }
+
     /// <summary>Set when the application is approved: the Accreditation it created.</summary>
     public ObjectId? AccreditationId { get; set; }
 

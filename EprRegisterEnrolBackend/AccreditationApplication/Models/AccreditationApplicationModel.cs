@@ -86,6 +86,10 @@ public class AccreditationApplicationModel
 
     public int? SourceYear { get; set; }
 
+    // RA-763: the SourceYear accreditation's number, as ReEx issued it, stored at Seed (or
+    // backfilled from the public register). Null when the operator was registered-only.
+    public string? SourceAccreditationNumber { get; set; }
+
     public string? ApplicationReference { get; set; }
 
     // RA-503: the operator's real, nation-specific bank payment reference (buildPaymentReference

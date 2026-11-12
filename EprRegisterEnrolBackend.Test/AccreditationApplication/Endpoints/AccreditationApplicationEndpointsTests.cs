@@ -269,6 +269,7 @@ public class AccreditationApplicationEndpointsTests
                         new ReExAccreditationDto
                         {
                             AccreditationId = "reex-abc",
+                            AccreditationNumber = "A25ER5000270063ST",
                             OrganisationId = "org-123",
                             MaterialType = MaterialType.Steel,
                             Year = 2025,
@@ -303,6 +304,8 @@ public class AccreditationApplicationEndpointsTests
         );
         body!.SourceReExAccreditationId.Should().Be("reex-abc");
         body.SourceYear.Should().Be(2025);
+        // RA-763: kept, so the 2026 number is derived from it rather than the registration number.
+        body.SourceAccreditationNumber.Should().Be("A25ER5000270063ST");
         body.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo5000);
         body.CompanyRegisteredAddress.Should().Be("29 Acacia Road, London, SW1A 1AA");
     }

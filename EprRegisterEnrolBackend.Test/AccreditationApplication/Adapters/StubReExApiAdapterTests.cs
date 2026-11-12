@@ -478,6 +478,22 @@ public class StubReExApiAdapterTests
         accreditation.Value!.OrganisationNumber.Should().Be(number.Value);
     }
 
+    // RA-763: like real ReEx, the accreditation's sequence differs from the registration's.
+    [Fact]
+    public async Task GetAccreditationAsync_AccreditationNumber_MatchesTheRegistrationExceptItsSequence()
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync("6a2fcd74e16883c137d01188", "reg-1", MaterialType.Plastic, 2025);
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        var registration = result.Value!.RegistrationReference!;
+        var accreditation = result.Value.AccreditationNumber!;
+        accreditation.Should().StartWith("A").And.HaveLength(registration.Length);
+        accreditation[1..11].Should().Be(registration[1..11]);
+        accreditation[15..].Should().Be(registration[15..]);
+        accreditation[11..15].Should().NotBe(registration[11..15]);
+    }
+
     [Fact]
     public async Task GetAccreditationAsync_TestOrganisation_UsesOnlyNotifySimulatedEmails()
     {
