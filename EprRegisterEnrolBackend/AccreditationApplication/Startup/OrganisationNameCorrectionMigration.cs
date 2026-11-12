@@ -1,7 +1,9 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
+using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -52,7 +54,11 @@ public sealed class OrganisationNameCorrectionOptions
 //
 // The domain model organisation is written alongside the legacy applications (not in one
 // transaction): each write is independently guarded, so a failure part-way is repaired by the next
-// run. Because both copies are written, this does not need dual-write to be off (contrast RA-691).
+// run - so after a partial run the flag must stay on and the migration re-run until the log shows
+// the Organisation renamed. Because both copies are written, this does not need dual-write to be
+// off (contrast RA-691). The Organisation is organisation-wide, so renaming it makes 500069's
+// applications for other years (which keep the old name) differ from the read model; each gets a
+// SeededDetailsDiffer conflict so the reconciler accepts that (RecordOtherYearConflictsAsync).
 //
 // A BackgroundService, so a Mongo failure here logs rather than crash-looping the host. The
 // persistence is resolved only once the migration is enabled, so a disabled migration never
@@ -86,7 +92,12 @@ public class OrganisationNameCorrectionMigration(
         bool AlreadyRenamed
     );
 
-    private sealed record OrganisationPlan(ObjectId Id, bool AlreadyRenamed);
+    // OtherYears: 500069's applications for other years that keep the old name (see RecordOtherYearConflictsAsync).
+    private sealed record OrganisationPlan(
+        ObjectId Id,
+        bool AlreadyRenamed,
+        IReadOnlyList<AccreditationApplicationModel> OtherYears
+    );
 
     private sealed record Plan(
         IReadOnlyList<ApplicationPlan> Applications,
@@ -141,21 +152,48 @@ public class OrganisationNameCorrectionMigration(
 
         foreach (var application in plan.Applications)
             await ReportAndApplyAsync(
-                applications,
-                application,
+                "application",
+                application.Id,
+                $" ({application.ApplicationReference}, {application.RegistrationReference}/"
+                    + $"{application.AccreditationReference}, {application.Status})",
+                application.AlreadyRenamed,
                 mode,
                 confirmedBy,
-                cancellationToken
+                async () =>
+                    await applications.UpdateFieldsAsync(
+                        application.Id,
+                        Builders<AccreditationApplicationModel>.Filter.Eq(
+                            a => a.OrganisationName,
+                            OldName
+                        ),
+                        Builders<AccreditationApplicationModel>.Update.Set(
+                            a => a.OrganisationName,
+                            NewName
+                        ),
+                        cancellationToken: cancellationToken
+                    ) is not null
             );
 
         if (plan.Organisation is { } organisation)
-            await ReportAndApplyAsync(
-                organisations!,
-                organisation,
+        {
+            var renamed = await ReportAndApplyAsync(
+                "domain model organisation",
+                organisation.Id,
+                "",
+                organisation.AlreadyRenamed,
                 mode,
                 confirmedBy,
-                cancellationToken
+                () => organisations!.RenameAsync(organisation.Id, OldName, NewName, cancellationToken)
             );
+            // Only once the Organisation holds the new name do the other years differ from it.
+            if (renamed || confirmedBy is null)
+                await RecordOtherYearConflictsAsync(
+                    organisation.OtherYears,
+                    mode,
+                    confirmedBy,
+                    cancellationToken
+                );
+        }
         else if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
                 "RA-764 {Mode}: no domain model organisation for {OrgId}; skipped",
@@ -282,9 +320,13 @@ public class OrganisationNameCorrectionMigration(
         if (organisations is null)
             return new Plan(applicationPlans, null);
 
+        var otherYears = byReExId
+            .Where(a => a.Year != AccreditationYear && a.Id is not null && a.OrganisationName != NewName)
+            .ToList();
         var organisationPlan = await PlanOrganisationAsync(
             organisations,
             reExOrganisationIds[0],
+            otherYears,
             cancellationToken
         );
         return organisationPlan.Ok ? new Plan(applicationPlans, organisationPlan.Plan) : null;
@@ -293,6 +335,7 @@ public class OrganisationNameCorrectionMigration(
     private async Task<(bool Ok, OrganisationPlan? Plan)> PlanOrganisationAsync(
         OrganisationPersistence organisations,
         string reExOrganisationId,
+        IReadOnlyList<AccreditationApplicationModel> otherYears,
         CancellationToken cancellationToken
     )
     {
@@ -338,7 +381,7 @@ public class OrganisationNameCorrectionMigration(
             return (false, null);
         }
 
-        return (true, new OrganisationPlan(organisation.Id, organisation.Name == NewName));
+        return (true, new OrganisationPlan(organisation.Id, organisation.Name == NewName, otherYears));
     }
 
     // Every reference carries the organisation number at characters 5-10 (see
@@ -364,99 +407,120 @@ public class OrganisationNameCorrectionMigration(
         && organisation.OrganisationNumber is null or OrgId
         && organisation.Name is OldName or NewName;
 
-    private async Task ReportAndApplyAsync(
-        IAccreditationApplicationPersistence persistence,
-        ApplicationPlan plan,
+    // Logs one planned rename (or skip) and, when confirmedBy is set (an authorised apply run), runs
+    // the guarded write. Returns whether the record now holds the new name.
+    private async Task<bool> ReportAndApplyAsync(
+        string record,
+        ObjectId id,
+        string details,
+        bool alreadyRenamed,
         string mode,
         string? confirmedBy,
-        CancellationToken cancellationToken
+        Func<Task<bool>> write
     )
     {
-        if (plan.AlreadyRenamed)
+        if (alreadyRenamed)
         {
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation(
-                    "RA-764 {Mode}: {OrgId} application {ApplicationId} ({ApplicationReference}, "
-                        + "{RegistrationReference}/{AccreditationReference}, {Status}) already "
-                        + "holds \"{NewName}\"; skipped",
+                    "RA-764 {Mode}: {OrgId} {Record} {Id}{Details} already holds \"{NewName}\"; skipped",
                     mode,
                     OrgId,
-                    plan.Id,
-                    plan.ApplicationReference,
-                    plan.RegistrationReference,
-                    plan.AccreditationReference,
-                    plan.Status,
+                    record,
+                    id,
+                    details,
                     NewName
                 );
-            return;
+            return true;
         }
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-                "RA-764 {Mode}: {OrgId} application {ApplicationId} ({ApplicationReference}, "
-                    + "{RegistrationReference}/{AccreditationReference}, {Status}): "
-                    + "\"{OldName}\" -> \"{NewName}\"",
+                "RA-764 {Mode}: {OrgId} {Record} {Id}{Details}: \"{OldName}\" -> \"{NewName}\"",
                 mode,
                 OrgId,
-                plan.Id,
-                plan.ApplicationReference,
-                plan.RegistrationReference,
-                plan.AccreditationReference,
-                plan.Status,
+                record,
+                id,
+                details,
                 OldName,
                 NewName
             );
 
         if (confirmedBy is null)
-            return;
+            return false;
 
-        var updated = await persistence.UpdateFieldsAsync(
-            plan.Id,
-            Builders<AccreditationApplicationModel>.Filter.Eq(a => a.OrganisationName, OldName),
-            Builders<AccreditationApplicationModel>.Update.Set(a => a.OrganisationName, NewName),
-            cancellationToken: cancellationToken
-        );
-        LogApplied("application", plan.Id, updated is not null, confirmedBy);
+        var written = await write();
+        LogApplied(record, id, written, confirmedBy);
+        return written;
     }
 
-    private async Task ReportAndApplyAsync(
-        OrganisationPersistence persistence,
-        OrganisationPlan plan,
+    // The domain Organisation is organisation-wide, and the read model projects its name onto every
+    // application, so once it is renamed 500069's applications for other years (which keep the name
+    // they were started with) differ from it. A SeededDetailsDiffer conflict on each is the record
+    // the reconciler accepts that difference by - the same one the migration writes when an
+    // application's name differs from its Organisation's. Guarded on one already being recorded, so
+    // a re-run adds none.
+    private async Task RecordOtherYearConflictsAsync(
+        IReadOnlyList<AccreditationApplicationModel> otherYears,
         string mode,
         string? confirmedBy,
         CancellationToken cancellationToken
     )
     {
-        if (plan.AlreadyRenamed)
+        var conflicts = serviceProvider.GetService<MigrationConflictPersistence>();
+        if (conflicts is null || otherYears.Count == 0)
+            return;
+
+        using var session = await serviceProvider
+            .GetRequiredService<IMongoDbClientFactory>()
+            .GetClient()
+            .StartSessionAsync(cancellationToken: cancellationToken);
+        foreach (var other in otherYears)
         {
+            var id = other.Id!.Value;
+            var recorded = await conflicts.ExistsAsync(
+                MigrationConflictKind.SeededDetailsDiffer,
+                id,
+                session,
+                cancellationToken
+            );
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation(
-                    "RA-764 {Mode}: {OrgId} domain model organisation {OrganisationId} already "
-                        + "holds \"{NewName}\"; skipped",
+                    "RA-764 {Mode}: {OrgId} {Year} application {ApplicationId} keeps "
+                        + "\"{OrganisationName}\"; SeededDetailsDiffer conflict {Action}",
                     mode,
                     OrgId,
-                    plan.Id,
-                    NewName
+                    other.Year,
+                    id,
+                    other.OrganisationName,
+                    recorded ? "already recorded; skipped" : "to record"
                 );
-            return;
-        }
+            if (recorded || confirmedBy is null)
+                continue;
 
-        if (logger.IsEnabled(LogLevel.Information))
-            logger.LogInformation(
-                "RA-764 {Mode}: {OrgId} domain model organisation {OrganisationId}: "
-                    + "\"{OldName}\" -> \"{NewName}\"",
-                mode,
-                OrgId,
-                plan.Id,
-                OldName,
-                NewName
+            await conflicts.InsertManyAsync(
+                [
+                    new MigrationConflict
+                    {
+                        Kind = MigrationConflictKind.SeededDetailsDiffer,
+                        ReExRegistrationId = other.RegistrationId ?? "",
+                        ApplicationIds = [id],
+                        RecordedAt = DateTime.UtcNow,
+                    },
+                ],
+                session,
+                cancellationToken
             );
-
-        if (confirmedBy is null)
-            return;
-
-        var renamed = await persistence.RenameAsync(plan.Id, OldName, NewName, cancellationToken);
-        LogApplied("domain model organisation", plan.Id, renamed, confirmedBy);
+            if (logger.IsEnabled(LogLevel.Information))
+                logger.LogInformation(
+                    "RA-764 APPLIED: {OrgId} {Year} application {ApplicationId}: SeededDetailsDiffer "
+                        + "conflict recorded. Spot check confirmed by {ConfirmedBy}",
+                    OrgId,
+                    other.Year,
+                    id,
+                    confirmedBy
+                );
+        }
     }
 
     private void LogApplied(string record, ObjectId id, bool written, string confirmedBy)

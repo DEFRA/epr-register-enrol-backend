@@ -1408,8 +1408,11 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   ever mapped, the backfill must move into the unit of work.
   The RA-764 organisation name correction (`OrganisationNameCorrectionMigration`, a one-off startup migration
   renaming organisation 500069 on its 2027 data) is a second exception: it writes the legacy `organisationName`
-  and the Organisation `name` it maps onto, each with an update guarded on the old name, so it leaves no drift and
-  may run with `DualWrite` on.
+  and the Organisation `name` it maps onto, each with an update guarded on the old name, so it may run with
+  `DualWrite` on. The Organisation is organisation-wide, so the read model then projects the new name onto
+  500069's applications for other years too, while their legacy documents keep the old one. The migration
+  records a `SeededDetailsDiffer` conflict on each of those (unless one is already recorded), so the reconciler
+  accepts that difference rather than reporting it as drift.
 - **Approval** (`status` push `approved`), in one transaction:
   - set Application `Approved`
   - insert the Accreditation, unique on `applicationId`, so a retried push is a no-op, and taking

@@ -2,9 +2,11 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
+using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -32,6 +34,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
     private readonly TestMongoDbClientFactory _factory;
     private readonly AccreditationApplicationPersistence _persistence;
     private readonly OrganisationPersistence _organisations;
+    private readonly MigrationConflictPersistence _conflicts;
     private readonly IMongoCollection<BsonDocument> _raw;
     private readonly IMongoCollection<BsonDocument> _rawOrganisations;
     private readonly CapturingLogger<OrganisationNameCorrectionMigration> _logger = new();
@@ -45,6 +48,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
             NullLoggerFactory.Instance
         );
         _organisations = new OrganisationPersistence(_factory, NullLoggerFactory.Instance);
+        _conflicts = new MigrationConflictPersistence(_factory, NullLoggerFactory.Instance);
         _raw = _factory.GetCollection<BsonDocument>(ApplicationsCollection);
         _rawOrganisations = _factory.GetCollection<BsonDocument>(
             DomainModelCollections.Organisations
@@ -111,6 +115,12 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
     // 2027 application with the same old name, and another org's domain organisation.
     private async Task<(ObjectId Approved, ObjectId Draft)> SeedOldStateAsync()
     {
+        var (approved, draft, _) = await SeedOldStateWith2026Async();
+        return (approved, draft);
+    }
+
+    private async Task<(ObjectId Approved, ObjectId Draft, ObjectId Previous)> SeedOldStateWith2026Async()
+    {
         var approved = await SeedAsync(Application());
         var draft = await SeedAsync(
             Application(
@@ -120,7 +130,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
                 status: ApplicationStatus.Saved
             )
         );
-        await SeedAsync(Application(year: 2026, accreditation: Accreditation2026));
+        var previous = await SeedAsync(Application(year: 2026, accreditation: Accreditation2026));
         await SeedAsync(
             Application(
                 orgId: 500070,
@@ -130,7 +140,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
             )
         );
         await SeedOrganisationAsync(reExId: "reex-500070", number: 500070);
-        return (approved, draft);
+        return (approved, draft, previous);
     }
 
     private OrganisationNameCorrectionMigration CreateMigration(
@@ -145,7 +155,11 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
         if (registerPersistence)
             services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
         if (registerOrganisations)
+        {
             services.AddSingleton(_organisations);
+            services.AddSingleton(_conflicts);
+        }
+        services.AddSingleton<IMongoDbClientFactory>(_factory);
         return new OrganisationNameCorrectionMigration(
             services.BuildServiceProvider(),
             Options.Create(
@@ -267,7 +281,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
             .AsString.Should()
             .Be(NewName);
         Logged(LogLevel.Information)
-            .Where(m => m.StartsWith("RA-764 APPLIED"))
+            .Where(m => m.StartsWith("RA-764 APPLIED") && !m.Contains("conflict"))
             .Should()
             .HaveCount(3)
             .And.OnlyContain(m => m.Contains("A Reviewer"));
@@ -463,6 +477,75 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
         await SeedOrganisationAsync(name: "Someone Else Ltd");
 
         await AssertAbortsWithoutWritingAsync("Someone Else Ltd");
+    }
+
+    private async Task<List<MigrationConflict>> ConflictsAsync() =>
+        await _factory
+            .GetCollection<MigrationConflict>(DomainModelCollections.MigrationConflicts)
+            .Find(FilterDefinition<MigrationConflict>.Empty)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+    // Review of PR #257: the Organisation is organisation-wide, so once renamed the read model shows
+    // the new name on 500069's 2026 application too. A SeededDetailsDiffer conflict is what lets the
+    // reconciler accept that difference from the 2026 legacy document.
+    [Fact]
+    public async Task Apply_records_one_SeededDetailsDiffer_conflict_per_other_year_application()
+    {
+        var (_, _, previous) = await SeedOldStateWith2026Async();
+        await SeedOrganisationAsync();
+
+        await RunAsync(CreateMigration(enabled: true, apply: true));
+        await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        var conflict = (await ConflictsAsync()).Should().ContainSingle().Subject;
+        conflict.Kind.Should().Be(MigrationConflictKind.SeededDetailsDiffer);
+        conflict.ApplicationIds.Should().Equal(previous);
+        Logged(LogLevel.Information).Should().Contain(m => m.Contains("already recorded"));
+        Logged(LogLevel.Error).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task An_existing_SeededDetailsDiffer_conflict_is_not_duplicated()
+    {
+        var (_, _, previous) = await SeedOldStateWith2026Async();
+        await SeedOrganisationAsync();
+        await _factory
+            .GetCollection<MigrationConflict>(DomainModelCollections.MigrationConflicts)
+            .InsertOneAsync(
+                new MigrationConflict
+                {
+                    Kind = MigrationConflictKind.SeededDetailsDiffer,
+                    ReExRegistrationId = "",
+                    ApplicationIds = [previous],
+                },
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        (await ConflictsAsync()).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Dry_run_records_no_conflict_but_logs_it()
+    {
+        await SeedOldStateAsync();
+        await SeedOrganisationAsync();
+
+        await RunAsync(CreateMigration(enabled: true));
+
+        (await ConflictsAsync()).Should().BeEmpty();
+        Logged(LogLevel.Information).Should().ContainSingle(m => m.Contains("to record"));
+    }
+
+    [Fact]
+    public async Task Without_a_domain_organisation_no_conflict_is_recorded()
+    {
+        await SeedOldStateAsync();
+
+        await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        (await ConflictsAsync()).Should().BeEmpty();
     }
 
     private static BsonDocument Without(BsonDocument document, params string[] fields)

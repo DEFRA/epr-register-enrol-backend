@@ -110,6 +110,7 @@ public class OrganisationPersistence(
     /// RA-764: every organisation held under <paramref name="reExOrganisationId"/> or numbered
     /// <paramref name="organisationNumber"/>. A list, so a caller correcting one organisation can see (and refuse to
     /// act on) the two keys pointing at different documents.
+    /// RA-764 one-off; removed with OrganisationNameCorrectionMigration - do not use elsewhere.
     /// </summary>
     public async Task<IReadOnlyList<OrganisationEntity>> FindByReExOrganisationIdOrNumberAsync(
         string reExOrganisationId,
@@ -129,6 +130,7 @@ public class OrganisationPersistence(
     /// <summary>
     /// RA-764: sets the organisation's name to <paramref name="newName"/> only while it still holds
     /// <paramref name="expectedName"/>, touching no other field. Returns whether it was changed.
+    /// RA-764 one-off; removed with OrganisationNameCorrectionMigration - do not use elsewhere.
     /// </summary>
     public async Task<bool> RenameAsync(
         ObjectId organisationId,
