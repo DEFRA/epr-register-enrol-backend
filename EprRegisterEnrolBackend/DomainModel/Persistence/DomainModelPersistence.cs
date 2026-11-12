@@ -97,9 +97,13 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
     // index build normally creates the collection first; if it didn't, it is created with the validator, using the same
     // settings. If another instance creates it in between (NamespaceExists), collMod is simply run again. A failure is
     // logged and returned, never thrown: it must never stop the service starting. MongoIndexInitializerService retries
-    // a Failed result with backoff for about 30 seconds; a NotPermitted one (a database user that may not run collMod)
-    // is left for the schema check to report as Degraded until the next startup (RA-746, RA-758).
-    public ValidatorApplyResult TryApplyValidator()
+    // a Transient result with backoff for about 30 seconds; a NotPermitted one (a database user that may not run
+    // collMod) is left for the schema check to report as Degraded until the next startup (RA-746, RA-758).
+    public ValidatorApplyResult TryApplyValidator() => LastValidatorApplyResult = ApplyValidator();
+
+    public ValidatorApplyResult LastValidatorApplyResult { get; private set; }
+
+    private ValidatorApplyResult ApplyValidator()
     {
         if (DefineValidator() is not { } validator)
         {

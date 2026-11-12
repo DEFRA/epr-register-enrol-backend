@@ -362,19 +362,21 @@ public sealed class ApplicationValidatorTests : IDisposable
         var result = persistence.TryApplyValidator();
 
         result.Should().Be(ValidatorApplyResult.Applied);
+        persistence.LastValidatorApplyResult.Should().Be(ValidatorApplyResult.Applied);
         (await DomainModelSchemaCheck.RunAsync([persistence], Ct))
             .Status.Should()
             .Be(HealthStatus.Healthy);
     }
 
     [Fact]
-    public void TryApplyValidator_MongoRefusesTheCommand_ReportsFailedWithoutThrowing()
+    public void TryApplyValidator_MongoRefusesTheCommand_ReportsTransientWithoutThrowing()
     {
         var persistence = new UnappliableValidatorPersistence(_factory, _clock);
 
         var result = persistence.TryApplyValidator();
 
-        result.Should().Be(ValidatorApplyResult.Failed);
+        result.Should().Be(ValidatorApplyResult.Transient);
+        persistence.LastValidatorApplyResult.Should().Be(ValidatorApplyResult.Transient);
     }
 
     [Fact]

@@ -127,23 +127,22 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
         status.Result.Status.Should().Be(HealthStatus.Healthy);
     }
 
-    // A validator the database user may not apply (no collMod permission) won't appear on a retry, so it is reported as
-    // Degraded after one more attempt and the startup loop stops, instead of retrying with backoff forever.
+    // A validator the database user may not apply (no collMod permission) won't appear on a retry. The constructor's
+    // refusal is enough: it is reported as Degraded and nothing tries again, with or without backoff.
     [Fact]
     public async Task InitializeAsync_ValidatorNotPermitted_RecordsDegradedAndDoesNotRetry()
     {
         var status = new DomainModelSchemaStatus();
-        var withoutValidator = ValidatedCollection(_ => ValidatorApplyResult.NotPermitted);
-        var services = LegacyPersistences()
-            .AddSingleton<IDomainModelSchemaStatus>(status)
-            .AddSingleton(_ => withoutValidator)
-            .BuildServiceProvider();
+        var withoutValidator = ValidatedCollection(
+            _ => ValidatorApplyResult.NotPermitted,
+            atStartup: ValidatorApplyResult.NotPermitted
+        );
 
-        var ready = await FastValidatorRetries(services).InitializeAsync(Ct);
+        var ready = await FastValidatorRetries(Services(status, withoutValidator)).InitializeAsync(Ct);
 
         ready.Should().BeTrue();
         status.Result.Status.Should().Be(HealthStatus.Degraded);
-        withoutValidator.Received(1).TryApplyValidator();
+        withoutValidator.DidNotReceive().TryApplyValidator();
     }
 
     // RA-758: a brief Mongo error during collMod (a failover, a dropped connection) is retried with backoff, so the
@@ -159,7 +158,7 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
             {
                 if (++attempts < 2)
                 {
-                    return ValidatorApplyResult.Failed;
+                    return ValidatorApplyResult.Transient;
                 }
 
                 applied = true;
@@ -167,12 +166,8 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
             },
             () => applied
         );
-        var services = LegacyPersistences()
-            .AddSingleton<IDomainModelSchemaStatus>(status)
-            .AddSingleton(_ => collection)
-            .BuildServiceProvider();
 
-        var ready = await FastValidatorRetries(services).InitializeAsync(Ct);
+        var ready = await FastValidatorRetries(Services(status, collection)).InitializeAsync(Ct);
 
         ready.Should().BeTrue();
         attempts.Should().Be(2);
@@ -183,13 +178,9 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
     public async Task InitializeAsync_ValidatorKeepsFailing_StopsAfterTheBackoffAndRecordsDegraded()
     {
         var status = new DomainModelSchemaStatus();
-        var collection = ValidatedCollection(_ => ValidatorApplyResult.Failed);
-        var services = LegacyPersistences()
-            .AddSingleton<IDomainModelSchemaStatus>(status)
-            .AddSingleton(_ => collection)
-            .BuildServiceProvider();
+        var collection = ValidatedCollection(_ => ValidatorApplyResult.Transient);
         var logger = new CapturingLogger<MongoIndexInitializerService>();
-        var initializer = FastValidatorRetries(services, logger);
+        var initializer = FastValidatorRetries(Services(status, collection), logger);
 
         var ready = await initializer.InitializeAsync(Ct);
 
@@ -206,31 +197,106 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
     [Fact]
     public async Task InitializeAsync_ValidatorMissingButIndexesFine_DoesNotRetryAnyOtherCollection()
     {
-        var status = new DomainModelSchemaStatus();
-        var withValidator = ValidatedCollection(_ => ValidatorApplyResult.Failed);
+        var withValidator = ValidatedCollection(_ => ValidatorApplyResult.Transient);
         var without = Collection("organisations", ["reExOrganisationId_u"]);
-        var services = LegacyPersistences()
-            .AddSingleton<IDomainModelSchemaStatus>(status)
-            .AddSingleton(_ => withValidator)
-            .AddSingleton(_ => without)
-            .BuildServiceProvider();
 
-        await FastValidatorRetries(services).InitializeAsync(Ct);
+        await FastValidatorRetries(Services(new DomainModelSchemaStatus(), withValidator, without))
+            .InitializeAsync(Ct);
 
         without.DidNotReceive().TryApplyValidator();
+    }
+
+    // One collection refused permission must not stop the retries for another whose failure was transient.
+    [Fact]
+    public async Task InitializeAsync_OneValidatorNotPermitted_StillRetriesTheOthers()
+    {
+        var applied = false;
+        var refused = ValidatedCollection(
+            _ => ValidatorApplyResult.NotPermitted,
+            atStartup: ValidatorApplyResult.NotPermitted,
+            name: "accreditationVersions"
+        );
+        var transient = ValidatedCollection(
+            _ =>
+            {
+                applied = true;
+                return ValidatorApplyResult.Applied;
+            },
+            () => applied
+        );
+
+        await FastValidatorRetries(Services(new DomainModelSchemaStatus(), refused, transient))
+            .InitializeAsync(Ct);
+
+        applied.Should().BeTrue();
+        refused.DidNotReceive().TryApplyValidator();
+    }
+
+    // Mongo dropping out during the retry must not take readiness down: before RA-758 the same blip left it Degraded.
+    [Fact]
+    public async Task InitializeAsync_MongoFailsDuringTheValidatorRetry_StaysDegradedAndCarriesOn()
+    {
+        var applied = false;
+        var reads = 0;
+        var status = Substitute.For<IDomainModelSchemaStatus>();
+        var collection = ValidatedCollection(
+            _ =>
+            {
+                applied = true;
+                return ValidatorApplyResult.Applied;
+            }
+        );
+        var expected = collection.GetExpectedValidation();
+        collection
+            .GetValidationAsync(Arg.Any<CancellationToken>())
+            .Returns(_ =>
+                ++reads == 2
+                    ? throw new TimeoutException("server selection timed out")
+                    : Task.FromResult(applied ? expected : null)
+            );
+
+        var ready = await FastValidatorRetries(Services(status, collection)).InitializeAsync(Ct);
+
+        ready.Should().BeTrue();
+        applied.Should().BeTrue();
+        status.DidNotReceive().Record(Arg.Is<HealthCheckResult>(r => r.Status == HealthStatus.Unhealthy));
+        status.Received().Record(Arg.Is<HealthCheckResult>(r => r.Status == HealthStatus.Healthy));
+    }
+
+    // An Unhealthy recheck is a failed round, not success: nothing is logged as applied and readiness stays Degraded.
+    [Fact]
+    public async Task InitializeAsync_RecheckUnhealthy_KeepsDegradedAndDoesNotReportSuccess()
+    {
+        var indexChecks = 0;
+        var status = new DomainModelSchemaStatus();
+        var collection = ValidatedCollection(_ => ValidatorApplyResult.Applied);
+        collection
+            .GetIndexNamesAsync(Arg.Any<CancellationToken>())
+            .Returns(_ =>
+                ++indexChecks == 1
+                    ? Task.FromResult<IReadOnlyList<string>>(["entityId_version_u"])
+                    : throw new TimeoutException("server selection timed out")
+            );
+        var logger = new CapturingLogger<MongoIndexInitializerService>();
+
+        var ready = await FastValidatorRetries(Services(status, collection), logger)
+            .InitializeAsync(Ct);
+
+        ready.Should().BeTrue();
+        status.Result.Status.Should().Be(HealthStatus.Degraded);
+        logger
+            .Entries.Should()
+            .NotContain(e =>
+                e.LogLevel == LogLevel.Information && e.Message.Contains("applied after retrying")
+            );
     }
 
     [Fact]
     public async Task InitializeAsync_HostStoppingDuringTheValidatorBackoff_EndsQuietly()
     {
-        var status = new DomainModelSchemaStatus();
-        var collection = ValidatedCollection(_ => ValidatorApplyResult.Failed);
-        var services = LegacyPersistences()
-            .AddSingleton<IDomainModelSchemaStatus>(status)
-            .AddSingleton(_ => collection)
-            .BuildServiceProvider();
+        var collection = ValidatedCollection(_ => ValidatorApplyResult.Transient);
         var initializer = new MongoIndexInitializerService(
-            services,
+            Services(new DomainModelSchemaStatus(), collection),
             new CapturingLogger<MongoIndexInitializerService>()
         )
         {
@@ -368,29 +434,51 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
             .AddSingleton(Substitute.For<IPendingUploadService>())
             .AddSingleton(Substitute.For<ICaseManagementAuthNonceStore>());
 
+    private static IServiceProvider Services(
+        IDomainModelSchemaStatus status,
+        params IDomainModelCollection[] collections
+    )
+    {
+        var services = LegacyPersistences().AddSingleton(status);
+        foreach (var collection in collections)
+        {
+            services.AddSingleton(collection);
+        }
+
+        return services.BuildServiceProvider();
+    }
+
+    // As many retries as production makes, each 1ms apart.
     private static MongoIndexInitializerService FastValidatorRetries(
         IServiceProvider services,
         CapturingLogger<MongoIndexInitializerService>? logger = null
-    ) =>
-        new(services, logger ?? new CapturingLogger<MongoIndexInitializerService>())
+    )
+    {
+        logger ??= new CapturingLogger<MongoIndexInitializerService>();
+        var defaults = new MongoIndexInitializerService(services, logger).ValidatorRetryDelays;
+        return new(services, logger)
         {
-            ValidatorRetryDelays = Enumerable.Repeat(TimeSpan.FromMilliseconds(1), 5).ToList(),
+            ValidatorRetryDelays = defaults.Select(_ => TimeSpan.FromMilliseconds(1)).ToList(),
         };
+    }
 
-    // An applicationVersions collection whose indexes are all present and whose validator is missing until
-    // isApplied says otherwise. apply stands in for TryApplyValidator.
+    // A collection (applicationVersions unless named) whose indexes are all present and whose validator is missing
+    // until isApplied says otherwise. apply stands in for TryApplyValidator; atStartup is the constructor's result.
     private static IDomainModelCollection ValidatedCollection(
         Func<CallInfo, ValidatorApplyResult> apply,
-        Func<bool>? isApplied = null
+        Func<bool>? isApplied = null,
+        ValidatorApplyResult atStartup = ValidatorApplyResult.Transient,
+        string name = "applicationVersions"
     )
     {
         var expected = new BsonDocument("validator", new BsonDocument("required", "name"));
-        var collection = Collection("applicationVersions", ["entityId_version_u"]);
+        var collection = Collection(name, ["entityId_version_u"]);
         collection.GetExpectedValidation().Returns(expected);
         collection
             .GetValidationAsync(Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult(isApplied?.Invoke() == true ? expected : null));
         collection.TryApplyValidator().Returns(apply);
+        collection.LastValidatorApplyResult.Returns(atStartup);
         return collection;
     }
 

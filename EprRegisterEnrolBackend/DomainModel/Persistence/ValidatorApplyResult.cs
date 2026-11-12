@@ -12,7 +12,7 @@ public enum ValidatorApplyResult
     Applied,
 
     /// <summary>It failed in a way that may clear within seconds, such as a dropped connection or a failover.</summary>
-    Failed,
+    Transient,
 
     /// <summary>The database user may not run collMod. That will not change on a retry.</summary>
     NotPermitted,
@@ -23,11 +23,20 @@ public static class ValidatorApplyFailure
 {
     private const int Unauthorized = 13;
 
-    // Atlas reports an action the user's role does not allow as AtlasError rather than Unauthorized.
+    // Atlas reports an action the user's role does not allow as AtlasError rather than Unauthorized, but it uses the
+    // same code for many other errors, so only its permission message counts.
     private const int AtlasError = 8000;
+    private const string AtlasNotAllowed = "not allowed to do action";
 
     public static ValidatorApplyResult Classify(Exception exception) =>
-        exception is MongoCommandException { Code: Unauthorized or AtlasError }
-            ? ValidatorApplyResult.NotPermitted
-            : ValidatorApplyResult.Failed;
+        exception switch
+        {
+            MongoCommandException { Code: Unauthorized } => ValidatorApplyResult.NotPermitted,
+            MongoCommandException { Code: AtlasError } atlas
+                when atlas.ErrorMessage?.Contains(
+                    AtlasNotAllowed,
+                    StringComparison.OrdinalIgnoreCase
+                ) == true => ValidatorApplyResult.NotPermitted,
+            _ => ValidatorApplyResult.Transient,
+        };
 }

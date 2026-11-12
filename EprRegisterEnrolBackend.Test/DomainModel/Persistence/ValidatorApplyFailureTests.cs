@@ -16,50 +16,71 @@ namespace EprRegisterEnrolBackend.Test.DomainModel.Persistence;
 /// </summary>
 public sealed class ValidatorApplyFailureTests
 {
-    [Theory]
-    [InlineData(13)] // Unauthorized
-    [InlineData(8000)] // AtlasError, which Atlas returns for an action the user's role does not allow
-    public void Classify_PermissionDenied_IsNotPermitted(int code) =>
+    [Fact]
+    public void Classify_Unauthorized_IsNotPermitted() =>
         ValidatorApplyFailure
-            .Classify(CommandFailure(code))
+            .Classify(CommandFailure(13))
             .Should()
             .Be(ValidatorApplyResult.NotPermitted);
+
+    [Fact]
+    public void Classify_AtlasRefusesTheAction_IsNotPermitted() =>
+        ValidatorApplyFailure
+            .Classify(
+                CommandFailure(
+                    8000,
+                    "user is not allowed to do action [collMod] on [epr.applicationVersions]"
+                )
+            )
+            .Should()
+            .Be(ValidatorApplyResult.NotPermitted);
+
+    // Atlas uses AtlasError for many other failures too, which may clear on a retry.
+    [Fact]
+    public void Classify_AnyOtherAtlasError_IsTransient() =>
+        ValidatorApplyFailure
+            .Classify(CommandFailure(8000, "cluster is being reconfigured"))
+            .Should()
+            .Be(ValidatorApplyResult.Transient);
 
     [Theory]
     [InlineData(2)] // BadValue
     [InlineData(91)] // ShutdownInProgress
     [InlineData(189)] // PrimarySteppedDown
     [InlineData(10107)] // NotWritablePrimary
-    public void Classify_AnyOtherCommandFailure_IsFailed(int code) =>
+    public void Classify_AnyOtherCommandFailure_IsTransient(int code) =>
         ValidatorApplyFailure
             .Classify(CommandFailure(code))
             .Should()
-            .Be(ValidatorApplyResult.Failed);
+            .Be(ValidatorApplyResult.Transient);
 
     [Fact]
-    public void Classify_Timeout_IsFailed() =>
+    public void Classify_Timeout_IsTransient() =>
         ValidatorApplyFailure
             .Classify(new TimeoutException("server selection timed out"))
             .Should()
-            .Be(ValidatorApplyResult.Failed);
+            .Be(ValidatorApplyResult.Transient);
 
     [Fact]
-    public void Classify_ConnectionDropped_IsFailed() =>
+    public void Classify_ConnectionDropped_IsTransient() =>
         ValidatorApplyFailure
             .Classify(new MongoConnectionException(ConnectionId(), "connection reset"))
             .Should()
-            .Be(ValidatorApplyResult.Failed);
+            .Be(ValidatorApplyResult.Transient);
 
-    private static MongoCommandException CommandFailure(int code) =>
+    private static MongoCommandException CommandFailure(
+        int code,
+        string message = "collMod failed"
+    ) =>
         new(
             ConnectionId(),
-            "collMod failed",
+            message,
             new BsonDocument("collMod", "applicationVersions"),
             new BsonDocument
             {
                 { "ok", 0 },
                 { "code", code },
-                { "errmsg", "collMod failed" },
+                { "errmsg", message },
             }
         );
 

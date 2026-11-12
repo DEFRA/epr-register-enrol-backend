@@ -28,4 +28,10 @@ public interface IDomainModelCollection
     /// the constructor that first applies it.
     /// </summary>
     ValidatorApplyResult TryApplyValidator();
+
+    /// <summary>
+    /// What the most recent <see cref="TryApplyValidator"/> returned, including the constructor's attempt, so a
+    /// refusal at startup is not retried (RA-758).
+    /// </summary>
+    ValidatorApplyResult LastValidatorApplyResult { get; }
 }
