@@ -53,7 +53,7 @@ public class PublicRegister2026Tests
     {
         Register["R26ER5003240079PL"]
             .Should()
-            .Be(new PublicRegister2026Entry(500324, "CLEARFIELD ENVIROTECH LIMITED", "A26ER5003240164PL"));
+            .Be(new PublicRegister2026Entry("A26ER5003240164PL", 500324, "CLEARFIELD ENVIROTECH LIMITED"));
     }
 
     [Fact]
