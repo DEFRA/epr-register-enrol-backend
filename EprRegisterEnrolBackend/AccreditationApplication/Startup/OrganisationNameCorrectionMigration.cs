@@ -67,7 +67,7 @@ public class OrganisationNameCorrectionMigration(
     internal const int AccreditationYear = 2027;
     internal const string OldName = "Encirc Ltd";
     internal const string NewName = "VIDRALA UK & IRELAND LIMITED";
-    internal const string RegistrationReference = "R26NR5000690003GL";
+    internal const string NamedRegistrationReference = "R26NR5000690003GL";
 
     internal enum RunResult
     {
@@ -113,22 +113,12 @@ public class OrganisationNameCorrectionMigration(
     // kicks ExecuteAsync off as a background task.
     internal async Task<RunResult> RunAsync(CancellationToken cancellationToken)
     {
-        var settings = options.Value;
-        if (!settings.Enabled)
+        if (!options.Value.Enabled)
             return RunResult.Disabled;
 
-        var apply = settings.Apply;
-        if (apply && string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy))
-        {
-            logger.LogError(
-                "RA-764 organisation name correction: Apply is set but SpotCheckConfirmedBy is "
-                    + "not, so running as a DRY RUN. Set it to whoever reviewed the dry-run output "
-                    + "against the live records."
-            );
-            apply = false;
-        }
-
-        var mode = apply ? "APPLY" : "DRY RUN (nothing will be written)";
+        // Null for a dry run; otherwise who authorised the apply.
+        var confirmedBy = AuthorisedReviewer(options.Value);
+        var mode = confirmedBy is null ? "DRY RUN (nothing will be written)" : "APPLY";
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
                 "RA-764 organisation name correction starting. Mode={Mode}",
@@ -149,7 +139,6 @@ public class OrganisationNameCorrectionMigration(
             return RunResult.Aborted;
         }
 
-        var confirmedBy = apply ? settings.SpotCheckConfirmedBy : null;
         foreach (var application in plan.Applications)
             await ReportAndApplyAsync(
                 applications,
@@ -176,7 +165,23 @@ public class OrganisationNameCorrectionMigration(
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation("RA-764 organisation name correction complete. Mode={Mode}", mode);
-        return apply ? RunResult.Applied : RunResult.DryRun;
+        return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
+    }
+
+    // Apply takes effect only with a named reviewer; without one the run stays a dry run.
+    private string? AuthorisedReviewer(OrganisationNameCorrectionOptions settings)
+    {
+        if (!settings.Apply)
+            return null;
+        if (!string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy))
+            return settings.SpotCheckConfirmedBy;
+
+        logger.LogError(
+            "RA-764 organisation name correction: Apply is set but SpotCheckConfirmedBy is not, "
+                + "so running as a DRY RUN. Set it to whoever reviewed the dry-run output against "
+                + "the live records."
+        );
+        return null;
     }
 
     private async Task<Plan?> PlanAsync(
@@ -234,8 +239,8 @@ public class OrganisationNameCorrectionMigration(
                 logger.LogError(
                     "RA-764 {OrgId}: application {ApplicationId} is Year {Year}, registration "
                         + "{RegistrationReference}, accreditation {AccreditationReference}, name "
-                        + "\"{OrganisationName}\"; expected {ExpectedYear} references for {OrgId} "
-                        + "and the name \"{OldName}\" or \"{NewName}\"",
+                        + "\"{OrganisationName}\"; expected {ExpectedYear} references for "
+                        + "{ExpectedOrgId} and the name \"{OldName}\" or \"{NewName}\"",
                     OrgId,
                     application.Id,
                     application.Year,
@@ -261,7 +266,7 @@ public class OrganisationNameCorrectionMigration(
             );
         }
 
-        if (!found.Any(a => a.RegistrationReference == RegistrationReference))
+        if (!found.Any(a => a.RegistrationReference == NamedRegistrationReference))
         {
             logger.LogError(
                 "RA-764 {OrgId}: none of its {Count} {Year} applications holds registration "
@@ -269,7 +274,7 @@ public class OrganisationNameCorrectionMigration(
                 OrgId,
                 found.Count,
                 AccreditationYear,
-                RegistrationReference
+                NamedRegistrationReference
             );
             return null;
         }
@@ -303,7 +308,7 @@ public class OrganisationNameCorrectionMigration(
         {
             logger.LogError(
                 "RA-764 {OrgId}: {Count} domain model organisations match ReEx organisation "
-                    + "{ReExOrganisationId} or number {OrgId}; expected at most one",
+                    + "{ReExOrganisationId} or number {ExpectedOrgId}; expected at most one",
                 OrgId,
                 found.Count,
                 reExOrganisationId,
@@ -318,7 +323,7 @@ public class OrganisationNameCorrectionMigration(
             logger.LogError(
                 "RA-764 {OrgId}: domain model organisation {OrganisationId} is ReEx organisation "
                     + "{ActualReExOrganisationId}, number {OrganisationNumber}, name "
-                    + "\"{OrganisationName}\"; expected {ReExOrganisationId}, {OrgId} and the "
+                    + "\"{OrganisationName}\"; expected {ReExOrganisationId}, {ExpectedOrgId} and the "
                     + "name \"{OldName}\" or \"{NewName}\"",
                 OrgId,
                 organisation.Id,

@@ -160,7 +160,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
         );
     }
 
-    private Task<RunResult> RunAsync(OrganisationNameCorrectionMigration migration) =>
+    private static Task<RunResult> RunAsync(OrganisationNameCorrectionMigration migration) =>
         migration.RunAsync(TestContext.Current.CancellationToken);
 
     private async Task<List<BsonDocument>> SnapshotAsync()
@@ -176,7 +176,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
         return all;
     }
 
-    private async Task<BsonDocument> ReadRawAsync(
+    private static async Task<BsonDocument> ReadRawAsync(
         IMongoCollection<BsonDocument> collection,
         ObjectId id
     ) =>
