@@ -415,6 +415,16 @@ public class AccreditationApplicationPersistence(
             .Find(a => a.AccreditationReference == accreditationReference)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
+        int orgId,
+        int year,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Collection
+            .Find(a => a.OrgId == orgId && a.Year == year)
+            .SortBy(a => a.Id)
+            .ToListAsync(cancellationToken);
+
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null

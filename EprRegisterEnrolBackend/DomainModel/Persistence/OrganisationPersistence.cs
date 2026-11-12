@@ -106,6 +106,48 @@ public class OrganisationPersistence(
         );
     }
 
+    /// <summary>
+    /// RA-764: every organisation held under <paramref name="reExOrganisationId"/> or numbered
+    /// <paramref name="organisationNumber"/>. A list, so a caller correcting one organisation can see (and refuse to
+    /// act on) the two keys pointing at different documents.
+    /// RA-764 one-off; removed with OrganisationNameCorrectionMigration - do not use elsewhere.
+    /// </summary>
+    public async Task<IReadOnlyList<OrganisationEntity>> FindByReExOrganisationIdOrNumberAsync(
+        string reExOrganisationId,
+        int organisationNumber,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Collection
+            .Find(
+                Builders<OrganisationEntity>.Filter.Eq(x => x.ReExOrganisationId, reExOrganisationId)
+                    | Builders<OrganisationEntity>.Filter.Eq(
+                        x => x.OrganisationNumber,
+                        organisationNumber
+                    )
+            )
+            .ToListAsync(cancellationToken);
+
+    /// <summary>
+    /// RA-764: sets the organisation's name to <paramref name="newName"/> only while it still holds
+    /// <paramref name="expectedName"/>, touching no other field. Returns whether it was changed.
+    /// RA-764 one-off; removed with OrganisationNameCorrectionMigration - do not use elsewhere.
+    /// </summary>
+    public async Task<bool> RenameAsync(
+        ObjectId organisationId,
+        string expectedName,
+        string newName,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var result = await Collection.UpdateOneAsync(
+            Builders<OrganisationEntity>.Filter.Eq(x => x.Id, organisationId)
+                & Builders<OrganisationEntity>.Filter.Eq(x => x.Name, expectedName),
+            Builders<OrganisationEntity>.Update.Set(x => x.Name, newName),
+            cancellationToken: cancellationToken
+        );
+        return result.ModifiedCount == 1;
+    }
+
     /// <summary>The organisation with <paramref name="reExOrganisationId"/>, or null.</summary>
     public async Task<OrganisationEntity?> FindByReExOrganisationIdAsync(
         string reExOrganisationId,
