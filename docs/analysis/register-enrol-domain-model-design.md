@@ -1399,7 +1399,7 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   and someone needs to check with them. "Fixed once issued" below refers to this service's own
   `registration-number` route. Once this service is the source of truth for registrations, there is no seeding from
   ReEx at all.
-- **Legacy-only writers outside the request paths.** The RA-691 accreditation reference correction
+- **Legacy-only writers outside the request paths.** The RA-691 / RA-763 accreditation reference correction
   (`AccreditationReferenceCorrectionMigration`, a one-off startup migration) writes the legacy application only.
   It refuses to apply while `DualWrite` is on and runs as a dry run instead, so it is applied with the flag off,
   before phase 3. Any other writer that bypasses the unit of work must do the same, with one exception: the
