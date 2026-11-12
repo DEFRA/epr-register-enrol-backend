@@ -23,8 +23,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // registered-only ORS 004 has an interim site too, which the page must not show. Each copy
 // has its own id and number: interim site ids key the edit routes and test ids application-wide,
 // and the number allocator keeps numbers unique within an application. Org 50019 (RA-492) has one
-// accredited ORS and three registered only, each lacking a different set of the fields the in-year
-// "add a registered ORS to your accreditation" journey asks for.
+// accredited ORS and four registered only: two complete, and two each lacking a different set of
+// the fields the in-year "add a registered ORS to your accreditation" journey asks for.
 //
 // RA-697: org 50018 also has a glass reprocessor registration and accreditation (its Reprocessor),
 // matching the frontend stub's, and org 50020 is an exporter that DevChangeRequestSeedService gives no
@@ -450,11 +450,15 @@ public class DevExporterAccreditationSeedService(
         };
 
     // RA-492 (org 50019): one accredited ORS with every field the in-year add journey asks for,
-    // and three registered only: complete (France: EU and OECD, so no BES evidence), country only
-    // (India: outside the EU and OECD, so BES evidence unless the conditions of export are met), and
-    // coordinates only (Turkey: OECD, so no BES evidence). Plus one never registered (see
-    // NeverRegisteredOrs), which neither tab lists and which cannot be added to a change request.
-    private static List<OverseasSiteModel> InYearChangeOverseasSites(int year) =>
+    // and four registered only: two complete (France and, RA-739, the Netherlands with an interim
+    // site: EU and OECD, so no BES evidence), listed first so both can be added and submitted
+    // together; country only (India: outside the EU and OECD, so BES evidence unless the conditions
+    // of export are met); and coordinates only (Turkey: OECD, so no BES evidence). Plus one never
+    // registered (see NeverRegisteredOrs), which neither tab lists and which cannot be added to a
+    // change request. The Registered tab lists them in this order.
+    private static List<OverseasSiteModel> InYearChangeOverseasSites(int year)
+    {
+        List<OverseasSiteModel> sites =
         [
             InYearChangeOrs(
                 Ors(901901, "001", "Hamburg Kunststoff GmbH", "901901 Industrial Estate", "Germany", $"{year}-01-01T00:00:00Z", []),
@@ -473,6 +477,22 @@ public class DevExporterAccreditationSeedService(
                 conditionsOfExport: true
             ),
             InYearChangeOrs(
+                Ors(
+                    901914,
+                    "009",
+                    "Rotterdam Recycling BV",
+                    "901914 Industrial Estate",
+                    "Netherlands",
+                    null,
+                    [AntwerpInterimSite(901915, "001")]
+                ),
+                isEu: true,
+                isOecd: true,
+                coordinates: "51.9244, 4.4777",
+                operationCodes: ["R3"],
+                conditionsOfExport: true
+            ),
+            InYearChangeOrs(
                 Ors(901911, "006", "Delhi Polymers Pvt", "901911 Industrial Estate", "India", null, []),
                 isEu: false,
                 isOecd: false
@@ -485,6 +505,9 @@ public class DevExporterAccreditationSeedService(
             ),
             NeverRegisteredOrs(),
         ];
+        sites.ForEach(InterimSiteSync.SyncMirror);
+        return sites;
+    }
 
     // An ORS the operator added on the accreditation application and then deselected before it was
     // granted: built as AddOverseasSite builds one (IsNewSite set, EU/OECD from the country) and

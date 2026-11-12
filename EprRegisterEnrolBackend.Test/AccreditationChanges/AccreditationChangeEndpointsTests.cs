@@ -19,7 +19,8 @@ namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
 // RA-492: in-year change request to add existing registered ORSs to a granted accreditation.
 // The approved application is DevExporterAccreditationSeedService's org 50019 fixture: 901901
-// accredited, 901910 registered and complete (France), 901911 registered with only a country
+// accredited, 901910 and 901914 registered and complete (France; the Netherlands, with an interim
+// site), 901911 registered with only a country
 // (India, so BES evidence is needed unless conditions of export are met), 901912 registered
 // missing R code and conditions of export (Turkey, OECD, so no BES), and 901913 never registered
 // (added on the application and deselected).
@@ -114,7 +115,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         var sites = view.GetProperty("sites").EnumerateArray().ToList();
         sites.Select(s => s.GetProperty("accreditationStatus").GetString())
             .Should()
-            .Equal("Accredited", "Registered", "Registered", "Registered");
+            .Equal("Accredited", "Registered", "Registered", "Registered", "Registered");
         Strings(SiteIn(view, 901911).GetProperty("lockedFields")).Should().Equal("country");
         Strings(SiteIn(view, 901910).GetProperty("lockedFields"))
             .Should()
@@ -238,8 +239,8 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         site.GetProperty("siteName").GetString().Should().Be("Delhi Polymers Pvt");
 
         var stored = await _factory.FakePersistence.GetByIdAsync(Org, AppId);
-        stored!.OverseasSites!.Sites.Should().HaveCount(5);
-        stored.OverseasSites.Sites.Select(s => s.OrsId).Should().Equal("001", "005", "006", "007", "008");
+        stored!.OverseasSites!.Sites.Should().HaveCount(6);
+        stored.OverseasSites.Sites.Select(s => s.OrsId).Should().Equal("001", "005", "009", "006", "007", "008");
         stored.OverseasSites.Sites.Single(s => s.SiteId == 901911).Selected.Should().BeFalse();
     }
 
@@ -300,7 +301,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         var view = await Get();
         view.GetProperty("sites").EnumerateArray().Select(s => s.GetProperty("siteId").GetInt32())
             .Should()
-            .Equal(901901, 901910, 901911, 901912);
+            .Equal(901901, 901910, 901914, 901911, 901912);
 
         (await AddSite(901913)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         _factory.FakeChangeRequests.All.Should().BeEmpty();
@@ -325,7 +326,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         get.StatusCode.Should().Be(HttpStatusCode.OK);
         (await ReadJson(get)).GetProperty("sites").EnumerateArray().Select(s => s.GetProperty("siteId").GetInt32())
             .Should()
-            .Equal(901901, 901910, 901911);
+            .Equal(901901, 901910, 901914, 901911);
         (await client.PostAsJsonAsync(Sites, new { siteId = 901912 }, Ct))
             .StatusCode.Should()
             .Be(HttpStatusCode.NotFound);
