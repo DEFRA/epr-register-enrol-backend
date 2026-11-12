@@ -29,12 +29,15 @@ public static class ChangeRequestRules
     /// The site's status on the accreditation, partitioned as RA-425's Manage overseas sites page does: selected is
     /// Accredited; otherwise an existing site is Registered. Null for a site added on a reaccreditation application
     /// and never registered (<see cref="OverseasSiteModel.IsNewSite"/>), which is neither and cannot be added.
+    /// RA-739: also null for an unselected site without an ORS id (pre-RA-507 data), since Case Management
+    /// needs every added site's ORS id, as the registration-only view leaves out an ORS without one.
     /// </summary>
     public static SiteAccreditationStatus? AccreditationStatus(OverseasSiteModel site) =>
         site switch
         {
             { Selected: true } => SiteAccreditationStatus.Accredited,
             { IsNewSite: true } => null,
+            _ when string.IsNullOrWhiteSpace(site.OrsId) => null,
             _ => SiteAccreditationStatus.Registered,
         };
 

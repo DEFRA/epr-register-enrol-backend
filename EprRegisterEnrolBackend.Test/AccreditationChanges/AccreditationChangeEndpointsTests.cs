@@ -306,6 +306,32 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         _factory.FakeChangeRequests.All.Should().BeEmpty();
     }
 
+    // RA-739: Case Management needs every add-ORS site's ORS id, so a registered site stored without one
+    // (pre-RA-507 data) is left out and cannot be added, as registration-only views leave such an ORS out.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task RegisteredSiteWithoutAnOrsId_IsNotListedAndCannotBeAdded(string? orsId)
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
+        accreditation.OverseasSites!.Sites.Single(s => s.SiteId == 901912).OrsId = orsId;
+        using var factory = new AccreditationChangeTestFactory(submitToCaseManagement: false);
+        factory.FakePersistence.Seed(accreditation);
+        using var client = factory.CreateClient();
+
+        var get = await client.GetAsync(Base, Ct);
+
+        get.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadJson(get)).GetProperty("sites").EnumerateArray().Select(s => s.GetProperty("siteId").GetInt32())
+            .Should()
+            .Equal(901901, 901910, 901911);
+        (await client.PostAsJsonAsync(Sites, new { siteId = 901912 }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.NotFound);
+        factory.FakeChangeRequests.All.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task AddSite_AccreditedSite_Returns409()
     {

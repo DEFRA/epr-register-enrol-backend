@@ -18,6 +18,7 @@ public class ChangeRequestRulesTests
         new()
         {
             SiteId = 1,
+            OrsId = "001",
             SiteName = "Site",
             Country = country,
             Coordinates = coordinates,
@@ -66,6 +67,26 @@ public class ChangeRequestRulesTests
         var site = Site();
         site.Selected = selected;
         site.IsNewSite = isNewSite;
+
+        ChangeRequestRules.AccreditationStatus(site).Should().Be(expected);
+    }
+
+    // RA-739: Case Management needs an add-ORS site's ORS id, so an unselected site without one is neither;
+    // an accredited site keeps its status.
+    [Theory]
+    [InlineData(false, null, null)]
+    [InlineData(false, "", null)]
+    [InlineData(false, " ", null)]
+    [InlineData(true, null, SiteAccreditationStatus.Accredited)]
+    public void AccreditationStatus_SiteWithoutAnOrsId_IsOnlyEverAccredited(
+        bool selected,
+        string? orsId,
+        SiteAccreditationStatus? expected
+    )
+    {
+        var site = Site();
+        site.Selected = selected;
+        site.OrsId = orsId;
 
         ChangeRequestRules.AccreditationStatus(site).Should().Be(expected);
     }

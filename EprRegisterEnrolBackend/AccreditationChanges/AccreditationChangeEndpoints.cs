@@ -162,7 +162,8 @@ public static class AccreditationChangeEndpoints
     private static async Task<IResult> Get(
         string organisationId,
         string applicationId,
-        [AsParameters] ChangeServices services
+        [AsParameters] ChangeServices services,
+        ILoggerFactory loggerFactory
     )
     {
         // RA-697: a reprocessor reads its (tonnage) requests too; it has no overseas sites.
@@ -180,11 +181,24 @@ public static class AccreditationChangeEndpoints
         var registrationOnly = await ListRegistrationOnlyAsync(organisationId, accreditation!, services);
         var requests = ownRequests.Concat(registrationOnly).OrderByDescending(r => r.CreatedAt).ToList();
         // A never-registered site has no status and is left out, as RA-425's page shows it on neither tab.
-        var sites = (accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
+        var allSites = accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [];
+        var sites = allSites
             .Select(site => (Site: site, Status: ChangeRequestRules.AccreditationStatus(site)))
             .Where(s => s.Status is not null)
             .Select(s => (s.Site, s.Status!.Value))
             .ToList();
+        // RA-739: a registered site without an ORS id is left out too, and logged so the data can be fixed.
+        var withoutOrsId = allSites.Count(s =>
+            s is { Selected: false, IsNewSite: false } && string.IsNullOrWhiteSpace(s.OrsId)
+        );
+        if (withoutOrsId > 0)
+            loggerFactory
+                .CreateLogger(typeof(AccreditationChangeEndpoints))
+                .LogWarning(
+                    "Left {Count} registered ORS without an ORS id out of accreditation {ApplicationId}'s sites",
+                    withoutOrsId,
+                    applicationId
+                );
 
         return Results.Ok(
             ChangesView(
