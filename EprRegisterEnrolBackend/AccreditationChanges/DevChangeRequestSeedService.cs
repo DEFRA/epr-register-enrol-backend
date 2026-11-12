@@ -244,7 +244,7 @@ public class DevChangeRequestSeedService(
             .SelectMany(i => new[] { i.ValidFrom, i.WithdrawnAt })
             .Append(submittedAt)
             .Max() ?? createdAt;
-        return new AccreditationChangeRequest
+        var request = new AccreditationChangeRequest
         {
             RequestId = FixedId(year, orgId, side, number, 0),
             ChangeType = seed.ChangeType,
@@ -263,6 +263,10 @@ public class DevChangeRequestSeedService(
             SubmittedBy = draft ? null : Submitter,
             SubmissionReference = reference,
         };
+        // RA-739: a submitted add-ORS request holds what Submit stores: each site's own charge and the total.
+        if (!draft && seed.ChangeType == Add)
+            request.SetCharge(ChangeRequestRules.Charge(request.Sites.Count));
+        return request;
     }
 
     // Fixed per year, org, accreditation and request, e.g. 00002026-0000-0000-a000-050018000001 for the exporter's

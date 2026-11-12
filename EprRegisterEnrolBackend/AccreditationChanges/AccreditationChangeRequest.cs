@@ -80,6 +80,24 @@ public class AccreditationChangeRequest
     public IEnumerable<ChangeRequestItem> Items =>
         TonnageBandUpgrade is null ? Sites : [.. Sites, TonnageBandUpgrade];
 
+    /// <summary>
+    /// RA-739: snapshots the charge at submit: the request's total and each site's own (every site is chargeable).
+    /// </summary>
+    public void SetCharge(ChargeView charge)
+    {
+        ChargePence = charge.TotalPence;
+        foreach (var site in Sites)
+            site.ChargePence = charge.ChargePerSitePence;
+    }
+
+    /// <summary>Clears the total and every site's charge together, when a request is reopened.</summary>
+    public void ClearCharge()
+    {
+        ChargePence = null;
+        foreach (var site in Sites)
+            site.ChargePence = null;
+    }
+
     /// <summary>Moves every item with the request: to Submitted on submit, back to InProgress on reopen.</summary>
     public void SetItemStatuses(ChangeItemStatus status)
     {
@@ -142,6 +160,12 @@ public class ChangeRequestSite : ChangeRequestItem
     public ChangeRequestSiteAnswers Answers { get; set; } = new();
 
     public BesEvidenceModel? BesEvidence { get; set; }
+
+    /// <summary>
+    /// RA-739: this site's own charge, the per-site in-year ORS fee, snapshotted at submit beside the request's
+    /// total <see cref="AccreditationChangeRequest.ChargePence"/> and cleared with it when the request is reopened.
+    /// </summary>
+    public int? ChargePence { get; set; }
 }
 
 public class ChangeRequestSiteAnswers

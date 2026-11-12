@@ -725,7 +725,7 @@ public static class AccreditationChangeEndpoints
             Email = body.Email,
         };
         draft.PaymentReference = body.PaymentReference;
-        draft.ChargePence = ChangeRequestRules.Charge(draft.Sites.Count).TotalPence;
+        draft.SetCharge(ChangeRequestRules.Charge(draft.Sites.Count));
         draft.Status = ChangeRequestStatus.Submitted;
         draft.SetItemStatuses(ChangeItemStatus.Submitted);
         draft.SubmittedAt = DateTime.UtcNow;
@@ -814,7 +814,7 @@ public static class AccreditationChangeEndpoints
         draft.SubmittedAt = null;
         draft.SubmittedBy = null;
         draft.PaymentReference = null;
-        draft.ChargePence = null;
+        draft.ClearCharge();
         draft.SubmissionReference = null;
         foreach (var item in draft.Items)
         {

@@ -1157,6 +1157,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.SubmissionReference.Should().BeNull();
         stored.Sites.Single().CaseManagementReference.Should().BeNull();
         stored.Sites.Single().CaseManagementWorkItemId.Should().BeNull();
+        stored.Sites.Single().ChargePence.Should().BeNull();
         stored.Sites.Single().Status.Should().Be(ChangeItemStatus.InProgress);
     }
 
@@ -1283,10 +1284,14 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
     private readonly AccreditationChangeTestFactory _factory;
     private readonly HttpClient _client;
 
+    // The seeded accreditation, held so a test can fill in an ORS before it is submitted.
+    private readonly AccreditationApplicationModel _accreditation =
+        DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
+
     public AccreditationChangeCaseManagementHttpTests()
     {
         _factory = new(submitToCaseManagement: true, caseManagement: _managementBe);
-        _factory.FakePersistence.Seed(DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year));
+        _factory.FakePersistence.Seed(_accreditation);
         _client = _factory.CreateClient();
     }
 
@@ -1364,6 +1369,208 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
         view.GetRawText().Should().NotContain("SUB-2026-0001");
     }
 
+    private static JsonNode SentSite(JsonNode request, int siteId) =>
+        request["payload"]!["sites"]!.AsArray().Single(s => s!["siteId"]!.GetValue<int>() == siteId)!;
+
+    private async Task AttachCleanBesEvidence(int siteId)
+    {
+        var fileUploadId = Guid.NewGuid().ToString();
+        await _factory.FakePendingUploadService.CreateAsync(fileUploadId, "http://cdp/status", ct: Ct);
+        await _factory.FakePendingUploadService.CompleteAsync(
+            fileUploadId,
+            new CdpCallbackFile
+            {
+                FileId = "file-1",
+                Filename = "bes.pdf",
+                FileStatus = "complete",
+                ContentType = "application/pdf",
+                S3Key = "bes-evidence/file-1",
+                S3Bucket = "bes-bucket",
+            },
+            Ct
+        );
+        (await _client.PostAsJsonAsync(
+                $"{Base}/requests/current/sites/{siteId}/bes-evidence/files",
+                new { fileUploadId, besEvidenceValidFromDate = "2026-01-01", besEvidenceExpiryDate = "2027-12-31" },
+                Ct
+            ))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Created);
+    }
+
+    // RA-739: each site goes in re-accreditation's site shape, with every interim site (withdrawn ones
+    // carrying removedAt), and its own charge alongside the submission's total.
+    [Fact]
+    public async Task Submit_SendsEachSiteInReaccreditationsSiteShapeWithItsOwnCharge()
+    {
+        var lyon = _accreditation.OverseasSites!.Sites.Single(s => s.SiteId == 901910);
+        lyon.AddressLine2 = "Zone Industrielle";
+        lyon.Code2 = "B3020";
+        lyon.Code3 = "GH013";
+        lyon.InterimSites =
+        [
+            new InterimSiteModel
+            {
+                SiteId = 1,
+                SiteNumber = "001",
+                Country = "France",
+                SiteName = "Marseille Storage",
+                AddressLine1 = "1 Quai",
+                TownOrCity = "Marseille",
+                ContactName = "Alex Morgan",
+                ContactEmail = "alex@example.com",
+                ContactPhone = "0123456789",
+                OperationCodes = ["R13"],
+                CreatedAt = new DateTime(2025, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+            },
+            new InterimSiteModel
+            {
+                SiteId = 2,
+                SiteNumber = "002",
+                Country = "France",
+                SiteName = "Old Depot",
+                AddressLine1 = "2 Quai",
+                TownOrCity = "Lyon",
+                ContactName = "Sam Lee",
+                ContactEmail = "sam@example.com",
+                ContactPhone = "0987654321",
+                OperationCodes = ["R12"],
+                RemovedAt = new DateTime(2026, 2, 1, 9, 0, 0, DateTimeKind.Utc),
+            },
+        ];
+        _managementBe.Respond = request => Created(request);
+
+        (await SubmitThreeSites()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var sent = _managementBe.Requests.Single();
+        sent["payload"]!["chargePence"]!.GetValue<int>().Should().Be(98400);
+        var expected = JsonNode.Parse(
+            """
+            {
+              "siteId": 901910,
+              "orsId": "005",
+              "siteName": "Lyon Plastiques SA",
+              "siteAddress": "901910 Industrial Estate, France",
+              "addressLine1": "901910 Industrial Estate",
+              "addressLine2": "Zone Industrielle",
+              "townOrCity": "Port",
+              "country": "France",
+              "coordinates": "45.7640, 4.8357",
+              "contactName": "Site Manager",
+              "contactEmail": "site901910@example.com",
+              "contactPhone": "+44 1234 567890",
+              "operationCodes": ["R3"],
+              "code1": "B3011",
+              "code2": "B3020",
+              "code3": "GH013",
+              "repatriatedLoads": "Rejected loads are returned to the UK exporter.",
+              "conditionsOfExport": true,
+              "isEu": true,
+              "isOecd": true,
+              "interimSites": [
+                {
+                  "siteId": 1,
+                  "siteNumber": "001",
+                  "isNewSite": false,
+                  "country": "France",
+                  "siteName": "Marseille Storage",
+                  "addressLine1": "1 Quai",
+                  "townOrCity": "Marseille",
+                  "contactName": "Alex Morgan",
+                  "contactEmail": "alex@example.com",
+                  "contactPhone": "0123456789",
+                  "operationCodes": ["R13"],
+                  "createdAt": "2025-09-01T00:00:00Z"
+                },
+                {
+                  "siteId": 2,
+                  "siteNumber": "002",
+                  "isNewSite": false,
+                  "country": "France",
+                  "siteName": "Old Depot",
+                  "addressLine1": "2 Quai",
+                  "townOrCity": "Lyon",
+                  "contactName": "Sam Lee",
+                  "contactEmail": "sam@example.com",
+                  "contactPhone": "0987654321",
+                  "operationCodes": ["R12"],
+                  "removedAt": "2026-02-01T09:00:00Z"
+                }
+              ],
+              "besEvidence": { "files": [] },
+              "suppliedFields": [],
+              "chargePence": 32800
+            }
+            """
+        )!;
+        var lyonSent = SentSite(sent, 901910);
+        JsonNode.DeepEquals(lyonSent, expected)
+            .Should()
+            .BeTrue($"expected {expected.ToJsonString()} but was {lyonSent.ToJsonString()}");
+        SentSite(sent, 901912)["chargePence"]!.GetValue<int>().Should().Be(32800);
+    }
+
+    // The operator's answer stands in for each value the ORS lacks, and the BES evidence is the request's own.
+    [Fact]
+    public async Task Submit_SendsTheEffectiveValuesAndTheRequestsOwnBesEvidence()
+    {
+        _managementBe.Respond = request => Created(request);
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901911 }, Ct))
+            .StatusCode.Should().Be(HttpStatusCode.Created);
+        (await _client.PatchAsJsonAsync(
+                $"{Base}/requests/current/sites/901911",
+                new { coordinates = "28.6139, 77.2090", operationCodes = R3, conditionsOfExport = false },
+                Ct
+            ))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+        await AttachCleanBesEvidence(901911);
+
+        (await _client.PostAsJsonAsync(
+                $"{Base}/requests/current/submit",
+                new { fullName = "Jane Smith", jobTitle = "Director" },
+                Ct
+            ))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+
+        var sent = _managementBe.Requests.Single();
+        sent["payload"]!["chargePence"]!.GetValue<int>().Should().Be(32800);
+        var site = SentSite(sent, 901911);
+        site["country"]!.GetValue<string>().Should().Be("India");
+        site["coordinates"]!.GetValue<string>().Should().Be("28.6139, 77.2090");
+        site["operationCodes"]!.AsArray().Select(c => c!.GetValue<string>()).Should().Equal("R3");
+        site["conditionsOfExport"]!.GetValue<bool>().Should().BeFalse();
+        site["isEu"]!.GetValue<bool>().Should().BeFalse();
+        site["isOecd"]!.GetValue<bool>().Should().BeFalse();
+        site["suppliedFields"]!.AsArray().Select(f => f!.GetValue<string>())
+            .Should().Equal("coordinates", "operationCodes", "conditionsOfExport");
+        site["chargePence"]!.GetValue<int>().Should().Be(32800);
+        var file = site["besEvidence"]!["files"]!.AsArray().Should().ContainSingle().Subject!;
+        file["fileId"]!.GetValue<string>().Should().Be("file-1");
+        file["filename"]!.GetValue<string>().Should().Be("bes.pdf");
+        file["contentType"]!.GetValue<string>().Should().Be("application/pdf");
+        file["scanStatus"]!.GetValue<string>().Should().Be("Clean");
+        file["besEvidenceValidFromDate"]!.GetValue<string>().Should().Be("2026-01-01");
+        file["besEvidenceExpiryDate"]!.GetValue<string>().Should().Be("2027-12-31");
+        file["s3Key"]!.GetValue<string>().Should().Be("bes-evidence/file-1");
+        file["s3Bucket"]!.GetValue<string>().Should().Be("bes-bucket");
+        file["uploadedAt"].Should().NotBeNull();
+    }
+
+    // Each site's own charge is stored with the request when it is submitted.
+    [Fact]
+    public async Task Submit_StoresEachSitesOwnChargeAndTheTotal()
+    {
+        _managementBe.Respond = request => Created(request);
+
+        (await SubmitThreeSites()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.ChargePence.Should().Be(98400);
+        stored.Sites.Select(s => s.ChargePence).Should().Equal(32800, 32800, 32800);
+    }
+
     public static TheoryData<string> Failures() =>
         ["server error", "unparseable", "no submission reference", "a site without a reference", "a site missing", "timeout"];
 
@@ -1404,7 +1611,10 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
         stored.SubmissionReference.Should().BeNull();
         stored.Sites.Should().HaveCount(3);
         stored.Sites.Should().OnlyContain(s =>
-            s.Status == ChangeItemStatus.InProgress && s.CaseManagementReference == null && s.CaseManagementWorkItemId == null
+            s.Status == ChangeItemStatus.InProgress
+            && s.CaseManagementReference == null
+            && s.CaseManagementWorkItemId == null
+            && s.ChargePence == null
         );
     }
 

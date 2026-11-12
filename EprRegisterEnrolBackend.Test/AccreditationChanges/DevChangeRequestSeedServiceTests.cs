@@ -120,6 +120,26 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
         ItemsOf(submitted).Should().NotContain(i => i.Status == ChangeItemStatus.InProgress);
     }
 
+    // RA-739: a submitted add-ORS request holds what a real submit stores: each site's own charge (the per-site
+    // in-year ORS fee) and the total. The draft has neither.
+    [Fact]
+    public async Task SeedAsync_SubmittedAddOrsRequestsCarryEachSitesChargeAndTheTotal()
+    {
+        var requests = await SeedAndList(ExporterApp);
+
+        var addOrs = requests
+            .Where(r => r.ChangeType == AccreditationChangeRequest.AddOverseasSiteChangeType)
+            .ToList();
+        var submitted = addOrs.Where(r => r.Status == ChangeRequestStatus.Submitted).ToList();
+        submitted.Should().NotBeEmpty();
+        // Each seeded add-ORS request adds one site.
+        submitted.Should().OnlyContain(r => r.Sites.Count == 1 && r.ChargePence == 32800);
+        submitted.SelectMany(r => r.Sites).Should().OnlyContain(s => s.ChargePence == 32800);
+        var draft = addOrs.Single(r => r.Status == ChangeRequestStatus.InProgress);
+        draft.ChargePence.Should().BeNull();
+        draft.Sites.Should().OnlyContain(s => s.ChargePence == null);
+    }
+
     // Queried, Submitted, Updated and Duly made: one each to the accredited ORSs' updates and the tonnage item.
     [Fact]
     public async Task SeedAsync_EachOrsHasAtMostOneActiveItem_AndTheOtherActiveStatusesOneEach()

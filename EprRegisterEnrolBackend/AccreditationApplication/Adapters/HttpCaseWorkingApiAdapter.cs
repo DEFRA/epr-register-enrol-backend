@@ -271,29 +271,34 @@ public class HttpCaseWorkingApiAdapter(
             chargePence = changeRequest.ChargePence,
             submittedBy = changeRequest.SubmittedBy,
             paymentReference = changeRequest.PaymentReference,
+            // RA-739: each site in re-accreditation's shape, with the values in force for this request (the
+            // operator's answer where the ORS had none), the request's own BES evidence and the site's own charge.
             sites = changeRequest.Sites.Select(site =>
             {
                 var ors = ChangeRequestRules.FindSite(accreditation, site.SiteId);
                 var effective = ChangeRequestRules.Effective(ors, site.Answers);
-                return new
-                {
-                    siteId = site.SiteId,
-                    orsId = site.OrsId,
-                    siteName = site.SiteName,
-                    country = effective.Country,
-                    coordinates = effective.Coordinates,
-                    operationCodes = effective.OperationCodes,
-                    conditionsOfExport = effective.ConditionsOfExport,
-                    suppliedFields = ChangeRequestRules.SuppliedFields(site.Answers),
-                    besEvidence = site.BesEvidence?.BesEvidenceUploads.Select(f => new
+                // The ORS is always on the accreditation; without it only the request's own values are sent.
+                var projected = ors is null
+                    ? new CaseManagementSite
                     {
-                        f.FileId,
-                        f.Filename,
-                        f.S3Bucket,
-                        f.S3Key,
-                        f.BesEvidenceValidFromDate,
-                        f.BesEvidenceExpiryDate,
-                    }),
+                        SiteId = site.SiteId,
+                        SiteName = site.SiteName,
+                        InterimSites = [],
+                        BesEvidence = BesEvidenceFiles(null),
+                    }
+                    : CaseManagementSiteFrom(ors);
+                return projected with
+                {
+                    SiteId = site.SiteId,
+                    OrsId = site.OrsId,
+                    SiteName = site.SiteName,
+                    Country = effective.Country,
+                    Coordinates = effective.Coordinates,
+                    OperationCodes = effective.OperationCodes,
+                    ConditionsOfExport = effective.ConditionsOfExport,
+                    BesEvidence = BesEvidenceFiles(site.BesEvidence),
+                    SuppliedFields = ChangeRequestRules.SuppliedFields(site.Answers),
+                    ChargePence = site.ChargePence,
                 };
             }),
         };
@@ -961,61 +966,107 @@ public class HttpCaseWorkingApiAdapter(
         (application.OverseasSites?.Sites ?? [])
             .Where(s => s.Selected)
             .Select(s =>
-                (object)new
-                {
-                    siteId = s.SiteId,
-                    selected = s.Selected,
-                    orsId = s.OrsId,
-                    siteName = s.SiteName,
-                    siteAddress = s.SiteAddress,
-                    addressLine1 = s.AddressLine1,
-                    addressLine2 = s.AddressLine2,
-                    townOrCity = s.TownOrCity,
-                    country = s.Country,
-                    coordinates = s.Coordinates,
-                    contactName = s.ContactName,
-                    contactEmail = s.ContactEmail,
-                    contactPhone = s.ContactPhone,
-                    operationCodes = s.OperationCodes,
-                    code1 = s.Code1,
-                    code2 = s.Code2,
-                    code3 = s.Code3,
-                    repatriatedLoads = s.RepatriatedLoads,
-                    conditionsOfExport = s.ConditionsOfExport,
-                    isEu = s.IsEu,
-                    isOecd = s.IsOecd,
-                    isNewSite = s.IsNewSite,
-                    registeredNowAccredited = s.RegisteredNowAccredited,
-                    // RA-603: derived rather than read straight off the model, so a stale stored
-                    // mirror can never advertise a site the operator has withdrawn.
-                    interimSite = BuildInterimSite(InterimSiteSync.Active(s).FirstOrDefault()),
-                    // RA-603 AC09: every interim site, withdrawn ones included. AC05 keeps those
-                    // for reporting and this service is where the reporting happens, so they go
-                    // over the wire carrying their dates and the regulator's own view decides
-                    // what to show.
-                    interimSites = InterimSiteSync
-                        .All(s)
-                        .Select(i => BuildInterimSite(i))
-                        .ToArray(),
-                    besEvidence = new
+                (object)(
+                    CaseManagementSiteFrom(s) with
                     {
-                        files = (s.BesEvidence?.BesEvidenceUploads ?? [])
-                            .Select(f => new
-                            {
-                                fileId = f.FileId,
-                                filename = f.Filename,
-                                contentType = f.ContentType,
-                                uploadedAt = f.UploadedAt,
-                                scanStatus = f.ScanStatus,
-                                besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
-                                besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
-                                s3Key = f.S3Key,
-                                s3Bucket = f.S3Bucket,
-                            })
-                            .ToArray(),
-                    },
-                })
+                        Selected = s.Selected,
+                        IsNewSite = s.IsNewSite,
+                        RegisteredNowAccredited = s.RegisteredNowAccredited,
+                        // RA-603: derived rather than read straight off the model, so a stale stored
+                        // mirror can never advertise a site the operator has withdrawn.
+                        InterimSite = BuildInterimSite(InterimSiteSync.Active(s).FirstOrDefault()),
+                    }
+                )
+            )
             .ToArray();
+
+    // RA-739: the one site projection Case Management gets, for a re-accreditation's overseas sites and for each
+    // site an in-year add-ORS request adds, so both case types share field names and shapes. Each caller fills in
+    // its own extras (see CaseManagementSite).
+    // RA-603 AC09: every interim site, withdrawn ones included. AC05 keeps those for reporting and this service
+    // is where the reporting happens, so they go over the wire carrying their dates and the regulator's own view
+    // decides what to show.
+    private static CaseManagementSite CaseManagementSiteFrom(OverseasSiteModel s) =>
+        new()
+        {
+            SiteId = s.SiteId,
+            OrsId = s.OrsId,
+            SiteName = s.SiteName,
+            SiteAddress = s.SiteAddress,
+            AddressLine1 = s.AddressLine1,
+            AddressLine2 = s.AddressLine2,
+            TownOrCity = s.TownOrCity,
+            Country = s.Country,
+            Coordinates = s.Coordinates,
+            ContactName = s.ContactName,
+            ContactEmail = s.ContactEmail,
+            ContactPhone = s.ContactPhone,
+            OperationCodes = s.OperationCodes,
+            Code1 = s.Code1,
+            Code2 = s.Code2,
+            Code3 = s.Code3,
+            RepatriatedLoads = s.RepatriatedLoads,
+            ConditionsOfExport = s.ConditionsOfExport,
+            IsEu = s.IsEu,
+            IsOecd = s.IsOecd,
+            InterimSites = InterimSiteSync.All(s).Select(i => BuildInterimSite(i)).ToArray(),
+            BesEvidence = BesEvidenceFiles(s.BesEvidence),
+        };
+
+    private static object BesEvidenceFiles(BesEvidenceModel? evidence) =>
+        new
+        {
+            files = (evidence?.BesEvidenceUploads ?? [])
+                .Select(f => new
+                {
+                    fileId = f.FileId,
+                    filename = f.Filename,
+                    contentType = f.ContentType,
+                    uploadedAt = f.UploadedAt,
+                    scanStatus = f.ScanStatus,
+                    besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
+                    besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
+                    s3Key = f.S3Key,
+                    s3Bucket = f.S3Bucket,
+                })
+                .ToArray(),
+        };
+
+    // Serialised in declaration order, which re-accreditation's payload has always had; nulls are dropped by
+    // JsonOptions, so a field one case type leaves unset is not sent at all.
+    // Re-accreditation only: Selected, IsNewSite, RegisteredNowAccredited and the InterimSite mirror.
+    // Add-ORS only: SuppliedFields and ChargePence (the site's own charge).
+    private sealed record CaseManagementSite
+    {
+        public required int SiteId { get; init; }
+        public bool? Selected { get; init; }
+        public string? OrsId { get; init; }
+        public required string SiteName { get; init; }
+        public string? SiteAddress { get; init; }
+        public string? AddressLine1 { get; init; }
+        public string? AddressLine2 { get; init; }
+        public string? TownOrCity { get; init; }
+        public string? Country { get; init; }
+        public string? Coordinates { get; init; }
+        public string? ContactName { get; init; }
+        public string? ContactEmail { get; init; }
+        public string? ContactPhone { get; init; }
+        public List<string>? OperationCodes { get; init; }
+        public string? Code1 { get; init; }
+        public string? Code2 { get; init; }
+        public string? Code3 { get; init; }
+        public string? RepatriatedLoads { get; init; }
+        public bool? ConditionsOfExport { get; init; }
+        public bool? IsEu { get; init; }
+        public bool? IsOecd { get; init; }
+        public bool? IsNewSite { get; init; }
+        public bool? RegisteredNowAccredited { get; init; }
+        public object? InterimSite { get; init; }
+        public required object?[] InterimSites { get; init; }
+        public required object BesEvidence { get; init; }
+        public List<string>? SuppliedFields { get; init; }
+        public int? ChargePence { get; init; }
+    }
 
     // Shared by BuildPayload and BuildSectionsPayload, as above.
     //
