@@ -32,6 +32,9 @@ public static class AccreditationChangeEndpoints
     private const string ConcurrentEditMessage =
         "The change request was changed by someone else. Reload it and try again.";
 
+    private const string PaymentReferenceField = nameof(SubmitRequest.PaymentReference);
+    private const string PaymentReferenceRequiredMessage = "Payment reference is required.";
+
     public static void UseAccreditationChangeEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup(RoutePrefix)
@@ -682,8 +685,13 @@ public static class AccreditationChangeEndpoints
     )
     {
         var validation = await submit.Validator.ValidateAsync(body, services.CancellationToken);
-        if (!validation.IsValid)
-            return Results.ValidationProblem(validation.ToDictionary());
+        var errors = validation.ToDictionary();
+        // RA-739: the validator is shared with application submit, where the payment reference is optional.
+        // Case Management requires it on a change request: it is the reference the operator was told to quote.
+        if (string.IsNullOrWhiteSpace(body.PaymentReference))
+            errors[PaymentReferenceField] = [PaymentReferenceRequiredMessage];
+        if (errors.Count > 0)
+            return Results.ValidationProblem(errors);
 
         var (error, accreditation, draft) = await LoadDraftAsync(
             organisationId,

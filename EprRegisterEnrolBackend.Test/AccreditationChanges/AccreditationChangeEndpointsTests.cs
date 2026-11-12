@@ -53,7 +53,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         _factory.Dispose();
     }
 
-    private static object Declaration => new { fullName = "Jane Smith", jobTitle = "Director" };
+    private static object Declaration => new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" };
 
     private static async Task<JsonElement> ReadJson(HttpResponseMessage response) =>
         await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
@@ -631,6 +631,29 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
     }
 
+    // RA-739: Case Management requires the payment reference the operator was told to quote, so a submit
+    // without one is refused here, before anything is saved, rather than failing at Case Management.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task Submit_WithoutAPaymentReference_Returns400AndStaysInProgress(string? paymentReference)
+    {
+        await AddSite(901910);
+
+        var response = await _client.PostAsJsonAsync(
+            SubmitUrl,
+            new { fullName = "Jane Smith", jobTitle = "Director", paymentReference },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ReadJson(response)).GetProperty("errors").TryGetProperty("PaymentReference", out _).Should().BeTrue();
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        stored.PaymentReference.Should().BeNull();
+    }
+
     [Fact]
     public async Task Submit_IncompleteSite_Returns422NamingEachFieldAndStaysInProgress()
     {
@@ -1032,7 +1055,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
         return await _client.PostAsJsonAsync(
             $"{Base}/requests/current/submit",
-            new { fullName = "Jane Smith", jobTitle = "Director" },
+            new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
             Ct
         );
     }
@@ -1120,7 +1143,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
 
         var response = await _client.PostAsJsonAsync(
             $"{Base}/requests/current/submit",
-            new { fullName = "Jane Smith", jobTitle = "Director" },
+            new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
             Ct
         );
 
@@ -1224,7 +1247,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         ));
         (await _client.PostAsJsonAsync(
                 $"{Base}/requests/current/submit",
-                new { fullName = "Jane Smith", jobTitle = "Director" },
+                new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
                 Ct
             ))
             .StatusCode.Should()
@@ -1528,7 +1551,7 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
 
         (await _client.PostAsJsonAsync(
                 $"{Base}/requests/current/submit",
-                new { fullName = "Jane Smith", jobTitle = "Director" },
+                new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
                 Ct
             ))
             .StatusCode.Should()
