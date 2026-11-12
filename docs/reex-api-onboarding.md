@@ -1,8 +1,9 @@
 # Accreditation API: onboarding guide for service clients
 
 A read-only API for services (first consumer: ReEx) that need accreditation data held by the
-Operator Backend. Paths live under `/v1`. The data behind the API will move to a new data model
-(a planned change); we do not intend that to change what the API returns, and any change to it follows the
+Operator Backend. Paths live under `/v1`. **The API is provisional**: the spec is still a draft, and
+the API may change after ReEx has tried it. The data behind it will also move to a new data model,
+which we do not intend to change what the API returns. See the
 [versioning and deprecation policy](#versioning-and-deprecation) below.
 
 ## Base URLs
@@ -331,6 +332,12 @@ and no trailing newline, then that you use the secret for this client and enviro
 
 The version is in the path, so the routes above are version 1.
 
+**Provisional for now.** The spec is a draft (`0.2.0-draft`). Until ReEx has consumed the API and
+we have settled its shape with them, we may make breaking changes to `/v1`, including to the fields
+and routes in this guide. We will tell you about any such change before it is released, in the
+places listed under "How you will hear about changes" below. When the shape is settled, this
+section will say so, and the rules below will apply.
+
 **Changes we can make to `/v1` at any time, without a new version:**
 
 - new fields in a response
@@ -341,7 +348,7 @@ The version is in the path, so the routes above are version 1.
 
 This is why your client must ignore fields it does not know and handle values it does not know.
 
-**Breaking changes** are not made in `/v1`. These are removing or renaming a field, changing its
+**Breaking changes**, once the shape is settled, are not made in `/v1`. These are removing or renaming a field, changing its
 type or meaning, removing a route, and rejecting input that was accepted before. They arrive as a
 new version, served alongside the old one. We do not switch a version off without telling you
 first, and the notice period is agreed with each consumer.
