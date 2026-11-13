@@ -408,6 +408,37 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task A_failure_reading_the_candidates_is_logged_and_does_not_stop_the_host()
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        persistence
+            .GetOpenWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("connection string with a secret"));
+        var services = new ServiceCollection();
+        services.AddSingleton(persistence);
+        services.AddSingleton(_caseWorking);
+        var migration = new ChargeCorrectionMigration(
+            services.BuildServiceProvider(),
+            Options.Create(new ChargeCorrectionOptions { Enabled = true, Apply = true }),
+            _logger
+        );
+
+        await migration.StartAsync(TestContext.Current.CancellationToken);
+        await migration.ExecuteTask!;
+
+        Logged(LogLevel.Error)
+            .Should()
+            .ContainSingle()
+            .Which.Should()
+            .Be(
+                "RA-766 charge correction failed before any application was processed: "
+                    + "error=InvalidOperationException"
+            );
+        _logger.Entries.Should().NotContain(e => e.Message.Contains("secret"));
+        await DidNotWriteAsync();
+    }
+
+    [Fact]
     public async Task Running_again_after_apply_changes_nothing()
     {
         var (workItemId, _) = await SeedAsync(storedPence: 218_400);

@@ -57,12 +57,6 @@ public class ChargeCorrectionMigration(
     ILogger<ChargeCorrectionMigration> logger
 ) : BackgroundService
 {
-    internal const string Approved = "approved";
-    internal const string Rejected = "rejected";
-    internal const string Withdrawn = "withdrawn";
-    internal const string ApprovedPendingContact = "approved-pending-contact";
-    internal const string RejectedPendingContact = "rejected-pending-contact";
-
     // The Case Management service states a charge is never changed in. The two pending-contact
     // states are not terminal there, but are already a decided outcome (this service shows them
     // as AwaitingDecision, so the application status alone would not catch them).
@@ -70,11 +64,11 @@ public class ChargeCorrectionMigration(
         StringComparer.OrdinalIgnoreCase
     )
     {
-        Approved,
-        Rejected,
-        Withdrawn,
-        ApprovedPendingContact,
-        RejectedPendingContact,
+        "approved",
+        "rejected",
+        "withdrawn",
+        "approved-pending-contact",
+        "rejected-pending-contact",
     };
 
     internal enum RunMode
