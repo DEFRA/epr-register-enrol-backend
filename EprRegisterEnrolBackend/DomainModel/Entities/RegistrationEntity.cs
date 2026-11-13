@@ -22,6 +22,13 @@ public class RegistrationEntity : VersionedEntityBase
 
     public List<string> PreviousRegistrationNumbers { get; set; } = [];
 
+    /// <summary>
+    /// RA-763: the newest accreditation number known for this registration that this service did not issue, which is
+    /// ReEx's, written at seed (e.g. A26ER5003240164PL). Null when ReEx had none, so the registration was registered
+    /// only. This service holds no Accreditation for those years (D10), so this is where the number is kept.
+    /// </summary>
+    public string? LatestKnownAccreditationNumber { get; set; }
+
     [BsonRepresentation(BsonType.String)]
     public RegistrationStatus Status { get; set; } = RegistrationStatus.Created;
 

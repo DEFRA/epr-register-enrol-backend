@@ -70,6 +70,12 @@ public static class SeedEntityMapper
             ? WasteProcessingKind.Exporter
             : WasteProcessingKind.Reprocessor;
         ApplyNumber(target, dto.RegistrationReference);
+        // RA-763: a seed that finds no accreditation number keeps the one already held.
+        if (!string.IsNullOrWhiteSpace(dto.AccreditationNumber))
+        {
+            target.LatestKnownAccreditationNumber = dto.AccreditationNumber;
+        }
+
         if (dto.PermitNumbers.Count > 0)
         {
             target.PermitNumbers = [.. dto.PermitNumbers];

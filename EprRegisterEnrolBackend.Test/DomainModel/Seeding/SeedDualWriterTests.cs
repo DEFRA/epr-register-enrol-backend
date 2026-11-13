@@ -356,6 +356,21 @@ public sealed class SeedDualWriterTests : IDisposable
             .Find(FilterDefinition<MigrationConflict>.Empty)
             .ToListAsync(Ct);
 
+    // RA-763: the Registration keeps ReEx's accreditation number, because no Accreditation is held here for that year.
+    [Fact]
+    public async Task WriteAsync_ReExGivesAnAccreditationNumber_KeepsItOnTheRegistration()
+    {
+        var reEx = ReEx();
+        reEx.AccreditationNumber = "A26EX1234567012P";
+
+        await SeedAsync(reEx);
+
+        Assert.Equal(
+            "A26EX1234567012P",
+            Assert.Single(await RegistrationVersionsAsync()).LatestKnownAccreditationNumber
+        );
+    }
+
     [Fact]
     public async Task WriteAsync_NumberChangedInReEx_WritesANewVersionKeepingTheOldNumber()
     {

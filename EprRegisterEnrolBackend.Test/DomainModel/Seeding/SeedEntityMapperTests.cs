@@ -314,6 +314,38 @@ public class SeedEntityMapperTests
     }
 
     [Fact]
+    public void ApplyTo_Registration_TakesReExsAccreditationNumberAsTheLatestKnown()
+    {
+        var target = new RegistrationEntity();
+
+        SeedEntityMapper.ApplyTo(
+            target,
+            new ReExAccreditationDto { AccreditationNumber = "A26ER5003240164PL" },
+            "reg",
+            MaterialType.Plastic
+        );
+
+        Assert.Equal("A26ER5003240164PL", target.LatestKnownAccreditationNumber);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void ApplyTo_Registration_NoAccreditationNumber_KeepsTheOneHeld(string? number)
+    {
+        var target = new RegistrationEntity { LatestKnownAccreditationNumber = "A26ER5003240164PL" };
+
+        SeedEntityMapper.ApplyTo(
+            target,
+            new ReExAccreditationDto { AccreditationNumber = number },
+            "reg",
+            MaterialType.Plastic
+        );
+
+        Assert.Equal("A26ER5003240164PL", target.LatestKnownAccreditationNumber);
+    }
+
+    [Fact]
     public void ApplyTo_Site_SetsFirstApprovedAtOnceOnly()
     {
         var target = new OverseasSiteEntity();

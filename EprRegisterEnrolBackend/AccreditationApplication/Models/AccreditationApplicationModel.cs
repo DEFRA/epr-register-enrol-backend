@@ -117,9 +117,11 @@ public class AccreditationApplicationModel
     // never regenerated once issued.
     public string? AccreditationReference { get; set; }
 
-    // RA-763: the operator's accreditation number for the previous year (e.g. A26ER5003240164PL
-    // on a 2027 application). Null when they were registered only that year.
-    public string? PreviousYearAccreditationReference { get; set; }
+    // RA-763: the operator's accreditation number for last year (e.g. A26ER5003240164PL on a
+    // 2027 application), the basis for this year's. Null when they were registered only last
+    // year. Not to be confused with PreviousAccreditationNumbers, which holds this year's
+    // numbers that were replaced.
+    public string? LastYearsAccreditationReference { get; set; }
 
     // RA-448's "reapply for accreditation" regenerate history. RA-690 removed that
     // path, so nothing writes this any more; it stays so existing documents still
