@@ -465,7 +465,7 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_RegisteredOnlyLastYear_OmitsLastYearsAccreditation()
+    public async Task SubmitApplicationAsync_NoLastYearsAccreditation_OmitsIt()
     {
         var (adapter, handler) = CreateAdapter();
         var application = CreateTestApplication();

@@ -368,13 +368,6 @@ public class StubReExApiAdapter(
         return ReExResult<Nation>.Success(nation, 200);
     }
 
-    // RA-690: a valid 17-character registration reference, derived so it is the same every time
-    // a given registration is seeded and differs between registrations - approval derives the
-    // accreditation reference from it, so a malformed or shared one would fail approval (invalid
-    // source, or a clash with another application's reference on repeated e2e runs). Uniqueness
-    // is probabilistic: the 4-digit sequence is a hash, so two registrations of one organisation
-    // collide about 1 time in 10,000 - fine for stub data, where each e2e organisation also has
-    // its own org number.
     // RA-763: like real ReEx, the accreditation's sequence differs from the registration's, so a
     // renewal derived from the registration number instead is caught. Positions 11-14 are the sequence.
     private static string DerivedAccreditationNumber(string registrationReference, string registrationId)
@@ -383,6 +376,13 @@ public class StubReExApiAdapter(
         return $"A{registrationReference[1..11]}{sequence:D4}{registrationReference[15..]}";
     }
 
+    // RA-690: a valid 17-character registration reference, derived so it is the same every time
+    // a given registration is seeded and differs between registrations - approval derives the
+    // accreditation reference from it, so a malformed or shared one would fail approval (invalid
+    // source, or a clash with another application's reference on repeated e2e runs). Uniqueness
+    // is probabilistic: the 4-digit sequence is a hash, so two registrations of one organisation
+    // collide about 1 time in 10,000 - fine for stub data, where each e2e organisation also has
+    // its own org number.
     private static string DerivedRegistrationReference(
         string organisationId,
         string registrationId,

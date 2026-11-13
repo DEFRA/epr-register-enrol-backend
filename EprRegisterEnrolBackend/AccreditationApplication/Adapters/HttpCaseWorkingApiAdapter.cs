@@ -714,8 +714,8 @@ public class HttpCaseWorkingApiAdapter(
             operatorOrganisationId = application.OrganisationId,
             operatorOrgNumber = application.OrgId,
             // RA-763: last year's accreditation number, so the case records the number its own
-            // accreditation number is derived from. Null (registered only last year) is dropped by
-            // JsonOptions' WhenWritingNull.
+            // accreditation number is derived from. Null (ReEx gave none) is dropped by JsonOptions'
+            // WhenWritingNull.
             lastYearsAccreditation = application.LastYearsAccreditation is { } lastYears
                 ? new { year = lastYears.Year, accreditationNumber = lastYears.AccreditationNumber }
                 : null,
