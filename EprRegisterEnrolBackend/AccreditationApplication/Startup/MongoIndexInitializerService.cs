@@ -70,8 +70,10 @@ public class MongoIndexInitializerService(
                     {
                         // Resolving each singleton runs its MongoService<T>
                         // constructor, which is where EnsureIndexes lives.
-                        _ = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
-                        _ = serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
+                        _ =
+                            serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
+                        _ =
+                            serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
                         _ = serviceProvider.GetRequiredService<IPendingUploadService>();
                         _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
                     },
@@ -121,9 +123,11 @@ public class MongoIndexInitializerService(
     // Re-applies each validator that is missing or different, rechecking the schema after every round, until the
     // check is Healthy or the delays run out. A collection whose last attempt was NotPermitted (the constructor's
     // included) is never retried: a database user that may not run collMod will not gain the permission between
-    // retries. Once only those are left, it stops. A round that fails (Mongo unreachable mid-retry) or whose recheck is
-    // Unhealthy is not recorded: the indexes were present when this started, so readiness stays at the last Degraded
-    // result rather than dropping because of the retry itself.
+    // retries. When only those are left it stops, and it checks for that before the first delay so a refused-only
+    // startup does not wait. A round that fails (Mongo unreachable mid-retry) or whose recheck is Unhealthy is not
+    // recorded: the indexes were present when this started, so readiness stays at the last Degraded result rather than
+    // dropping because of the retry itself. A later round with nothing left to apply still rechecks and records, so a
+    // validator applied in a round whose recheck failed (or by another instance) does not leave readiness Degraded.
     private async Task<HealthCheckResult> RetryValidatorsAsync(
         IReadOnlyList<IDomainModelCollection> collections,
         IDomainModelSchemaStatus status,
@@ -133,13 +137,13 @@ public class MongoIndexInitializerService(
     {
         var result = degraded;
         var elapsed = Stopwatch.StartNew();
+        if (await NothingToRetryAsync(collections, cancellationToken))
+        {
+            return result;
+        }
+
         foreach (var delay in ValidatorRetryDelays)
         {
-            if (!collections.Any(IsRetryable))
-            {
-                return result;
-            }
-
             await Task.Delay(delay, cancellationToken);
             try
             {
@@ -147,12 +151,6 @@ public class MongoIndexInitializerService(
                     collections,
                     cancellationToken
                 );
-                if (missing.Count == 0)
-                {
-                    // Whatever is still Degraded was refused permission.
-                    return result;
-                }
-
                 foreach (var collection in missing)
                 {
                     await Task.Run(collection.TryApplyValidator, cancellationToken)
@@ -160,22 +158,27 @@ public class MongoIndexInitializerService(
                 }
 
                 var recheck = await DomainModelSchemaCheck.RunAsync(collections, cancellationToken);
+                if (recheck.Status != HealthStatus.Unhealthy)
+                {
+                    result = recheck;
+                    status.Record(result);
+                }
+
                 if (recheck.Status == HealthStatus.Healthy)
                 {
-                    status.Record(recheck);
                     logger.LogInformation(
                         "MongoIndexInitializerService: domain model validators applied after retrying"
                     );
                     return recheck;
                 }
 
-                if (recheck.Status == HealthStatus.Degraded)
+                if (missing.Count == 0 && recheck.Status == HealthStatus.Degraded)
                 {
-                    result = recheck;
-                    status.Record(result);
+                    // Nothing was left to apply, so whatever is still Degraded was refused permission.
+                    return result;
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 logger.LogWarning(
                     ex,
@@ -196,6 +199,28 @@ public class MongoIndexInitializerService(
         collection.GetExpectedValidation() is not null
         && collection.LastValidatorApplyResult != ValidatorApplyResult.NotPermitted;
 
+    // True when every validator still wrong was refused permission, so there is no point waiting for a retry. If Mongo
+    // fails to answer, it is treated as worth retrying: the retry rounds handle that.
+    private async Task<bool> NothingToRetryAsync(
+        IReadOnlyList<IDomainModelCollection> collections,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            return (await CollectionsMissingValidatorAsync(collections, cancellationToken)).Count
+                == 0;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                ex,
+                "MongoIndexInitializerService: could not read the domain model validators; retrying"
+            );
+            return false;
+        }
+    }
+
     // The retryable collections whose validator on the server is missing or not the expected one.
     private static async Task<List<IDomainModelCollection>> CollectionsMissingValidatorAsync(
         IReadOnlyList<IDomainModelCollection> collections,
@@ -206,8 +231,8 @@ public class MongoIndexInitializerService(
         foreach (var collection in collections.Where(IsRetryable))
         {
             if (
-                await collection.GetValidationAsync(cancellationToken)
-                != collection.GetExpectedValidation()
+                await DomainModelSchemaCheck.ValidatorProblemAsync(collection, cancellationToken)
+                is not null
             )
             {
                 missing.Add(collection);
