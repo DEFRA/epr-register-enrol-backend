@@ -441,6 +441,46 @@ public class HttpCaseWorkingApiAdapterTests
         payload.TryGetProperty("nation", out _).Should().BeFalse();
     }
 
+    // RA-763: the case carries last year's accreditation number, in the shape management-be's RA-763
+    // migration backfills onto older cases.
+    [Fact]
+    public async Task SubmitApplicationAsync_SendsLastYearsAccreditation()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var application = CreateTestApplication();
+        application.LastYearsAccreditation = new AccreditationNumberForYearModel
+        {
+            Year = 2026,
+            AccreditationNumber = "A26ER5000270063WO",
+        };
+
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        var lastYears = JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload")
+            .GetProperty("lastYearsAccreditation");
+        lastYears.GetProperty("year").GetInt32().Should().Be(2026);
+        lastYears.GetProperty("accreditationNumber").GetString().Should().Be("A26ER5000270063WO");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_RegisteredOnlyLastYear_OmitsLastYearsAccreditation()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var application = CreateTestApplication();
+        application.LastYearsAccreditation = null;
+
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload")
+            .TryGetProperty("lastYearsAccreditation", out _)
+            .Should()
+            .BeFalse();
+    }
+
     // RA-503: OrgId is resolved fresh from ReEx immediately before submission (see the Submit
     // endpoint) and can be null on a lookup failure - the payload must omit operatorOrgNumber
     // rather than send a fabricated value, same as every other nullable field here.
