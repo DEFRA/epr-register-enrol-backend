@@ -104,7 +104,7 @@ jobs:
       # No frontend tag is passed: the action then builds the same-named
       # frontend branch itself, or frontend main when there is none.
       - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
-        uses: DEFRA/epr-register-enrol-fe-tests/run-journey-tests@9131e3469f647b8c16389998abe32b5e881acec4 # main
+        uses: DEFRA/epr-register-enrol-fe-tests/run-journey-tests@e98507cab831c71df9d8573a2dc52a173ccaf3aa # main
         with:
           epr-register-enrol-be: ${{ github.sha }}
           branch: ${{ steps.e2e-branch.outputs.ref }}
