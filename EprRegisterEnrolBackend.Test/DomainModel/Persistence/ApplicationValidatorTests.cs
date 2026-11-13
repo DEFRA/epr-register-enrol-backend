@@ -344,6 +344,62 @@ public sealed class ApplicationValidatorTests : IDisposable
         result.Description.Should().Contain(DomainModelCollections.ApplicationVersions);
     }
 
+    // --- applying it again (RA-758) -------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task TryApplyValidator_AfterTheValidatorWasLost_PutsItBack()
+    {
+        var persistence = Persistence();
+        await _database.RunCommandAsync<BsonDocument>(
+            new BsonDocument
+            {
+                { "collMod", DomainModelCollections.ApplicationVersions },
+                { "validator", new BsonDocument() },
+            },
+            cancellationToken: Ct
+        );
+
+        var result = persistence.TryApplyValidator();
+
+        result.Should().Be(ValidatorApplyResult.Applied);
+        persistence.LastValidatorApplyResult.Should().Be(ValidatorApplyResult.Applied);
+        (await DomainModelSchemaCheck.RunAsync([persistence], Ct))
+            .Status.Should()
+            .Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public void TryApplyValidator_MongoRefusesTheCommand_ReportsTransientWithoutThrowing()
+    {
+        var persistence = new UnappliableValidatorPersistence(_factory, _clock);
+
+        var result = persistence.TryApplyValidator();
+
+        result.Should().Be(ValidatorApplyResult.Transient);
+        persistence.LastValidatorApplyResult.Should().Be(ValidatorApplyResult.Transient);
+    }
+
+    // TryApplyValidator never throws, even for a failure that is not Mongo's: it first runs in the constructor, where an
+    // escaping exception would stop the service starting.
+    [Fact]
+    public void TryApplyValidator_NonMongoFailure_ReportsTransientWithoutThrowing()
+    {
+        var construct = () => new ThrowingValidatorPersistence(_factory, _clock);
+
+        var persistence = construct.Should().NotThrow().Which;
+
+        persistence.LastValidatorApplyResult.Should().Be(ValidatorApplyResult.Transient);
+        persistence.TryApplyValidator().Should().Be(ValidatorApplyResult.Transient);
+    }
+
+    [Fact]
+    public void TryApplyValidator_NoValidatorDefined_HasNothingToApply()
+    {
+        var persistence = new NoValidatorPersistence(_factory);
+
+        persistence.TryApplyValidator().Should().Be(ValidatorApplyResult.NoValidator);
+    }
+
     [Fact]
     public async Task SchemaCheck_ValidatorInAnotherMode_IsDegraded()
     {
@@ -373,6 +429,25 @@ public sealed class ApplicationValidatorTests : IDisposable
     {
         protected override BsonDocument? DefineValidator() =>
             new("$where", "function() { return true; }");
+    }
+
+    // A validator that fails to build with something other than a Mongo error, which must still not escape.
+    private sealed class ThrowingValidatorPersistence(
+        IMongoDbClientFactory factory,
+        TimeProvider clock
+    ) : ApplicationVersionPersistence(factory, NullLoggerFactory.Instance, clock)
+    {
+        protected override BsonDocument? DefineValidator() =>
+            throw new InvalidOperationException("validator could not be built");
+    }
+
+    // A collection with no validator at all, the default for a domain model collection.
+    private sealed class NoValidatorPersistence(IMongoDbClientFactory factory)
+        : DomainModelPersistence<BsonDocument>(factory, "noValidator", NullLoggerFactory.Instance)
+    {
+        protected override List<CreateIndexModel<BsonDocument>> DefineIndexes(
+            IndexKeysDefinitionBuilder<BsonDocument> builder
+        ) => [];
     }
 
     // A collection with a validator and no indexes, so nothing creates it before the validator is applied.
