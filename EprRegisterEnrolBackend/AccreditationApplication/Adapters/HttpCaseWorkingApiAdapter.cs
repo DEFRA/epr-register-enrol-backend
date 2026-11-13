@@ -453,6 +453,97 @@ public class HttpCaseWorkingApiAdapter(
         }
     }
 
+    // RA-766 (temporary): the identity the charge correction acts as. ManagementBe requires an
+    // end-user id on every mutating call and records it on the charge-corrected audit entry.
+    internal const string ChargeCorrectionUserId = "ra-766-charge-correction";
+    internal const string ChargeCorrectionUserName = "RA-766 charge correction";
+
+    public async Task<CaseWorkingWorkItem> GetWorkItemAsync(
+        Guid workItemId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var endpoint = $"{RequireUrl()}/work-items/{workItemId}";
+
+        using var request = BuildRequest(
+            HttpMethod.Get,
+            endpoint,
+            userId: ChargeCorrectionUserId,
+            userName: ChargeCorrectionUserName
+        );
+        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        // Throws an HttpRequestException carrying the status code. Its message names the
+        // status only, never the response body.
+        response.EnsureSuccessStatusCode();
+
+        var detail = await response.Content.ReadFromJsonAsync<WorkItemChargeResponseDto>(
+            JsonOptions,
+            cancellationToken
+        );
+        var payload = detail?.Payload ?? default;
+        var isObject = payload.ValueKind == JsonValueKind.Object;
+
+        int? charge = null;
+        if (
+            isObject
+            && payload.TryGetProperty("chargeAmountPence", out var chargeElement)
+            && chargeElement.ValueKind == JsonValueKind.Number
+            && chargeElement.TryGetInt32(out var chargeValue)
+        )
+        {
+            charge = chargeValue;
+        }
+
+        var dulyMade =
+            isObject
+            && payload.TryGetProperty("paymentDate", out var paymentDate)
+            && paymentDate.ValueKind != JsonValueKind.Null
+            && paymentDate.ValueKind != JsonValueKind.Undefined;
+
+        return new CaseWorkingWorkItem(detail?.StateId, charge, dulyMade);
+    }
+
+    public async Task<SetChargeOutcome> SetChargeAsync(
+        Guid workItemId,
+        int chargeAmountPence,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var endpoint = $"{RequireUrl()}/work-items/re-accreditation/{workItemId}/charge";
+
+        using var request = BuildRequest(
+            HttpMethod.Put,
+            endpoint,
+            new { chargeAmountPence },
+            ChargeCorrectionUserId,
+            ChargeCorrectionUserName
+        );
+        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            return SetChargeOutcome.Closed;
+        }
+
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<SetChargeResponseDto>(
+            JsonOptions,
+            cancellationToken
+        );
+        return string.Equals(result?.Outcome, "unchanged", StringComparison.OrdinalIgnoreCase)
+            ? SetChargeOutcome.Unchanged
+            : SetChargeOutcome.Updated;
+    }
+
+    private string RequireUrl() =>
+        string.IsNullOrWhiteSpace(_config.Url)
+            ? throw new InvalidOperationException("CaseWorking API URL is not configured.")
+            : _config.Url.TrimEnd('/');
+
     public async Task<WithdrawResult> WithdrawApplicationAsync(
         AccreditationApplicationModel application,
         QuerySubmitterContactDetails contactDetails,
@@ -1019,6 +1110,19 @@ public class HttpCaseWorkingApiAdapter(
         // RA-316. Both optional on the consumer; nulls are dropped by JsonOptions.
         public int? ChargeAmountPence { get; init; }
         public string? PaymentReference { get; init; }
+    }
+
+    // RA-766 (temporary): the subset of GET /work-items/{id} the charge correction reads.
+    internal sealed class WorkItemChargeResponseDto
+    {
+        public string? StateId { get; init; }
+        public JsonElement Payload { get; init; }
+    }
+
+    // RA-766 (temporary): the response of PUT .../charge ("updated" or "unchanged").
+    internal sealed class SetChargeResponseDto
+    {
+        public string? Outcome { get; init; }
     }
 
     internal sealed class WithdrawWorkItemRequest

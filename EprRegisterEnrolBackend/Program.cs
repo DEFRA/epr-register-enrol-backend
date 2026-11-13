@@ -208,6 +208,13 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<OrganisationNameCorrectionMigration>();
 
+    // RA-766: one-off correction of the charge held by the Case Management service after a query.
+    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+    builder.Services.Configure<ChargeCorrectionOptions>(
+        builder.Configuration.GetSection(ChargeCorrectionOptions.SectionName)
+    );
+    builder.Services.AddHostedService<ChargeCorrectionMigration>();
+
     // RA-646: fixed test accreditations for other teams to read in dev, test and ext-test.
     // Off unless TestData:SeedOnStartup is set, which only those environments do.
     builder.Services.Configure<TestDataConfig>(

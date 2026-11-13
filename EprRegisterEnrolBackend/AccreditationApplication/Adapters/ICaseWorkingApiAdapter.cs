@@ -55,6 +55,24 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
+    // RA-766 (temporary; removed with ChargeCorrectionMigration): reads the state, charge and
+    // duly-made marker of a work item (ManagementBe's GET /work-items/{id}). Allowed to throw
+    // (an HttpRequestException carrying the status code for a non-success response): the
+    // migration counts a failure and carries on.
+    Task<CaseWorkingWorkItem> GetWorkItemAsync(
+        Guid workItemId,
+        CancellationToken cancellationToken = default
+    );
+
+    // RA-766 (temporary; removed with ChargeCorrectionMigration): sets the charge held on a work
+    // item (ManagementBe's PUT /work-items/re-accreditation/{id}/charge). A 409 (the work item
+    // is closed) is Closed; any other non-success response throws.
+    Task<SetChargeOutcome> SetChargeAsync(
+        Guid workItemId,
+        int chargeAmountPence,
+        CancellationToken cancellationToken = default
+    );
+
     // Calls ManagementBe's withdraw action (RA-252) so the linked work item — and its
     // automatic audit trail — reflect the withdrawal. Like ResumeFromQueryAsync this is
     // allowed to throw: the caller (Withdraw) must know whether the call succeeded before
@@ -78,6 +96,20 @@ public sealed record CaseWorkingSubmissionResult(string CaseReference, Guid? Wor
 public sealed record NotificationStatusResult(string? NotificationStatus, DateTime? SlaDueDate);
 
 public sealed record ResumeFromQueryResult(bool IsSuccess);
+
+// RA-766 (temporary): the parts of a ManagementBe work item the charge correction needs.
+// ChargeAmountPence is null when none is stored; DulyMade is whether a payment date has been
+// recorded (what ManagementBe's own charge-corrected audit entry reports).
+public sealed record CaseWorkingWorkItem(string? StateId, int? ChargeAmountPence, bool DulyMade);
+
+// RA-766 (temporary): Closed means ManagementBe answered 409: the work item is approved,
+// refused, withdrawn or awaiting applicant contact, and its charge is never changed.
+public enum SetChargeOutcome
+{
+    Updated,
+    Unchanged,
+    Closed,
+}
 
 // Refused means ManagementBe answered 409: the application has already been decided.
 // Failed is every other problem, which the caller still reports as a service fault.

@@ -199,6 +199,17 @@ public interface IAccreditationApplicationPersistence
         int year,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// RA-766: every application that is linked to a ManagementBe work item and is not yet
+    /// Approved, Rejected or Withdrawn, oldest first. Read straight from the legacy collection,
+    /// like every other read here, not from the domain model (DualWrite is off in prod). Used by
+    /// ChargeCorrectionMigration to find the work items whose charge may be stale.
+    /// RA-766 one-off; removed with ChargeCorrectionMigration - do not use elsewhere.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenWithCaseManagementWorkItemAsync(
+        CancellationToken cancellationToken = default
+    );
     Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null

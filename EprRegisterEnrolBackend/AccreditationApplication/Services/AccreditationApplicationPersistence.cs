@@ -425,6 +425,28 @@ public class AccreditationApplicationPersistence(
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);
 
+    // RA-766: the statuses an application can no longer leave.
+    internal static readonly ApplicationStatus[] ClosedStatuses =
+    [
+        ApplicationStatus.Approved,
+        ApplicationStatus.Rejected,
+        ApplicationStatus.Withdrawn,
+    ];
+
+    public async Task<
+        IReadOnlyList<AccreditationApplicationModel>
+    > GetOpenWithCaseManagementWorkItemAsync(CancellationToken cancellationToken = default)
+    {
+        var filter = Builders<AccreditationApplicationModel>.Filter;
+        return await Collection
+            .Find(
+                filter.Ne(a => a.CaseManagementWorkItemId, null)
+                    & filter.Nin(a => a.ApplicationStatus, ClosedStatuses)
+            )
+            .SortBy(a => a.Id)
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null

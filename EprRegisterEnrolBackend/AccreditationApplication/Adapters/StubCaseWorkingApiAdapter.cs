@@ -153,6 +153,42 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new ResumeFromQueryResult(true));
     }
 
+    // RA-766 (temporary): the stub holds no work items, so the charge correction finds nothing to
+    // change.
+    public Task<CaseWorkingWorkItem> GetWorkItemAsync(
+        Guid workItemId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.GetWorkItemAsync called for workItemId={WorkItemId}",
+                workItemId
+            );
+        }
+
+        return Task.FromResult(new CaseWorkingWorkItem(null, null, false));
+    }
+
+    public Task<SetChargeOutcome> SetChargeAsync(
+        Guid workItemId,
+        int chargeAmountPence,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.SetChargeAsync called for workItemId={WorkItemId} chargeAmountPence={ChargeAmountPence}",
+                workItemId,
+                chargeAmountPence
+            );
+        }
+
+        return Task.FromResult(SetChargeOutcome.Unchanged);
+    }
+
     public Task<WithdrawResult> WithdrawApplicationAsync(
         AccreditationApplicationModel application,
         QuerySubmitterContactDetails contactDetails,
