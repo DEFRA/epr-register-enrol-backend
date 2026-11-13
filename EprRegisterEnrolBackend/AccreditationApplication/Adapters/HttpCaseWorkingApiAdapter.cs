@@ -29,6 +29,9 @@ public class HttpCaseWorkingApiAdapter(
     // Named HttpClient registered in Program.cs (carries the explicit 15s timeout).
     private const string DefaultHttpClientName = "DefaultClient";
 
+    // No header propagation, so it works from a hosted service with no HTTP request (RA-766).
+    internal const string BackgroundHttpClientName = "BackgroundClient";
+
     // The response body is attached via BeginScope under a dotted key, not interpolated into
     // the message template: CDP's OpenSearch ingestion pipeline only recognises the specific
     // slash-nested ECS paths on its allow-list (for http/response it's only body/bytes size
@@ -471,7 +474,7 @@ public class HttpCaseWorkingApiAdapter(
             userId: ChargeCorrectionUserId,
             userName: ChargeCorrectionUserName
         );
-        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
+        var client = httpClientFactory.CreateClient(BackgroundHttpClientName);
 
         using var response = await client.SendAsync(request, cancellationToken);
         // Throws an HttpRequestException carrying the status code. Its message names the
@@ -520,7 +523,7 @@ public class HttpCaseWorkingApiAdapter(
             ChargeCorrectionUserId,
             ChargeCorrectionUserName
         );
-        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
+        var client = httpClientFactory.CreateClient(BackgroundHttpClientName);
 
         using var response = await client.SendAsync(request, cancellationToken);
         if (response.StatusCode == HttpStatusCode.Conflict)

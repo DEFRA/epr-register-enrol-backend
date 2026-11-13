@@ -77,6 +77,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
         .AddHeaderPropagation();
 
+    // For callers that run outside an HTTP request (hosted services such as the RA-766 charge
+    // correction). Header propagation throws InvalidOperationException when there is no request
+    // to propagate from, so this client deliberately omits it.
+    builder.Services.AddHttpClient(
+        "BackgroundClient",
+        client => client.Timeout = TimeSpan.FromSeconds(15)
+    );
+
     // Proxy HTTP Client
     builder.Services.AddTransient<ProxyHttpMessageHandler>();
     builder

@@ -2741,7 +2741,7 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var handler = new CapturingHttpMessageHandler(status, body);
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
-        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        httpClientFactory.CreateClient("BackgroundClient").Returns(new HttpClient(handler));
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             Options.Create(new CaseWorkingApiConfig { Url = TestUrl + "/", ClientId = TestClientId }),
@@ -2900,7 +2900,7 @@ public class HttpCaseWorkingApiAdapterTests
     {
         var handler = new CapturingHttpMessageHandler(HttpStatusCode.OK, new { });
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
-        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        httpClientFactory.CreateClient("BackgroundClient").Returns(new HttpClient(handler));
         var adapter = new HttpCaseWorkingApiAdapter(
             httpClientFactory,
             Options.Create(new CaseWorkingApiConfig { Url = "", ClientId = TestClientId }),
