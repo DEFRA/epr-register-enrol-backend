@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 
 namespace EprRegisterEnrolBackend.Test.CdpUploader;
@@ -156,5 +157,70 @@ public class DevScanAutoCompleteServiceTests
                 Arg.Any<CdpCallbackFile>(),
                 Arg.Any<CancellationToken>()
             );
+    }
+
+    // The record can expire between the pending read and the completion; the service logs that,
+    // so the poller must not also report the upload as completed.
+    [Fact]
+    public async Task TryCompleteFromCdpStatus_RecordGoneBeforeComplete_DoesNotLogCompleted()
+    {
+        _pendingUploadService
+            .TryGetPendingUploadDetailsAsync("upload-5", Arg.Any<CancellationToken>())
+            .Returns(
+                new PendingUploadDetails("http://cdp-uploader/status/upload-5", null, null, null)
+            );
+        _cdpUploaderService
+            .GetStatusAsync("http://cdp-uploader/status/upload-5", Arg.Any<CancellationToken>())
+            .Returns(
+                new CdpStatusResponse
+                {
+                    UploadStatus = "ready",
+                    Form = new CdpCallbackForm
+                    {
+                        File = new CdpCallbackFile { FileId = "file-5", FileStatus = "complete" },
+                    },
+                }
+            );
+        _pendingUploadService
+            .CompleteAsync("upload-5", Arg.Any<CdpCallbackFile>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        var logger = new CapturingLogger<DevScanAutoCompleteService>();
+
+        await new DevScanAutoCompleteService(_pendingUploadService, _cdpUploaderService, logger)
+            .TryCompleteFromCdpStatus("upload-5", CancellationToken.None);
+
+        logger.Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TryCompleteFromCdpStatus_Completed_LogsCompleted()
+    {
+        _pendingUploadService
+            .TryGetPendingUploadDetailsAsync("upload-6", Arg.Any<CancellationToken>())
+            .Returns(
+                new PendingUploadDetails("http://cdp-uploader/status/upload-6", null, null, null)
+            );
+        _cdpUploaderService
+            .GetStatusAsync("http://cdp-uploader/status/upload-6", Arg.Any<CancellationToken>())
+            .Returns(
+                new CdpStatusResponse
+                {
+                    UploadStatus = "ready",
+                    Form = new CdpCallbackForm
+                    {
+                        File = new CdpCallbackFile { FileId = "file-6", FileStatus = "complete" },
+                    },
+                }
+            );
+        _pendingUploadService
+            .CompleteAsync("upload-6", Arg.Any<CdpCallbackFile>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var logger = new CapturingLogger<DevScanAutoCompleteService>();
+
+        await new DevScanAutoCompleteService(_pendingUploadService, _cdpUploaderService, logger)
+            .TryCompleteFromCdpStatus("upload-6", CancellationToken.None);
+
+        logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Information && e.Message.Contains("upload-6"));
     }
 }

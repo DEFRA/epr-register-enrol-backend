@@ -6,9 +6,9 @@ namespace EprRegisterEnrolBackend.Test.CdpUploader;
 
 // In-memory stand-in for the real Mongo-backed PendingUploadService, so endpoint tests
 // don't need a real Mongo instance - mirrors FakeRegulatoryNumberSequenceCounterPersistence.
-// Behaviourally identical to the old ConcurrentDictionary-backed production implementation
-// this replaced (epr-register-enrol-backend-6y2); TTL/multi-instance behaviour is covered
-// separately by PendingUploadServiceTests against a real ephemeral mongod.
+// Same observable behaviour as PendingUploadService (including CompleteAsync storing nothing
+// for an unknown id); TTL/multi-instance behaviour is covered separately by
+// PendingUploadServiceTests against a real ephemeral mongod (epr-register-enrol-backend-6y2).
 public class FakePendingUploadService : IPendingUploadService
 {
     private record PendingUpload(
@@ -65,7 +65,7 @@ public class FakePendingUploadService : IPendingUploadService
         );
     }
 
-    public Task CompleteAsync(
+    public Task<bool> CompleteAsync(
         string fileUploadId,
         CdpCallbackFile fileResult,
         CancellationToken ct = default
@@ -76,13 +76,20 @@ public class FakePendingUploadService : IPendingUploadService
                 ? FileProcessingStatus.Validated
                 : FileProcessingStatus.Rejected;
 
-        _uploads.AddOrUpdate(
-            fileUploadId,
-            _ => new PendingUpload(string.Empty, null, null, null, fileResult, newStatus),
-            (_, existing) => existing with { ScanResult = fileResult, Status = newStatus }
-        );
+        // Update only, matching PendingUploadService: no record, nothing stored.
+        while (_uploads.TryGetValue(fileUploadId, out var existing))
+        {
+            if (
+                _uploads.TryUpdate(
+                    fileUploadId,
+                    existing with { ScanResult = fileResult, Status = newStatus },
+                    existing
+                )
+            )
+                return Task.FromResult(true);
+        }
 
-        return Task.CompletedTask;
+        return Task.FromResult(false);
     }
 
     public Task<IReadOnlyList<string>> GetPendingUploadIdsAsync(CancellationToken ct = default)
@@ -94,21 +101,13 @@ public class FakePendingUploadService : IPendingUploadService
         return Task.FromResult(ids);
     }
 
-    public Task<CdpStatusResponse> GetStatusAsync(
+    public Task<CdpStatusResponse?> GetStatusAsync(
         string fileUploadId,
         CancellationToken ct = default
     )
     {
         if (!_uploads.TryGetValue(fileUploadId, out var upload))
-        {
-            return Task.FromResult(
-                new CdpStatusResponse
-                {
-                    UploadStatus = "pending",
-                    ProcessingStatus = "preprocessing",
-                }
-            );
-        }
+            return Task.FromResult<CdpStatusResponse?>(null);
 
         CdpStatusResponse response = upload.Status switch
         {
@@ -136,6 +135,6 @@ public class FakePendingUploadService : IPendingUploadService
             },
         };
 
-        return Task.FromResult(response);
+        return Task.FromResult<CdpStatusResponse?>(response);
     }
 }

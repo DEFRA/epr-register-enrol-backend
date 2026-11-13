@@ -357,6 +357,15 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 .ToList()
         );
 
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
+        int orgId,
+        int year,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store.Where(a => a.OrgId == orgId && a.Year == year).Select(ShallowCopy).ToList()
+        );
+
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null
