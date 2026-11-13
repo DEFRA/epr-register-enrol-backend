@@ -105,13 +105,13 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
 
     private ValidatorApplyResult ApplyValidator()
     {
-        if (DefineValidator() is not { } validator)
-        {
-            return ValidatorApplyResult.NoValidator;
-        }
-
         try
         {
+            if (DefineValidator() is not { } validator)
+            {
+                return ValidatorApplyResult.NoValidator;
+            }
+
             try
             {
                 RunWithValidation("collMod", validator);
@@ -130,7 +130,9 @@ public abstract class DomainModelPersistence<T> : MongoService<T>, IDomainModelC
 
             return ValidatorApplyResult.Applied;
         }
-        catch (Exception ex) when (ex is MongoException or TimeoutException)
+        // Any exception, not only Mongo's: this runs in the constructor, where one escaping would stop the service
+        // starting. Anything that is not a known refusal is classed as Transient.
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             var result = ValidatorApplyFailure.Classify(ex);
             Logger.LogWarning(

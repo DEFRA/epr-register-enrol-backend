@@ -23,9 +23,9 @@ public interface IDomainModelCollection
     Task<BsonDocument?> GetValidationAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Applies the validator again (collMod, or create if the collection does not exist yet). Never throws: a failure is
-    /// logged and returned, so the caller can tell one worth retrying from one that is not (RA-758). Synchronous, like
-    /// the constructor that first applies it.
+    /// Applies the validator again (collMod, or create if the collection does not exist yet). Never throws, other than
+    /// an <see cref="OperationCanceledException"/>: any other failure is logged and returned, so the caller can tell one
+    /// worth retrying from one that is not (RA-758). Synchronous, like the constructor that first applies it.
     /// </summary>
     ValidatorApplyResult TryApplyValidator();
 
