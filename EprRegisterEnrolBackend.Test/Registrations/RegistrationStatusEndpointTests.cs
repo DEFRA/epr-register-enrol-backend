@@ -359,6 +359,145 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    // RA-739: the manage page URLs carry the registration number, so the frontend reads the status by it.
+    private const string RegistrationNumber = "R25ER0500036908PL";
+    private const string ByNumberPath = $"/api/v1/registrations/by-number/{RegistrationNumber}/status";
+    private const string HeldByNumberPath = $"{ByNumberPath}?organisationId=50003";
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ByNumber_ReturnsTheCurrentVersionsStatusWithItsReExRegistrationId(bool expandEnabled)
+    {
+        using var factory = Factory(expandEnabled);
+        using var client = FrontendClient(factory);
+        var versions = Versions(factory);
+        var created = await versions.InsertAsync(
+            Registration(RegistrationStatus.Created),
+            new ChangeInfo { Reason = ChangeReason.ReExImport },
+            cancellationToken: Ct
+        );
+        await versions.UpdateAsync(
+            Registration(RegistrationStatus.Approved).WithEntityId(created.EntityId),
+            created.Version,
+            new ChangeInfo { Reason = ChangeReason.ReExRefresh },
+            cancellationToken: Ct
+        );
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("registrationId").GetString().Should().Be(ReExRegistrationId);
+        body.GetProperty("registrationNumber").GetString().Should().Be(RegistrationNumber);
+        body.GetProperty("status").GetString().Should().Be("Approved");
+        body.GetProperty("organisationName").GetString().Should().Be("Delta Green Ltd");
+        body.GetProperty("materialType").GetString().Should().Be("Plastic");
+    }
+
+    // ReEx is asked with the found version's ReEx registration id, so a number another organisation holds is
+    // not found under this one.
+    [Theory]
+    [InlineData("50011")]
+    [InlineData("99999")]
+    public async Task ByNumber_ForAnOrganisationThatDoesNotHoldTheRegistration_ReturnsNotFound(
+        string organisationId
+    )
+    {
+        using var factory = Factory(expandEnabled: true);
+        using var client = FrontendClient(factory);
+        await Versions(factory)
+            .InsertAsync(
+                Registration(RegistrationStatus.Approved),
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+
+        var response = await client.GetAsync($"{ByNumberPath}?organisationId={organisationId}", Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ByNumber_NoRegistrationRecord_ReturnsNotFound(bool expandEnabled)
+    {
+        using var factory = Factory(expandEnabled);
+        using var client = FrontendClient(factory);
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // A superseded number belongs to an older version only.
+    [Fact]
+    public async Task ByNumber_OnlyAnOlderVersionHasTheNumber_ReturnsNotFound()
+    {
+        using var factory = Factory(expandEnabled: true);
+        using var client = FrontendClient(factory);
+        var versions = Versions(factory);
+        var created = await versions.InsertAsync(
+            Registration(RegistrationStatus.Approved),
+            new ChangeInfo { Reason = ChangeReason.ReExImport },
+            cancellationToken: Ct
+        );
+        var renumbered = Registration(RegistrationStatus.Approved).WithEntityId(created.EntityId);
+        renumbered.RegistrationNumber = "R25ER0500036909PL";
+        await versions.UpdateAsync(
+            renumbered,
+            created.Version,
+            new ChangeInfo { Reason = ChangeReason.ReExRefresh },
+            cancellationToken: Ct
+        );
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("?organisationId=")]
+    public async Task ByNumber_WithoutAnOrganisationId_ReturnsBadRequest(string query)
+    {
+        using var factory = Factory(expandEnabled: true);
+        using var client = FrontendClient(factory);
+
+        var response = await client.GetAsync($"{ByNumberPath}{query}", Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ByNumber_InYearChangesFlagOff_ReturnsNotFound()
+    {
+        using var factory = Factory(expandEnabled: true, inYearChangesEnabled: false);
+        using var client = FrontendClient(factory);
+        await Versions(factory)
+            .InsertAsync(
+                Registration(RegistrationStatus.Approved),
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task ByNumber_WithoutTheFrontendSecret_IsRejected()
+    {
+        using var factory = Factory(expandEnabled: true);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
     [Fact]
     public async Task WithTheWrongSecret_IsRejected()
     {
