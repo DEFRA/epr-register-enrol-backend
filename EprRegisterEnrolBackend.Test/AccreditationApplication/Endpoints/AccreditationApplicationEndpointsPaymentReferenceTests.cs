@@ -94,7 +94,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
     private static async Task<JsonElement> Json(HttpResponseMessage response) =>
         (await response.Content.ReadFromJsonAsync<JsonElement>(Ct));
 
-    private Task SentToCaseManagement(Func<AccreditationApplicationModel, bool> match) =>
+    private Task<CaseWorkingSubmissionResult> SentToCaseManagement(Func<AccreditationApplicationModel, bool> match) =>
         _factory
             .MockCaseWorkingAdapter.Received(1)
             .SubmitApplicationAsync(
@@ -117,7 +117,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
 
         await _factory
             .MockCaseWorkingAdapter.DidNotReceiveWithAnyArgs()
-            .SubmitApplicationAsync(default!, default);
+            .SubmitApplicationAsync(default!, Ct);
 
         var stored = await Stored(app);
         stored.ApplicationStatus.Should().Be(ApplicationStatus.Started);
@@ -147,8 +147,8 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         await _factory
             .MockReExAdapter.DidNotReceiveWithAnyArgs()
-            .GetOrganisationNumberAsync(default!, default);
-        await _factory.MockReExAdapter.DidNotReceiveWithAnyArgs().GetNationAsync(default!, default!, default);
+            .GetOrganisationNumberAsync(default!, Ct);
+        await _factory.MockReExAdapter.DidNotReceiveWithAnyArgs().GetNationAsync(default!, default!, Ct);
         await SentToCaseManagement(a =>
             a.OrgId == 500500 && a.Nation == Nation.England && a.PaymentReference == "PR/PK/REP/500500"
         );
@@ -266,7 +266,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
             "Nation unavailable",
             "not looked up: the application has no registrationId"
         );
-        await _factory.MockReExAdapter.DidNotReceiveWithAnyArgs().GetNationAsync(default!, default!, default);
+        await _factory.MockReExAdapter.DidNotReceiveWithAnyArgs().GetNationAsync(default!, default!, Ct);
     }
 
     // AC3: an old client (or a direct API call) still sending paymentReference has it ignored -
