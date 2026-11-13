@@ -145,4 +145,35 @@ public class DevAccreditationHistorySeedServiceTests
         result.Value!.RegistrationReference.Should()
             .Be(DevAccreditationHistorySeedService.DeltaGreen2026RegistrationReference);
     }
+
+    // The point of the seed: a 2027 Delta Green approval finds it as the previous accreditation,
+    // and the two possible sources derive different references.
+    [Fact]
+    public async Task Seeded2026Accreditation_IsThePreviousAccreditationForA2027Application()
+    {
+        var persistence = new FakeAccreditationApplicationPersistence();
+        await CreateSut(persistence).SeedAsync(CancellationToken.None);
+
+        var previous = await persistence.GetLatestPreviousAccreditationAsync(
+            DeltaGreen,
+            FakeOrganisationPersistence.Reg50003.ToString(),
+            MaterialType.Plastic,
+            null,
+            2027
+        );
+
+        previous.Should().NotBeNull();
+        AccreditationReferenceDerivation
+            .Derive(
+                previous!.AccreditationReference,
+                AccreditationReferenceSourceKind.PreviousAccreditation,
+                2027
+            )
+            .Reference.Should()
+            .Be("A27ER0500030042PL");
+        AccreditationReferenceDerivation
+            .Derive("R26ER0500036908PL", AccreditationReferenceSourceKind.Registration, 2027)
+            .Reference.Should()
+            .Be("A27ER0500036908PL", because: "the registration source must give a different answer");
+    }
 }

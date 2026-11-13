@@ -7,15 +7,16 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
 // RA-690: local manual testing only. Gives Delta Green Ltd (stub org 50003, Plastic) an approved
-// 2026 accreditation held in this backend. RA-763: issuance no longer reads earlier applications
-// held here; a renewal derives from LastYearsAccreditation, which Seed takes from ReEx (the stub
-// here), so this record no longer decides Delta Green's 2027 reference. Registered only in Development with DevSeedData:Enabled, which the local compose
+// 2026 accreditation held in this backend, so approving its 2027 "Re-Accreditation" application
+// exercises the previous-accreditation path (see .tasks/ra-690-testing-guidelines.md in the
+// parent repo). Registered only in Development with DevSeedData:Enabled, which the local compose
 // stack sets. The test hosts also run as Development, so the flag keeps this out of them.
 //
 // The accreditation reference's sequence (0042) deliberately differs from the stub's registration
 // sequence for this registration (6908), so the two possible sources derive different 2027
 // references: A27ER0500030042PL (previous accreditation, correct) and A27ER0500036908PL
-// (registration reference).
+// (registration reference). RA-763: a previous accreditation held here also comes before last
+// year's number from the stub ReEx, so this record still decides Delta Green's 2027 reference.
 //
 // Idempotent: a fixed id means it is inserted once and left alone after that, including any
 // changes a tester makes to it.

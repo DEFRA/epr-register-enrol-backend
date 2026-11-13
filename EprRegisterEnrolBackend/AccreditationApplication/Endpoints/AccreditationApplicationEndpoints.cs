@@ -535,12 +535,34 @@ public static class AccreditationApplicationEndpoints
         if (application.AccreditationReference is not null)
             return (Results.Ok(application), null);
 
-        // RA-763: a renewal derives from last year's accreditation number, which Seed keeps from ReEx
-        // (and the public register backfill fills in for applications seeded before that). Only an
-        // operator registered only last year has none, and derives from the registration reference.
-        var (sourceKind, sourceReference) = application.LastYearsAccreditation is { } lastYears
-            ? (AccreditationReferenceSourceKind.PreviousAccreditation, lastYears.AccreditationNumber)
-            : (AccreditationReferenceSourceKind.Registration, registrationReference);
+        // The source, in order:
+        // 1. The latest previous accreditation reference held in this backend, so a renewal of an
+        //    accreditation this service issued (2028 onwards) keeps it, even across a lapsed year.
+        //    Without a registration id there is nothing to match previous years on.
+        // 2. RA-763: last year's accreditation number, which Seed keeps from ReEx. 2026
+        //    accreditations were granted in ReEx, so this is the source for 2027 renewals.
+        // 3. The registration reference, when neither is held.
+        var previous = string.IsNullOrEmpty(application.RegistrationId)
+            ? null
+            : await persistence.GetLatestPreviousAccreditationAsync(
+                application.OrganisationId,
+                application.RegistrationId,
+                application.MaterialType,
+                application.GlassRecyclingProcess,
+                application.Year
+            );
+        var (sourceKind, sourceReference) = (previous, application.LastYearsAccreditation) switch
+        {
+            ({ } held, _) => (
+                AccreditationReferenceSourceKind.PreviousAccreditation,
+                held.AccreditationReference!
+            ),
+            (null, { } lastYears) => (
+                AccreditationReferenceSourceKind.PreviousAccreditation,
+                lastYears.AccreditationNumber
+            ),
+            _ => (AccreditationReferenceSourceKind.Registration, registrationReference),
+        };
 
         var derivation = AccreditationReferenceDerivation.Derive(
             sourceReference,
@@ -585,16 +607,19 @@ public static class AccreditationApplicationEndpoints
                     updated,
                     sourceKind,
                     sourceReference,
+                    previous?.ApplicationId,
                     withdrawnHolderIds
                 )
         );
     }
 
     // RA-690: the source of each issued reference is logged, not stored, so support can explain
-    // any reference without a schema change. Any withdrawn applications already holding the
-    // reference are named so support can see why two records share it.
+    // any reference without a schema change. A previous-accreditation source also names the
+    // application it came from, and any withdrawn applications already holding the reference are
+    // named so support can see why two records share it.
     private const string IssuedTemplate =
         "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference}";
+    private const string SourceApplicationTemplate = " sourceApplicationId={SourceApplicationId}";
     private const string WithdrawnHoldersTemplate = " withdrawnHolderIds={WithdrawnHolderIds}";
 
     private static void LogAccreditationReferenceIssued(
@@ -602,6 +627,7 @@ public static class AccreditationApplicationEndpoints
         AccreditationApplicationModel application,
         AccreditationReferenceSourceKind sourceKind,
         string sourceReference,
+        string? sourceApplicationId,
         IReadOnlyList<ObjectId> withdrawnHolderIds
     )
     {
@@ -609,20 +635,44 @@ public static class AccreditationApplicationEndpoints
             return;
 
         var (reference, id) = (application.AccreditationReference, application.Id);
-        if (withdrawnHolderIds.Count == 0)
+        var withdrawnIds = string.Join(",", withdrawnHolderIds);
+        switch (sourceApplicationId, withdrawnHolderIds.Count)
         {
-            logger.LogInformation(IssuedTemplate, reference, id, sourceKind, sourceReference);
-            return;
+            case (null, 0):
+                logger.LogInformation(IssuedTemplate, reference, id, sourceKind, sourceReference);
+                break;
+            case (null, _):
+                logger.LogInformation(
+                    IssuedTemplate + WithdrawnHoldersTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    withdrawnIds
+                );
+                break;
+            case (_, 0):
+                logger.LogInformation(
+                    IssuedTemplate + SourceApplicationTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    sourceApplicationId
+                );
+                break;
+            default:
+                logger.LogInformation(
+                    IssuedTemplate + SourceApplicationTemplate + WithdrawnHoldersTemplate,
+                    reference,
+                    id,
+                    sourceKind,
+                    sourceReference,
+                    sourceApplicationId,
+                    withdrawnIds
+                );
+                break;
         }
-
-        logger.LogInformation(
-            IssuedTemplate + WithdrawnHoldersTemplate,
-            reference,
-            id,
-            sourceKind,
-            sourceReference,
-            string.Join(",", withdrawnHolderIds)
-        );
     }
 
     // Bundles GenerateOrUpdateRegistrationNumber's DI-service/framework parameters under one
