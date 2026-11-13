@@ -277,7 +277,8 @@ public class HttpCaseWorkingApiAdapter(
             {
                 var ors = ChangeRequestRules.FindSite(accreditation, site.SiteId);
                 var effective = ChangeRequestRules.Effective(ors, site.Answers);
-                // The ORS is always on the accreditation; without it only the request's own values are sent.
+                // A request site is one of the accreditation's ORS; should it not be found, only the request's
+                // own values are sent.
                 var projected = ors is null
                     ? new CaseManagementSite
                     {
@@ -422,7 +423,9 @@ public class HttpCaseWorkingApiAdapter(
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
             LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
             throw new HttpRequestException(
-                $"ManagementBe work item submission failed: {(int)response.StatusCode}"
+                $"ManagementBe work item submission failed: {(int)response.StatusCode}",
+                null,
+                response.StatusCode
             );
         }
     }

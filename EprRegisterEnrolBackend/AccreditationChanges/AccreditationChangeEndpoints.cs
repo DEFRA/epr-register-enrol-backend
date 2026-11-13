@@ -1,3 +1,4 @@
+using System.Net;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -773,10 +774,10 @@ public static class AccreditationChangeEndpoints
             // by a request the regulator never received. Only Case Management's own failures are
             // a 503; anything else is a defect and goes to the exception handler.
             // A timeout reopens the request too, but ManagementBe may already hold the submission and
-            // replays a resubmit on operatorRequestId with the sites it first received. So once the
-            // request was sent, its sites are fixed: an added site would never get a reference and a
-            // removed one would leave its work item behind. Not configured means nothing was sent.
-            if (ex is not CaseWorkingNotConfiguredException)
+            // replays a resubmit on operatorRequestId with the sites it first received. So once it may
+            // hold it, the request's sites are fixed: an added site would never get a reference and a
+            // removed one would leave its work item behind.
+            if (MayHoldSubmission(ex))
                 draft.SentToCaseManagement = true;
             await ReopenAsync(draft, services, logger);
             if (
@@ -818,6 +819,18 @@ public static class AccreditationChangeEndpoints
             );
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
     }
+
+    // Not configured means nothing was sent, and ManagementBe validates a submission before it saves
+    // anything, so a 4xx means it holds nothing. A timeout, a 5xx or an unreadable 2xx may follow a save.
+    private static bool MayHoldSubmission(Exception ex) =>
+        ex
+            is not (
+                CaseWorkingNotConfiguredException
+                or HttpRequestException
+                {
+                    StatusCode: >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError,
+                }
+            );
 
     // Undoes Submit's save after Case Management failed. Not cancellable: the caller may have gone,
     // and the request must not be left Submitted.

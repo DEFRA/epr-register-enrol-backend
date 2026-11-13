@@ -1347,7 +1347,9 @@ public class HttpCaseWorkingApiAdapterTests
         );
 
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
-        await act.Should().ThrowAsync<HttpRequestException>().WithMessage("*500*");
+        (await act.Should().ThrowAsync<HttpRequestException>().WithMessage("*500*"))
+            .Which.StatusCode.Should()
+            .Be(HttpStatusCode.InternalServerError);
     }
 
     [Fact]

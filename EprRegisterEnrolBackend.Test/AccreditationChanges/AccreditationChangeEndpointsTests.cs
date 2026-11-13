@@ -1223,16 +1223,20 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     // retry submits it. Case Management may already hold the first attempt and replays a resubmit with
     // the sites it received, so the sites sent can't be added to or removed.
     [Theory]
-    [InlineData("rejected")]
+    [InlineData("unreachable")]
+    [InlineData("server error")]
     [InlineData("timeout")]
     public async Task Submit_FlagOn_AfterACaseManagementFailure_TheSitesAreFixedButTheDraftCanBeResubmitted(
         string failure
     )
     {
         CaseManagementThrows(
-            failure == "timeout"
-                ? new CaseWorkingApiTimeoutException("timed out", new TaskCanceledException())
-                : new HttpRequestException("unavailable")
+            failure switch
+            {
+                "timeout" => new CaseWorkingApiTimeoutException("timed out", new TaskCanceledException()),
+                "server error" => new HttpRequestException("failed", null, HttpStatusCode.InternalServerError),
+                _ => new HttpRequestException("unavailable"),
+            }
         );
         (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
 
@@ -1257,11 +1261,18 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.Sites.Single().CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
     }
 
-    // Not configured, nothing was sent, so the reopened draft's sites can still change.
-    [Fact]
-    public async Task Submit_FlagOn_CaseManagementNotConfigured_TheSitesCanStillChange()
+    // Not configured, nothing was sent; a 4xx, Case Management saved nothing. Either way the reopened
+    // draft's sites can still change.
+    [Theory]
+    [InlineData("not-configured")]
+    [InlineData("rejected")]
+    public async Task Submit_FlagOn_CaseManagementHoldsNothing_TheSitesCanStillChange(string failure)
     {
-        CaseManagementThrows(new CaseWorkingNotConfiguredException());
+        CaseManagementThrows(
+            failure == "rejected"
+                ? new HttpRequestException("invalid", null, HttpStatusCode.BadRequest)
+                : new CaseWorkingNotConfiguredException()
+        );
         (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
 
         _factory.FakeChangeRequests.All.Single().SentToCaseManagement.Should().BeFalse();
