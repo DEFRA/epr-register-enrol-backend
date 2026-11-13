@@ -77,7 +77,7 @@ public sealed class ModelApplicationReaderTests : IDisposable
             .GetCollection<BsonDocument>(LegacyCollection)
             .UpdateOneAsync(
                 Builders<BsonDocument>.Filter.Eq("_id", id),
-                Builders<BsonDocument>.Update.Set("Version", version).Set("UpdatedAt", updatedAt),
+                Builders<BsonDocument>.Update.Set("version", version).Set("updatedAt", updatedAt),
                 cancellationToken: Ct
             );
 
