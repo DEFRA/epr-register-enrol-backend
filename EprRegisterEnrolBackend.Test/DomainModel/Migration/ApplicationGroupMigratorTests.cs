@@ -1243,6 +1243,94 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         );
     }
 
+    // RA-763: an application backfilled before the domain model existed holds last year's accreditation number;
+    // migrating it puts that number on the Registration, as the seed would have.
+    [Fact]
+    public async Task NewRegistration_TakesLastYearsAccreditationNumberFromTheApplications()
+    {
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.LastYearsAccreditation = LastYears("A26ER5000270063WO");
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        var held = Assert.Single(registration.AccreditationNumbers);
+        Assert.Equal(2026, held.Year);
+        Assert.Equal("A26ER5000270063WO", held.AccreditationNumber);
+    }
+
+    [Fact]
+    public async Task RegistrationTheSeedCreated_WithoutLastYearsAccreditationNumber_GainsIt()
+    {
+        await SeededRegistrationAsync(RegistrationNumber);
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.LastYearsAccreditation = LastYears("A26ER5000270063WO");
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal(2, registration.Version);
+        Assert.Equal(ChangeReason.Migration, registration.LastChange.Reason);
+        Assert.Equal(
+            "A26ER5000270063WO",
+            Assert.Single(registration.AccreditationNumbers).AccreditationNumber
+        );
+    }
+
+    [Fact]
+    public async Task RegistrationTheSeedCreated_KeepsTheAccreditationNumberItHoldsForTheYear()
+    {
+        var seeded = await SeededRegistrationAsync(RegistrationNumber);
+        seeded.AccreditationNumbers = [new() { Year = 2026, AccreditationNumber = "A26FROMREEX" }];
+        await _stores.Registrations.Versions.UpdateAsync(
+            seeded,
+            seeded.Version,
+            new ChangeInfo { Reason = ChangeReason.ReExRefresh },
+            cancellationToken: Ct
+        );
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.LastYearsAccreditation = LastYears("A26FROMREGISTER");
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal(2, registration.Version);
+        Assert.Equal(
+            "A26FROMREEX",
+            Assert.Single(registration.AccreditationNumbers).AccreditationNumber
+        );
+    }
+
+    [Fact]
+    public async Task ApplicationsHoldingNoLastYearsAccreditation_LeaveTheRegistrationsListEmpty()
+    {
+        var application = await ApplicationAsync(ApplicationStatus.Started, Day1);
+
+        await MigrateAsync(application);
+
+        Assert.Empty(
+            Assert
+                .Single(
+                    await CurrentAsync<RegistrationEntity>(
+                        DomainModelCollections.RegistrationVersions
+                    )
+                )
+                .AccreditationNumbers
+        );
+    }
+
+    private static AccreditationNumberForYearModel LastYears(string number) =>
+        new() { Year = 2026, AccreditationNumber = number };
+
     [Fact]
     public async Task ApplicationHoldingANumberTheRegistrationAlreadyReplaced_IsNotAConflict()
     {

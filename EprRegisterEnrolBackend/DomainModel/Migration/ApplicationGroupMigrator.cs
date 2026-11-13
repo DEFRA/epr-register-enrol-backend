@@ -378,6 +378,9 @@ public sealed class ApplicationGroupMigrator(
                     current.RegistrationNumber,
                     current.PreviousRegistrationNumbers
                 );
+                current.AccreditationNumbers = WithLastYearsAccreditations(
+                    current.AccreditationNumbers
+                );
                 registration = (
                     await versions.UpdateAsync(
                         current,
@@ -405,6 +408,34 @@ public sealed class ApplicationGroupMigrator(
                 .Distinct()
                 .ToList();
 
+        // RA-763: the seed keeps last year's accreditation number on the Registration, but an application seeded or
+        // backfilled before the domain model existed holds it only itself. A year the Registration already holds keeps
+        // its number; otherwise the newest application holding one for that year gives it.
+        private List<AccreditationNumberForYear> WithLastYearsAccreditations(
+            IEnumerable<AccreditationNumberForYear> held
+        )
+        {
+            var numbers = held.ToList();
+            foreach (var lastYears in ranked.Select(a => a.LastYearsAccreditation))
+            {
+                if (lastYears is null || numbers.Exists(n => n.Year == lastYears.Year))
+                {
+                    continue;
+                }
+
+                numbers.Add(
+                    new AccreditationNumberForYear
+                    {
+                        Year = lastYears.Year,
+                        AccreditationNumber = lastYears.AccreditationNumber,
+                    }
+                );
+            }
+
+            numbers.Sort((a, b) => a.Year.CompareTo(b.Year));
+            return numbers;
+        }
+
         private RegistrationEntity NewRegistration(
             ObjectId organisationId,
             string reExRegistrationId,
@@ -417,6 +448,7 @@ public sealed class ApplicationGroupMigrator(
                 RegistrationNumber = numberWinner?.RegistrationReference,
                 PreviousRegistrationNumbers = OlderNumbers(numberWinner?.RegistrationReference, []),
                 PermitNumbers = [.. Newest.PermitNumbers],
+                AccreditationNumbers = WithLastYearsAccreditations([]),
                 Site = WithSiteAddress(null),
                 Material = Newest.MaterialType,
                 Nation = Newest.Nation,
