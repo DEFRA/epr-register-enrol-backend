@@ -313,36 +313,63 @@ public class SeedEntityMapperTests
         Assert.Equal("2 Mill Rd, Leeds", target.Site?.FormattedAddress);
     }
 
-    [Fact]
-    public void ApplyTo_Registration_TakesReExsAccreditationNumberAsTheLatestKnown()
-    {
-        var target = new RegistrationEntity();
-
+    private static void ApplyAccreditation(RegistrationEntity target, int year, string? number) =>
         SeedEntityMapper.ApplyTo(
             target,
-            new ReExAccreditationDto { AccreditationNumber = "A26ER5003240164PL" },
+            new ReExAccreditationDto { Year = year, AccreditationNumber = number },
             "reg",
             MaterialType.Plastic
         );
 
-        Assert.Equal("A26ER5003240164PL", target.LatestKnownAccreditationNumber);
+    private static (int, string)[] AccreditationNumbers(RegistrationEntity target) =>
+        [.. target.AccreditationNumbers.Select(a => (a.Year, a.AccreditationNumber))];
+
+    [Fact]
+    public void ApplyTo_Registration_KeepsReExsAccreditationNumberWithItsYear()
+    {
+        var target = new RegistrationEntity();
+
+        ApplyAccreditation(target, 2026, "A26ER5003240164PL");
+
+        Assert.Equal([(2026, "A26ER5003240164PL")], AccreditationNumbers(target));
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void ApplyTo_Registration_NoAccreditationNumber_KeepsTheOneHeld(string? number)
+    public void ApplyTo_Registration_NoAccreditationNumber_KeepsTheOneHeldForTheYear(string? number)
     {
-        var target = new RegistrationEntity { LatestKnownAccreditationNumber = "A26ER5003240164PL" };
+        var target = new RegistrationEntity();
+        ApplyAccreditation(target, 2026, "A26ER5003240164PL");
 
-        SeedEntityMapper.ApplyTo(
-            target,
-            new ReExAccreditationDto { AccreditationNumber = number },
-            "reg",
-            MaterialType.Plastic
+        ApplyAccreditation(target, 2026, number);
+
+        Assert.Equal([(2026, "A26ER5003240164PL")], AccreditationNumbers(target));
+    }
+
+    [Fact]
+    public void ApplyTo_Registration_AnotherYear_AddsItAndKeepsTheOthersInYearOrder()
+    {
+        var target = new RegistrationEntity();
+        ApplyAccreditation(target, 2027, "A27ER5003240201PL");
+
+        ApplyAccreditation(target, 2026, "A26ER5003240164PL");
+
+        Assert.Equal(
+            [(2026, "A26ER5003240164PL"), (2027, "A27ER5003240201PL")],
+            AccreditationNumbers(target)
         );
+    }
 
-        Assert.Equal("A26ER5003240164PL", target.LatestKnownAccreditationNumber);
+    [Fact]
+    public void ApplyTo_Registration_NumberChangedForTheYear_ReplacesIt()
+    {
+        var target = new RegistrationEntity();
+        ApplyAccreditation(target, 2026, "A26ER5003240164PL");
+
+        ApplyAccreditation(target, 2026, "A26ER5003240999PL");
+
+        Assert.Equal([(2026, "A26ER5003240999PL")], AccreditationNumbers(target));
     }
 
     [Fact]

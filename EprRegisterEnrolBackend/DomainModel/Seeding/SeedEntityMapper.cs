@@ -70,11 +70,7 @@ public static class SeedEntityMapper
             ? WasteProcessingKind.Exporter
             : WasteProcessingKind.Reprocessor;
         ApplyNumber(target, dto.RegistrationReference);
-        // RA-763: a seed that finds no accreditation number keeps the one already held.
-        if (!string.IsNullOrWhiteSpace(dto.AccreditationNumber))
-        {
-            target.LatestKnownAccreditationNumber = dto.AccreditationNumber;
-        }
+        ApplyAccreditationNumber(target, dto.Year, dto.AccreditationNumber);
 
         if (dto.PermitNumbers.Count > 0)
         {
@@ -141,6 +137,36 @@ public static class SeedEntityMapper
 
     // ReEx masters the number until this service does registrations, so it can change one already issued. The old
     // number goes onto the previous numbers, and the current one is never among them.
+    // RA-763: sets the year's accreditation number, keeping every other year's. A seed that finds no number keeps
+    // the one already held for the year.
+    private static void ApplyAccreditationNumber(
+        RegistrationEntity target,
+        int year,
+        string? accreditationNumber
+    )
+    {
+        if (string.IsNullOrWhiteSpace(accreditationNumber))
+        {
+            return;
+        }
+
+        var held = target.AccreditationNumbers.Find(a => a.Year == year);
+        if (held is not null)
+        {
+            held.AccreditationNumber = accreditationNumber;
+            return;
+        }
+
+        target.AccreditationNumbers.Add(
+            new RegistrationAccreditationNumber
+            {
+                Year = year,
+                AccreditationNumber = accreditationNumber,
+            }
+        );
+        target.AccreditationNumbers.Sort((a, b) => a.Year.CompareTo(b.Year));
+    }
+
     private static void ApplyNumber(RegistrationEntity target, string? number)
     {
         if (string.IsNullOrWhiteSpace(number) || number == target.RegistrationNumber)

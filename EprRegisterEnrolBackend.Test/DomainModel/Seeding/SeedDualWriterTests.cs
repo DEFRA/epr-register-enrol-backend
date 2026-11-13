@@ -358,17 +358,19 @@ public sealed class SeedDualWriterTests : IDisposable
 
     // RA-763: the Registration keeps ReEx's accreditation number, because no Accreditation is held here for that year.
     [Fact]
-    public async Task WriteAsync_ReExGivesAnAccreditationNumber_KeepsItOnTheRegistration()
+    public async Task WriteAsync_ReExGivesAnAccreditationNumber_KeepsItOnTheRegistrationWithItsYear()
     {
         var reEx = ReEx();
+        reEx.Year = 2026;
         reEx.AccreditationNumber = "A26EX1234567012P";
 
         await SeedAsync(reEx);
 
-        Assert.Equal(
-            "A26EX1234567012P",
-            Assert.Single(await RegistrationVersionsAsync()).LatestKnownAccreditationNumber
+        var held = Assert.Single(
+            Assert.Single(await RegistrationVersionsAsync()).AccreditationNumbers
         );
+        Assert.Equal(2026, held.Year);
+        Assert.Equal("A26EX1234567012P", held.AccreditationNumber);
     }
 
     [Fact]
