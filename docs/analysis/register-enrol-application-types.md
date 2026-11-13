@@ -242,7 +242,7 @@ Risk The offline payment reference identifies only the organisation, so a regula
 
 ### How payment references are built
 
-The reference is not unique beyond the organisation. It is built in the frontend by `buildPaymentReference` (`paymentDetails.js:80`), with only three variable parts: the nation, the organisation number and, in England only, whether the operator is an exporter. Verified James, against frontend `origin/main` d7f3446 Product had thought references were "pretty much unique" (Kev), so this is worth sharing with them.
+The reference is not unique beyond the organisation. It was built in the frontend by `buildPaymentReference` (`paymentDetails.js:80`). Since RA-000 the OJ backend builds it instead (`PaymentReferenceBuilder`), with the same formats: once at submit, where it is stored and sent to Case Management, and on every read of an application. It has only three variable parts: the nation, the organisation number and, in England only, whether the operator is an exporter. Verified James, against frontend `origin/main` d7f3446 Product had thought references were "pretty much unique" (Kev), so this is worth sharing with them.
 
 | Nation | Format | Example, organisation 500500 |
 | --- | --- | --- |
@@ -252,8 +252,8 @@ The reference is not unique beyond the organisation. It is built in the frontend
 | Scotland | `E800 81581/{organisationNumber}` | `E800 81581/500500` |
 | Northern Ireland | `NI/PR/REEX/{organisationNumber}` | `NI/PR/REEX/500500` |
 
-- **Nation:** `application.nation`, which the backend derives from the registration's regulator. It defaults to England if missing, so an application without a nation gets an England-format reference and England's bank details.
-- **Organisation number:** `application.organisationNumber`. This is the only part that identifies who is paying.
+- **Nation:** `application.nation`, which the backend derives from the registration's regulator. Since RA-000 the backend does not default it: submit is refused (503) without a nation, and a read returns no payment reference. The frontend's own default to England for bank details is a separate item.
+- **Organisation number:** `application.orgId` (ReEx's numeric organisation number). This is the only part that identifies who is paying. Since RA-000 submit is refused (503) without one, so a reference never ends in `/null`.
 - **Exporter flag:** `application.isExporter`. Only England's format uses it.
 
 **Working answer (James):** the regulator matches a bank payment to a batch or application by organisation, date and amount, outside the service; the service only records that the amount is fully paid. The team thinks a duplicate is unlikely. The likeliest clash is one organisation sending two same-sized payments close together, for example two single-site ORS changes at £328 each. In that case either match is acceptable, as long as each payment is matched only once. If it becomes a problem, adding the `submissionReference` to the payment reference the operator is shown would fix it. Assumption Confirm with regulators that matching by date and amount works for them.

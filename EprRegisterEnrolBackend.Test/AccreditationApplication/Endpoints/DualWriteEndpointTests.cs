@@ -1352,6 +1352,9 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         var application = await ApplicationAsync(Guid.NewGuid());
         application.IsExporter = false;
         application.OverseasSites = null;
+        // RA-000: Submit needs the organisation number and nation.
+        application.OrgId = 500500;
+        application.Nation = Nation.England;
         application.Prns.SectionStatus = SectionStatus.Completed;
         application.BusinessPlan.SectionStatus = SectionStatus.Completed;
         application.SamplingPlan.SectionStatus = SectionStatus.Completed;
@@ -1366,7 +1369,6 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
                 fullName = "Ann Smith",
                 jobTitle = "Director",
                 email = "ann@example.com",
-                paymentReference = "PAY-1",
             },
             Ct
         );
