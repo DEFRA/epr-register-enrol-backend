@@ -15,7 +15,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // The accreditation reference's sequence (0042) deliberately differs from the stub's registration
 // sequence for this registration (6908), so the two possible sources derive different 2027
 // references: A27ER0500030042PL (previous accreditation, correct) and A27ER0500036908PL
-// (registration reference).
+// (registration reference). RA-763: a previous accreditation held here also comes before last
+// year's number from the stub ReEx, so this record still decides Delta Green's 2027 reference.
 //
 // Idempotent: a fixed id means it is inserted once and left alone after that, including any
 // changes a tester makes to it.

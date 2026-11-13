@@ -173,6 +173,16 @@ public class StubReExApiAdapter(
         if (isTestOrganisation)
             organisationName = $"E2E Organisation {organisationId}";
 
+        var registrationReference = DerivedRegistrationReference(
+            organisationId,
+            registrationId,
+            materialType,
+            glassRecyclingProcess,
+            year,
+            nation,
+            isExporter
+        );
+
         var fixture = new ReExAccreditationDto
         {
             AccreditationId = $"reex-acc-{organisationId}-{materialType}-{year}",
@@ -181,15 +191,8 @@ public class StubReExApiAdapter(
             Year = year,
             OrganisationName = organisationName ?? "Stub Reprocessing Ltd",
             OrganisationNumber = StubOrganisationNumber(organisationId),
-            RegistrationReference = DerivedRegistrationReference(
-                organisationId,
-                registrationId,
-                materialType,
-                glassRecyclingProcess,
-                year,
-                nation,
-                isExporter
-            ),
+            RegistrationReference = registrationReference,
+            AccreditationNumber = DerivedAccreditationNumber(registrationReference, registrationId),
             SiteAddress = siteAddress,
             IsExporter = isExporter,
             Nation = nation,
@@ -363,6 +366,14 @@ public class StubReExApiAdapter(
 
         RegulatorNationMapper.TryMap(submittedToRegulator, out var nation);
         return ReExResult<Nation>.Success(nation, 200);
+    }
+
+    // RA-763: like real ReEx, the accreditation's sequence differs from the registration's, so a
+    // renewal derived from the registration number instead is caught. Positions 11-14 are the sequence.
+    private static string DerivedAccreditationNumber(string registrationReference, string registrationId)
+    {
+        var sequence = (int)(Fnv1a($"accreditation:{registrationId}") % RegistrationSequenceRange);
+        return $"A{registrationReference[1..11]}{sequence:D4}{registrationReference[15..]}";
     }
 
     // RA-690: a valid 17-character registration reference, derived so it is the same every time

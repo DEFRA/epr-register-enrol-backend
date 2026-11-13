@@ -713,6 +713,12 @@ public class HttpCaseWorkingApiAdapter(
             // organisation number. operatorOrgNumber (below) is the new field carrying that value.
             operatorOrganisationId = application.OrganisationId,
             operatorOrgNumber = application.OrgId,
+            // RA-763: last year's accreditation number, so the case records the number its own
+            // accreditation number is derived from. Null (ReEx gave none) is dropped by JsonOptions'
+            // WhenWritingNull.
+            lastYearsAccreditation = application.LastYearsAccreditation is { } lastYears
+                ? new { year = lastYears.Year, accreditationNumber = lastYears.AccreditationNumber }
+                : null,
             operatorRegistrationId = application.RegistrationId,
             operatorEmail = application.SubmittedBy?.Email,
             // RA-316: the charge the operator was shown on the payment-details page, echoed so
