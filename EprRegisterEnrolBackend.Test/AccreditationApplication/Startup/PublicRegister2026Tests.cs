@@ -5,7 +5,7 @@ using FluentAssertions;
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
 // RA-763: pins the 5 November 2026 public register snapshot, so any change to the
-// data, and to its known errors, is a deliberate one.
+// data, and to the rows held back for their errors, is a deliberate one.
 public class PublicRegister2026Tests
 {
     private static readonly Regex RegistrationNumber = new(
@@ -25,18 +25,30 @@ public class PublicRegister2026Tests
     private static IReadOnlyDictionary<string, PublicRegister2026Entry> Register =>
         PublicRegister2026.ByRegistrationNumber;
 
+    private static IReadOnlyDictionary<string, PublicRegister2026Entry> HeldBack =>
+        PublicRegister2026.HeldBack;
+
     [Fact]
-    public void Holds_every_row_of_the_register()
+    public void Holds_every_row_of_the_register_except_the_six_held_back()
     {
-        Register.Should().HaveCount(394);
-        Register.Values.Count(e => e.AccreditationNumber is null).Should().Be(19);
+        Register.Should().HaveCount(388);
+        Register.Values.Count(e => e.AccreditationNumber is null).Should().Be(18);
+        HeldBack.Should().HaveCount(6);
+        (Register.Count + HeldBack.Count).Should().Be(394);
+    }
+
+    [Fact]
+    public void A_held_back_row_is_not_in_the_register_the_backfill_uses()
+    {
+        Register.Keys.Should().NotIntersectWith(HeldBack.Keys);
     }
 
     [Fact]
     public void Accreditation_numbers_are_unique()
     {
         var numbers = Register
-            .Values.Select(e => e.AccreditationNumber)
+            .Values.Concat(HeldBack.Values)
+            .Select(e => e.AccreditationNumber)
             .Where(n => n is not null)
             .ToList();
         numbers.Should().OnlyHaveUniqueItems();
@@ -57,25 +69,10 @@ public class PublicRegister2026Tests
     }
 
     [Fact]
-    public void Every_row_except_the_known_errors_is_well_formed_and_consistent()
+    public void Every_row_is_well_formed_and_consistent()
     {
-        var knownErrors = new[]
-        {
-            TruncatedRegistration,
-            JpRecyclingRegistration,
-            ComhairleRegistration,
-            EncircRegistration,
-            ReddyPaiSteelRegistration,
-            ReddyPaiAluminiumRegistration,
-        };
-
         foreach (var (registration, entry) in Register)
         {
-            if (knownErrors.Contains(registration))
-            {
-                continue;
-            }
-
             RegistrationNumber.IsMatch(registration).Should().BeTrue(registration);
             registration[5..11].Should().Be(entry.OrgId.ToString("D6"), registration);
 
@@ -92,13 +89,22 @@ public class PublicRegister2026Tests
     }
 
     [Fact]
-    public void Known_register_errors_are_kept_as_published()
+    public void Held_back_rows_are_kept_as_published()
     {
-        Register[TruncatedRegistration].AccreditationNumber.Should().BeNull();
-        Register[JpRecyclingRegistration].AccreditationNumber.Should().Be("A26WR5005320025PL");
-        Register[ComhairleRegistration].AccreditationNumber.Should().Be("A26SR5005410022GL");
-        Register[EncircRegistration].OrgId.Should().Be(500069);
-        Register[ReddyPaiSteelRegistration].OrgId.Should().Be(500263);
-        Register[ReddyPaiAluminiumRegistration].OrgId.Should().Be(500263);
+        HeldBack.Keys.Should()
+            .BeEquivalentTo(
+                TruncatedRegistration,
+                JpRecyclingRegistration,
+                ComhairleRegistration,
+                EncircRegistration,
+                ReddyPaiSteelRegistration,
+                ReddyPaiAluminiumRegistration
+            );
+        HeldBack[TruncatedRegistration].AccreditationNumber.Should().BeNull();
+        HeldBack[JpRecyclingRegistration].AccreditationNumber.Should().Be("A26WR5005320025PL");
+        HeldBack[ComhairleRegistration].AccreditationNumber.Should().Be("A26SR5005410022GL");
+        HeldBack[EncircRegistration].OrgId.Should().Be(500069);
+        HeldBack[ReddyPaiSteelRegistration].OrgId.Should().Be(500263);
+        HeldBack[ReddyPaiAluminiumRegistration].OrgId.Should().Be(500263);
     }
 }
