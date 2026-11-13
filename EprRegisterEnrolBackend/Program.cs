@@ -208,6 +208,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<OrganisationNameCorrectionMigration>();
 
+    // RA-763: one-off backfill of last year's accreditation number onto 2027 applications from the
+    // 2026 public register, and correction of the one 2027 number issued from the wrong source.
+    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+    builder.Services.Configure<LastYearsAccreditationBackfillOptions>(
+        builder.Configuration.GetSection(LastYearsAccreditationBackfillOptions.SectionName)
+    );
+    builder.Services.AddHostedService<LastYearsAccreditationBackfillMigration>();
+
     // RA-646: fixed test accreditations for other teams to read in dev, test and ext-test.
     // Off unless TestData:SeedOnStartup is set, which only those environments do.
     builder.Services.Configure<TestDataConfig>(
