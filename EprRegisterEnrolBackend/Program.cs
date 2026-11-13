@@ -77,6 +77,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         )
         .AddHeaderPropagation();
 
+    // For callers that run outside an HTTP request (hosted services such as the RA-766 charge
+    // correction). Header propagation throws InvalidOperationException when there is no request
+    // to propagate from, so this client deliberately omits it.
+    builder.Services.AddHttpClient(
+        "BackgroundClient",
+        client => client.Timeout = TimeSpan.FromSeconds(15)
+    );
+
     // Proxy HTTP Client
     builder.Services.AddTransient<ProxyHttpMessageHandler>();
     builder
@@ -207,6 +215,13 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Configuration.GetSection(OrganisationNameCorrectionOptions.SectionName)
     );
     builder.Services.AddHostedService<OrganisationNameCorrectionMigration>();
+
+    // RA-766: one-off correction of the charge held by the Case Management service after a query.
+    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+    builder.Services.Configure<ChargeCorrectionOptions>(
+        builder.Configuration.GetSection(ChargeCorrectionOptions.SectionName)
+    );
+    builder.Services.AddHostedService<ChargeCorrectionMigration>();
 
     // RA-646: fixed test accreditations for other teams to read in dev, test and ext-test.
     // Off unless TestData:SeedOnStartup is set, which only those environments do.
