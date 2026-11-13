@@ -137,11 +137,12 @@ public class ChargeCorrectionMigration(
             cancellationToken
         );
 
-        logger.LogInformation(
-            "RA-766 charge correction starting: mode={Mode} candidates={Candidates}",
-            modeText,
-            applications.Count
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "RA-766 charge correction starting: mode={Mode} candidates={Candidates}",
+                modeText,
+                applications.Count
+            );
 
         var counts = new Dictionary<Outcome, int>();
         foreach (var application in applications)
@@ -166,19 +167,20 @@ public class ChargeCorrectionMigration(
             counts.GetValueOrDefault(Outcome.Failed)
         );
 
-        logger.LogInformation(
-            "RA-766 charge correction summary: mode={Mode} candidates={Candidates} updated={Updated} "
-                + "would-update={WouldUpdate} unchanged={Unchanged} skipped-no-band={SkippedNoBand} "
-                + "skipped-terminal={SkippedTerminal} failed={Failed}",
-            modeText,
-            summary.Candidates,
-            summary.Updated,
-            summary.WouldUpdate,
-            summary.Unchanged,
-            summary.SkippedNoBand,
-            summary.SkippedTerminal,
-            summary.Failed
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "RA-766 charge correction summary: mode={Mode} candidates={Candidates} updated={Updated} "
+                    + "would-update={WouldUpdate} unchanged={Unchanged} skipped-no-band={SkippedNoBand} "
+                    + "skipped-terminal={SkippedTerminal} failed={Failed}",
+                modeText,
+                summary.Candidates,
+                summary.Updated,
+                summary.WouldUpdate,
+                summary.Unchanged,
+                summary.SkippedNoBand,
+                summary.SkippedTerminal,
+                summary.Failed
+            );
         return summary;
     }
 
@@ -273,7 +275,11 @@ public class ChargeCorrectionMigration(
         int? oldPence,
         int? newPence,
         bool? dulyMade
-    ) =>
+    )
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+            return;
+
         logger.LogInformation(
             "RA-766 charge correction: outcome={Outcome} applicationReference={ApplicationReference} "
                 + "workItemId={WorkItemId} oldPence={OldPence} newPence={NewPence} dulyMade={DulyMade}",
@@ -282,8 +288,18 @@ public class ChargeCorrectionMigration(
             workItemId,
             oldPence?.ToString(CultureInfo.InvariantCulture) ?? "none",
             newPence?.ToString(CultureInfo.InvariantCulture) ?? "none",
-            dulyMade is { } made ? (made ? "true" : "false") : "unknown"
+            DulyMadeText(dulyMade)
         );
+    }
+
+    // Unknown when the work item was never read (no charge could be calculated).
+    private static string DulyMadeText(bool? dulyMade) =>
+        dulyMade switch
+        {
+            true => "true",
+            false => "false",
+            null => "unknown",
+        };
 
     private static string OutcomeText(Outcome outcome) =>
         outcome switch

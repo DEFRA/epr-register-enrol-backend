@@ -136,7 +136,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
 
         summary.Mode.Should().Be(RunMode.Disabled);
         _logger.Entries.Should().BeEmpty();
-        await _caseWorking.DidNotReceiveWithAnyArgs().GetWorkItemAsync(default, default);
+        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         var summary = await RunAsync(apply: true);
 
         summary.SkippedNoBand.Should().Be(1);
-        await _caseWorking.DidNotReceiveWithAnyArgs().GetWorkItemAsync(default, default);
+        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
         await DidNotWriteAsync();
         OutcomeLines()
             .Should()
@@ -377,7 +377,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         var summary = await RunAsync(apply: true);
 
         summary.Candidates.Should().Be(0);
-        await _caseWorking.DidNotReceiveWithAnyArgs().GetWorkItemAsync(default, default);
+        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     [Theory]

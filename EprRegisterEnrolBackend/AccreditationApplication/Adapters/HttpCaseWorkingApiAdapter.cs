@@ -463,7 +463,7 @@ public class HttpCaseWorkingApiAdapter(
         CancellationToken cancellationToken = default
     )
     {
-        var endpoint = $"{RequireUrl()}/work-items/{workItemId}";
+        var endpoint = $"{ConfiguredUrl()}/work-items/{workItemId}";
 
         using var request = BuildRequest(
             HttpMethod.Get,
@@ -511,7 +511,7 @@ public class HttpCaseWorkingApiAdapter(
         CancellationToken cancellationToken = default
     )
     {
-        var endpoint = $"{RequireUrl()}/work-items/re-accreditation/{workItemId}/charge";
+        var endpoint = $"{ConfiguredUrl()}/work-items/re-accreditation/{workItemId}/charge";
 
         using var request = BuildRequest(
             HttpMethod.Put,
@@ -539,7 +539,7 @@ public class HttpCaseWorkingApiAdapter(
             : SetChargeOutcome.Updated;
     }
 
-    private string RequireUrl() =>
+    private string ConfiguredUrl() =>
         string.IsNullOrWhiteSpace(_config.Url)
             ? throw new InvalidOperationException("CaseWorking API URL is not configured.")
             : _config.Url.TrimEnd('/');
