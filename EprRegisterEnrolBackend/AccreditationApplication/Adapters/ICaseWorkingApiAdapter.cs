@@ -10,11 +10,12 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
-    // RA-492: creates an add-overseas-site work item for a submitted in-year change request and
-    // returns ManagementBe's in-year change reference for it (format: see "Application
-    // reference" in ManagementBe's docs/work-items.md). Allowed to throw - the caller only marks
-    // the request Submitted once this succeeds.
-    Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+    // RA-492, RA-739: sends a submitted add-overseas-site change request to ManagementBe, which
+    // creates one work item per site. Returns the submission reference they share and each site's
+    // own work item id and in-year change reference (format: see "Application reference" in
+    // ManagementBe's docs/work-items.md). Throws HttpRequestException unless every submitted site
+    // came back with a reference; the caller reopens the request on any failure.
+    Task<ChangeRequestSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
         CancellationToken cancellationToken = default
@@ -68,12 +69,21 @@ public interface ICaseWorkingApiAdapter
     );
 }
 
-// CaseReference is ManagementBe's case reference: an application's AP reference, or a change
-// request's in-year change reference (formats: see "Application reference" in ManagementBe's
-// docs/work-items.md). WorkItemId is null when ManagementBe's response didn't carry a usable id
-// (e.g. unparseable body) — that must not fail the submission, since the reference is already
-// known.
+// CaseReference is ManagementBe's case reference for an application: its AP reference (format:
+// see "Application reference" in ManagementBe's docs/work-items.md). WorkItemId is null when
+// ManagementBe's response didn't carry a usable id (e.g. unparseable body) — that must not fail
+// the submission, since the reference is already known.
 public sealed record CaseWorkingSubmissionResult(string CaseReference, Guid? WorkItemId);
+
+// RA-739: ManagementBe's answer to a change request: the submission reference shared by its work
+// items, and one entry per submitted site, in the request's site order.
+public sealed record ChangeRequestSubmissionResult(
+    string SubmissionReference,
+    IReadOnlyList<SiteWorkItemResult> Sites
+);
+
+// WorkItemId is null when ManagementBe's entry carried no usable id; the reference is what counts.
+public sealed record SiteWorkItemResult(int SiteId, string CaseReference, Guid? WorkItemId);
 
 public sealed record NotificationStatusResult(string? NotificationStatus, DateTime? SlaDueDate);
 

@@ -99,11 +99,12 @@ public class HttpCaseWorkingApiAdapter(
 
     // RA-492: the in-year "add a registered ORS to an accreditation" change request. Only called
     // when AccreditationChanges:SubmitToCaseManagement is on - ManagementBe must register the
-    // add-overseas-site work-item type before that flag is switched on. ManagementBe returns an
-    // in-year change reference (format: see "Application reference" in ManagementBe's
-    // docs/work-items.md) in the same applicationReference field an application's AP reference
-    // comes back in.
-    public async Task<CaseWorkingSubmissionResult> SubmitChangeRequestAsync(
+    // add-overseas-site work-item type before that flag is switched on.
+    // RA-739: ManagementBe splits the request into one work item per site, in one transaction,
+    // and answers { submissionReference, workItems: [{ siteId, id, applicationReference }] }:
+    // each site's in-year change reference (format: see "Application reference" in
+    // ManagementBe's docs/work-items.md) and the SUB reference they share.
+    public async Task<ChangeRequestSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
         CancellationToken cancellationToken = default
@@ -129,13 +130,119 @@ public class HttpCaseWorkingApiAdapter(
             );
         }
 
-        return await CreateWorkItemAsync(
+        using var response = await PostWorkItemAsync(
             endpoint,
             body,
             changeRequest.SubmittedBy?.Email ?? changeRequest.OrganisationId,
             changeRequest.SubmittedBy?.FullName,
             cancellationToken
         );
+
+        AddOverseasSiteResponseDto? result;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<AddOverseasSiteResponseDto>(
+                JsonOptions,
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to parse ManagementBe add-overseas-site response from {Endpoint}; cannot obtain the sites' references",
+                endpoint
+            );
+            throw new HttpRequestException(
+                $"Failed to parse ManagementBe work item response from {endpoint}.",
+                ex
+            );
+        }
+
+        return ToSubmissionResult(changeRequest, result, endpoint);
+    }
+
+    // Every submitted site must come back with its own reference: the operator is shown it, and a
+    // site without one would be a site the regulator may never have received.
+    private ChangeRequestSubmissionResult ToSubmissionResult(
+        AccreditationChangeRequest changeRequest,
+        AddOverseasSiteResponseDto? response,
+        string endpoint
+    )
+    {
+        if (string.IsNullOrWhiteSpace(response?.SubmissionReference))
+        {
+            logger.LogError(
+                "ManagementBe response from {Endpoint} did not include a submission reference",
+                endpoint
+            );
+            throw new HttpRequestException(
+                $"ManagementBe work item response from {endpoint} did not include a submission reference."
+            );
+        }
+
+        var bySite = new Dictionary<int, AddOverseasSiteWorkItemDto>();
+        foreach (var workItem in response.WorkItems ?? [])
+        {
+            if (
+                TryReadSiteId(workItem.SiteId, out var siteId)
+                && !string.IsNullOrWhiteSpace(workItem.ApplicationReference)
+            )
+                bySite.TryAdd(siteId, workItem);
+        }
+
+        var sites = new List<SiteWorkItemResult>(changeRequest.Sites.Count);
+        foreach (var site in changeRequest.Sites)
+        {
+            if (!bySite.TryGetValue(site.SiteId, out var workItem))
+            {
+                logger.LogError(
+                    "ManagementBe response from {Endpoint} did not include a reference for site {SiteId} of change request {RequestId}",
+                    endpoint,
+                    site.SiteId,
+                    changeRequest.RequestId
+                );
+                throw new HttpRequestException(
+                    $"ManagementBe work item response from {endpoint} did not include a reference for site {site.SiteId}."
+                );
+            }
+            sites.Add(
+                new SiteWorkItemResult(
+                    site.SiteId,
+                    workItem.ApplicationReference!,
+                    workItem.Id is { } id && id != Guid.Empty ? id : null
+                )
+            );
+        }
+
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Change request {RequestId} submitted as {SubmissionReference}: {References}",
+                changeRequest.RequestId,
+                response.SubmissionReference,
+                string.Join(',', sites.Select(s => s.CaseReference))
+            );
+        }
+
+        return new ChangeRequestSubmissionResult(response.SubmissionReference, sites);
+    }
+
+    // ManagementBe echoes siteId as the operator sent it: a number, or a string if it was one.
+    private static bool TryReadSiteId(JsonElement value, out int siteId)
+    {
+        siteId = 0;
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number => value.TryGetInt32(out siteId),
+            JsonValueKind.String => int.TryParse(
+                value.GetString(),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out siteId
+            ),
+            _ => false,
+        };
     }
 
     internal static object BuildChangeRequestPayload(
@@ -164,29 +271,35 @@ public class HttpCaseWorkingApiAdapter(
             chargePence = changeRequest.ChargePence,
             submittedBy = changeRequest.SubmittedBy,
             paymentReference = changeRequest.PaymentReference,
+            // RA-739: each site in re-accreditation's shape, with the values in force for this request (the
+            // operator's answer where the ORS had none), the request's own BES evidence and the site's own charge.
             sites = changeRequest.Sites.Select(site =>
             {
                 var ors = ChangeRequestRules.FindSite(accreditation, site.SiteId);
                 var effective = ChangeRequestRules.Effective(ors, site.Answers);
-                return new
-                {
-                    siteId = site.SiteId,
-                    orsId = site.OrsId,
-                    siteName = site.SiteName,
-                    country = effective.Country,
-                    coordinates = effective.Coordinates,
-                    operationCodes = effective.OperationCodes,
-                    conditionsOfExport = effective.ConditionsOfExport,
-                    suppliedFields = ChangeRequestRules.SuppliedFields(site.Answers),
-                    besEvidence = site.BesEvidence?.BesEvidenceUploads.Select(f => new
+                // A request site is one of the accreditation's ORS; should it not be found, only the request's
+                // own values are sent.
+                var projected = ors is null
+                    ? new CaseManagementSite
                     {
-                        f.FileId,
-                        f.Filename,
-                        f.S3Bucket,
-                        f.S3Key,
-                        f.BesEvidenceValidFromDate,
-                        f.BesEvidenceExpiryDate,
-                    }),
+                        SiteId = site.SiteId,
+                        SiteName = site.SiteName,
+                        InterimSites = [],
+                        BesEvidence = BesEvidenceFiles(null),
+                    }
+                    : CaseManagementSiteFrom(ors);
+                return projected with
+                {
+                    SiteId = site.SiteId,
+                    OrsId = site.OrsId,
+                    SiteName = site.SiteName,
+                    Country = effective.Country,
+                    Coordinates = effective.Coordinates,
+                    OperationCodes = effective.OperationCodes,
+                    ConditionsOfExport = effective.ConditionsOfExport,
+                    BesEvidence = BesEvidenceFiles(site.BesEvidence),
+                    SuppliedFields = ChangeRequestRules.SuppliedFields(site.Answers),
+                    ChargePence = site.ChargePence,
                 };
             }),
         };
@@ -199,46 +312,13 @@ public class HttpCaseWorkingApiAdapter(
         CancellationToken cancellationToken
     )
     {
-        using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
-        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
-
-        HttpResponseMessage response;
-        try
-        {
-            response = await client.SendAsync(request, cancellationToken);
-        }
-        // The "DefaultClient" HttpClient carries an explicit 15s Timeout (Program.cs) so this
-        // call fails fast rather than hanging up to .NET's 100s default. HttpClient reports its
-        // own timeout as a TaskCanceledException indistinguishable by type from a caller-driven
-        // cancellation — the `when` clause is what tells them apart (mirrors ReExClient's same
-        // distinction). Surfaced as a dedicated exception type so the Submit endpoint can return
-        // a clear, distinguishable response instead of a generic unhandled-exception 500 (RA-311).
-        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            logger.LogError(
-                ex,
-                "Timed out waiting for ManagementBe at {Endpoint} (client timeout exceeded)",
-                endpoint
-            );
-            throw new CaseWorkingApiTimeoutException(
-                $"Timed out waiting for ManagementBe at {endpoint}.",
-                ex
-            );
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
-            throw;
-        }
-
-        if (!response.IsSuccessStatusCode)
-        {
-            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-            LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
-            throw new HttpRequestException(
-                $"ManagementBe work item submission failed: {(int)response.StatusCode}"
-            );
-        }
+        using var response = await PostWorkItemAsync(
+            endpoint,
+            body,
+            userId,
+            userName,
+            cancellationToken
+        );
 
         WorkItemResponseDto? result;
         try
@@ -291,6 +371,63 @@ public class HttpCaseWorkingApiAdapter(
         }
 
         return new CaseWorkingSubmissionResult(result.ApplicationReference, workItemId);
+    }
+
+    // Sends a POST /work-items and returns ManagementBe's 2xx response for the caller to parse.
+    // A timeout throws CaseWorkingApiTimeoutException and any other status HttpRequestException.
+    private async Task<HttpResponseMessage> PostWorkItemAsync(
+        string endpoint,
+        CreateWorkItemRequest body,
+        string userId,
+        string? userName,
+        CancellationToken cancellationToken
+    )
+    {
+        using var request = BuildRequest(HttpMethod.Post, endpoint, body, userId, userName);
+        var client = httpClientFactory.CreateClient(DefaultHttpClientName);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await client.SendAsync(request, cancellationToken);
+        }
+        // The "DefaultClient" HttpClient carries an explicit 15s Timeout (Program.cs) so this
+        // call fails fast rather than hanging up to .NET's 100s default. HttpClient reports its
+        // own timeout as a TaskCanceledException indistinguishable by type from a caller-driven
+        // cancellation — the `when` clause is what tells them apart (mirrors ReExClient's same
+        // distinction). Surfaced as a dedicated exception type so the Submit endpoint can return
+        // a clear, distinguishable response instead of a generic unhandled-exception 500 (RA-311).
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogError(
+                ex,
+                "Timed out waiting for ManagementBe at {Endpoint} (client timeout exceeded)",
+                endpoint
+            );
+            throw new CaseWorkingApiTimeoutException(
+                $"Timed out waiting for ManagementBe at {endpoint}.",
+                ex
+            );
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            throw;
+        }
+
+        if (response.IsSuccessStatusCode)
+            return response;
+
+        using (response)
+        {
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            LogManagementBeError(LogLevel.Error, (int)response.StatusCode, endpoint, responseBody);
+            throw new HttpRequestException(
+                $"ManagementBe work item submission failed: {(int)response.StatusCode}",
+                null,
+                response.StatusCode
+            );
+        }
     }
 
     private static readonly NotificationStatusResult s_emptyNotificationStatus = new(null, null);
@@ -832,61 +969,107 @@ public class HttpCaseWorkingApiAdapter(
         (application.OverseasSites?.Sites ?? [])
             .Where(s => s.Selected)
             .Select(s =>
-                (object)new
-                {
-                    siteId = s.SiteId,
-                    selected = s.Selected,
-                    orsId = s.OrsId,
-                    siteName = s.SiteName,
-                    siteAddress = s.SiteAddress,
-                    addressLine1 = s.AddressLine1,
-                    addressLine2 = s.AddressLine2,
-                    townOrCity = s.TownOrCity,
-                    country = s.Country,
-                    coordinates = s.Coordinates,
-                    contactName = s.ContactName,
-                    contactEmail = s.ContactEmail,
-                    contactPhone = s.ContactPhone,
-                    operationCodes = s.OperationCodes,
-                    code1 = s.Code1,
-                    code2 = s.Code2,
-                    code3 = s.Code3,
-                    repatriatedLoads = s.RepatriatedLoads,
-                    conditionsOfExport = s.ConditionsOfExport,
-                    isEu = s.IsEu,
-                    isOecd = s.IsOecd,
-                    isNewSite = s.IsNewSite,
-                    registeredNowAccredited = s.RegisteredNowAccredited,
-                    // RA-603: derived rather than read straight off the model, so a stale stored
-                    // mirror can never advertise a site the operator has withdrawn.
-                    interimSite = BuildInterimSite(InterimSiteSync.Active(s).FirstOrDefault()),
-                    // RA-603 AC09: every interim site, withdrawn ones included. AC05 keeps those
-                    // for reporting and this service is where the reporting happens, so they go
-                    // over the wire carrying their dates and the regulator's own view decides
-                    // what to show.
-                    interimSites = InterimSiteSync
-                        .All(s)
-                        .Select(i => BuildInterimSite(i))
-                        .ToArray(),
-                    besEvidence = new
+                (object)(
+                    CaseManagementSiteFrom(s) with
                     {
-                        files = (s.BesEvidence?.BesEvidenceUploads ?? [])
-                            .Select(f => new
-                            {
-                                fileId = f.FileId,
-                                filename = f.Filename,
-                                contentType = f.ContentType,
-                                uploadedAt = f.UploadedAt,
-                                scanStatus = f.ScanStatus,
-                                besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
-                                besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
-                                s3Key = f.S3Key,
-                                s3Bucket = f.S3Bucket,
-                            })
-                            .ToArray(),
-                    },
-                })
+                        Selected = s.Selected,
+                        IsNewSite = s.IsNewSite,
+                        RegisteredNowAccredited = s.RegisteredNowAccredited,
+                        // RA-603: derived rather than read straight off the model, so a stale stored
+                        // mirror can never advertise a site the operator has withdrawn.
+                        InterimSite = BuildInterimSite(InterimSiteSync.Active(s).FirstOrDefault()),
+                    }
+                )
+            )
             .ToArray();
+
+    // RA-739: the one site projection Case Management gets, for a re-accreditation's overseas sites and for each
+    // site an in-year add-ORS request adds, so both case types share field names and shapes. Each caller fills in
+    // its own extras (see CaseManagementSite).
+    // RA-603 AC09: every interim site, withdrawn ones included. AC05 keeps those for reporting and this service
+    // is where the reporting happens, so they go over the wire carrying their dates and the regulator's own view
+    // decides what to show.
+    private static CaseManagementSite CaseManagementSiteFrom(OverseasSiteModel s) =>
+        new()
+        {
+            SiteId = s.SiteId,
+            OrsId = s.OrsId,
+            SiteName = s.SiteName,
+            SiteAddress = s.SiteAddress,
+            AddressLine1 = s.AddressLine1,
+            AddressLine2 = s.AddressLine2,
+            TownOrCity = s.TownOrCity,
+            Country = s.Country,
+            Coordinates = s.Coordinates,
+            ContactName = s.ContactName,
+            ContactEmail = s.ContactEmail,
+            ContactPhone = s.ContactPhone,
+            OperationCodes = s.OperationCodes,
+            Code1 = s.Code1,
+            Code2 = s.Code2,
+            Code3 = s.Code3,
+            RepatriatedLoads = s.RepatriatedLoads,
+            ConditionsOfExport = s.ConditionsOfExport,
+            IsEu = s.IsEu,
+            IsOecd = s.IsOecd,
+            InterimSites = InterimSiteSync.All(s).Select(i => BuildInterimSite(i)).ToArray(),
+            BesEvidence = BesEvidenceFiles(s.BesEvidence),
+        };
+
+    private static object BesEvidenceFiles(BesEvidenceModel? evidence) =>
+        new
+        {
+            files = (evidence?.BesEvidenceUploads ?? [])
+                .Select(f => new
+                {
+                    fileId = f.FileId,
+                    filename = f.Filename,
+                    contentType = f.ContentType,
+                    uploadedAt = f.UploadedAt,
+                    scanStatus = f.ScanStatus,
+                    besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
+                    besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
+                    s3Key = f.S3Key,
+                    s3Bucket = f.S3Bucket,
+                })
+                .ToArray(),
+        };
+
+    // Serialised in declaration order, which re-accreditation's payload has always had; nulls are dropped by
+    // JsonOptions, so a field one case type leaves unset is not sent at all.
+    // Re-accreditation only: Selected, IsNewSite, RegisteredNowAccredited and the InterimSite mirror.
+    // Add-ORS only: SuppliedFields and ChargePence (the site's own charge).
+    private sealed record CaseManagementSite
+    {
+        public required int SiteId { get; init; }
+        public bool? Selected { get; init; }
+        public string? OrsId { get; init; }
+        public required string SiteName { get; init; }
+        public string? SiteAddress { get; init; }
+        public string? AddressLine1 { get; init; }
+        public string? AddressLine2 { get; init; }
+        public string? TownOrCity { get; init; }
+        public string? Country { get; init; }
+        public string? Coordinates { get; init; }
+        public string? ContactName { get; init; }
+        public string? ContactEmail { get; init; }
+        public string? ContactPhone { get; init; }
+        public List<string>? OperationCodes { get; init; }
+        public string? Code1 { get; init; }
+        public string? Code2 { get; init; }
+        public string? Code3 { get; init; }
+        public string? RepatriatedLoads { get; init; }
+        public bool? ConditionsOfExport { get; init; }
+        public bool? IsEu { get; init; }
+        public bool? IsOecd { get; init; }
+        public bool? IsNewSite { get; init; }
+        public bool? RegisteredNowAccredited { get; init; }
+        public object? InterimSite { get; init; }
+        public required object?[] InterimSites { get; init; }
+        public required object BesEvidence { get; init; }
+        public List<string>? SuppliedFields { get; init; }
+        public int? ChargePence { get; init; }
+    }
 
     // Shared by BuildPayload and BuildSectionsPayload, as above.
     //
@@ -1007,6 +1190,21 @@ public class HttpCaseWorkingApiAdapter(
         public string? TypeId { get; init; }
         public string? StateId { get; init; }
         public JsonElement Payload { get; init; }
+        public string? ApplicationReference { get; init; }
+    }
+
+    // RA-739: ManagementBe's 201 (or idempotent replay) for an add-overseas-site submission.
+    internal sealed class AddOverseasSiteResponseDto
+    {
+        public string? SubmissionReference { get; init; }
+        public List<AddOverseasSiteWorkItemDto>? WorkItems { get; init; }
+    }
+
+    internal sealed class AddOverseasSiteWorkItemDto
+    {
+        // Echoed as sent, so a number or a string; read with TryReadSiteId.
+        public JsonElement SiteId { get; init; }
+        public Guid? Id { get; init; }
         public string? ApplicationReference { get; init; }
     }
 

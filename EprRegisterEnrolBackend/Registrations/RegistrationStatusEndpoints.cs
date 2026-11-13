@@ -3,6 +3,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.Utils;
+using Microsoft.AspNetCore.Authorization;
 
 namespace EprRegisterEnrolBackend.Registrations;
 
@@ -28,17 +29,22 @@ public sealed record RegistrationStatusResponse(
 /// </summary>
 public static class RegistrationStatusEndpoints
 {
-    public static void UseRegistrationStatusEndpoints(this IEndpointRouteBuilder app) =>
+    public static void UseRegistrationStatusEndpoints(this IEndpointRouteBuilder app)
+    {
         app.MapGet("api/v1/registrations/{registrationId}/status", GetStatus)
-            .RequireAuthorization(policy =>
-                policy
-                    .AddAuthenticationSchemes(FrontendAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
-            );
+            .RequireAuthorization(FrontendOnly);
+        app.MapGet("api/v1/registrations/by-number/{registrationNumber}/status", GetStatusByNumber)
+            .RequireAuthorization(FrontendOnly);
+    }
 
-    // registrationId is the ReEx registration id, which is what the frontend's URLs carry. RA-697: organisationId is
-    // the ReEx organisation id in the same URL, and required. ReEx names it, and must say it holds the registration:
-    // a registration-only page has no accreditation to tie the two together.
+    private static void FrontendOnly(AuthorizationPolicyBuilder policy) =>
+        policy
+            .AddAuthenticationSchemes(FrontendAuthenticationHandler.SchemeName)
+            .RequireAuthenticatedUser();
+
+    // registrationId is the ReEx registration id. RA-697: organisationId is the ReEx organisation id, and required.
+    // ReEx names it, and must say it holds the registration: a registration-only page has no accreditation to tie
+    // the two together.
     private static async Task<IResult> GetStatus(
         string registrationId,
         string? organisationId,
@@ -54,7 +60,39 @@ public static class RegistrationStatusEndpoints
             registrationId,
             cancellationToken
         );
-        if (current is null)
+        return await StatusAsync(current, organisationId, reEx, cancellationToken);
+    }
+
+    // RA-739: the frontend's manage page URLs carry the registration number, not the ReEx registration id. Only the
+    // current version's number matches, so a superseded number is a 404. ReEx is then asked with that version's
+    // ReEx registration id, so a number another organisation holds is a 404 too.
+    private static async Task<IResult> GetStatusByNumber(
+        string registrationNumber,
+        string? organisationId,
+        RegistrationVersionStore store,
+        IReExApiAdapter reEx,
+        CancellationToken cancellationToken
+    )
+    {
+        if (string.IsNullOrWhiteSpace(organisationId))
+            return Results.BadRequest("organisationId is required.");
+
+        var current = await store.FindCurrentByRegistrationNumberAsync(
+            registrationNumber,
+            cancellationToken
+        );
+        return await StatusAsync(current, organisationId, reEx, cancellationToken);
+    }
+
+    // A version without a ReEx registration id cannot be checked against ReEx, so it has no status to show.
+    private static async Task<IResult> StatusAsync(
+        RegistrationEntity? current,
+        string organisationId,
+        IReExApiAdapter reEx,
+        CancellationToken cancellationToken
+    )
+    {
+        if (current?.ReExRegistrationId is not { } registrationId)
             return Results.NotFound();
 
         var holder = await reEx.GetRegistrationHolderNameAsync(organisationId, registrationId, cancellationToken);

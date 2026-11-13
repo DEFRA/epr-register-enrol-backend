@@ -1347,7 +1347,9 @@ public class HttpCaseWorkingApiAdapterTests
         );
 
         var act = () => adapter.SubmitApplicationAsync(CreateTestApplication());
-        await act.Should().ThrowAsync<HttpRequestException>().WithMessage("*500*");
+        (await act.Should().ThrowAsync<HttpRequestException>().WithMessage("*500*"))
+            .Which.StatusCode.Should()
+            .Be(HttpStatusCode.InternalServerError);
     }
 
     [Fact]
@@ -2260,14 +2262,47 @@ public class HttpCaseWorkingApiAdapterTests
         return (request, accreditation);
     }
 
+    private const string TestSubmissionReference = "SUB-2026-0007";
+
+    // RA-739: ManagementBe's 201 for an add-ORS submission. siteId is echoed as the operator sent it.
+    private static object AddOrsResponse(string? submissionReference, params object[] workItems) =>
+        new { submissionReference, workItems };
+
+    private static object WorkItem(object siteId, string? applicationReference, Guid? id = null) =>
+        new { siteId, id = id ?? Guid.NewGuid(), applicationReference };
+
+    private static HttpCaseWorkingApiAdapter AdapterFor(HttpMessageHandler handler, string? sharedSecret = null)
+    {
+        var config = Options.Create(
+            new CaseWorkingApiConfig { Url = TestUrl, ClientId = TestClientId, SharedSecret = sharedSecret }
+        );
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        return new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+    }
+
+    private static (HttpCaseWorkingApiAdapter Adapter, CapturingHttpMessageHandler Handler) ChangeRequestAdapter(
+        string? sharedSecret = null
+    )
+    {
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.Created,
+            AddOrsResponse(TestSubmissionReference, WorkItem(901912, TestChangeRequestReference))
+        );
+        return (AdapterFor(handler, sharedSecret), handler);
+    }
+
+    private static ChangeRequestSite RequestSite(int siteId, string orsId) =>
+        new() { SiteId = siteId, OrsId = orsId, SiteName = $"Site {orsId}" };
+
     [Fact]
     public async Task SubmitChangeRequestAsync_PostsAnAddOverseasSiteWorkItemWithTheEffectiveSiteValues()
     {
-        var (adapter, handler) = CreateAdapter(
-            sharedSecret: "secret",
-            responseReference: TestChangeRequestReference,
-            responseTypeId: AccreditationChangeRequest.AddOverseasSiteChangeType
-        );
+        var (adapter, handler) = ChangeRequestAdapter(sharedSecret: "secret");
         var (request, accreditation) = CreateChangeRequest();
 
         var result = await adapter.SubmitChangeRequestAsync(
@@ -2276,7 +2311,8 @@ public class HttpCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.CaseReference.Should().Be(TestChangeRequestReference);
+        result.SubmissionReference.Should().Be(TestSubmissionReference);
+        result.Sites.Single().Should().BeEquivalentTo(new { SiteId = 901912, CaseReference = TestChangeRequestReference });
         handler.CapturedRequest!.RequestUri!.ToString().Should().Be($"{TestUrl}/work-items");
         handler.CapturedRequest.Headers.GetValues("x-cdp-user-id").Single().Should().Be("jane@example.com");
         handler.CapturedRequest.Headers.Contains("x-cdp-auth-signature").Should().BeTrue();
@@ -2304,8 +2340,7 @@ public class HttpCaseWorkingApiAdapterTests
     [Fact]
     public async Task SubmitChangeRequestAsync_DoesNotSendTheApplicationReferencePostcodes()
     {
-        var (adapter, handler) = CreateAdapter(responseReference: TestChangeRequestReference,
-            responseTypeId: AccreditationChangeRequest.AddOverseasSiteChangeType);
+        var (adapter, handler) = ChangeRequestAdapter();
         var (request, accreditation) = CreateChangeRequest();
         accreditation.SiteAddress = "1 Dock Road, Hull, HU1 2BB";
         accreditation.CompanyRegisterAddressPostcode.Should().NotBeNullOrWhiteSpace();
@@ -2335,20 +2370,122 @@ public class HttpCaseWorkingApiAdapterTests
     [Fact]
     public async Task SubmitChangeRequestAsync_ManagementBeRejectsTheType_Throws()
     {
-        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl, ClientId = TestClientId });
-        var handler = new CapturingHttpMessageHandler(HttpStatusCode.BadRequest, new { title = "Unknown type" });
-        var httpClientFactory = Substitute.For<IHttpClientFactory>();
-        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
-        var adapter = new HttpCaseWorkingApiAdapter(
-            httpClientFactory,
-            config,
-            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        var adapter = AdapterFor(
+            new CapturingHttpMessageHandler(HttpStatusCode.BadRequest, new { title = "Unknown type" })
         );
         var (request, accreditation) = CreateChangeRequest();
 
         var act = () => adapter.SubmitChangeRequestAsync(request, accreditation);
 
         await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    // RA-739: one work item per site, matched to the request's sites by siteId, whatever order
+    // ManagementBe lists them in and whether it echoes siteId as a number or a string.
+    [Fact]
+    public async Task SubmitChangeRequestAsync_SeveralSites_MatchesEachSitesOwnReferenceBySiteId()
+    {
+        var (request, accreditation) = CreateChangeRequest();
+        request.Sites.Add(RequestSite(901910, "005"));
+        request.Sites.Add(RequestSite(901911, "006"));
+        var ids = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+        var adapter = AdapterFor(
+            new CapturingHttpMessageHandler(
+                HttpStatusCode.Created,
+                AddOrsResponse(
+                    TestSubmissionReference,
+                    WorkItem(901911, "IYC-ORS-2026-00003", ids[2]),
+                    WorkItem("901912", "IYC-ORS-2026-00001", ids[0]),
+                    WorkItem(901910, "IYC-ORS-2026-00002", ids[1])
+                )
+            )
+        );
+
+        var result = await adapter.SubmitChangeRequestAsync(request, accreditation, TestContext.Current.CancellationToken);
+
+        result.SubmissionReference.Should().Be(TestSubmissionReference);
+        result.Sites.Should().Equal(
+            new SiteWorkItemResult(901912, "IYC-ORS-2026-00001", ids[0]),
+            new SiteWorkItemResult(901910, "IYC-ORS-2026-00002", ids[1]),
+            new SiteWorkItemResult(901911, "IYC-ORS-2026-00003", ids[2])
+        );
+    }
+
+    // The id only correlates; a site's reference is what the operator is shown.
+    [Fact]
+    public async Task SubmitChangeRequestAsync_WorkItemWithoutAnId_StillSucceedsWithNoId()
+    {
+        var (request, accreditation) = CreateChangeRequest();
+        var adapter = AdapterFor(
+            new CapturingHttpMessageHandler(
+                HttpStatusCode.Created,
+                new
+                {
+                    submissionReference = TestSubmissionReference,
+                    workItems = new[] { new { siteId = 901912, applicationReference = TestChangeRequestReference } },
+                }
+            )
+        );
+
+        var result = await adapter.SubmitChangeRequestAsync(request, accreditation, TestContext.Current.CancellationToken);
+
+        result.Sites.Single().WorkItemId.Should().BeNull();
+    }
+
+    public static TheoryData<string, string> UnusableAddOrsResponses() =>
+        new()
+        {
+            { "not json", "not valid json" },
+            { "null body", "null" },
+            { "no submission reference", """{"workItems":[{"siteId":901912,"id":"6f1c6c43-3f53-4d7a-9f0e-6b2b4c8e1a11","applicationReference":"IYC-ORS-2026-00001"}]}""" },
+            { "blank submission reference", """{"submissionReference":" ","workItems":[{"siteId":901912,"applicationReference":"IYC-ORS-2026-00001"}]}""" },
+            { "no work items", """{"submissionReference":"SUB-2026-0001"}""" },
+            { "site missing", """{"submissionReference":"SUB-2026-0001","workItems":[{"siteId":901910,"applicationReference":"IYC-ORS-2026-00001"}]}""" },
+            { "site without reference", """{"submissionReference":"SUB-2026-0001","workItems":[{"siteId":901912,"applicationReference":""}]}""" },
+            { "site id unreadable", """{"submissionReference":"SUB-2026-0001","workItems":[{"siteId":{"x":1},"applicationReference":"IYC-ORS-2026-00001"}]}""" },
+            { "re-accreditation shape", """{"id":"6f1c6c43-3f53-4d7a-9f0e-6b2b4c8e1a11","applicationReference":"IYC-ORS-2026-00001"}""" },
+        };
+
+    // RA-739: without a reference for every submitted site the operator could not be shown one, so
+    // the submission fails and the caller reopens the request.
+    [Theory]
+    [MemberData(nameof(UnusableAddOrsResponses))]
+    public async Task SubmitChangeRequestAsync_ResponseWithoutEverySitesReference_Throws(string _, string body)
+    {
+        var (request, accreditation) = CreateChangeRequest();
+        var adapter = AdapterFor(new RawBodyHttpMessageHandler(HttpStatusCode.Created, body));
+
+        var act = () => adapter.SubmitChangeRequestAsync(request, accreditation, TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_OneOfSeveralSitesMissing_Throws()
+    {
+        var (request, accreditation) = CreateChangeRequest();
+        request.Sites.Add(RequestSite(901910, "005"));
+        var adapter = AdapterFor(
+            new CapturingHttpMessageHandler(
+                HttpStatusCode.Created,
+                AddOrsResponse(TestSubmissionReference, WorkItem(901912, "IYC-ORS-2026-00001"))
+            )
+        );
+
+        var act = () => adapter.SubmitChangeRequestAsync(request, accreditation, TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_Timeout_ThrowsCaseWorkingApiTimeoutException()
+    {
+        var (request, accreditation) = CreateChangeRequest();
+        var adapter = AdapterFor(new TimeoutHttpMessageHandler());
+
+        var act = () => adapter.SubmitChangeRequestAsync(request, accreditation, TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<CaseWorkingApiTimeoutException>();
     }
 
     #region Test infrastructure

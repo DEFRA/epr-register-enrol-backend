@@ -1,3 +1,4 @@
+using System.Net;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -31,6 +32,12 @@ public static class AccreditationChangeEndpoints
 
     private const string ConcurrentEditMessage =
         "The change request was changed by someone else. Reload it and try again.";
+
+    private const string SitesFixedMessage =
+        "This change request has already been sent to the regulator, so sites can't be added or removed. Submit it again instead.";
+
+    private const string PaymentReferenceField = nameof(SubmitRequest.PaymentReference);
+    private const string PaymentReferenceRequiredMessage = "Payment reference is required.";
 
     public static void UseAccreditationChangeEndpoints(this IEndpointRouteBuilder app)
     {
@@ -162,7 +169,8 @@ public static class AccreditationChangeEndpoints
     private static async Task<IResult> Get(
         string organisationId,
         string applicationId,
-        [AsParameters] ChangeServices services
+        [AsParameters] ChangeServices services,
+        ILoggerFactory loggerFactory
     )
     {
         // RA-697: a reprocessor reads its (tonnage) requests too; it has no overseas sites.
@@ -180,11 +188,24 @@ public static class AccreditationChangeEndpoints
         var registrationOnly = await ListRegistrationOnlyAsync(organisationId, accreditation!, services);
         var requests = ownRequests.Concat(registrationOnly).OrderByDescending(r => r.CreatedAt).ToList();
         // A never-registered site has no status and is left out, as RA-425's page shows it on neither tab.
-        var sites = (accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [])
+        var allSites = accreditation!.IsExporter ? accreditation.OverseasSites?.Sites ?? [] : [];
+        var sites = allSites
             .Select(site => (Site: site, Status: ChangeRequestRules.AccreditationStatus(site)))
             .Where(s => s.Status is not null)
             .Select(s => (s.Site, s.Status!.Value))
             .ToList();
+        // RA-739: a registered site without an ORS id is left out too, and logged so the data can be fixed.
+        var withoutOrsId = allSites.Count(s =>
+            s is { Selected: false, IsNewSite: false } && string.IsNullOrWhiteSpace(s.OrsId)
+        );
+        if (withoutOrsId > 0)
+            loggerFactory
+                .CreateLogger(typeof(AccreditationChangeEndpoints))
+                .LogWarning(
+                    "Left {Count} registered ORS without an ORS id out of accreditation {ApplicationId}'s sites",
+                    withoutOrsId,
+                    applicationId
+                );
 
         return Results.Ok(
             ChangesView(
@@ -426,6 +447,8 @@ public static class AccreditationChangeEndpoints
         var draft = requests.FirstOrDefault(r => r.Status == ChangeRequestStatus.InProgress);
         if (draft is not null && draft.Sites.Exists(s => s.SiteId == body.SiteId))
             return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
+        if (draft is { SentToCaseManagement: true })
+            return Results.Conflict(SitesFixedMessage);
 
         var requestSite = new ChangeRequestSite
         {
@@ -473,8 +496,11 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        if (draft!.Sites.RemoveAll(s => s.SiteId == siteId) == 0)
+        if (!draft!.Sites.Exists(s => s.SiteId == siteId))
             return Results.NotFound();
+        if (draft.SentToCaseManagement)
+            return Results.Conflict(SitesFixedMessage);
+        draft.Sites.RemoveAll(s => s.SiteId == siteId);
 
         if (draft.Sites.Count == 0)
             return await services.Requests.DeleteDraftAsync(draft, services.CancellationToken)
@@ -668,8 +694,13 @@ public static class AccreditationChangeEndpoints
     )
     {
         var validation = await submit.Validator.ValidateAsync(body, services.CancellationToken);
-        if (!validation.IsValid)
-            return Results.ValidationProblem(validation.ToDictionary());
+        var errors = validation.ToDictionary();
+        // RA-739: the validator is shared with application submit, where the payment reference is optional.
+        // Case Management requires it on a change request: it is the reference the operator was told to quote.
+        if (string.IsNullOrWhiteSpace(body.PaymentReference))
+            errors[PaymentReferenceField] = [PaymentReferenceRequiredMessage];
+        if (errors.Count > 0)
+            return Results.ValidationProblem(errors);
 
         var (error, accreditation, draft) = await LoadDraftAsync(
             organisationId,
@@ -711,7 +742,7 @@ public static class AccreditationChangeEndpoints
             Email = body.Email,
         };
         draft.PaymentReference = body.PaymentReference;
-        draft.ChargePence = ChangeRequestRules.Charge(draft.Sites.Count).TotalPence;
+        draft.SetCharge(ChangeRequestRules.Charge(draft.Sites.Count));
         draft.Status = ChangeRequestStatus.Submitted;
         draft.SetItemStatuses(ChangeItemStatus.Submitted);
         draft.SubmittedAt = DateTime.UtcNow;
@@ -725,7 +756,7 @@ public static class AccreditationChangeEndpoints
             return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
 
         var logger = submit.LoggerFactory.CreateLogger(typeof(AccreditationChangeEndpoints));
-        CaseWorkingSubmissionResult result;
+        ChangeRequestSubmissionResult result;
         try
         {
             // The payload's operatorRequestId is this request's id, the same on every attempt, so
@@ -742,10 +773,12 @@ public static class AccreditationChangeEndpoints
             // Whatever went wrong, the request goes back to InProgress, so its sites are not held
             // by a request the regulator never received. Only Case Management's own failures are
             // a 503; anything else is a defect and goes to the exception handler.
-            // RA-492: a timeout reopens the request too. ManagementBe replays on operatorRequestId,
-            // so a resubmit returns the original work item even if the sites were edited in
-            // between. Locking a request whose outcome is unknown is deferred to the Case
-            // Management service in-year change story.
+            // A timeout reopens the request too, but ManagementBe may already hold the submission and
+            // replays a resubmit on operatorRequestId with the sites it first received. So once it may
+            // hold it, the request's sites are fixed: an added site would never get a reference and a
+            // removed one would leave its work item behind.
+            if (MayHoldSubmission(ex))
+                draft.SentToCaseManagement = true;
             await ReopenAsync(draft, services, logger);
             if (
                 ex
@@ -767,18 +800,38 @@ public static class AccreditationChangeEndpoints
             );
         }
 
-        draft.CaseManagementReference = result.CaseReference;
-        draft.CaseManagementWorkItemId = result.WorkItemId;
-        // Nothing else writes a Submitted request, so this only fails if the store does; the
-        // submission itself has succeeded either way.
-        if (!await services.Requests.UpdateAsync(draft, services.CancellationToken))
+        // RA-739: each site is its own work item with its own reference; the adapter has checked
+        // that every submitted site has one.
+        draft.SubmissionReference = result.SubmissionReference;
+        foreach (var site in result.Sites)
+        {
+            var item = draft.Sites.Single(s => s.SiteId == site.SiteId);
+            item.CaseManagementReference = site.CaseReference;
+            item.CaseManagementWorkItemId = site.WorkItemId;
+        }
+        // Not cancellable: Case Management holds the work items now, and a Submitted request can't
+        // be sent again, so its references must be saved even if the caller has gone. Nothing else
+        // writes a Submitted request, so this only fails if the store does.
+        if (!await services.Requests.UpdateAsync(draft, CancellationToken.None))
             logger.LogError(
-                "Change request {RequestId} was sent to Case Management as {Reference} but the reference was not saved",
+                "Change request {RequestId} was sent to Case Management as {SubmissionReference} but its references were not saved",
                 draft.RequestId,
-                result.CaseReference
+                result.SubmissionReference
             );
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
     }
+
+    // Not configured means nothing was sent, and ManagementBe validates a submission before it saves
+    // anything, so a 4xx means it holds nothing. A timeout, a 5xx or an unreadable 2xx may follow a save.
+    private static bool MayHoldSubmission(Exception ex) =>
+        ex
+            is not (
+                CaseWorkingNotConfiguredException
+                or HttpRequestException
+                {
+                    StatusCode: >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError,
+                }
+            );
 
     // Undoes Submit's save after Case Management failed. Not cancellable: the caller may have gone,
     // and the request must not be left Submitted.
@@ -793,7 +846,13 @@ public static class AccreditationChangeEndpoints
         draft.SubmittedAt = null;
         draft.SubmittedBy = null;
         draft.PaymentReference = null;
-        draft.ChargePence = null;
+        draft.ClearCharge();
+        draft.SubmissionReference = null;
+        foreach (var item in draft.Items)
+        {
+            item.CaseManagementReference = null;
+            item.CaseManagementWorkItemId = null;
+        }
         // Fails only if another draft was started for the accreditation in the moment the request
         // was Submitted, which the one-draft rule then refuses.
         if (!await services.Requests.UpdateAsync(draft, CancellationToken.None))

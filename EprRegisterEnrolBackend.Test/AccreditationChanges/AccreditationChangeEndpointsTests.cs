@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -18,7 +19,8 @@ namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
 // RA-492: in-year change request to add existing registered ORSs to a granted accreditation.
 // The approved application is DevExporterAccreditationSeedService's org 50019 fixture: 901901
-// accredited, 901910 registered and complete (France), 901911 registered with only a country
+// accredited, 901910 and 901914 registered and complete (France; the Netherlands, with an interim
+// site), 901911 registered with only a country
 // (India, so BES evidence is needed unless conditions of export are met), 901912 registered
 // missing R code and conditions of export (Turkey, OECD, so no BES), and 901913 never registered
 // (added on the application and deselected).
@@ -52,7 +54,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         _factory.Dispose();
     }
 
-    private static object Declaration => new { fullName = "Jane Smith", jobTitle = "Director" };
+    private static object Declaration => new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" };
 
     private static async Task<JsonElement> ReadJson(HttpResponseMessage response) =>
         await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
@@ -113,7 +115,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         var sites = view.GetProperty("sites").EnumerateArray().ToList();
         sites.Select(s => s.GetProperty("accreditationStatus").GetString())
             .Should()
-            .Equal("Accredited", "Registered", "Registered", "Registered");
+            .Equal("Accredited", "Registered", "Registered", "Registered", "Registered");
         Strings(SiteIn(view, 901911).GetProperty("lockedFields")).Should().Equal("country");
         Strings(SiteIn(view, 901910).GetProperty("lockedFields"))
             .Should()
@@ -237,8 +239,8 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         site.GetProperty("siteName").GetString().Should().Be("Delhi Polymers Pvt");
 
         var stored = await _factory.FakePersistence.GetByIdAsync(Org, AppId);
-        stored!.OverseasSites!.Sites.Should().HaveCount(5);
-        stored.OverseasSites.Sites.Select(s => s.OrsId).Should().Equal("001", "005", "006", "007", "008");
+        stored!.OverseasSites!.Sites.Should().HaveCount(6);
+        stored.OverseasSites.Sites.Select(s => s.OrsId).Should().Equal("001", "005", "009", "006", "007", "008");
         stored.OverseasSites.Sites.Single(s => s.SiteId == 901911).Selected.Should().BeFalse();
     }
 
@@ -299,10 +301,36 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         var view = await Get();
         view.GetProperty("sites").EnumerateArray().Select(s => s.GetProperty("siteId").GetInt32())
             .Should()
-            .Equal(901901, 901910, 901911, 901912);
+            .Equal(901901, 901910, 901914, 901911, 901912);
 
         (await AddSite(901913)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         _factory.FakeChangeRequests.All.Should().BeEmpty();
+    }
+
+    // RA-739: Case Management needs every add-ORS site's ORS id, so a registered site stored without one
+    // (pre-RA-507 data) is left out and cannot be added, as registration-only views leave such an ORS out.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task RegisteredSiteWithoutAnOrsId_IsNotListedAndCannotBeAdded(string? orsId)
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
+        accreditation.OverseasSites!.Sites.Single(s => s.SiteId == 901912).OrsId = orsId;
+        using var factory = new AccreditationChangeTestFactory(submitToCaseManagement: false);
+        factory.FakePersistence.Seed(accreditation);
+        using var client = factory.CreateClient();
+
+        var get = await client.GetAsync(Base, Ct);
+
+        get.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadJson(get)).GetProperty("sites").EnumerateArray().Select(s => s.GetProperty("siteId").GetInt32())
+            .Should()
+            .Equal(901901, 901910, 901914, 901911);
+        (await client.PostAsJsonAsync(Sites, new { siteId = 901912 }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.NotFound);
+        factory.FakeChangeRequests.All.Should().BeEmpty();
     }
 
     [Fact]
@@ -604,6 +632,29 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
     }
 
+    // RA-739: Case Management requires the payment reference the operator was told to quote, so a submit
+    // without one is refused here, before anything is saved, rather than failing at Case Management.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task Submit_WithoutAPaymentReference_Returns400AndStaysInProgress(string? paymentReference)
+    {
+        await AddSite(901910);
+
+        var response = await _client.PostAsJsonAsync(
+            SubmitUrl,
+            new { fullName = "Jane Smith", jobTitle = "Director", paymentReference },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ReadJson(response)).GetProperty("errors").TryGetProperty("PaymentReference", out _).Should().BeTrue();
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        stored.PaymentReference.Should().BeNull();
+    }
+
     [Fact]
     public async Task Submit_IncompleteSite_Returns422NamingEachFieldAndStaysInProgress()
     {
@@ -639,7 +690,11 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         stored.ChargePence.Should().Be(32800);
         stored.PaymentReference.Should().Be("PAY-1");
         stored.SubmittedAt.Should().NotBeNull();
-        stored.CaseManagementReference.Should().BeNull();
+        // Flag off: no references, which the operator sees as "Not applicable".
+        stored.SubmissionReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementWorkItemId.Should().BeNull();
+        SiteIn(submitted, 901910).GetProperty("caseManagementReference").ValueKind.Should().Be(JsonValueKind.Null);
         await _factory.MockCaseWorkingAdapter.DidNotReceiveWithAnyArgs()
             .SubmitChangeRequestAsync(default!, default!, Ct);
 
@@ -716,7 +771,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
             UpdatedAt = createdAt,
             SubmittedAt = createdAt,
             SubmittedBy = new SubmittedByModel { FullName = "Jane Smith", JobTitle = "Director" },
-            CaseManagementReference = $"CHG-{createdAt:MMdd}",
+            SubmissionReference = $"SUB-{createdAt:MMdd}",
         };
         _factory.FakeChangeRequests.Seed(request);
         return request;
@@ -734,17 +789,25 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         var withdrawn = Item(901911, "006", ChangeItemStatus.Withdrawn);
         withdrawn.ValidFrom = GrantedOn;
         withdrawn.WithdrawnAt = WithdrawnOn;
+        granted.CaseManagementReference = "IYC-ORS-2026-00001";
+        withdrawn.CaseManagementReference = "IYC-ORS-2026-00002";
         var sites = SeedSubmitted(GrantedOn, [granted, withdrawn]);
         var tonnage = SeedSubmitted(
             WithdrawnOn,
             [],
-            new TonnageBandUpgradeItem { Status = ChangeItemStatus.Queried, RequestedBand = PlannedTonnageBand.UpTo10000 }
+            new TonnageBandUpgradeItem
+            {
+                Status = ChangeItemStatus.Queried,
+                RequestedBand = PlannedTonnageBand.UpTo10000,
+                CaseManagementReference = "IYC-TBU-2026-00001",
+            }
         );
 
         var view = await Get();
 
         var siteRequest = RequestIn(view, sites.RequestId);
-        siteRequest.GetProperty("caseManagementReference").GetString().Should().Be("CHG-0301");
+        siteRequest.TryGetProperty("caseManagementReference", out _).Should().BeFalse();
+        siteRequest.TryGetProperty("submissionReference", out _).Should().BeFalse();
         siteRequest.GetProperty("submittedBy").GetProperty("fullName").GetString().Should().Be("Jane Smith");
         siteRequest.GetProperty("submittedAt").GetDateTime().Should().Be(GrantedOn);
         siteRequest.GetProperty("tonnageBandUpgrade").ValueKind.Should().Be(JsonValueKind.Null);
@@ -754,9 +817,11 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         grantedView.GetProperty("status").GetString().Should().Be("Approved");
         grantedView.GetProperty("validFrom").GetDateTime().Should().Be(GrantedOn);
         grantedView.GetProperty("withdrawnAt").ValueKind.Should().Be(JsonValueKind.Null);
+        grantedView.GetProperty("caseManagementReference").GetString().Should().Be("IYC-ORS-2026-00001");
         var withdrawnView = SiteIn(siteRequest, 901911);
         withdrawnView.GetProperty("status").GetString().Should().Be("Withdrawn");
         withdrawnView.GetProperty("withdrawnAt").GetDateTime().Should().Be(WithdrawnOn);
+        withdrawnView.GetProperty("caseManagementReference").GetString().Should().Be("IYC-ORS-2026-00002");
 
         var tonnageRequest = RequestIn(view, tonnage.RequestId);
         tonnageRequest.GetProperty("changeType").GetString().Should().Be("upgrade-tonnage-band");
@@ -768,6 +833,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         item.GetProperty("requestedBand").GetString().Should().Be("UpTo10000");
         item.GetProperty("validFrom").ValueKind.Should().Be(JsonValueKind.Null);
         item.GetProperty("withdrawnAt").ValueKind.Should().Be(JsonValueKind.Null);
+        item.GetProperty("caseManagementReference").GetString().Should().Be("IYC-TBU-2026-00001");
     }
 
     // A granted, refused or withdrawn item is history: the site is not pending and can be added again.
@@ -990,10 +1056,14 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
         return await _client.PostAsJsonAsync(
             $"{Base}/requests/current/submit",
-            new { fullName = "Jane Smith", jobTitle = "Director" },
+            new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
             Ct
         );
     }
+
+    // Case Management's answer for AddAndSubmit's one site, 901910.
+    private static ChangeRequestSubmissionResult Sent((string Reference, Guid? WorkItemId) site) =>
+        new("SUB-2026-0001", [new SiteWorkItemResult(901910, site.Reference, site.WorkItemId)]);
 
     [Fact]
     public async Task Submit_FlagOn_SendsTheRequestToCaseManagementAndStoresItsReference()
@@ -1005,15 +1075,16 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", workItemId));
+            .Returns(Sent(("IYC-ORS-2026-00001", workItemId)));
 
         var response = await AddAndSubmit();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
-        stored.CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
-        stored.CaseManagementWorkItemId.Should().Be(workItemId);
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.Sites.Single().CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
+        stored.Sites.Single().CaseManagementWorkItemId.Should().Be(workItemId);
         await _factory.MockCaseWorkingAdapter.Received(1).SubmitChangeRequestAsync(
             Arg.Is<AccreditationChangeRequest>(r =>
                 r.Sites.Single().OrsId == "005" && r.ChargePence == 32800 && r.SubmittedBy!.FullName == "Jane Smith"
@@ -1023,7 +1094,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         );
     }
 
-    private void CaseManagementReturns(CaseWorkingSubmissionResult result) =>
+    private void CaseManagementReturns(ChangeRequestSubmissionResult result) =>
         _factory
             .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
                 Arg.Any<AccreditationChangeRequest>(),
@@ -1056,7 +1127,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
             .Returns(_ =>
             {
                 storedWhenCalled = _factory.FakeChangeRequests.All.Single().Status;
-                return new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid());
+                return Sent(("IYC-ORS-2026-00001", null));
             });
 
         (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -1067,13 +1138,13 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     [Fact]
     public async Task Submit_FlagOn_LostRace_Returns409AndNeverCallsCaseManagement()
     {
-        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid()));
+        CaseManagementReturns(Sent(("IYC-ORS-2026-00001", null)));
         await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
         _factory.FakeChangeRequests.LoseUpdateWhen = r => r.Status == ChangeRequestStatus.Submitted;
 
         var response = await _client.PostAsJsonAsync(
             $"{Base}/requests/current/submit",
-            new { fullName = "Jane Smith", jobTitle = "Director" },
+            new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
             Ct
         );
 
@@ -1107,7 +1178,10 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.SubmittedBy.Should().BeNull();
         stored.PaymentReference.Should().BeNull();
         stored.ChargePence.Should().BeNull();
-        stored.CaseManagementReference.Should().BeNull();
+        stored.SubmissionReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementWorkItemId.Should().BeNull();
+        stored.Sites.Single().ChargePence.Should().BeNull();
         stored.Sites.Single().Status.Should().Be(ChangeItemStatus.InProgress);
     }
 
@@ -1122,7 +1196,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns<CaseWorkingSubmissionResult>(_ =>
+            .Returns<ChangeRequestSubmissionResult>(_ =>
             {
                 _factory.FakeChangeRequests.Seed(
                     new AccreditationChangeRequest
@@ -1145,12 +1219,25 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.Sites.Single().Status.Should().Be(ChangeItemStatus.Submitted);
     }
 
-    // Reopened, the request is the draft again: its site is not pending a regulator decision, more
-    // sites join it, and a retry submits it.
-    [Fact]
-    public async Task Submit_FlagOn_AfterACaseManagementFailure_TheDraftCanBeChangedAndResubmitted()
+    // Reopened, the request is the draft again: its site is not pending a regulator decision and a
+    // retry submits it. Case Management may already hold the first attempt and replays a resubmit with
+    // the sites it received, so the sites sent can't be added to or removed.
+    [Theory]
+    [InlineData("unreachable")]
+    [InlineData("server error")]
+    [InlineData("timeout")]
+    public async Task Submit_FlagOn_AfterACaseManagementFailure_TheSitesAreFixedButTheDraftCanBeResubmitted(
+        string failure
+    )
     {
-        CaseManagementThrows(new HttpRequestException("unavailable"));
+        CaseManagementThrows(
+            failure switch
+            {
+                "timeout" => new CaseWorkingApiTimeoutException("timed out", new TaskCanceledException()),
+                "server error" => new HttpRequestException("failed", null, HttpStatusCode.InternalServerError),
+                _ => new HttpRequestException("unavailable"),
+            }
+        );
         (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
 
         var view = await (await _client.GetAsync(Base, Ct)).Content.ReadFromJsonAsync<JsonElement>(Ct);
@@ -1158,30 +1245,39 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         view.GetProperty("sites").EnumerateArray()
             .Single(s => s.GetProperty("siteId").GetInt32() == 901910)
             .GetProperty("pendingRequestStatus").GetString().Should().Be("InProgress");
-        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901912 }, Ct))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.Created);
-        await _client.PatchAsJsonAsync(
-            $"{Base}/requests/current/sites/901912",
-            new { operationCodes = R3, conditionsOfExport = false },
-            Ct
-        );
+        _factory.FakeChangeRequests.All.Single().SentToCaseManagement.Should().BeTrue();
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901912 }, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await _client.DeleteAsync($"{Base}/requests/current/sites/901910", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
-        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00002", Guid.NewGuid()));
-        (await _client.PostAsJsonAsync(
-                $"{Base}/requests/current/submit",
-                new { fullName = "Jane Smith", jobTitle = "Director" },
-                Ct
-            ))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.OK);
+        CaseManagementReturns(Sent(("IYC-ORS-2026-00001", null)));
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/submit", new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" }, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
-        stored.Sites.Should().HaveCount(2);
-        stored.ChargePence.Should().Be(65600);
-        stored.CaseManagementReference.Should().Be("IYC-ORS-2026-00002");
+        stored.Sites.Should().ContainSingle().Which.SiteId.Should().Be(901910);
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.Sites.Single().CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
+    }
+
+    // Not configured, nothing was sent; a 4xx, Case Management saved nothing. Either way the reopened
+    // draft's sites can still change.
+    [Theory]
+    [InlineData("not-configured")]
+    [InlineData("rejected")]
+    public async Task Submit_FlagOn_CaseManagementHoldsNothing_TheSitesCanStillChange(string failure)
+    {
+        CaseManagementThrows(
+            failure == "rejected"
+                ? new HttpRequestException("invalid", null, HttpStatusCode.BadRequest)
+                : new CaseWorkingNotConfiguredException()
+        );
+        (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+
+        _factory.FakeChangeRequests.All.Single().SentToCaseManagement.Should().BeFalse();
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901912 }, Ct)).StatusCode.Should().Be(HttpStatusCode.Created);
+        (await _client.DeleteAsync($"{Base}/requests/current/sites/901910", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     // Not a Case Management failure: the request is still reopened, but the error is not dressed up
@@ -1201,14 +1297,426 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     [Fact]
     public async Task Submit_FlagOn_ReferenceNotSaved_StillSubmitted()
     {
-        CaseManagementReturns(new CaseWorkingSubmissionResult("IYC-ORS-2026-00001", Guid.NewGuid()));
-        _factory.FakeChangeRequests.LoseUpdateWhen = r => r.CaseManagementReference is not null;
+        CaseManagementReturns(Sent(("IYC-ORS-2026-00001", null)));
+        _factory.FakeChangeRequests.LoseUpdateWhen = r => r.SubmissionReference is not null;
 
         var response = await AddAndSubmit();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
-        stored.CaseManagementReference.Should().BeNull();
+        stored.SubmissionReference.Should().BeNull();
+        stored.Sites.Single().CaseManagementReference.Should().BeNull();
+    }
+
+    // The frontend can give up after Case Management has created the work items. The request is
+    // Submitted and can't be sent again, so its references must still be saved.
+    [Fact]
+    public async Task Submit_FlagOn_CallerGoneOnceCaseManagementAnswers_StillSavesTheReferences()
+    {
+        await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        _factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(call =>
+            {
+                caller.Cancel();
+                call.Arg<CancellationToken>().IsCancellationRequested.Should().BeTrue();
+                return Sent(("IYC-ORS-2026-00001", null));
+            });
+
+        var send = () =>
+            _client.PostAsJsonAsync(
+                $"{Base}/requests/current/submit",
+                new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
+                caller.Token
+            );
+
+        await send.Should().ThrowAsync<OperationCanceledException>();
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (_factory.FakeChangeRequests.All.Single().SubmissionReference is null && DateTime.UtcNow < deadline)
+            await Task.Delay(20, Ct);
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.Submitted);
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.Sites.Single().CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
+    }
+}
+
+// RA-739: the hand-off flag on, through the real HTTP adapter, against a fake ManagementBe that
+// answers POST /work-items as ManagementBe answers an add-overseas-site submission.
+public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
+{
+    private const int Year = 2026;
+    private static readonly string Org = DevExporterOrg.InYearChange.OrganisationId;
+    private static readonly string AppId = DevExporterAccreditationSeedService.ApplicationIdFor(DevExporterOrg.InYearChange, Year).ToString();
+    private static readonly string Base = $"/api/v1/accreditation-changes/{Org}/{AppId}";
+    private static readonly string[] R3 = ["R3"];
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private readonly FakeManagementBe _managementBe = new();
+    private readonly AccreditationChangeTestFactory _factory;
+    private readonly HttpClient _client;
+
+    // The seeded accreditation, held so a test can fill in an ORS before it is submitted.
+    private readonly AccreditationApplicationModel _accreditation =
+        DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
+
+    public AccreditationChangeCaseManagementHttpTests()
+    {
+        _factory = new(submitToCaseManagement: true, caseManagement: _managementBe);
+        _factory.FakePersistence.Seed(_accreditation);
+        _client = _factory.CreateClient();
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        _factory.Dispose();
+        _managementBe.Dispose();
+    }
+
+    // Three complete sites: France as it is, India and Turkey with their missing answers supplied.
+    private async Task<HttpResponseMessage> SubmitThreeSites()
+    {
+        foreach (var siteId in new[] { 901910, 901911, 901912 })
+            (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId }, Ct))
+                .StatusCode.Should().Be(HttpStatusCode.Created);
+        await _client.PatchAsJsonAsync(
+            $"{Base}/requests/current/sites/901911",
+            new { coordinates = "28.6139, 77.2090", operationCodes = R3, conditionsOfExport = true },
+            Ct
+        );
+        await _client.PatchAsJsonAsync(
+            $"{Base}/requests/current/sites/901912",
+            new { operationCodes = R3, conditionsOfExport = false },
+            Ct
+        );
+        return await _client.PostAsJsonAsync(
+            $"{Base}/requests/current/submit",
+            new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
+            Ct
+        );
+    }
+
+    // ManagementBe's 201: the sites in reverse order, each echoing the siteId number it was sent.
+    private static (HttpStatusCode, string) Created(JsonNode request, Func<JsonNode, object?>? reference = null)
+    {
+        var sites = request["payload"]!["sites"]!.AsArray();
+        var workItems = sites
+            .Select((site, index) => new
+            {
+                siteId = site!["siteId"]!.GetValue<int>(),
+                id = Guid.NewGuid(),
+                applicationReference = reference is null ? $"IYC-ORS-2026-{index + 1:D5}" : reference(site),
+            })
+            .Reverse();
+        return (HttpStatusCode.Created, JsonSerializer.Serialize(new { submissionReference = "SUB-2026-0001", workItems }));
+    }
+
+    [Fact]
+    public async Task Submit_ThreeSites_StoresOneSubmissionReferenceAndEachSitesOwnReferenceAndWorkItem()
+    {
+        _managementBe.Respond = request => Created(request);
+
+        var response = await SubmitThreeSites();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        _managementBe.Requests.Should().ContainSingle();
+        var sent = _managementBe.Requests.Single();
+        sent["typeId"]!.GetValue<string>().Should().Be("add-overseas-site");
+        sent["payload"]!["sites"]!.AsArray().Select(s => s!["siteId"]!.GetValue<int>())
+            .Should().Equal(901910, 901911, 901912);
+
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.Submitted);
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.Sites.Select(s => (s.SiteId, s.CaseManagementReference))
+            .Should().Equal((901910, "IYC-ORS-2026-00001"), (901911, "IYC-ORS-2026-00002"), (901912, "IYC-ORS-2026-00003"));
+        stored.Sites.Select(s => s.CaseManagementWorkItemId).Should().OnlyHaveUniqueItems().And.NotContainNulls();
+
+        // The operator's view shows each site's own reference, and not the submission reference.
+        var view = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        view.GetProperty("sites").EnumerateArray()
+            .Select(s => s.GetProperty("caseManagementReference").GetString())
+            .Should().Equal("IYC-ORS-2026-00001", "IYC-ORS-2026-00002", "IYC-ORS-2026-00003");
+        view.GetRawText().Should().NotContain("SUB-2026-0001");
+    }
+
+    private static JsonNode SentSite(JsonNode request, int siteId) =>
+        request["payload"]!["sites"]!.AsArray().Single(s => s!["siteId"]!.GetValue<int>() == siteId)!;
+
+    private async Task AttachCleanBesEvidence(int siteId)
+    {
+        var fileUploadId = Guid.NewGuid().ToString();
+        await _factory.FakePendingUploadService.CreateAsync(fileUploadId, "http://cdp/status", ct: Ct);
+        await _factory.FakePendingUploadService.CompleteAsync(
+            fileUploadId,
+            new CdpCallbackFile
+            {
+                FileId = "file-1",
+                Filename = "bes.pdf",
+                FileStatus = "complete",
+                ContentType = "application/pdf",
+                S3Key = "bes-evidence/file-1",
+                S3Bucket = "bes-bucket",
+            },
+            Ct
+        );
+        (await _client.PostAsJsonAsync(
+                $"{Base}/requests/current/sites/{siteId}/bes-evidence/files",
+                new { fileUploadId, besEvidenceValidFromDate = "2026-01-01", besEvidenceExpiryDate = "2027-12-31" },
+                Ct
+            ))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Created);
+    }
+
+    // RA-739: each site goes in re-accreditation's site shape, with every interim site (withdrawn ones
+    // carrying removedAt), and its own charge alongside the submission's total.
+    [Fact]
+    public async Task Submit_SendsEachSiteInReaccreditationsSiteShapeWithItsOwnCharge()
+    {
+        var lyon = _accreditation.OverseasSites!.Sites.Single(s => s.SiteId == 901910);
+        lyon.AddressLine2 = "Zone Industrielle";
+        lyon.Code2 = "B3020";
+        lyon.Code3 = "GH013";
+        lyon.InterimSites =
+        [
+            new InterimSiteModel
+            {
+                SiteId = 1,
+                SiteNumber = "001",
+                Country = "France",
+                SiteName = "Marseille Storage",
+                AddressLine1 = "1 Quai",
+                TownOrCity = "Marseille",
+                ContactName = "Alex Morgan",
+                ContactEmail = "alex@example.com",
+                ContactPhone = "0123456789",
+                OperationCodes = ["R13"],
+                CreatedAt = new DateTime(2025, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+            },
+            new InterimSiteModel
+            {
+                SiteId = 2,
+                SiteNumber = "002",
+                Country = "France",
+                SiteName = "Old Depot",
+                AddressLine1 = "2 Quai",
+                TownOrCity = "Lyon",
+                ContactName = "Sam Lee",
+                ContactEmail = "sam@example.com",
+                ContactPhone = "0987654321",
+                OperationCodes = ["R12"],
+                RemovedAt = new DateTime(2026, 2, 1, 9, 0, 0, DateTimeKind.Utc),
+            },
+        ];
+        _managementBe.Respond = request => Created(request);
+
+        (await SubmitThreeSites()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var sent = _managementBe.Requests.Single();
+        sent["payload"]!["chargePence"]!.GetValue<int>().Should().Be(98400);
+        var expected = JsonNode.Parse(
+            """
+            {
+              "siteId": 901910,
+              "orsId": "005",
+              "siteName": "Lyon Plastiques SA",
+              "siteAddress": "901910 Industrial Estate, France",
+              "addressLine1": "901910 Industrial Estate",
+              "addressLine2": "Zone Industrielle",
+              "townOrCity": "Port",
+              "country": "France",
+              "coordinates": "45.7640, 4.8357",
+              "contactName": "Site Manager",
+              "contactEmail": "site901910@example.com",
+              "contactPhone": "+44 1234 567890",
+              "operationCodes": ["R3"],
+              "code1": "B3011",
+              "code2": "B3020",
+              "code3": "GH013",
+              "repatriatedLoads": "Rejected loads are returned to the UK exporter.",
+              "conditionsOfExport": true,
+              "isEu": true,
+              "isOecd": true,
+              "interimSites": [
+                {
+                  "siteId": 1,
+                  "siteNumber": "001",
+                  "isNewSite": false,
+                  "country": "France",
+                  "siteName": "Marseille Storage",
+                  "addressLine1": "1 Quai",
+                  "townOrCity": "Marseille",
+                  "contactName": "Alex Morgan",
+                  "contactEmail": "alex@example.com",
+                  "contactPhone": "0123456789",
+                  "operationCodes": ["R13"],
+                  "createdAt": "2025-09-01T00:00:00Z"
+                },
+                {
+                  "siteId": 2,
+                  "siteNumber": "002",
+                  "isNewSite": false,
+                  "country": "France",
+                  "siteName": "Old Depot",
+                  "addressLine1": "2 Quai",
+                  "townOrCity": "Lyon",
+                  "contactName": "Sam Lee",
+                  "contactEmail": "sam@example.com",
+                  "contactPhone": "0987654321",
+                  "operationCodes": ["R12"],
+                  "removedAt": "2026-02-01T09:00:00Z"
+                }
+              ],
+              "besEvidence": { "files": [] },
+              "suppliedFields": [],
+              "chargePence": 32800
+            }
+            """
+        )!;
+        var lyonSent = SentSite(sent, 901910);
+        JsonNode.DeepEquals(lyonSent, expected)
+            .Should()
+            .BeTrue($"expected {expected.ToJsonString()} but was {lyonSent.ToJsonString()}");
+        SentSite(sent, 901912)["chargePence"]!.GetValue<int>().Should().Be(32800);
+    }
+
+    // The operator's answer stands in for each value the ORS lacks, and the BES evidence is the request's own.
+    [Fact]
+    public async Task Submit_SendsTheEffectiveValuesAndTheRequestsOwnBesEvidence()
+    {
+        _managementBe.Respond = request => Created(request);
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901911 }, Ct))
+            .StatusCode.Should().Be(HttpStatusCode.Created);
+        (await _client.PatchAsJsonAsync(
+                $"{Base}/requests/current/sites/901911",
+                new { coordinates = "28.6139, 77.2090", operationCodes = R3, conditionsOfExport = false },
+                Ct
+            ))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+        await AttachCleanBesEvidence(901911);
+
+        (await _client.PostAsJsonAsync(
+                $"{Base}/requests/current/submit",
+                new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
+                Ct
+            ))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+
+        var sent = _managementBe.Requests.Single();
+        sent["payload"]!["chargePence"]!.GetValue<int>().Should().Be(32800);
+        var site = SentSite(sent, 901911);
+        site["country"]!.GetValue<string>().Should().Be("India");
+        site["coordinates"]!.GetValue<string>().Should().Be("28.6139, 77.2090");
+        site["operationCodes"]!.AsArray().Select(c => c!.GetValue<string>()).Should().Equal("R3");
+        site["conditionsOfExport"]!.GetValue<bool>().Should().BeFalse();
+        site["isEu"]!.GetValue<bool>().Should().BeFalse();
+        site["isOecd"]!.GetValue<bool>().Should().BeFalse();
+        site["suppliedFields"]!.AsArray().Select(f => f!.GetValue<string>())
+            .Should().Equal("coordinates", "operationCodes", "conditionsOfExport");
+        site["chargePence"]!.GetValue<int>().Should().Be(32800);
+        var file = site["besEvidence"]!["files"]!.AsArray().Should().ContainSingle().Subject!;
+        file["fileId"]!.GetValue<string>().Should().Be("file-1");
+        file["filename"]!.GetValue<string>().Should().Be("bes.pdf");
+        file["contentType"]!.GetValue<string>().Should().Be("application/pdf");
+        file["scanStatus"]!.GetValue<string>().Should().Be("Clean");
+        file["besEvidenceValidFromDate"]!.GetValue<string>().Should().Be("2026-01-01");
+        file["besEvidenceExpiryDate"]!.GetValue<string>().Should().Be("2027-12-31");
+        file["s3Key"]!.GetValue<string>().Should().Be("bes-evidence/file-1");
+        file["s3Bucket"]!.GetValue<string>().Should().Be("bes-bucket");
+        file["uploadedAt"].Should().NotBeNull();
+    }
+
+    // Each site's own charge is stored with the request when it is submitted.
+    [Fact]
+    public async Task Submit_StoresEachSitesOwnChargeAndTheTotal()
+    {
+        _managementBe.Respond = request => Created(request);
+
+        (await SubmitThreeSites()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.ChargePence.Should().Be(98400);
+        stored.Sites.Select(s => s.ChargePence).Should().Equal(32800, 32800, 32800);
+    }
+
+    public static TheoryData<string> Failures() =>
+        ["server error", "unparseable", "no submission reference", "a site without a reference", "a site missing", "timeout"];
+
+    // Any Case Management failure reopens the request, with nothing of the submission kept, and is a 503.
+    [Theory]
+    [MemberData(nameof(Failures))]
+    public async Task Submit_CaseManagementFails_Returns503AndReopensTheRequest(string failure)
+    {
+        _managementBe.Respond = request =>
+            failure switch
+            {
+                "server error" => (HttpStatusCode.InternalServerError, """{"title":"Error"}"""),
+                "unparseable" => (HttpStatusCode.Created, "<html>"),
+                "no submission reference" => (
+                    HttpStatusCode.Created,
+                    Created(request).Item2.Replace("\"submissionReference\":\"SUB-2026-0001\",", "", StringComparison.Ordinal)
+                ),
+                "a site without a reference" => Created(
+                    request,
+                    site => site["siteId"]!.GetValue<int>() == 901911 ? null : "IYC-ORS-2026-00009"
+                ),
+                "a site missing" => (
+                    HttpStatusCode.Created,
+                    """{"submissionReference":"SUB-2026-0001","workItems":[{"siteId":901910,"applicationReference":"IYC-ORS-2026-00001"}]}"""
+                ),
+                _ => throw new TaskCanceledException("timed out", new TimeoutException()),
+            };
+
+        var response = await SubmitThreeSites();
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        stored.SubmittedAt.Should().BeNull();
+        stored.SubmittedBy.Should().BeNull();
+        stored.PaymentReference.Should().BeNull();
+        stored.ChargePence.Should().BeNull();
+        stored.SubmissionReference.Should().BeNull();
+        stored.Sites.Should().HaveCount(3);
+        stored.Sites.Should().OnlyContain(s =>
+            s.Status == ChangeItemStatus.InProgress
+            && s.CaseManagementReference == null
+            && s.CaseManagementWorkItemId == null
+            && s.ChargePence == null
+        );
+    }
+
+    private sealed class FakeManagementBe : HttpMessageHandler
+    {
+        public Func<JsonNode, (HttpStatusCode Status, string Body)> Respond { get; set; } =
+            _ => (HttpStatusCode.NotFound, "{}");
+
+        public List<JsonNode> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            request.RequestUri!.ToString().Should().Be($"{AccreditationChangeTestFactory.CaseManagementUrl}/work-items");
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!;
+            Requests.Add(body);
+            var (status, json) = Respond(body);
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            };
+        }
     }
 }
