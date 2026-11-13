@@ -317,9 +317,9 @@ public class AccreditationApplicationEndpointsTests
         body.CompanyRegisteredAddress.Should().Be("29 Acacia Road, London, SW1A 1AA");
     }
 
-    // RA-763: an operator registered only last year has no accreditation number to keep.
+    // RA-763: a ReEx accreditation with no number leaves nothing to keep.
     [Fact]
-    public async Task Seed_RegisteredOnlyLastYear_HasNoLastYearsAccreditation()
+    public async Task Seed_ReExAccreditationWithNoNumber_HasNoLastYearsAccreditation()
     {
         Reset();
         _factory

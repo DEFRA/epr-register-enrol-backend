@@ -11,9 +11,10 @@ using NSubstitute.ClearExtensions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
-// RA-763: a renewal's reference is last year's accreditation number with YY swapped. Only an
-// operator registered only last year, so with none, derives from the registration reference (see
-// AccreditationNumberEndpointTests).
+// RA-763: a 2027 renewal's reference is last year's accreditation number, kept from ReEx at Seed,
+// with YY swapped. A previous accreditation held in this backend comes first (see
+// AccreditationNumberFromPreviousAccreditationEndpointTests); an application holding neither
+// derives from the registration reference.
 public class AccreditationNumberFromLastYearsAccreditationEndpointTests
     : IClassFixture<AccreditationApplicationTestFactory>
 {
@@ -101,17 +102,17 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task An_operator_registered_only_last_year_derives_from_the_registration_reference()
+    public async Task An_application_holding_no_last_years_number_derives_from_the_registration_reference()
     {
         var app = SeedApplication(2027);
 
         (await IssuedReference(app)).Should().Be("A27ER0001239999PL");
     }
 
-    // RA-763: an earlier application held here is no longer a source: for 2027 there never is
-    // one, as 2026 was accredited in ReEx.
+    // An accreditation this service issued (2028 onwards) is held here and ReEx doesn't have it,
+    // so it comes before last year's number from ReEx.
     [Fact]
-    public async Task An_earlier_approved_application_held_here_is_not_a_source()
+    public async Task An_earlier_approved_application_held_here_comes_before_last_years_number()
     {
         SeedApplication(
             2026,
@@ -126,7 +127,7 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
             a => a.LastYearsAccreditation = LastYears(LastYearsNumber)
         );
 
-        (await IssuedReference(withLastYears)).Should().Be("A27ER0001230042PL");
+        (await IssuedReference(withLastYears)).Should().Be("A27ER0001230055PL");
     }
 
     [Fact]

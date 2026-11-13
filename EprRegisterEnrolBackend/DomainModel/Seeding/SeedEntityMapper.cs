@@ -135,8 +135,6 @@ public static class SeedEntityMapper
         return entity;
     }
 
-    // ReEx masters the number until this service does registrations, so it can change one already issued. The old
-    // number goes onto the previous numbers, and the current one is never among them.
     // RA-763: sets the year's accreditation number, keeping every other year's. A seed that finds no number keeps
     // the one already held for the year.
     private static void ApplyAccreditationNumber(
@@ -167,6 +165,8 @@ public static class SeedEntityMapper
         target.AccreditationNumbers.Sort((a, b) => a.Year.CompareTo(b.Year));
     }
 
+    // ReEx masters the number until this service does registrations, so it can change one already issued. The old
+    // number goes onto the previous numbers, and the current one is never among them.
     private static void ApplyNumber(RegistrationEntity target, string? number)
     {
         if (string.IsNullOrWhiteSpace(number) || number == target.RegistrationNumber)

@@ -34,6 +34,22 @@ public interface IAccreditationApplicationPersistence
         IClientSessionHandle? session = null
     );
 
+    /// <summary>
+    /// RA-690: the latest previous approved accreditation for the same registration - the source
+    /// an accreditation reference is derived from on renewal. Matches the organisation,
+    /// registration, material and glass process, a year strictly before
+    /// <paramref name="beforeYear"/>, status Approved and a non-empty accreditation reference.
+    /// Highest year wins, then most recently edited, so a lapsed renewal (e.g. 2026 to 2028)
+    /// still finds the 2026 accreditation. Runs server-side and returns at most one; null when
+    /// nothing matches.
+    /// </summary>
+    Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        GlassRecyclingProcess? glassRecyclingProcess,
+        int beforeYear
+    );
 
     /// <summary>
     /// RA-690: every application other than <paramref name="applicationId"/> that holds
