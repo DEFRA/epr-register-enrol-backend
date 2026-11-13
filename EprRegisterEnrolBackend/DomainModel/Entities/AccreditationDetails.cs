@@ -40,10 +40,11 @@ public sealed class AccreditationDetails : ApplicationDetails
     public List<string> PreviousReservedAccreditationNumbers { get; set; } = [];
 
     /// <summary>
-    /// The operator's accreditation number for last year, the basis for this year's. Null when they were registered
-    /// only last year. Unlike <see cref="PreviousReservedAccreditationNumbers"/>, it is not a number this application held.
+    /// RA-763: the operator's accreditation number for last year, with its year, the basis for this year's. Null when
+    /// they were registered only last year. Unlike <see cref="PreviousReservedAccreditationNumbers"/>, it is not a
+    /// number this application held.
     /// </summary>
-    public string? LastYearsAccreditationNumber { get; set; }
+    public AccreditationNumberForYear? LastYearsAccreditation { get; set; }
 
     /// <summary>ReEx's id for the prior-year accreditation this was seeded from. Copied to the Accreditation at approval.</summary>
     public string? SourceReExAccreditationId { get; set; }

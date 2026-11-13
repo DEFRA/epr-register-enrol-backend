@@ -26,7 +26,7 @@ public class RegistrationEntity : VersionedEntityBase
     /// RA-763: the accreditation numbers ReEx issued for this registration, one per year, oldest first, written at
     /// seed. A year with no entry was registration only, or has not been seeded.
     /// </summary>
-    public List<RegistrationAccreditationNumber> AccreditationNumbers { get; set; } = [];
+    public List<AccreditationNumberForYear> AccreditationNumbers { get; set; } = [];
 
     [BsonRepresentation(BsonType.String)]
     public RegistrationStatus Status { get; set; } = RegistrationStatus.Created;

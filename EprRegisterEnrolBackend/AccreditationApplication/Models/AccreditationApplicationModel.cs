@@ -117,11 +117,11 @@ public class AccreditationApplicationModel
     // never regenerated once issued.
     public string? AccreditationReference { get; set; }
 
-    // RA-763: the operator's accreditation number for last year (e.g. A26ER5003240164PL on a
-    // 2027 application), the basis for this year's. Null when they were registered only last
-    // year. Not to be confused with PreviousAccreditationNumbers, which holds this year's
-    // numbers that were replaced.
-    public string? LastYearsAccreditationReference { get; set; }
+    // RA-763: the operator's accreditation number for last year, with its year (e.g. 2026 and
+    // A26ER5003240164PL on a 2027 application), the basis for this year's. Null when they were
+    // registered only last year. Not to be confused with PreviousAccreditationNumbers, which
+    // holds this year's numbers that were replaced.
+    public AccreditationNumberForYearModel? LastYearsAccreditation { get; set; }
 
     // RA-448's "reapply for accreditation" regenerate history. RA-690 removed that
     // path, so nothing writes this any more; it stays so existing documents still
@@ -188,6 +188,13 @@ public class SubmittedByModel
     public required string FullName { get; set; }
     public required string JobTitle { get; set; }
     public string? Email { get; set; }
+}
+
+/// <summary>RA-763: an accreditation number and the year it applies to.</summary>
+public class AccreditationNumberForYearModel
+{
+    public int Year { get; set; }
+    public required string AccreditationNumber { get; set; }
 }
 
 public class SubmitterContactDetailsModel

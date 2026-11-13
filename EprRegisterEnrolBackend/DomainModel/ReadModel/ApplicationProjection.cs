@@ -39,7 +39,13 @@ public static class ApplicationProjection
             SourceReExAccreditationId = details.SourceReExAccreditationId,
             SourceYear = details.SeedDataSourceYear,
             PreviousAccreditationNumbers = details.PreviousReservedAccreditationNumbers,
-            LastYearsAccreditationReference = details.LastYearsAccreditationNumber,
+            LastYearsAccreditation = details.LastYearsAccreditation is { } lastYears
+                ? new AccreditationNumberForYearModel
+                {
+                    Year = lastYears.Year,
+                    AccreditationNumber = lastYears.AccreditationNumber,
+                }
+                : null,
             Year = details.Year,
             RegistrationId = application.ReExRegistrationId,
             IsExporter = registration?.WasteProcessingType == WasteProcessingKind.Exporter,

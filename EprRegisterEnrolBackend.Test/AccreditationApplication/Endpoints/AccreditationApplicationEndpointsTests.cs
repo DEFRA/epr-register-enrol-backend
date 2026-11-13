@@ -305,9 +305,53 @@ public class AccreditationApplicationEndpointsTests
         body!.SourceReExAccreditationId.Should().Be("reex-abc");
         body.SourceYear.Should().Be(2025);
         // RA-763: kept, so the 2026 number is derived from it rather than the registration number.
-        body.LastYearsAccreditationReference.Should().Be("A25ER5000270063ST");
+        body.LastYearsAccreditation.Should()
+            .BeEquivalentTo(
+                new AccreditationNumberForYearModel
+                {
+                    Year = 2025,
+                    AccreditationNumber = "A25ER5000270063ST",
+                }
+            );
         body.Prns.PlannedTonnageBand.Should().Be(PlannedTonnageBand.UpTo5000);
         body.CompanyRegisteredAddress.Should().Be("29 Acacia Road, London, SW1A 1AA");
+    }
+
+    // RA-763: an operator registered only last year has no accreditation number to keep.
+    [Fact]
+    public async Task Seed_RegisteredOnlyLastYear_HasNoLastYearsAccreditation()
+    {
+        Reset();
+        _factory
+            .MockReExAdapter.GetAccreditationAsync("org-123", "reg-1", MaterialType.Steel, 2025)
+            .Returns(
+                Task.FromResult(
+                    ReExResult<ReExAccreditationDto>.Success(
+                        new ReExAccreditationDto
+                        {
+                            AccreditationId = "reex-abc",
+                            OrganisationId = "org-123",
+                            MaterialType = MaterialType.Steel,
+                            Year = 2025,
+                            OverseasSites = [],
+                        },
+                        200
+                    )
+                )
+            );
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            new SeedRequest { Year = 2026 },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.LastYearsAccreditation.Should().BeNull();
     }
 
     // RA-456: ReEx already sends the "Activities or investment not covered by the other

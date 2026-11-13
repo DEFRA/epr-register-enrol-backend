@@ -489,7 +489,11 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         application.PermitNumbers = ["EPR/AB1234"];
         application.SourceReExAccreditationId = "reex-accreditation";
         application.SourceYear = 2026;
-        application.LastYearsAccreditationReference = "A26ER5000270063WO";
+        application.LastYearsAccreditation = new AccreditationNumberForYearModel
+        {
+            Year = 2026,
+            AccreditationNumber = "A26ER5000270063WO",
+        };
         application.PreviousAccreditationNumbers = ["A26OLD"];
         await _applications.CreateAsync(application);
 
@@ -512,7 +516,8 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         );
         Assert.Equal("reex-accreditation", details.SourceReExAccreditationId);
         Assert.Equal(2026, details.SeedDataSourceYear);
-        Assert.Equal("A26ER5000270063WO", details.LastYearsAccreditationNumber);
+        Assert.Equal(2026, details.LastYearsAccreditation?.Year);
+        Assert.Equal("A26ER5000270063WO", details.LastYearsAccreditation?.AccreditationNumber);
         Assert.Equal(["A26OLD"], details.PreviousReservedAccreditationNumbers);
     }
 

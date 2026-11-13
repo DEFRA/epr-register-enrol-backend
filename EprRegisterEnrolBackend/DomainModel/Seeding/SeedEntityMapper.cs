@@ -158,7 +158,7 @@ public static class SeedEntityMapper
         }
 
         target.AccreditationNumbers.Add(
-            new RegistrationAccreditationNumber
+            new AccreditationNumberForYear
             {
                 Year = year,
                 AccreditationNumber = accreditationNumber,
