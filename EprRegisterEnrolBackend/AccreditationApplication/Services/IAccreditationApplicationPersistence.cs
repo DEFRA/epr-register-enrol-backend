@@ -183,6 +183,16 @@ public interface IAccreditationApplicationPersistence
         int year,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// RA-763: every application applying for <paramref name="year"/>, whatever its status, oldest first. Used by
+    /// LastYearsAccreditationBackfillMigration to check each one against the 2026 public register.
+    /// RA-763 one-off; removed with LastYearsAccreditationBackfillMigration - do not use elsewhere.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetByYearAsync(
+        int year,
+        CancellationToken cancellationToken = default
+    );
     Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null
