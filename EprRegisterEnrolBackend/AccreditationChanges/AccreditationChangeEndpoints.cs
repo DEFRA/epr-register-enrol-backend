@@ -34,7 +34,7 @@ public static class AccreditationChangeEndpoints
         "The change request was changed by someone else. Reload it and try again.";
 
     private const string SitesFixedMessage =
-        "This change request was sent to the regulator, so its sites can't change until it is submitted.";
+        "This change request has already been sent to the regulator, so sites can't be added or removed. Submit it again instead.";
 
     private const string PaymentReferenceField = nameof(SubmitRequest.PaymentReference);
     private const string PaymentReferenceRequiredMessage = "Payment reference is required.";
