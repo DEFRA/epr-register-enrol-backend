@@ -809,9 +809,10 @@ public static class AccreditationChangeEndpoints
             item.CaseManagementReference = site.CaseReference;
             item.CaseManagementWorkItemId = site.WorkItemId;
         }
-        // Nothing else writes a Submitted request, so this only fails if the store does; the
-        // submission itself has succeeded either way.
-        if (!await services.Requests.UpdateAsync(draft, services.CancellationToken))
+        // Not cancellable: Case Management holds the work items now, and a Submitted request can't
+        // be sent again, so its references must be saved even if the caller has gone. Nothing else
+        // writes a Submitted request, so this only fails if the store does.
+        if (!await services.Requests.UpdateAsync(draft, CancellationToken.None))
             logger.LogError(
                 "Change request {RequestId} was sent to Case Management as {SubmissionReference} but its references were not saved",
                 draft.RequestId,

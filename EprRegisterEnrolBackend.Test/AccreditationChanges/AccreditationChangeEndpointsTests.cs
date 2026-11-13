@@ -1308,6 +1308,43 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.SubmissionReference.Should().BeNull();
         stored.Sites.Single().CaseManagementReference.Should().BeNull();
     }
+
+    // The frontend can give up after Case Management has created the work items. The request is
+    // Submitted and can't be sent again, so its references must still be saved.
+    [Fact]
+    public async Task Submit_FlagOn_CallerGoneOnceCaseManagementAnswers_StillSavesTheReferences()
+    {
+        await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct);
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        _factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(call =>
+            {
+                caller.Cancel();
+                call.Arg<CancellationToken>().IsCancellationRequested.Should().BeTrue();
+                return Sent(("IYC-ORS-2026-00001", null));
+            });
+
+        var send = () =>
+            _client.PostAsJsonAsync(
+                $"{Base}/requests/current/submit",
+                new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
+                caller.Token
+            );
+
+        await send.Should().ThrowAsync<OperationCanceledException>();
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (_factory.FakeChangeRequests.All.Single().SubmissionReference is null && DateTime.UtcNow < deadline)
+            await Task.Delay(20, Ct);
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.Submitted);
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.Sites.Single().CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
+    }
 }
 
 // RA-739: the hand-off flag on, through the real HTTP adapter, against a fake ManagementBe that
