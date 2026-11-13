@@ -32,6 +32,9 @@ public static class AccreditationChangeEndpoints
     private const string ConcurrentEditMessage =
         "The change request was changed by someone else. Reload it and try again.";
 
+    private const string SitesFixedMessage =
+        "This change request was sent to the regulator, so its sites can't change until it is submitted.";
+
     private const string PaymentReferenceField = nameof(SubmitRequest.PaymentReference);
     private const string PaymentReferenceRequiredMessage = "Payment reference is required.";
 
@@ -443,6 +446,8 @@ public static class AccreditationChangeEndpoints
         var draft = requests.FirstOrDefault(r => r.Status == ChangeRequestStatus.InProgress);
         if (draft is not null && draft.Sites.Exists(s => s.SiteId == body.SiteId))
             return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
+        if (draft is { SentToCaseManagement: true })
+            return Results.Conflict(SitesFixedMessage);
 
         var requestSite = new ChangeRequestSite
         {
@@ -490,8 +495,11 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        if (draft!.Sites.RemoveAll(s => s.SiteId == siteId) == 0)
+        if (!draft!.Sites.Exists(s => s.SiteId == siteId))
             return Results.NotFound();
+        if (draft.SentToCaseManagement)
+            return Results.Conflict(SitesFixedMessage);
+        draft.Sites.RemoveAll(s => s.SiteId == siteId);
 
         if (draft.Sites.Count == 0)
             return await services.Requests.DeleteDraftAsync(draft, services.CancellationToken)
@@ -764,10 +772,12 @@ public static class AccreditationChangeEndpoints
             // Whatever went wrong, the request goes back to InProgress, so its sites are not held
             // by a request the regulator never received. Only Case Management's own failures are
             // a 503; anything else is a defect and goes to the exception handler.
-            // RA-492: a timeout reopens the request too. ManagementBe replays on operatorRequestId,
-            // so a resubmit returns the original work item even if the sites were edited in
-            // between. Locking a request whose outcome is unknown is deferred to the Case
-            // Management service in-year change story.
+            // A timeout reopens the request too, but ManagementBe may already hold the submission and
+            // replays a resubmit on operatorRequestId with the sites it first received. So once the
+            // request was sent, its sites are fixed: an added site would never get a reference and a
+            // removed one would leave its work item behind. Not configured means nothing was sent.
+            if (ex is not CaseWorkingNotConfiguredException)
+                draft.SentToCaseManagement = true;
             await ReopenAsync(draft, services, logger);
             if (
                 ex

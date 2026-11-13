@@ -1219,12 +1219,21 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         stored.Sites.Single().Status.Should().Be(ChangeItemStatus.Submitted);
     }
 
-    // Reopened, the request is the draft again: its site is not pending a regulator decision, more
-    // sites join it, and a retry submits it.
-    [Fact]
-    public async Task Submit_FlagOn_AfterACaseManagementFailure_TheDraftCanBeChangedAndResubmitted()
+    // Reopened, the request is the draft again: its site is not pending a regulator decision and a
+    // retry submits it. Case Management may already hold the first attempt and replays a resubmit with
+    // the sites it received, so the sites sent can't be added to or removed.
+    [Theory]
+    [InlineData("rejected")]
+    [InlineData("timeout")]
+    public async Task Submit_FlagOn_AfterACaseManagementFailure_TheSitesAreFixedButTheDraftCanBeResubmitted(
+        string failure
+    )
     {
-        CaseManagementThrows(new HttpRequestException("unavailable"));
+        CaseManagementThrows(
+            failure == "timeout"
+                ? new CaseWorkingApiTimeoutException("timed out", new TaskCanceledException())
+                : new HttpRequestException("unavailable")
+        );
         (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
 
         var view = await (await _client.GetAsync(Base, Ct)).Content.ReadFromJsonAsync<JsonElement>(Ct);
@@ -1232,34 +1241,32 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         view.GetProperty("sites").EnumerateArray()
             .Single(s => s.GetProperty("siteId").GetInt32() == 901910)
             .GetProperty("pendingRequestStatus").GetString().Should().Be("InProgress");
-        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901912 }, Ct))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.Created);
-        await _client.PatchAsJsonAsync(
-            $"{Base}/requests/current/sites/901912",
-            new { operationCodes = R3, conditionsOfExport = false },
-            Ct
-        );
+        _factory.FakeChangeRequests.All.Single().SentToCaseManagement.Should().BeTrue();
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901912 }, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await _client.DeleteAsync($"{Base}/requests/current/sites/901910", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901910 }, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
-        CaseManagementReturns(new ChangeRequestSubmissionResult(
-            "SUB-2026-0002",
-            [new SiteWorkItemResult(901910, "IYC-ORS-2026-00002", null), new SiteWorkItemResult(901912, "IYC-ORS-2026-00003", null)]
-        ));
-        (await _client.PostAsJsonAsync(
-                $"{Base}/requests/current/submit",
-                new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" },
-                Ct
-            ))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.OK);
+        CaseManagementReturns(Sent(("IYC-ORS-2026-00001", null)));
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/submit", new { fullName = "Jane Smith", jobTitle = "Director", paymentReference = "PAY-1" }, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.Submitted);
-        stored.Sites.Should().HaveCount(2);
-        stored.ChargePence.Should().Be(65600);
-        stored.SubmissionReference.Should().Be("SUB-2026-0002");
-        stored.Sites.Select(s => s.CaseManagementReference).Should().Equal("IYC-ORS-2026-00002", "IYC-ORS-2026-00003");
+        stored.Sites.Should().ContainSingle().Which.SiteId.Should().Be(901910);
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.Sites.Single().CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
+    }
+
+    // Not configured, nothing was sent, so the reopened draft's sites can still change.
+    [Fact]
+    public async Task Submit_FlagOn_CaseManagementNotConfigured_TheSitesCanStillChange()
+    {
+        CaseManagementThrows(new CaseWorkingNotConfiguredException());
+        (await AddAndSubmit()).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+
+        _factory.FakeChangeRequests.All.Single().SentToCaseManagement.Should().BeFalse();
+        (await _client.PostAsJsonAsync($"{Base}/requests/current/sites", new { siteId = 901912 }, Ct)).StatusCode.Should().Be(HttpStatusCode.Created);
+        (await _client.DeleteAsync($"{Base}/requests/current/sites/901910", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     // Not a Case Management failure: the request is still reopened, but the error is not dressed up

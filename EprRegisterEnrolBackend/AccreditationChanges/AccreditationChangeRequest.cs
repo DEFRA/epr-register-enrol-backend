@@ -72,6 +72,13 @@ public class AccreditationChangeRequest
     /// </summary>
     public string? SubmissionReference { get; set; }
 
+    /// <summary>
+    /// RA-739: set when a submit was sent to Case Management but the request was reopened because no confirmed reply
+    /// came back. Case Management may already hold the submission and replays a resubmit with the sites it first
+    /// received, so from then on the request's sites can't be added or removed.
+    /// </summary>
+    public bool SentToCaseManagement { get; set; }
+
     /// <summary>Optimistic-concurrency token, bumped by every update.</summary>
     public long Version { get; set; }
 
