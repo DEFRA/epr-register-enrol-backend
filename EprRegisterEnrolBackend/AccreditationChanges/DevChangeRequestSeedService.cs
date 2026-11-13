@@ -190,46 +190,55 @@ public class DevChangeRequestSeedService(
     ) =>
         seeds.Select((seed, index) => Request(target, side, firstNumber + index, seed));
 
+    private static DateTime SeedDate(int year, (int Month, int Day) date) =>
+        new(year, date.Month, date.Day, 9, 0, 0, DateTimeKind.Utc);
+
+    private static ChangeRequestItem Item(
+        Target target,
+        char side,
+        int number,
+        RequestSeed seed,
+        ItemSeed item,
+        int index
+    )
+    {
+        var itemId = Guid.Parse(FixedId(target.Year, target.OrgId, side, number, index + 1));
+        DateTime? validFrom = item.ValidFrom is { } from ? SeedDate(target.Year, from) : null;
+        if (item.TonnageBand is { } band)
+            return new TonnageBandUpgradeItem
+            {
+                ItemId = itemId,
+                RequestedBand = band,
+                Status = item.Status,
+                ValidFrom = validFrom,
+            };
+        var site = target.Sites.Single(s => s.OrsId == item.OrsId);
+        return new ChangeRequestSite
+        {
+            ItemId = itemId,
+            ChangeType = seed.ChangeType,
+            // A registration-only item is keyed by its ORS id's integer value, as the registration view keys
+            // its sites, even when the registration's accreditation keys the same ORS differently.
+            SiteId = target.ApplicationId is null
+                ? int.Parse(site.OrsId!, System.Globalization.CultureInfo.InvariantCulture)
+                : site.SiteId,
+            OrsId = site.OrsId,
+            SiteName = site.SiteName,
+            Status = item.Status,
+            ValidFrom = validFrom,
+            WithdrawnAt = item.WithdrawnAt is { } at ? SeedDate(target.Year, at) : null,
+        };
+    }
+
     private static AccreditationChangeRequest Request(Target target, char side, int number, RequestSeed seed)
     {
         var year = target.Year;
-        DateTime On((int Month, int Day) date) => new(year, date.Month, date.Day, 9, 0, 0, DateTimeKind.Utc);
         var orgId = target.OrgId;
         var items = seed
-            .Items.Select<ItemSeed, ChangeRequestItem>(
-                (item, index) =>
-                {
-                    var itemId = Guid.Parse(FixedId(year, orgId, side, number, index + 1));
-                    DateTime? validFrom = item.ValidFrom is { } from ? On(from) : null;
-                    if (item.TonnageBand is { } band)
-                        return new TonnageBandUpgradeItem
-                        {
-                            ItemId = itemId,
-                            RequestedBand = band,
-                            Status = item.Status,
-                            ValidFrom = validFrom,
-                        };
-                    var site = target.Sites.Single(s => s.OrsId == item.OrsId);
-                    return new ChangeRequestSite
-                    {
-                        ItemId = itemId,
-                        ChangeType = seed.ChangeType,
-                        // A registration-only item is keyed by its ORS id's integer value, as the registration view keys
-                        // its sites, even when the registration's accreditation keys the same ORS differently.
-                        SiteId = target.ApplicationId is null
-                            ? int.Parse(site.OrsId!, System.Globalization.CultureInfo.InvariantCulture)
-                            : site.SiteId,
-                        OrsId = site.OrsId,
-                        SiteName = site.SiteName,
-                        Status = item.Status,
-                        ValidFrom = validFrom,
-                        WithdrawnAt = item.WithdrawnAt is { } at ? On(at) : null,
-                    };
-                }
-            )
+            .Items.Select((item, index) => Item(target, side, number, seed, item, index))
             .ToList();
 
-        var createdAt = On((seed.Month, seed.Day));
+        var createdAt = SeedDate(year, (seed.Month, seed.Day));
         var draft = items.Exists(i => i.Status == ChangeItemStatus.InProgress);
         // RA-739: a submitted request's reference stands in for its submission reference, and each item gets its
         // own, numbered within the request, e.g. CR26050018A008-1.
