@@ -57,7 +57,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     private async Task<(Guid WorkItemId, AccreditationApplicationModel Application)> SeedAsync(
         PlannedTonnageBand? band = PlannedTonnageBand.Over10000,
         int sites = 1,
-        ApplicationStatus status = ApplicationStatus.Queried,
+        ApplicationStatus status = ApplicationStatus.Updated,
         bool hasWorkItem = true,
         int? storedPence = 218_400,
         string workItemState = "queried",
@@ -370,7 +370,8 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     [InlineData(ApplicationStatus.Approved)]
     [InlineData(ApplicationStatus.Rejected)]
     [InlineData(ApplicationStatus.Withdrawn)]
-    public async Task Closed_applications_are_not_candidates(ApplicationStatus status)
+    [InlineData(ApplicationStatus.Queried)]
+    public async Task Closed_and_queried_applications_are_not_candidates(ApplicationStatus status)
     {
         await SeedAsync(status: status);
 
@@ -385,7 +386,6 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     [InlineData(ApplicationStatus.Started)]
     [InlineData(ApplicationStatus.Submitted)]
     [InlineData(ApplicationStatus.DulyMade)]
-    [InlineData(ApplicationStatus.Queried)]
     [InlineData(ApplicationStatus.Updated)]
     [InlineData(ApplicationStatus.AwaitingDecision)]
     public async Task Open_applications_with_a_work_item_are_candidates(ApplicationStatus status)
@@ -412,7 +412,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     {
         var persistence = Substitute.For<IAccreditationApplicationPersistence>();
         persistence
-            .GetOpenWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
+            .GetOpenNotQueriedWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("connection string with a secret"));
         var services = new ServiceCollection();
         services.AddSingleton(persistence);

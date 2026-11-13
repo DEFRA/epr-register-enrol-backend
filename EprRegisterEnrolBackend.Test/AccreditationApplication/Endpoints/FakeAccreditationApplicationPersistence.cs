@@ -366,7 +366,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             _store.Where(a => a.OrgId == orgId && a.Year == year).Select(ShallowCopy).ToList()
         );
 
-    public Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenWithCaseManagementWorkItemAsync(
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenNotQueriedWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     ) =>
         Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
@@ -378,6 +378,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                             ApplicationStatus.Approved
                             or ApplicationStatus.Rejected
                             or ApplicationStatus.Withdrawn
+                            or ApplicationStatus.Queried
                         )
                 )
                 .Select(ShallowCopy)

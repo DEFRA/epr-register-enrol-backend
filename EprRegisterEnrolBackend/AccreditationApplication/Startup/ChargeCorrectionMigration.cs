@@ -27,7 +27,9 @@ public sealed class ChargeCorrectionOptions
 // work items already affected. This service is the only place the charge is calculated
 // (AccreditationChargeCalculator); the Case Management service only stores it.
 //
-// For every application linked to a work item and not yet Approved, Rejected or Withdrawn:
+// For every application linked to a work item that is not Queried and not yet Approved, Rejected
+// or Withdrawn (a Queried application has not sent its answer, so any charge it holds is a draft
+// that must not reach the Case Management service; resubmitting it sends the right one):
 //   - no planned tonnage band                  -> skipped-no-band (no charge can be calculated)
 //   - work item already closed there           -> skipped-terminal (see ClosedWorkItemStates)
 //   - work item already holds the charge       -> unchanged
@@ -133,7 +135,7 @@ public class ChargeCorrectionMigration(
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
         var caseWorking = serviceProvider.GetRequiredService<ICaseWorkingApiAdapter>();
 
-        var applications = await persistence.GetOpenWithCaseManagementWorkItemAsync(
+        var applications = await persistence.GetOpenNotQueriedWithCaseManagementWorkItemAsync(
             cancellationToken
         );
 
