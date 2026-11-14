@@ -220,4 +220,19 @@ public sealed partial class DualWriteEndpointTests
         Assert.Equal(ModelName, body.GetProperty("organisationName").GetString());
         Assert.Equal((await LegacyAsync(application))!.Version, body.GetProperty("version").GetInt64());
     }
+
+    // A seed writes the initial Application version, so with ReadFromModel on its Created response is served from the
+    // model. Write responses are strict like reads: a 404 here would mean the seed left the model without it.
+    [Fact]
+    public async Task ReadFromModel_On_Seed_AnswersCreatedFromTheModel()
+    {
+        Restart(new(s_readFromModelOn) { ["DomainModel:DualWriteSeed"] = "true" });
+        ReExHoldsTheRegistration();
+
+        var response = await SeedAsync();
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Equal(response.Headers.Location!.OriginalString.Split('/')[^1], body.GetProperty("applicationId").GetString());
+    }
 }

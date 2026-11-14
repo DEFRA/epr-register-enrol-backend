@@ -51,6 +51,7 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
                 ["CaseWorking:UseStub"] = "true",
                 ["DomainModel:ExpandEnabled"] = "true",
                 ["DomainModel:DualWrite"] = "true",
+                ["DomainModel:DualWriteSeed"] = "true",
                 ["DomainModel:ReadFromModel"] = "true",
             }
         );

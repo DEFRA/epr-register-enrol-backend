@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.Utils.Mongo;
 using System.Diagnostics.Metrics;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -78,6 +79,21 @@ public sealed class SeedDualWriterTests : IDisposable
         _factory.GetClient().DropDatabase(_databaseName);
     }
 
+    // The seed writes the initial Application version through the real migrator (RA-705), over the same database.
+    private ApplicationGroupMigrator Migrator(IMongoDbClientFactory factory) =>
+        new(
+            new AccreditationApplicationPersistence(factory, NullLoggerFactory.Instance),
+            new ApplicationGroupStores(
+                new OrganisationPersistence(factory, NullLoggerFactory.Instance),
+                new RegistrationPersistence(factory, NullLoggerFactory.Instance, _clock),
+                new OverseasSitePersistence(factory, NullLoggerFactory.Instance, _clock),
+                new ApplicationVersionPersistence(factory, NullLoggerFactory.Instance, _clock),
+                new AccreditationPersistence(factory, NullLoggerFactory.Instance, _clock),
+                new MigrationConflictPersistence(factory, NullLoggerFactory.Instance)
+            ),
+            _clock
+        );
+
     // The concurrency test passes its own logger: CapturingLogger is not safe for concurrent writes.
     private SeedDualWriter Writer(ILogger<SeedDualWriter>? logger = null) =>
         new(
@@ -88,6 +104,7 @@ public sealed class SeedDualWriterTests : IDisposable
                 _overseasSites,
                 new MigrationConflictPersistence(_factory, NullLoggerFactory.Instance)
             ),
+            Migrator(_factory),
             _applications,
             new SeedDualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
             _clock,
@@ -257,6 +274,7 @@ public sealed class SeedDualWriterTests : IDisposable
                 new OverseasSitePersistence(secondaries, NullLoggerFactory.Instance, _clock),
                 new MigrationConflictPersistence(secondaries, NullLoggerFactory.Instance)
             ),
+            Migrator(secondaries),
             new AccreditationApplicationPersistence(secondaries, NullLoggerFactory.Instance),
             new SeedDualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
             _clock,
@@ -356,6 +374,21 @@ public sealed class SeedDualWriterTests : IDisposable
             .Find(FilterDefinition<MigrationConflict>.Empty)
             .ToListAsync(Ct);
 
+    // What the seed itself records: ReEx disagreeing with an accredited site. Since RA-705 the seed also writes the
+    // initial Application version by migrating the application's group, and the migration records its own conflicts
+    // about these fixtures (several live applications for one material and year, an approval with no accreditation
+    // number). Those are the migrator's tests' business, so the seed's tests look at the seed's own records only.
+    private async Task<List<MigrationConflict>> SeedConflictsAsync() =>
+        [.. (await ConflictsAsync()).Where(c => c.Kind == MigrationConflictKind.ReExDetailsDiffer)];
+
+    private List<CapturingLogger<SeedDualWriter>.Entry> SeedLogEntries() =>
+        [
+            .. _logger.Entries.Where(e =>
+                !e.Message.StartsWith("Migration conflict recorded:", StringComparison.Ordinal)
+                || e.Message.Contains("kind ReExDetailsDiffer", StringComparison.Ordinal)
+            ),
+        ];
+
     [Fact]
     public async Task WriteAsync_NumberChangedInReEx_WritesANewVersionKeepingTheOldNumber()
     {
@@ -388,7 +421,7 @@ public sealed class SeedDualWriterTests : IDisposable
         var after = await CurrentSiteAsync("001");
         Assert.Equal(before.Version, after.Version);
         Assert.Equal("Site One", after.SiteName);
-        var conflict = Assert.Single(await ConflictsAsync());
+        var conflict = Assert.Single(await SeedConflictsAsync());
         Assert.Equal(MigrationConflictKind.ReExDetailsDiffer, conflict.Kind);
         Assert.Equal("001", conflict.OrsId);
         Assert.Equal(ReExRegistrationId, conflict.ReExRegistrationId);
@@ -412,7 +445,7 @@ public sealed class SeedDualWriterTests : IDisposable
 
         await Writer().WriteAsync(Seed(ReEx(), await LegacyApplicationAsync(ReEx())), Ct);
 
-        Assert.Empty(await ConflictsAsync());
+        Assert.Empty(await SeedConflictsAsync());
     }
 
     [Fact]
@@ -427,7 +460,7 @@ public sealed class SeedDualWriterTests : IDisposable
         var after = await CurrentSiteAsync("001");
         Assert.Equal("Site One Renamed", after.SiteName);
         Assert.Equal(ChangeReason.ReExRefresh, after.LastChange.Reason);
-        Assert.Empty(await ConflictsAsync());
+        Assert.Empty(await SeedConflictsAsync());
     }
 
     [Theory]
@@ -445,7 +478,7 @@ public sealed class SeedDualWriterTests : IDisposable
         await Writer().WriteAsync(Seed(renamed, await LegacyApplicationAsync(renamed)), Ct);
 
         Assert.Equal("Site One Renamed", (await CurrentSiteAsync("001")).SiteName);
-        Assert.Empty(await ConflictsAsync());
+        Assert.Empty(await SeedConflictsAsync());
     }
 
     [Fact]
@@ -505,20 +538,20 @@ public sealed class SeedDualWriterTests : IDisposable
     {
         var first = ReEx();
         await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
-        Assert.Empty(_logger.Entries);
+        Assert.Empty(SeedLogEntries());
 
         var changed = ReEx();
         changed.RegistrationReference = "R27EX1234567P";
         var seeded = await LegacyApplicationAsync(changed);
         await Writer().WriteAsync(Seed(changed, seeded), Ct);
 
-        var entry = Assert.Single(_logger.Entries);
+        var entry = Assert.Single(SeedLogEntries());
         Assert.Equal(LogLevel.Warning, entry.LogLevel);
         Assert.Contains(ReExRegistrationId, entry.Message);
         Assert.Contains("R26EX1234567P", entry.Message);
         Assert.Contains("R27EX1234567P", entry.Message);
         Assert.Contains(seeded.Id.ToString()!, entry.Message);
-        Assert.Empty(await ConflictsAsync());
+        Assert.Empty(await SeedConflictsAsync());
     }
 
     [Fact]
@@ -529,7 +562,7 @@ public sealed class SeedDualWriterTests : IDisposable
 
         await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
 
-        Assert.Empty(_logger.Entries);
+        Assert.Empty(SeedLogEntries());
     }
 
     [Fact]
@@ -553,7 +586,7 @@ public sealed class SeedDualWriterTests : IDisposable
 
         var current = (await RegistrationVersionsAsync()).Single(r => r.IsCurrent);
         Assert.Equal("R26EX1234567P", current.RegistrationNumber);
-        Assert.Equal(LogLevel.Error, Assert.Single(_logger.Entries).LogLevel);
+        Assert.Equal(LogLevel.Error, Assert.Single(SeedLogEntries()).LogLevel);
     }
 
     [Fact]
@@ -566,7 +599,7 @@ public sealed class SeedDualWriterTests : IDisposable
         var seeded = await LegacyApplicationAsync(renamed);
         await Writer().WriteAsync(Seed(renamed, seeded), Ct);
 
-        var entry = Assert.Single(_logger.Entries);
+        var entry = Assert.Single(SeedLogEntries());
         Assert.Equal(LogLevel.Warning, entry.LogLevel);
         Assert.Contains(nameof(MigrationConflictKind.ReExDetailsDiffer), entry.Message);
         Assert.Contains(ReExRegistrationId, entry.Message);
@@ -617,8 +650,8 @@ public sealed class SeedDualWriterTests : IDisposable
 
         await Writer().WriteAsync(Seed(ReEx("Site One Renamed"), missing), Ct);
 
-        Assert.Empty(await ConflictsAsync());
-        Assert.Equal(LogLevel.Error, Assert.Single(_logger.Entries).LogLevel);
+        Assert.Empty(await SeedConflictsAsync());
+        Assert.Equal(LogLevel.Error, Assert.Single(SeedLogEntries()).LogLevel);
     }
 
     [Fact]
@@ -642,9 +675,9 @@ public sealed class SeedDualWriterTests : IDisposable
         var after = await CurrentSiteAsync("001");
         Assert.Equal(before.Version, after.Version);
         Assert.Equal("Site One", after.SiteName);
-        Assert.Empty(await ConflictsAsync());
+        Assert.Empty(await SeedConflictsAsync());
         Assert.Equal(1, Interlocked.Read(ref _failures));
-        var entry = Assert.Single(_logger.Entries);
+        var entry = Assert.Single(SeedLogEntries());
         Assert.Equal(LogLevel.Error, entry.LogLevel);
         Assert.Contains(seeded.Id.ToString()!, entry.Message);
         Assert.Contains(
@@ -693,7 +726,7 @@ public sealed class SeedDualWriterTests : IDisposable
         Assert.Empty(await RegistrationVersionsAsync());
         Assert.Empty(await SiteVersionsAsync());
         Assert.Equal(1, Interlocked.Read(ref _failures));
-        var entry = Assert.Single(_logger.Entries);
+        var entry = Assert.Single(SeedLogEntries());
         Assert.Equal(LogLevel.Error, entry.LogLevel);
         Assert.Null(entry.Exception);
         Assert.Contains(missing.Id.ToString()!, entry.Message);

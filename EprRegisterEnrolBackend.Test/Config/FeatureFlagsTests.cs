@@ -69,15 +69,22 @@ public class FeatureFlagsTests
         act.Should().NotThrow();
     }
 
-    // RA-705: ReadFromModel serves every read from the domain model, which on CDP only dual-write keeps current
-    // (and Expand creates). Off by default, so deploying changes nothing until an environment opts in.
-    private static IConfiguration ReadSettings(bool readFromModel, bool dualWrite, bool expand) =>
+    // RA-705: ReadFromModel serves every read from the domain model, which on CDP only dual-write keeps current, only
+    // seed dual-write starts (the initial Application version) and Expand creates. Off by default, so deploying changes
+    // nothing until an environment opts in.
+    private static IConfiguration ReadSettings(
+        bool readFromModel,
+        bool dualWrite,
+        bool dualWriteSeed,
+        bool expand
+    ) =>
         new ConfigurationBuilder()
             .AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
                     [FeatureFlags.ReadFromModelKey] = readFromModel ? "true" : "false",
                     ["DomainModel:DualWrite"] = dualWrite ? "true" : "false",
+                    ["DomainModel:DualWriteSeed"] = dualWriteSeed ? "true" : "false",
                     ["DomainModel:ExpandEnabled"] = expand ? "true" : "false",
                 }
             )
@@ -94,18 +101,20 @@ public class FeatureFlagsTests
             .BeFalse();
 
     [Theory]
-    [InlineData(false, true, "DomainModel:DualWrite")]
-    [InlineData(true, false, "DomainModel:ExpandEnabled")]
-    [InlineData(false, false, "DomainModel:DualWrite")]
+    [InlineData(false, true, true, "DomainModel:DualWrite")]
+    [InlineData(true, false, true, "DomainModel:DualWriteSeed")]
+    [InlineData(true, true, false, "DomainModel:ExpandEnabled")]
+    [InlineData(false, false, false, "DomainModel:DualWrite")]
     public void ReadFromModelWithoutItsPrerequisites_OutsideDevelopment_RefusesToStart(
         bool dualWrite,
+        bool dualWriteSeed,
         bool expand,
         string missing
     )
     {
         var act = () =>
             FeatureFlags.EnsureReadFromModelHasItsPrerequisites(
-                ReadSettings(readFromModel: true, dualWrite, expand),
+                ReadSettings(readFromModel: true, dualWrite, dualWriteSeed, expand),
                 new FakeHostEnvironment(Environments.Production)
             );
 
@@ -115,19 +124,20 @@ public class FeatureFlagsTests
     }
 
     [Theory]
-    [InlineData(true, true, true)]
-    [InlineData(false, false, false)]
-    [InlineData(false, true, true)]
-    [InlineData(false, false, true)]
+    [InlineData(true, true, true, true)]
+    [InlineData(false, false, false, false)]
+    [InlineData(false, true, true, true)]
+    [InlineData(false, false, false, true)]
     public void ReadFromModelOtherCombinations_OutsideDevelopment_Start(
         bool readFromModel,
         bool dualWrite,
+        bool dualWriteSeed,
         bool expand
     )
     {
         var act = () =>
             FeatureFlags.EnsureReadFromModelHasItsPrerequisites(
-                ReadSettings(readFromModel, dualWrite, expand),
+                ReadSettings(readFromModel, dualWrite, dualWriteSeed, expand),
                 new FakeHostEnvironment(Environments.Production)
             );
 
@@ -140,7 +150,12 @@ public class FeatureFlagsTests
     {
         var act = () =>
             FeatureFlags.EnsureReadFromModelHasItsPrerequisites(
-                ReadSettings(readFromModel: true, dualWrite: false, expand: false),
+                ReadSettings(
+                    readFromModel: true,
+                    dualWrite: false,
+                    dualWriteSeed: false,
+                    expand: false
+                ),
                 new FakeHostEnvironment(Environments.Development)
             );
 

@@ -83,6 +83,9 @@ public static class DomainModelServiceCollectionExtensions
 
         services.AddSingleton<SeedModelStores>();
         services.AddSingleton<SeedDualWriteMetrics>();
+        // The seed writes the initial Application version through the migrator, RA-705.
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
         services.AddSingleton<ISeedDualWriter, SeedDualWriter>();
     }
 
@@ -99,8 +102,8 @@ public static class DomainModelServiceCollectionExtensions
         }
 
         services.AddSingleton<DualWriteMetrics>();
-        services.AddSingleton<ApplicationGroupStores>();
-        services.AddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
         services.AddSingleton<IApplicationModelSync, ApplicationModelSync>();
         services.AddSingleton<IModelInterimSiteNumbers, ModelInterimSiteNumbers>();
         services.AddSingleton<IRegistrationNumberRules, RegistrationNumberRules>();

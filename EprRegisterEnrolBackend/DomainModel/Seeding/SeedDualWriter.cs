@@ -17,6 +17,7 @@ namespace EprRegisterEnrolBackend.DomainModel.Seeding;
 public sealed class SeedDualWriter(
     IMongoDbClientFactory clientFactory,
     SeedModelStores stores,
+    IApplicationGroupMigrator migrator,
     IAccreditationApplicationPersistence applications,
     SeedDualWriteMetrics metrics,
     TimeProvider clock,
@@ -134,6 +135,9 @@ public sealed class SeedDualWriter(
             session,
             cancellationToken
         );
+        // A seed starts the application; the migrator's mapping keeps the seeded version identical to a migrated one.
+        var migration = await migrator.EnsureMigratedAsync(seed.Application.Id!.Value, session, cancellationToken);
+        conflicts.AddRange(migration.Conflicts);
         return (conflicts, replacedNumber);
     }
 

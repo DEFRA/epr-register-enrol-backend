@@ -721,7 +721,7 @@ public sealed partial class DualWriteEndpointTests
             .CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct);
 
     [Fact]
-    public async Task Seed_DualWriteSeedOn_WritesTheEntitiesAndStampsTheApplicationOverHttp()
+    public async Task Seed_DualWriteSeedOn_WritesTheEntitiesAndTheInitialApplicationVersionOverHttp()
     {
         Restart(s_seedOnly);
         ReExHoldsTheRegistration();
@@ -749,8 +749,15 @@ public sealed partial class DualWriteEndpointTests
         )!;
         Assert.Equal("Acme Recycling Ltd", organisation.Name);
         Assert.Equal(500027, organisation.OrganisationNumber);
-        // The seed writes no Application version: the first write to the group builds it.
-        Assert.Equal(0, await CountAsync(DomainModelCollections.ApplicationVersions));
+        // A seed is when a user starts an application, so it writes the initial Application version too, even with
+        // DualWrite off (the team only ever enables seed dual-write and full dual-write together).
+        var entity = (await CurrentApplicationAsync(created))!;
+        Assert.Equal(1, entity.Version);
+        Assert.Equal(registration.EntityId, entity.RegistrationId);
+        Assert.Equal(
+            ors.EntityId,
+            Assert.Single(entity.AsAccreditation().ApplicationOverseasSites).OverseasSiteId
+        );
     }
 
     [Fact]
@@ -765,17 +772,19 @@ public sealed partial class DualWriteEndpointTests
         Assert.Equal(0, await CountAsync(DomainModelCollections.Organisations));
         Assert.Equal(0, await CountAsync(DomainModelCollections.RegistrationVersions));
         Assert.Equal(0, await CountAsync(DomainModelCollections.OverseasSiteVersions));
+        Assert.Equal(0, await CountAsync(DomainModelCollections.ApplicationVersions));
     }
 
     [Fact]
-    public async Task FirstTouch_AfterTheSeedStampedTheApplication_ReusesTheSeedsRegistrationAndSites()
+    public async Task FirstWrite_AfterTheSeed_VersionsTheSeedsApplicationAndReusesItsRegistrationAndSites()
     {
         Restart(s_seedAndDualWriteOn);
         ReExHoldsTheRegistration();
         var created = await SeededApplicationAsync(await SeedAsync());
         var seededRegistration = (await CurrentRegistrationAsync())!;
         var seededSite = Assert.Single(await SeededSitesAsync());
-        Assert.Null(await CurrentApplicationAsync(created));
+        var seeded = (await CurrentApplicationAsync(created))!;
+        Assert.Equal(1, seeded.Version);
 
         var response = await _client.PatchAsJsonAsync(
             AppUrl(created, "business-plan"),
@@ -785,6 +794,8 @@ public sealed partial class DualWriteEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var entity = (await CurrentApplicationAsync(created))!;
+        Assert.Equal(seeded.EntityId, entity.EntityId);
+        Assert.Equal(2, entity.Version);
         Assert.Equal(seededRegistration.EntityId, entity.RegistrationId);
         var registration = (await CurrentRegistrationAsync())!;
         Assert.Equal(seededRegistration.EntityId, registration.EntityId);

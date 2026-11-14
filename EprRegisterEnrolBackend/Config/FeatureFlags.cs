@@ -16,14 +16,17 @@ public static class FeatureFlags
     private const string DualWriteKey = $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.DualWrite)}";
 
     /// <summary>
-    /// RA-705: serves every read from the domain model. On CDP only dual-write keeps the model current
-    /// and only expand creates its collections; refuse to start if either is off.
+    /// RA-705: serves every read from the domain model. On CDP only dual-write (including seed dual-write)
+    /// keeps the model current and only expand creates its collections; refuse to start if any are off.
     /// </summary>
     public const string ReadFromModelKey =
         $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.ReadFromModel)}";
 
     private const string ExpandEnabledKey =
         $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.ExpandEnabled)}";
+
+    private const string DualWriteSeedKey =
+        $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.DualWriteSeed)}";
 
     /// <summary>
     /// RA-697: the in-year changes routes read the domain model's registrations and ORSs. On CDP only dual-write
@@ -54,9 +57,9 @@ public static class FeatureFlags
 
     /// <summary>
     /// RA-705: ReadFromModel serves every read from the domain model. On CDP only dual-write
-    /// (<c>DualWrite</c>) keeps the model current and only <c>ExpandEnabled</c> creates its collections.
-    /// So outside Development, ReadFromModel on with DualWrite off, or with ExpandEnabled off,
-    /// must refuse to start. Development is exempt: there the dev seeds write the model directly.
+    /// (<c>DualWrite</c>, <c>DualWriteSeed</c>) keeps the model current and only <c>ExpandEnabled</c> creates its
+    /// collections. So outside Development, ReadFromModel on with DualWrite off, DualWriteSeed off, or with
+    /// ExpandEnabled off, must refuse to start. Development is exempt: there the dev seeds write the model directly.
     /// </summary>
     public static void EnsureReadFromModelHasItsPrerequisites(
         IConfiguration configuration,
@@ -70,6 +73,15 @@ public static class FeatureFlags
                 throw new InvalidOperationException(
                     $"{ReadFromModelKey} needs {DualWriteKey} outside Development: turn {DualWriteKey} on, or "
                         + $"{ReadFromModelKey} off. On CDP only dual-write keeps the model current."
+                );
+            }
+
+            if (!configuration.GetValue<bool>(DualWriteSeedKey))
+            {
+                throw new InvalidOperationException(
+                    $"{ReadFromModelKey} needs {DualWriteSeedKey} outside Development: turn {DualWriteSeedKey} on, or "
+                        + $"{ReadFromModelKey} off. Only seed dual-write writes a new application's initial "
+                        + "version to the model."
                 );
             }
 
