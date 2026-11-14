@@ -16,6 +16,16 @@ public static class FeatureFlags
     private const string DualWriteKey = $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.DualWrite)}";
 
     /// <summary>
+    /// RA-705: serves every read from the domain model. On CDP only dual-write keeps the model current
+    /// and only expand creates its collections; refuse to start if either is off.
+    /// </summary>
+    public const string ReadFromModelKey =
+        $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.ReadFromModel)}";
+
+    private const string ExpandEnabledKey =
+        $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.ExpandEnabled)}";
+
+    /// <summary>
     /// RA-697: the in-year changes routes read the domain model's registrations and ORSs. On CDP only dual-write
     /// (<c>DualWrite</c>, <c>DualWriteSeed</c> for seeded ones, and the <c>MigrateEnabled</c> migration, which
     /// itself needs <c>DualWrite</c>) fills those, so with the flag on and <c>DualWrite</c> off the pages would
@@ -39,6 +49,37 @@ public static class FeatureFlags
                     + $"{InYearChangesEnabledKey} off. The in-year changes routes read the domain model, which on CDP "
                     + "only dual-write fills."
             );
+        }
+    }
+
+    /// <summary>
+    /// RA-705: ReadFromModel serves every read from the domain model. On CDP only dual-write
+    /// (<c>DualWrite</c>) keeps the model current and only <c>ExpandEnabled</c> creates its collections.
+    /// So outside Development, ReadFromModel on with DualWrite off, or with ExpandEnabled off,
+    /// must refuse to start. Development is exempt: there the dev seeds write the model directly.
+    /// </summary>
+    public static void EnsureReadFromModelHasItsPrerequisites(
+        IConfiguration configuration,
+        IHostEnvironment environment
+    )
+    {
+        if (configuration.GetValue<bool>(ReadFromModelKey) && !environment.IsDevelopment())
+        {
+            if (!configuration.GetValue<bool>(DualWriteKey))
+            {
+                throw new InvalidOperationException(
+                    $"{ReadFromModelKey} needs {DualWriteKey} outside Development: turn {DualWriteKey} on, or "
+                        + $"{ReadFromModelKey} off. On CDP only dual-write keeps the model current."
+                );
+            }
+
+            if (!configuration.GetValue<bool>(ExpandEnabledKey))
+            {
+                throw new InvalidOperationException(
+                    $"{ReadFromModelKey} needs {ExpandEnabledKey} outside Development: turn {ExpandEnabledKey} on, or "
+                        + $"{ReadFromModelKey} off. On CDP only expand creates the model collections."
+                );
+            }
         }
     }
 }

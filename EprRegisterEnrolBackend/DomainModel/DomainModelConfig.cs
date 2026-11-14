@@ -43,6 +43,14 @@ public class DomainModelConfig
     public bool ReconcileEnabled { get; set; }
 
     /// <summary>
+    /// Phase 5, "Switch reads": the read routes and the ReEx accreditation API are served from the domain model
+    /// through the ApplicationReadModel facade instead of the legacy accreditationApplications document.
+    /// Needs <see cref="DualWrite"/> and <see cref="ExpandEnabled"/>. Turning it off is the rollback: reads
+    /// return to legacy.
+    /// </summary>
+    public bool ReadFromModel { get; set; }
+
+    /// <summary>
     /// Run the B0 transaction smoke test and the B1 legacy-data survey once at startup. Only for test
     /// environments, where the data is test data (R15).
     /// </summary>
