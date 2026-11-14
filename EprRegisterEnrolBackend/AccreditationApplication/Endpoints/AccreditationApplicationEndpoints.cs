@@ -243,13 +243,12 @@ public static class AccreditationApplicationEndpoints
             : null;
 
     /// <summary>
-    /// RA-475/RA-503: the ReEx lookup shared by every caller that needs the numeric
-    /// organisation id (<c>OrganisationDto.OrgId</c>) behind a ReEx organisation id
-    /// (<c>organisationId</c>, a UUID). Returns null on any lookup failure/absence - the
-    /// regulatory-number callers apply their own fallback on top of this (see
-    /// <see cref="ResolveOrgIdAsync"/>), and <see cref="GetById"/>'s backfill simply retries on
-    /// the next read. Submit does not use it: it needs the ReEx outcome for its Error log, so it
-    /// goes through <see cref="PaymentReferenceResolver"/>.
+    /// RA-475: the ReEx lookup the regulatory-number endpoints use for the numeric organisation
+    /// id (<c>OrganisationDto.OrgId</c>) behind a ReEx organisation id (<c>organisationId</c>, a
+    /// UUID). Returns null on any
+    /// lookup failure/absence; those callers apply their own fallback on top of this (see
+    /// <see cref="ResolveOrgIdAsync"/>). GetById and Submit use
+    /// <see cref="OrganisationDetailsLookup"/> instead.
     /// </summary>
     private static async Task<int?> ResolveOrgNumberFromReExAsync(
         string organisationId,
@@ -1096,51 +1095,25 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
-        // RA-503: backfill OrgId (ReEx's numeric organisation number) for any application read
-        // before Submit's own resolution ran - older applications, or ones that never reached
-        // Submit yet. Resolved once and persisted (application reassigned to the updated
-        // document on success) so later reads skip the ReEx round trip entirely; a lookup
-        // failure leaves OrgId null and is not persisted, so the next read retries rather than
-        // permanently caching a miss.
-        if (application.OrgId is null)
-        {
-            var orgNumber = await ResolveOrgNumberFromReExAsync(
-                organisationId,
-                reExAdapter,
-                cancellationToken
-            );
-            if (orgNumber is not null)
-            {
-                application.OrgId = orgNumber;
-                application = await persistence.UpdateAsync(application) ?? application;
-            }
-        }
+        // RA-503/RA-526: backfill OrgId (ReEx's numeric organisation number) and Nation for any
+        // application read before Seed or Submit stored them. The lookup rules (stored values used
+        // as they are, an out-of-range organisation number not used) are shared with Submit in
+        // OrganisationDetailsLookup. Persisted on success so later reads skip the ReEx round trip;
+        // a lookup failure leaves the value null and unsaved, so the next read retries rather
+        // than caching a miss.
+        var backfill = await OrganisationDetailsLookup.FillMissingAsync(
+            application,
+            reExAdapter,
+            cancellationToken
+        );
+        if (backfill.Changed)
+            application = await persistence.UpdateAsync(application) ?? application;
 
-        // RA-526: backfill Nation for any application read before Seed's own resolution ran -
-        // older applications, or ones that never reached Seed yet under the pre-RA-526 code.
-        // Same shape as the RA-503 OrgId backfill above: resolved once and persisted so later
-        // reads skip the ReEx round trip, and a lookup failure leaves Nation null rather than
-        // permanently caching a miss. Without this, epr-register-enrol-frontend's
-        // resolveNation (which no longer falls back to postcode) would show every such
-        // application's operator the wrong nation's bank details and payment reference.
-        if (application.Nation is null && application.RegistrationId is not null)
-        {
-            var nationResult = await reExAdapter.GetNationAsync(
-                organisationId,
-                application.RegistrationId,
-                cancellationToken
-            );
-            if (nationResult.IsSuccess)
-            {
-                application.Nation = nationResult.Value;
-                application = await persistence.UpdateAsync(application) ?? application;
-            }
-        }
-
-        // RA-000 (C4): the payment reference shown on the declaration, confirmation and
-        // view-payment pages is built here from the OrgId and Nation above, never rebuilt by the
-        // frontend. Null when either is still missing: the frontend shows an error rather than a
-        // reference that could end in "/null". Not saved - Submit stores the one it sends.
+        // RA-000: the payment reference the frontend shows on the submit-confirmation,
+        // view-payment-details and in-year /payment pages is built here from the OrgId and Nation
+        // above; the frontend never builds it. Null when either is missing (or the organisation
+        // number is out of range): the frontend shows an error rather than a reference that could
+        // end in "/null". Not saved - Submit stores the one it sends.
         application.PaymentReference = PaymentReferenceBuilder.BuildForRead(
             application,
             loggerFactory.CreateLogger("AccreditationApplicationEndpoints")
@@ -3490,10 +3463,11 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest("All sections must be completed before submission.");
         }
 
-        // RA-000 (C1/C2/C3): the stored OrgId and Nation are used as they are; each is looked up
-        // in ReEx only when not stored. If either is still missing, nothing is sent to Case
-        // Management and nothing is written: the 503 lets the operator try again later with what
-        // they entered. The payment reference is built from them here, once, and stored.
+        // RA-000: the stored OrgId and Nation are used as they are; each is looked up in ReEx only
+        // when not stored, and an organisation number outside 1-999999 counts as none. If either
+        // is still missing, nothing is sent to Case Management and nothing is written: the 503
+        // lets the operator try again later with what they entered. The payment reference is
+        // built from them here, once, and stored.
         var (payment, unavailable) = await PaymentReferenceResolver.ResolveAsync(
             application,
             nameof(Submit),

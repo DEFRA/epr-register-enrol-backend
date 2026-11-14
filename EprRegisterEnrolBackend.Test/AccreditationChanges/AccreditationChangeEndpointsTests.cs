@@ -595,7 +595,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         stored.Sites.Single().Status.Should().Be(ChangeItemStatus.InProgress);
     }
 
-    // RA-000 (AC6): no organisation number on the accreditation and ReEx can't give one, or no
+    // RA-000: no organisation number on the accreditation and ReEx can't give one, or no
     // nation and ReEx can't give one - the same 503 as an application's submit, nothing saved or
     // sent, the draft kept as it was, and an Error log with the ids.
     [Theory]
@@ -669,7 +669,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
     }
 
-    // RA-000 (AC6): the payment reference is built from the accreditation's organisation number
+    // RA-000: the payment reference is built from the accreditation's organisation number
     // (50019) and nation (England, exporter); one an old client still sends is ignored.
     [Fact]
     public async Task Submit_Complete_MarksSubmittedWithoutCaseManagementAndKeepsTheSitePending()

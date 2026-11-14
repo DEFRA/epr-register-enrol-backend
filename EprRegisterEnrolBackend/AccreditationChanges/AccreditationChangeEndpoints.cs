@@ -705,7 +705,7 @@ public static class AccreditationChangeEndpoints
                 statusCode: StatusCodes.Status422UnprocessableEntity
             );
 
-        // RA-000 (AC6): the payment reference is built here from the accreditation's organisation
+        // RA-000: the payment reference is built here from the accreditation's organisation
         // number and nation, by the same rules as an application's Submit, before the request is
         // saved as Submitted. Without either, nothing is saved or sent and the operator keeps the
         // draft as it was. A looked-up value is used for this request only: the accreditation is

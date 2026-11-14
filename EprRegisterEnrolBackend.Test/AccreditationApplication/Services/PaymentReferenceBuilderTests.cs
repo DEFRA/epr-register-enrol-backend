@@ -28,12 +28,30 @@ public class PaymentReferenceBuilderTests
         {
             // A culture with a group separator must not change the reference.
             Thread.CurrentThread.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
-            PaymentReferenceBuilder.Build(Nation.England, 1234567, false).Should().Be("PR/PK/REP/1234567");
+            PaymentReferenceBuilder.Build(Nation.England, 123456, false).Should().Be("PR/PK/REP/123456");
         }
         finally
         {
             Thread.CurrentThread.CurrentCulture = previous;
         }
+    }
+
+    // The range management-be accepts for operatorOrgNumber.
+    [Theory]
+    [InlineData(1, "PR/PK/REP/1")]
+    [InlineData(999_999, "PR/PK/REP/999999")]
+    public void Build_OrgNumberAtTheEdgesOfTheRange_Builds(int orgNumber, string expected) =>
+        PaymentReferenceBuilder.Build(Nation.England, orgNumber, false).Should().Be(expected);
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1_000_000)]
+    [InlineData(-1)]
+    public void Build_OrgNumberOutOfRange_Throws(int orgNumber)
+    {
+        var act = () => PaymentReferenceBuilder.Build(Nation.England, orgNumber, false);
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
     [Fact]
@@ -48,7 +66,9 @@ public class PaymentReferenceBuilderTests
     [InlineData(null, Nation.England)]
     [InlineData(500500, null)]
     [InlineData(null, null)]
-    public void TryBuild_MissingOrgNumberOrNation_ReturnsNull(int? orgId, Nation? nation) =>
+    [InlineData(0, Nation.England)]
+    [InlineData(1_000_000, Nation.England)]
+    public void TryBuild_MissingOrOutOfRangeOrgNumberOrMissingNation_ReturnsNull(int? orgId, Nation? nation) =>
         PaymentReferenceBuilder
             .TryBuild(
                 new AccreditationApplicationModel

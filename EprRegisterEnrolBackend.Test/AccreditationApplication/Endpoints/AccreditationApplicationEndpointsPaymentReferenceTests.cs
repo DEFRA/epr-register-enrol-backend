@@ -136,7 +136,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         error.Message.Should().Contain(reExOutcome);
     }
 
-    // AC1: a stored organisation number and nation are used as they are - ReEx is not asked.
+    // A stored organisation number and nation are used as they are - ReEx is not asked.
     [Fact]
     public async Task Submit_StoredOrgNumberAndNation_BuildsStoresAndSendsTheReferenceWithoutAReExLookup()
     {
@@ -158,7 +158,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         stored.PaymentReference.Should().Be("PR/PK/REP/500500");
     }
 
-    // AC1: a stored organisation number is never replaced, even when ReEx would now answer
+    // A stored organisation number is never replaced, even when ReEx would now answer
     // differently (or would fail).
     [Fact]
     public async Task Submit_StoredOrgNumber_IsNeverReplacedByAReExValue()
@@ -172,7 +172,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         (await Stored(app)).OrgId.Should().Be(500500);
     }
 
-    // AC1: none stored - ReEx is asked once and the number it gives is sent and saved.
+    // None stored - ReEx is asked once and the number it gives is sent and saved.
     [Fact]
     public async Task Submit_NoStoredOrgNumber_LooksItUpOnceAndSavesIt()
     {
@@ -191,7 +191,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         stored.PaymentReference.Should().Be("PR/PK/REP/500600");
     }
 
-    // AC2: no organisation number stored and ReEx can't give one - failure, not found, or an
+    // No organisation number stored and ReEx can't give one - failure, not found, or an
     // organisation with no orgId recorded.
     public static TheoryData<string, int?, string> OrgNumberFailures =>
         new()
@@ -222,7 +222,47 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         await AssertBlocked(response, app, "Organisation number unavailable", reExOutcome);
     }
 
-    // C2: building the reference needs the nation. None stored - ReEx's lookup is used.
+    // An organisation number outside 1-999999 (the range management-be accepts) counts as none,
+    // whether it is stored or comes from ReEx; a stored one is not replaced by a lookup.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1_000_000)]
+    public async Task Submit_StoredOrgNumberOutOfRange_Returns503AndLogsTheValue(int orgNumber)
+    {
+        var app = SeedStarted(orgId: orgNumber, nation: Nation.England);
+
+        var response = await Submit(app);
+
+        await AssertBlocked(
+            response,
+            app,
+            "Organisation number unavailable",
+            $"stored value {orgNumber} is outside 1-999999"
+        );
+        await _factory
+            .MockReExAdapter.DidNotReceiveWithAnyArgs()
+            .GetOrganisationNumberAsync(default!, Ct);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1_000_000)]
+    public async Task Submit_LookedUpOrgNumberOutOfRange_Returns503AndLogsTheValue(int orgNumber)
+    {
+        var app = SeedStarted(orgId: null, nation: Nation.England);
+        OrgNumberLookupReturns(ReExResult<int?>.Success(orgNumber, 200));
+
+        var response = await Submit(app);
+
+        await AssertBlocked(
+            response,
+            app,
+            "Organisation number unavailable",
+            $"ReEx returned {orgNumber}, outside 1-999999"
+        );
+    }
+
+    // The reference needs the nation. None stored - ReEx's lookup is used.
     [Fact]
     public async Task Submit_NoStoredNation_LooksItUpAndBuildsThatNationsReference()
     {
@@ -238,7 +278,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         stored.PaymentReference.Should().Be("PREX/500500");
     }
 
-    // C2: no nation and ReEx can't give one - never defaulted to England.
+    // No stored nation and ReEx can't give one - a missing stored nation is never defaulted.
     [Fact]
     public async Task Submit_NoNationAvailable_Returns503SendsNothingSavesNothingAndLogsError()
     {
@@ -252,7 +292,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         await AssertBlocked(response, app, "Nation unavailable", "ReEx status=404 kind=NotFound");
     }
 
-    // C2: no nation and no registration to look it up from.
+    // No nation and no registration to look it up from.
     [Fact]
     public async Task Submit_NoNationAndNoRegistrationId_Returns503WithoutALookup()
     {
@@ -269,7 +309,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         await _factory.MockReExAdapter.DidNotReceiveWithAnyArgs().GetNationAsync(default!, default!, Ct);
     }
 
-    // AC3: an old client (or a direct API call) still sending paymentReference has it ignored -
+    // An old client (or a direct API call) still sending paymentReference has it ignored -
     // the built reference is what is stored and sent.
     [Fact]
     public async Task Submit_CallerSendsAPaymentReference_ItIsIgnored()
@@ -292,7 +332,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         (await Stored(app)).PaymentReference.Should().Be("E800 81581/500500");
     }
 
-    // --- GET application (AC4/AC5 backend half) ---
+    // --- GET application ---
 
     private async Task<JsonElement> GetApplication(AccreditationApplicationModel app)
     {
@@ -315,7 +355,7 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         _factory.LogCapture.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 
-    // AC5: null when the organisation number can't be found - never a reference ending "/null"
+    // Null when the organisation number can't be found - never a reference ending "/null"
     // and never another reference in its place.
     [Fact]
     public async Task Get_NoOrgNumberAvailable_ReturnsANullPaymentReference()
@@ -340,7 +380,22 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         body.GetProperty("paymentReference").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
-    // C4: a stored reference that differs from the built one (e.g. "/null" captured from the
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1_000_000)]
+    public async Task Get_StoredOrgNumberOutOfRange_ReturnsANullPaymentReference(int orgNumber)
+    {
+        var app = SeedStarted(orgId: orgNumber, nation: Nation.England);
+
+        var body = await GetApplication(app);
+
+        body.GetProperty("paymentReference").ValueKind.Should().Be(JsonValueKind.Null);
+        await _factory
+            .MockReExAdapter.DidNotReceiveWithAnyArgs()
+            .GetOrganisationNumberAsync(default!, Ct);
+    }
+
+    // A stored reference that differs from the built one (e.g. "/null" captured from the
     // frontend before this change) is logged at Error for migration and the built one returned.
     [Fact]
     public async Task Get_StoredReferenceDiffers_ReturnsTheBuiltOneAndLogsError()
