@@ -29,7 +29,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 /// to end over HTTP against a real replica set: the legacy write and the model writes commit together or not at
 /// all, and side effects run only after the commit.
 /// </summary>
-public sealed class DualWriteEndpointTests : IAsyncDisposable
+public sealed partial class DualWriteEndpointTests : IAsyncDisposable
 {
     private const string OrganisationId = "6512a0f0c0ffee0000000001";
     private const string ReExRegistrationId = "6512a0f0c0ffee0000000002";
