@@ -93,57 +93,69 @@ public static class OrganisationDetailsLookup
         CancellationToken cancellationToken
     )
     {
-        var changed = false;
-        string? orgNumberProblem = null;
-        string? nationProblem = null;
+        var (orgNumberChanged, orgNumberProblem) = await FillOrgNumberAsync(
+            application,
+            reEx,
+            cancellationToken
+        );
+        var (nationChanged, nationProblem) = await FillNationAsync(
+            application,
+            reEx,
+            cancellationToken
+        );
+        return new Outcome(orgNumberChanged || nationChanged, orgNumberProblem, nationProblem);
+    }
 
+    // A stored organisation number is used as it is (but counts as none outside the range); one is
+    // looked up only when none is stored.
+    private static async Task<(bool Changed, string? Problem)> FillOrgNumberAsync(
+        AccreditationApplicationModel application,
+        IReExApiAdapter reEx,
+        CancellationToken cancellationToken
+    )
+    {
         if (application.OrgId is { } stored)
-        {
-            if (!PaymentReferenceBuilder.IsValidOrgNumber(stored))
-                orgNumberProblem = $"stored value {stored} is outside {Range}";
-        }
-        else
-        {
-            var orgNumber = await reEx.GetOrganisationNumberAsync(
-                application.OrganisationId,
-                cancellationToken
-            );
-            if (orgNumber is { IsSuccess: true, Value: { } found })
-            {
-                if (PaymentReferenceBuilder.IsValidOrgNumber(found))
-                {
-                    application.OrgId = found;
-                    changed = true;
-                }
-                else
-                    orgNumberProblem = $"ReEx returned {found}, outside {Range}";
-            }
-            else
-                orgNumberProblem = Describe(orgNumber);
-        }
+            return PaymentReferenceBuilder.IsValidOrgNumber(stored)
+                ? (false, null)
+                : (false, $"stored value {stored} is outside {Range}");
 
-        if (application.Nation is null)
-        {
-            if (application.RegistrationId is null)
-                nationProblem = "not looked up: the application has no registrationId";
-            else
-            {
-                var nation = await reEx.GetNationAsync(
-                    application.OrganisationId,
-                    application.RegistrationId,
-                    cancellationToken
-                );
-                if (nation is { IsSuccess: true })
-                {
-                    application.Nation = nation.Value;
-                    changed = true;
-                }
-                else
-                    nationProblem = Describe(nation);
-            }
-        }
+        var orgNumber = await reEx.GetOrganisationNumberAsync(
+            application.OrganisationId,
+            cancellationToken
+        );
+        if (orgNumber is not { IsSuccess: true, Value: { } found })
+            return (false, Describe(orgNumber));
+        if (!PaymentReferenceBuilder.IsValidOrgNumber(found))
+            return (false, $"ReEx returned {found}, outside {Range}");
 
-        return new Outcome(changed, orgNumberProblem, nationProblem);
+        application.OrgId = found;
+        return (true, null);
+    }
+
+    // A stored nation is used as it is; one is looked up only when none is stored. What ReEx's
+    // nation lookup returns is used as given (see RegulatorNationMapper for how it maps a
+    // regulator code).
+    private static async Task<(bool Changed, string? Problem)> FillNationAsync(
+        AccreditationApplicationModel application,
+        IReExApiAdapter reEx,
+        CancellationToken cancellationToken
+    )
+    {
+        if (application.Nation is not null)
+            return (false, null);
+        if (application.RegistrationId is null)
+            return (false, "not looked up: the application has no registrationId");
+
+        var nation = await reEx.GetNationAsync(
+            application.OrganisationId,
+            application.RegistrationId,
+            cancellationToken
+        );
+        if (nation is not { IsSuccess: true })
+            return (false, Describe(nation));
+
+        application.Nation = nation.Value;
+        return (true, null);
     }
 
     private static string Range =>
