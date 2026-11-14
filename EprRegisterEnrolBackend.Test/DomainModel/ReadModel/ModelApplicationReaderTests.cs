@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel;
@@ -58,9 +61,12 @@ public sealed class ModelApplicationReaderTests : IDisposable
 
     // The reconciler's builder fills every field the model holds, but with fixed references; ApplicationReference and
     // CaseManagementWorkItemId carry unique indexes, so each application here gets its own.
-    private static AccreditationApplicationModel Application(DateTime updatedAt)
+    private static AccreditationApplicationModel Application(
+        DateTime updatedAt,
+        ApplicationStatus status = ApplicationStatus.Queried
+    )
     {
-        var application = ApplicationReconcilerTests.Application(updatedAt: updatedAt);
+        var application = ApplicationReconcilerTests.Application(status, updatedAt);
         application.ApplicationReference = $"APP-{application.Id}";
         if (application.CaseManagementWorkItemId is not null)
         {
@@ -247,5 +253,106 @@ public sealed class ModelApplicationReaderTests : IDisposable
         var served = await _reader.ServeAsync(legacyOnly, Ct);
 
         served.Should().BeNull();
+    }
+
+    // Golden JSON (design doc phase 5 gate): with ReadFromModel on, the frontend must receive exactly the JSON it receives
+    // today. Serialised the way the API serialises (web defaults, camelCase, enums as strings), the served application
+    // must match the legacy document field for field, in every status, for an exporter and for a reprocessor.
+    private static readonly JsonSerializerOptions s_apiJson = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
+
+    private static void Differences(JsonNode? legacy, JsonNode? served, string path, List<string> found)
+    {
+        switch (legacy, served)
+        {
+            case (JsonObject l, JsonObject m):
+                foreach (var key in l.Select(p => p.Key).Union(m.Select(p => p.Key)).Distinct())
+                {
+                    Differences(l[key], m[key], $"{path}.{key}", found);
+                }
+                break;
+            case (JsonArray l, JsonArray m):
+                if (l.Count != m.Count)
+                {
+                    found.Add($"{path}: {l.Count} items in legacy, {m.Count} served");
+                    break;
+                }
+                for (var i = 0; i < l.Count; i++)
+                {
+                    Differences(l[i], m[i], $"{path}[{i}]", found);
+                }
+                break;
+            default:
+                if (!JsonNode.DeepEquals(legacy, served))
+                {
+                    found.Add($"{path}: legacy {legacy?.ToJsonString() ?? "null"}, served {served?.ToJsonString() ?? "null"}");
+                }
+                break;
+        }
+    }
+
+    public static TheoryData<ApplicationStatus, bool> StatusesAndKinds()
+    {
+        var data = new TheoryData<ApplicationStatus, bool>();
+        foreach (var status in Enum.GetValues<ApplicationStatus>())
+        {
+            data.Add(status, true);
+            data.Add(status, false);
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(StatusesAndKinds))]
+    public async Task Serve_ProducesTheSameJsonAsLegacy(ApplicationStatus status, bool exporter)
+    {
+        var application = Application(Day1, status);
+        application.IsExporter = exporter;
+        application.WasteProcessingType = exporter ? "exporter" : "reprocessor";
+        var created = await _applications.CreateAsync(application)
+            ?? throw new InvalidOperationException("The legacy insert failed.");
+        await InsertRaceRetry.RunInTransactionAsync(
+            _factory,
+            (session, token) => _migrator.EnsureMigratedAsync(created.Id!.Value, session, token),
+            _ => { },
+            Ct
+        );
+        var legacy = (await _applications.GetByIdAsync(created.OrganisationId, created.Id!.Value.ToString()))!;
+
+        var served = await _reader.ServeAsync(legacy, Ct);
+
+        served.Should().NotBeNull().And.NotBeSameAs(legacy);
+        var found = new List<string>();
+        Differences(
+            JsonSerializer.SerializeToNode(legacy, s_apiJson),
+            JsonSerializer.SerializeToNode(served, s_apiJson),
+            "$",
+            found
+        );
+        found.Should().BeEmpty();
+    }
+
+    // The golden comparison must be able to fail: a field the model serves differently is reported by its path.
+    [Fact]
+    public async Task Differences_ReportsAFieldServedDifferently()
+    {
+        var legacy = await CreateAndMigrateAsync(Day1);
+        var served = await _reader.ServeAsync(legacy, Ct);
+        served!.OrganisationName = "Something Else";
+        served.Prns.Authorisers.Clear();
+
+        var found = new List<string>();
+        Differences(
+            JsonSerializer.SerializeToNode(legacy, s_apiJson),
+            JsonSerializer.SerializeToNode(served, s_apiJson),
+            "$",
+            found
+        );
+
+        found.Should().Contain(d => d.StartsWith("$.organisationName:"));
+        found.Should().Contain(d => d.StartsWith("$.prns.authorisers:"));
     }
 }
