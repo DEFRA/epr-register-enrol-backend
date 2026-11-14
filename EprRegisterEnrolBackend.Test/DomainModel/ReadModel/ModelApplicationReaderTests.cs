@@ -151,6 +151,37 @@ public sealed class ModelApplicationReaderTests : IDisposable
         read.Should().BeNull();
     }
 
+    // Decided 2026-11-13: no fallback to legacy. After the migration everything is in the model, and an application that
+    // isn't there should exist in neither, so the route answers 404.
+    [Fact]
+    public async Task GetById_InLegacyButNotInTheModel_ReturnsNull()
+    {
+        var legacyOnly = (
+            await _applications.CreateAsync(ApplicationReconcilerTests.Application(updatedAt: Day1))
+        )!;
+
+        var read = await _reader.GetByIdAsync(
+            legacyOnly.OrganisationId!,
+            legacyOnly.Id!.Value.ToString(),
+            Ct
+        );
+
+        read.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetByOrganisation_LeavesOutApplicationsNotInTheModel()
+    {
+        var migrated = await CreateAndMigrateAsync(Day1);
+        await _applications.CreateAsync(
+            ApplicationReconcilerTests.Application(updatedAt: Day1.AddDays(2))
+        );
+
+        var list = await _reader.GetByOrganisationAsync(migrated.OrganisationId!, Ct);
+
+        list.Select(a => a.Id).Should().Equal(migrated.Id);
+    }
+
     [Fact]
     public async Task GetByOrganisation_ListsNewestFirstByLegacyUpdatedAt()
     {
