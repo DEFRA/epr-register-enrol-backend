@@ -204,4 +204,20 @@ public sealed partial class DualWriteEndpointTests
 
         Assert.Equal(LegacyOnlyName, body.GetProperty("organisationName").GetString());
     }
+
+    // Read after dual-write, on a replica set: a change written in one request is served from the model by the next.
+    [Fact]
+    public async Task ReadFromModel_On_GetById_AfterAWrite_ServesTheWrittenChangeFromTheModel()
+    {
+        Restart(s_readFromModelOn);
+        ReExKnowsNothing();
+        var application = await MigratedThenRenamedInLegacyAsync();
+        Assert.Equal(HttpStatusCode.OK, (await PatchPrnsAsync(application)).StatusCode);
+
+        var body = await JsonAsync(await GetByIdAsync(application));
+
+        Assert.Equal("UpTo500", body.GetProperty("prns").GetProperty("plannedTonnageBand").GetString());
+        Assert.Equal(ModelName, body.GetProperty("organisationName").GetString());
+        Assert.Equal((await LegacyAsync(application))!.Version, body.GetProperty("version").GetInt64());
+    }
 }
