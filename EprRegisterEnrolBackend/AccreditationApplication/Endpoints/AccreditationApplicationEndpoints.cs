@@ -38,6 +38,7 @@ public static class AccreditationApplicationEndpoints
     public static void UseAccreditationApplicationEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("api/v1/accreditation-applications");
+        group.AddEndpointFilter<ApplicationResponseReaderFilter>(); // RA-705
 
         FrontendOnly(group.MapPost("{organisationId}/{registrationId}/{materialType}/seed", Seed));
         FrontendOnly(group.MapGet("{organisationId}", GetList));

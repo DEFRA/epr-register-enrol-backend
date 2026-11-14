@@ -152,4 +152,56 @@ public sealed partial class DualWriteEndpointTests
         Assert.Equal(Nation.Wales, (await RegistrationOfAsync(application)).Nation);
         Assert.Equal("Wales", body.GetProperty("nation").GetString());
     }
+
+    // A write's response is built inside the dual-write transaction, before the sync reaches the model, so with
+    // ReadFromModel on it is served again through the reader once the write has committed.
+    private Task<HttpResponseMessage> PatchPrnsAsync(AccreditationApplicationModel application) =>
+        _client.PatchAsync(
+            AppUrl(application, "prns"),
+            new StringContent(
+                """{"plannedTonnageBand":"UpTo500"}""",
+                System.Text.Encoding.UTF8,
+                "application/json"
+            ),
+            Ct
+        );
+
+    [Fact]
+    public async Task ReadFromModel_On_WriteResponse_ServesTheModel()
+    {
+        Restart(s_readFromModelOn);
+        ReExKnowsNothing();
+        var application = await MigratedThenRenamedInLegacyAsync();
+
+        var body = await JsonAsync(await PatchPrnsAsync(application));
+
+        Assert.Equal(ModelName, body.GetProperty("organisationName").GetString());
+        Assert.Equal("UpTo500", body.GetProperty("prns").GetProperty("plannedTonnageBand").GetString());
+    }
+
+    [Fact]
+    public async Task ReadFromModel_On_WriteResponse_TakesTheVersionFromLegacy()
+    {
+        Restart(s_readFromModelOn);
+        ReExKnowsNothing();
+        var application = await MigratedThenRenamedInLegacyAsync();
+
+        var body = await JsonAsync(await PatchPrnsAsync(application));
+
+        Assert.Equal(
+            (await LegacyAsync(application))!.Version,
+            body.GetProperty("version").GetInt64()
+        );
+    }
+
+    [Fact]
+    public async Task ReadFromModel_Off_WriteResponse_ServesLegacy()
+    {
+        ReExKnowsNothing();
+        var application = await MigratedThenRenamedInLegacyAsync();
+
+        var body = await JsonAsync(await PatchPrnsAsync(application));
+
+        Assert.Equal(LegacyOnlyName, body.GetProperty("organisationName").GetString());
+    }
 }
