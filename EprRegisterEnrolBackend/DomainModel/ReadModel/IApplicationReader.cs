@@ -26,4 +26,13 @@ public interface IApplicationReader
         AccreditationApplicationModel legacy,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// The configured source's version of each legacy document already read, in the same order; those the
+    /// source doesn't hold are left out.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> ServeManyFromSourceAsync(
+        IReadOnlyList<AccreditationApplicationModel> legacy,
+        CancellationToken cancellationToken = default
+    );
 }

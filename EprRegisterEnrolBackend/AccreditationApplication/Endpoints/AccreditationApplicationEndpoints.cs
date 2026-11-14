@@ -8,6 +8,7 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
@@ -40,7 +41,11 @@ public static class AccreditationApplicationEndpoints
         var group = app.MapGroup("api/v1/accreditation-applications");
         // RA-705: with DomainModel:ReadFromModel on, write responses are served again from the model once the
         // write has committed (each handler builds its body from legacy inside the dual-write transaction).
-        group.AddEndpointFilter<ApplicationResponseReaderFilter>();
+        // Registered only with the flag on.
+        if (app.ServiceProvider.GetRequiredService<IOptions<DomainModelConfig>>().Value.ReadFromModel)
+        {
+            group.AddEndpointFilter<ApplicationResponseReaderFilter>();
+        }
 
         FrontendOnly(group.MapPost("{organisationId}/{registrationId}/{materialType}/seed", Seed));
         FrontendOnly(group.MapGet("{organisationId}", GetList));

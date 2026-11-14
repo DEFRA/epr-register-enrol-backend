@@ -38,15 +38,41 @@ public sealed class ModelApplicationReader(
         CancellationToken cancellationToken = default
     )
     {
-        var legacyList = await applications.GetByOrganisationAsync(organisationId);
+        return await ServeManyFromSourceAsync(
+            [.. await applications.GetByOrganisationAsync(organisationId)],
+            cancellationToken
+        );
+    }
+
+    /// <summary>Transforms a legacy application into the model's projection while preserving legacy metadata.</summary>
+    public async Task<AccreditationApplicationModel?> ServeFromSourceAsync(
+        AccreditationApplicationModel legacy,
+        CancellationToken cancellationToken = default
+    )
+    {
+        using var session = await clientFactory
+            .GetClient()
+            .StartSessionAsync(cancellationToken: cancellationToken);
+        return await ServeFromSourceAsync(legacy, session, cancellationToken);
+    }
+
+    /// <summary>
+    /// The configured source's version of each legacy document already read, in the same order; those the
+    /// source doesn't hold are left out.
+    /// </summary>
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> ServeManyFromSourceAsync(
+        IReadOnlyList<AccreditationApplicationModel> legacy,
+        CancellationToken cancellationToken = default
+    )
+    {
         using var session = await clientFactory
             .GetClient()
             .StartSessionAsync(cancellationToken: cancellationToken);
 
         var results = new List<AccreditationApplicationModel>();
-        foreach (var legacy in legacyList)
+        foreach (var item in legacy)
         {
-            var served = await ServeFromSourceAsync(legacy, session, cancellationToken);
+            var served = await ServeFromSourceAsync(item, session, cancellationToken);
             if (served is not null)
             {
                 results.Add(served);
@@ -56,10 +82,10 @@ public sealed class ModelApplicationReader(
         return results;
     }
 
-    /// <summary>Transforms a legacy application into the model's projection while preserving legacy metadata.</summary>
-    public async Task<AccreditationApplicationModel?> ServeFromSourceAsync(
+    private async Task<AccreditationApplicationModel?> ServeFromSourceAsync(
         AccreditationApplicationModel legacy,
-        CancellationToken cancellationToken = default
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
     )
     {
         if (legacy.Id is null)
@@ -67,19 +93,7 @@ public sealed class ModelApplicationReader(
             return null;
         }
 
-        using var session = await clientFactory
-            .GetClient()
-            .StartSessionAsync(cancellationToken: cancellationToken);
-        return await ServeFromSourceAsync(legacy, session, cancellationToken);
-    }
-
-    private async Task<AccreditationApplicationModel?> ServeFromSourceAsync(
-        AccreditationApplicationModel legacy,
-        IClientSessionHandle session,
-        CancellationToken cancellationToken
-    )
-    {
-        var projection = await readModel.GetAsync(legacy.Id!.Value, session, cancellationToken);
+        var projection = await readModel.GetAsync(legacy.Id.Value, session, cancellationToken);
         if (projection is null)
         {
             return null;

@@ -11,15 +11,32 @@ public sealed class LegacyApplicationReader(IAccreditationApplicationPersistence
         string organisationId,
         string applicationId,
         CancellationToken cancellationToken = default
-    ) => await persistence.GetByIdAsync(organisationId, applicationId);
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return await persistence.GetByIdAsync(organisationId, applicationId);
+    }
 
     public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrganisationAsync(
         string organisationId,
         CancellationToken cancellationToken = default
-    ) => (await persistence.GetByOrganisationAsync(organisationId)).ToList();
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return (await persistence.GetByOrganisationAsync(organisationId)).ToList();
+    }
 
     public Task<AccreditationApplicationModel?> ServeFromSourceAsync(
         AccreditationApplicationModel legacy,
         CancellationToken cancellationToken = default
     ) => Task.FromResult<AccreditationApplicationModel?>(legacy);
+
+    public Task<IReadOnlyList<AccreditationApplicationModel>> ServeManyFromSourceAsync(
+        IReadOnlyList<AccreditationApplicationModel> legacy,
+        CancellationToken cancellationToken = default
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(legacy);
+    }
 }
