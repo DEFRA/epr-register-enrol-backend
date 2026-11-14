@@ -779,6 +779,9 @@ public class AccreditationApplicationEndpointsInterimSitesTests
             MaterialType = MaterialType.Steel,
             ApplicationStatus = ApplicationStatus.Started,
             IsExporter = true,
+            // RA-000: Submit needs the organisation number and nation.
+            OrgId = 500500,
+            Nation = Nation.England,
             OverseasSites = new AccreditationApplicationOverseasSites
             {
                 SectionStatus = SectionStatus.Completed,

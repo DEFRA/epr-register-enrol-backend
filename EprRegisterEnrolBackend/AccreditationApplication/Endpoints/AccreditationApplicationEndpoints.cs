@@ -243,12 +243,12 @@ public static class AccreditationApplicationEndpoints
             : null;
 
     /// <summary>
-    /// RA-475/RA-503: the ReEx lookup shared by every caller that needs the numeric
-    /// organisation id (<c>OrganisationDto.OrgId</c>) behind a ReEx organisation id
-    /// (<c>organisationId</c>, a UUID). Returns null on any lookup failure/absence -
-    /// callers that have a fallback value of their own (see <see cref="ResolveOrgIdAsync"/>)
-    /// apply it on top of this; <see cref="Submit"/> has none, so null propagates
-    /// straight through to <c>AccreditationApplicationModel.OrgId</c>.
+    /// RA-475: the ReEx lookup the regulatory-number endpoints use for the numeric organisation
+    /// id (<c>OrganisationDto.OrgId</c>) behind a ReEx organisation id (<c>organisationId</c>, a
+    /// UUID). Returns null on any
+    /// lookup failure/absence; those callers apply their own fallback on top of this (see
+    /// <see cref="ResolveOrgIdAsync"/>). GetById and Submit use
+    /// <see cref="OrganisationDetailsLookup"/> instead.
     /// </summary>
     private static async Task<int?> ResolveOrgNumberFromReExAsync(
         string organisationId,
@@ -1095,46 +1095,29 @@ public static class AccreditationApplicationEndpoints
         if (application is null)
             return Results.NotFound();
 
-        // RA-503: backfill OrgId (ReEx's numeric organisation number) for any application read
-        // before Submit's own resolution ran - older applications, or ones that never reached
-        // Submit yet. Resolved once and persisted (application reassigned to the updated
-        // document on success) so later reads skip the ReEx round trip entirely; a lookup
-        // failure leaves OrgId null and is not persisted, so the next read retries rather than
-        // permanently caching a miss.
-        if (application.OrgId is null)
-        {
-            var orgNumber = await ResolveOrgNumberFromReExAsync(
-                organisationId,
-                reExAdapter,
-                cancellationToken
-            );
-            if (orgNumber is not null)
-            {
-                application.OrgId = orgNumber;
-                application = await persistence.UpdateAsync(application) ?? application;
-            }
-        }
+        // RA-503/RA-526: backfill OrgId (ReEx's numeric organisation number) and Nation for any
+        // application read before Seed or Submit stored them. The lookup rules (stored values used
+        // as they are, an out-of-range organisation number not used) are shared with Submit in
+        // OrganisationDetailsLookup. Persisted on success so later reads skip the ReEx round trip;
+        // a lookup failure leaves the value null and unsaved, so the next read retries rather
+        // than caching a miss.
+        var backfill = await OrganisationDetailsLookup.FillMissingAsync(
+            application,
+            reExAdapter,
+            cancellationToken
+        );
+        if (backfill.Changed)
+            application = await persistence.UpdateAsync(application) ?? application;
 
-        // RA-526: backfill Nation for any application read before Seed's own resolution ran -
-        // older applications, or ones that never reached Seed yet under the pre-RA-526 code.
-        // Same shape as the RA-503 OrgId backfill above: resolved once and persisted so later
-        // reads skip the ReEx round trip, and a lookup failure leaves Nation null rather than
-        // permanently caching a miss. Without this, epr-register-enrol-frontend's
-        // resolveNation (which no longer falls back to postcode) would show every such
-        // application's operator the wrong nation's bank details and payment reference.
-        if (application.Nation is null && application.RegistrationId is not null)
-        {
-            var nationResult = await reExAdapter.GetNationAsync(
-                organisationId,
-                application.RegistrationId,
-                cancellationToken
-            );
-            if (nationResult.IsSuccess)
-            {
-                application.Nation = nationResult.Value;
-                application = await persistence.UpdateAsync(application) ?? application;
-            }
-        }
+        // RA-000: the payment reference the frontend shows on the submit-confirmation,
+        // view-payment-details and in-year /payment pages is built here from the OrgId and Nation
+        // above; the frontend never builds it. Null when either is missing (or the organisation
+        // number is out of range): the frontend shows an error rather than a reference that could
+        // end in "/null". Not saved - Submit stores the one it sends.
+        application.PaymentReference = PaymentReferenceBuilder.BuildForRead(
+            application,
+            loggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+        );
 
         // Skip the round-trip entirely when there is nothing to look up (e.g. older
         // applications submitted before the work-item id was persisted, or applications
@@ -3480,19 +3463,23 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest("All sections must be completed before submission.");
         }
 
-        var submittedAt = DateTime.UtcNow;
-        ApplySubmission(application, request, submittedAt);
-
-        // RA-503: resolve ReEx's numeric OrgId (e.g. 500500) fresh, immediately before submission,
-        // so the work-item payload carries the operator/regulator-safe organisation number rather
-        // than the internal ObjectId in OrganisationId. Unlike ResolveOrgIdAsync's callers, Submit
-        // has no caller-supplied fallback value to apply - a lookup failure leaves OrgId null
-        // rather than blocking submission.
-        application.OrgId = await ResolveOrgNumberFromReExAsync(
-            organisationId,
+        // RA-000: the stored OrgId and Nation are used as they are; each is looked up in ReEx only
+        // when not stored, and an organisation number outside 1-999999 counts as none. If either
+        // is still missing, nothing is sent to Case Management and nothing is written: the 503
+        // lets the operator try again later with what they entered. The payment reference is
+        // built from them here, once, and stored.
+        var (payment, unavailable) = await PaymentReferenceResolver.ResolveAsync(
+            application,
+            nameof(Submit),
             services.ReExAdapter,
+            services.LoggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
             services.CancellationToken
         );
+        if (unavailable is not null)
+            return unavailable;
+
+        var submittedAt = DateTime.UtcNow;
+        ApplySubmission(application, request, payment!, submittedAt);
 
         // Call adapter before persisting: if adapter fails, DB is unchanged and the caller can retry safely.
         CaseWorkingSubmissionResult submissionResult;
@@ -3529,7 +3516,7 @@ public static class AccreditationApplicationEndpoints
         var submission = new Submission(
             request,
             submittedAt,
-            application.OrgId,
+            payment!,
             submissionResult,
             application.Version
         );
@@ -3563,6 +3550,7 @@ public static class AccreditationApplicationEndpoints
     private static void ApplySubmission(
         AccreditationApplicationModel application,
         SubmitRequest request,
+        ResolvedPaymentReference payment,
         DateTime submittedAt
     )
     {
@@ -3575,9 +3563,12 @@ public static class AccreditationApplicationEndpoints
             JobTitle = request.JobTitle,
             Email = request.Email,
         };
-        // RA-503: the operator's real bank payment reference, as shown on their own
-        // submit-confirmation/view-payment-details pages - see BuildPayload.
-        application.PaymentReference = request.PaymentReference;
+        // RA-000: the organisation number and nation the reference was built from (a looked-up
+        // value is saved with the submission), and the reference itself - the one the operator is
+        // shown and Case Management is sent.
+        application.OrgId = payment.OrgId;
+        application.Nation = payment.Nation;
+        application.PaymentReference = payment.PaymentReference;
 
         // Version 1 for every section that exists on this application — only OverseasSites/
         // BesEvidence are exporter-specific, everything else applies regardless of IsExporter.
@@ -3614,7 +3605,7 @@ public static class AccreditationApplicationEndpoints
     private sealed record Submission(
         SubmitRequest Request,
         DateTime SubmittedAt,
-        int? OrgId,
+        ResolvedPaymentReference Payment,
         CaseWorkingSubmissionResult CaseWorking,
         long ReadVersion
     );
@@ -3643,8 +3634,12 @@ public static class AccreditationApplicationEndpoints
         if (application.ApplicationStatus != ApplicationStatus.Started)
             return Results.Conflict("Application must be in 'Started' status to submit.");
 
-        ApplySubmission(application, submission.Request, submission.SubmittedAt);
-        application.OrgId = submission.OrgId;
+        ApplySubmission(
+            application,
+            submission.Request,
+            submission.Payment,
+            submission.SubmittedAt
+        );
         application.ApplicationReference = submission.CaseWorking.CaseReference;
         application.CaseManagementWorkItemId = submission.CaseWorking.WorkItemId;
 

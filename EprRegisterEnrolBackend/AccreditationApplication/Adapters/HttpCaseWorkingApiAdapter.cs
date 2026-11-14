@@ -154,16 +154,22 @@ public class HttpCaseWorkingApiAdapter(
             accreditationReference = changeRequest.AccreditationReference,
             material = changeRequest.MaterialType.ToString(),
             accreditationYear = changeRequest.Year,
-            nation = accreditation.Nation?.ToString(),
+            nation = Require(accreditation.Nation, "nation", accreditation.ApplicationId).ToString(),
             // management-fe reads these two from every work item's payload, whatever its type:
             // wasteProcessingType for the worklist's applicant type (absent reads as
             // "Reprocessor") and operatorOrgNumber for the Org ID on the card, case header and
             // audit log. ManagementBe's in-year change reference uses only typeId and accreditationYear.
             wasteProcessingType = accreditation.WasteProcessingType,
-            operatorOrgNumber = accreditation.OrgId,
+            // RA-000: both always present - the in-year Submit refuses (503) without the
+            // organisation number and nation, and builds the payment reference from them.
+            operatorOrgNumber = Require(accreditation.OrgId, "operatorOrgNumber", accreditation.ApplicationId),
             chargePence = changeRequest.ChargePence,
             submittedBy = changeRequest.SubmittedBy,
-            paymentReference = changeRequest.PaymentReference,
+            paymentReference = Require(
+                changeRequest.PaymentReference,
+                "paymentReference",
+                accreditation.ApplicationId
+            ),
             sites = changeRequest.Sites.Select(site =>
             {
                 var ors = ChangeRequestRules.FindSite(accreditation, site.SiteId);
@@ -411,14 +417,8 @@ public class HttpCaseWorkingApiAdapter(
             // identical to BuildPayload's (RA-292 AC04), so a pseudo-section here would break
             // that contract. The charge is a whole-application value, not a section.
             ChargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
-            // RA-503: the operator's real bank payment reference (see BuildPayload), persisted on
-            // the model since the original Submit and still available here. Falls back to
-            // ApplicationReference (unlike at initial Submit, already populated by the time a
-            // resume-from-query round trip happens) for an application submitted before this
-            // field existed - PaymentReference is a brand-new field with no backfill, so without
-            // this fallback a pre-existing application would silently regress from sending its
-            // ApplicationReference (the old behaviour) to sending nothing at all.
-            PaymentReference = application.PaymentReference ?? application.ApplicationReference,
+            // RA-000: no paymentReference. ManagementBe's ResumeFromQueryRequest has no such
+            // member, so it was never read; the work item keeps the one sent at Submit.
         };
 
         var endpoint =
@@ -681,6 +681,22 @@ public class HttpCaseWorkingApiAdapter(
         return payload;
     }
 
+    // RA-000: a value the endpoints guarantee before calling Case Management. Missing here is a
+    // defect, so it throws (ExceptionLoggingHandler logs it at Error and returns a 500
+    // ProblemDetails) rather than sending a work item without it.
+    private static T Require<T>(T? value, string field, string? applicationId)
+        where T : struct =>
+        value
+        ?? throw new InvalidOperationException(
+            $"Cannot send {field} to Case Management for applicationId={applicationId}: it is missing."
+        );
+
+    private static string Require(string? value, string field, string? applicationId) =>
+        value
+        ?? throw new InvalidOperationException(
+            $"Cannot send {field} to Case Management for applicationId={applicationId}: it is missing."
+        );
+
     private static object BuildPayload(AccreditationApplicationModel application)
     {
         return new
@@ -697,11 +713,10 @@ public class HttpCaseWorkingApiAdapter(
             siteAddressPostcode = ExtractPostcode(application.SiteAddress),
             // RA-526: derived at Seed time from the registration's own regulator (see
             // RegulatorNationMapper) - the reliable replacement for ManagementBe's own
-            // postcode-derived nation routing (ReAccreditationNationRoutingHook). Null when
-            // this application predates that derivation; JsonOptions' WhenWritingNull drops it
-            // entirely rather than sending an explicit null, so ManagementBe's own
-            // default-to-England fallback applies exactly as it does for any other absent field.
-            nation = application.Nation?.ToString(),
+            // postcode-derived nation routing (ReAccreditationNationRoutingHook). RA-000: Submit
+            // looks it up when not stored and refuses to submit without it (the payment reference
+            // is built from it), so it is always present here.
+            nation = Require(application.Nation, "nation", application.ApplicationId).ToString(),
             companyRegisterAddressPostcode = application.CompanyRegisterAddressPostcode,
             companyRegisteredAddress = application.CompanyRegisteredAddress,
             companiesHouseNumber = application.CompaniesHouseNumber,
@@ -712,7 +727,9 @@ public class HttpCaseWorkingApiAdapter(
             // any existing consumer, but it must never be treated as the operator/regulator-facing
             // organisation number. operatorOrgNumber (below) is the new field carrying that value.
             operatorOrganisationId = application.OrganisationId,
-            operatorOrgNumber = application.OrgId,
+            // RA-000: always present - Submit refuses to submit without it (503), and ManagementBe
+            // rejects a submission without it.
+            operatorOrgNumber = Require(application.OrgId, "operatorOrgNumber", application.ApplicationId),
             operatorRegistrationId = application.RegistrationId,
             operatorEmail = application.SubmittedBy?.Email,
             // RA-316: the charge the operator was shown on the payment-details page, echoed so
@@ -720,15 +737,15 @@ public class HttpCaseWorkingApiAdapter(
             // it and drifting. Null (band unset) is dropped entirely by JsonOptions'
             // WhenWritingNull, and ManagementBe renders a blank rather than rejecting.
             chargeAmountPence = AccreditationChargeCalculator.CalculateChargePence(application),
-            // RA-503: the operator's real, nation-specific bank payment reference (built by
-            // buildPaymentReference in epr-register-enrol-frontend, e.g. PR/PK/REP/500500) - the
-            // exact string shown to the operator on their submit-confirmation and
-            // view-payment-details pages, captured from SubmitRequest into
-            // application.PaymentReference at Submit time. Null (a caller that predates this)
-            // is dropped by JsonOptions' WhenWritingNull; ManagementBe falls back to its own
-            // generated applicationReference when the field is absent (see WorkItemService.
-            // SubmitAsync) rather than rejecting the submission.
-            paymentReference = application.PaymentReference,
+            // RA-000: the operator's nation-specific bank payment reference (e.g. PR/PK/REP/500500),
+            // built by Submit from OrgId and Nation (PaymentReferenceBuilder) and stored - the
+            // exact string the operator is shown and told to quote. Always present; ManagementBe
+            // rejects a submission without it.
+            paymentReference = Require(
+                application.PaymentReference,
+                "paymentReference",
+                application.ApplicationId
+            ),
             submittedBy = application.SubmittedBy is null
                 ? null
                 : new
@@ -1016,9 +1033,8 @@ public class HttpCaseWorkingApiAdapter(
         public required IReadOnlyList<string> SectionKeys { get; init; }
         public required Dictionary<string, object?> Sections { get; init; }
 
-        // RA-316. Both optional on the consumer; nulls are dropped by JsonOptions.
+        // RA-316. Optional on the consumer; a null is dropped by JsonOptions.
         public int? ChargeAmountPence { get; init; }
-        public string? PaymentReference { get; init; }
     }
 
     internal sealed class WithdrawWorkItemRequest

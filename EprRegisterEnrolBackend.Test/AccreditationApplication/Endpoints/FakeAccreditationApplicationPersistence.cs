@@ -723,6 +723,9 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             SourceReExAccreditationId = src.SourceReExAccreditationId,
             SourceYear = src.SourceYear,
             ApplicationReference = src.ApplicationReference,
+            // RA-000: was missing - the stored payment reference never survived a read through
+            // this fake, so neither Submit's write of it nor GetById's mismatch check could be seen.
+            PaymentReference = src.PaymentReference,
             CaseManagementReference = src.CaseManagementReference,
             CaseManagementWorkItemId = src.CaseManagementWorkItemId,
             // RA-448: was missing entirely before this feature - GetByIdAsync/

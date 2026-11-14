@@ -8,10 +8,12 @@ using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.DevSeed;
+using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using NSubstitute;
 using NSubstitute.ClearExtensions;
 using NSubstitute.ExceptionExtensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
@@ -593,6 +595,53 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         stored.Sites.Single().Status.Should().Be(ChangeItemStatus.InProgress);
     }
 
+    // RA-000: no organisation number on the accreditation and ReEx can't give one, or no
+    // nation and ReEx can't give one - the same 503 as an application's submit, nothing saved or
+    // sent, the draft kept as it was, and an Error log with the ids.
+    [Theory]
+    [InlineData("orgNumber", "Organisation number unavailable", "ReEx status=500 kind=ServerError")]
+    [InlineData("nation", "Nation unavailable", "ReEx status=404 kind=NotFound")]
+    public async Task Submit_PaymentReferenceCannotBeBuilt_Returns503AndKeepsTheDraft(
+        string missing,
+        string title,
+        string reExOutcome
+    )
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
+        if (missing == "orgNumber")
+            accreditation.OrgId = null;
+        else
+            accreditation.Nation = null;
+        _factory.FakePersistence.Clear();
+        _factory.FakePersistence.Seed(accreditation);
+        _factory.MockReExAdapter.GetOrganisationNumberAsync(Org, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<int?>.Fail(new ReExError(ReExErrorKind.ServerError), 500)));
+        _factory.MockReExAdapter.GetNationAsync(Org, accreditation.RegistrationId!, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ReExResult<Nation>.Fail(new ReExError(ReExErrorKind.NotFound), 404)));
+        await AddSite(901910);
+        _factory.LogCapture.Clear();
+
+        var response = await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        var problem = await ReadJson(response);
+        problem.GetProperty("status").GetInt32().Should().Be(503);
+        problem.GetProperty("title").GetString().Should().Be(title);
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        stored.SubmittedBy.Should().BeNull();
+        stored.PaymentReference.Should().BeNull();
+        stored.Sites.Single().Status.Should().Be(ChangeItemStatus.InProgress);
+        await _factory.MockCaseWorkingAdapter.DidNotReceiveWithAnyArgs()
+            .SubmitChangeRequestAsync(default!, default!, Ct);
+        var error = _factory.LogCapture.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error).Subject;
+        error.Message.Should().StartWith("AccreditationChange.Submit blocked");
+        error.Message.Should().Contain($"applicationId={AppId}");
+        error.Message.Should().Contain($"organisationId={Org}");
+        error.Message.Should().Contain(reExOutcome);
+    }
+
     [Fact]
     public async Task Submit_MissingDeclarationDetails_Returns400()
     {
@@ -620,6 +669,8 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
     }
 
+    // RA-000: the payment reference is built from the accreditation's organisation number
+    // (50019) and nation (England, exporter); one an old client still sends is ignored.
     [Fact]
     public async Task Submit_Complete_MarksSubmittedWithoutCaseManagementAndKeepsTheSitePending()
     {
@@ -627,7 +678,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
 
         var response = await _client.PostAsJsonAsync(
             SubmitUrl,
-            new { fullName = "Jane Smith", jobTitle = "Director", email = "jane@example.com", paymentReference = "PAY-1" },
+            new { fullName = "Jane Smith", jobTitle = "Director", email = "jane@example.com", paymentReference = "PR/PK/EXP/null" },
             Ct
         );
 
@@ -637,7 +688,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         submitted.GetProperty("submittedBy").GetProperty("fullName").GetString().Should().Be("Jane Smith");
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.ChargePence.Should().Be(32800);
-        stored.PaymentReference.Should().Be("PAY-1");
+        stored.PaymentReference.Should().Be("PR/PK/EXP/50019");
         stored.SubmittedAt.Should().NotBeNull();
         stored.CaseManagementReference.Should().BeNull();
         await _factory.MockCaseWorkingAdapter.DidNotReceiveWithAnyArgs()
@@ -1017,8 +1068,10 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
         await _factory.MockCaseWorkingAdapter.Received(1).SubmitChangeRequestAsync(
             Arg.Is<AccreditationChangeRequest>(r =>
                 r.Sites.Single().OrsId == "005" && r.ChargePence == 32800 && r.SubmittedBy!.FullName == "Jane Smith"
+                // RA-000: the reference is known before Case Management is called.
+                && r.PaymentReference == "PR/PK/EXP/50019"
             ),
-            Arg.Is<AccreditationApplicationModel>(a => a.AccreditationReference == AccreditationReference),
+            Arg.Is<AccreditationApplicationModel>(a => a.AccreditationReference == AccreditationReference && a.OrgId == 50019),
             Arg.Any<CancellationToken>()
         );
     }

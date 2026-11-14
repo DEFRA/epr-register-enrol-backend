@@ -31,6 +31,8 @@ public class HttpCaseWorkingApiAdapterTests
         {
             OrganisationId = "12345",
             OrgId = 500500,
+            Nation = Nation.England,
+            PaymentReference = "PR/PK/REP/500500",
             OrganisationName = "Acme Recycling Ltd",
             Year = 2026,
             RegistrationId = "reg-001",
@@ -423,39 +425,36 @@ public class HttpCaseWorkingApiAdapterTests
         payload.GetProperty("nation").GetString().Should().Be("Wales");
     }
 
-    // RA-526: Nation is nullable - an application seeded before this field existed must omit
-    // it entirely rather than send a fabricated value, same as every other nullable field here.
-    // ManagementBe defaults to England when nation is absent.
-    [Fact]
-    public async Task SubmitApplicationAsync_NullNation_OmitsNationFromPayload()
+    // RA-000: Submit refuses (503) without the organisation number, nation or payment reference,
+    // so one missing here is a defect: the adapter throws rather than send a work item without it
+    // (ManagementBe rejects a missing operatorOrgNumber/paymentReference) - nothing is posted.
+    [Theory]
+    [InlineData("operatorOrgNumber")]
+    [InlineData("nation")]
+    [InlineData("paymentReference")]
+    public async Task SubmitApplicationAsync_RequiredValueMissing_ThrowsAndPostsNothing(string field)
     {
         var application = CreateTestApplication();
-        application.Nation = null;
+        switch (field)
+        {
+            case "operatorOrgNumber":
+                application.OrgId = null;
+                break;
+            case "nation":
+                application.Nation = null;
+                break;
+            default:
+                application.PaymentReference = null;
+                break;
+        }
 
         var (adapter, handler) = CreateAdapter();
-        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+        var act = () =>
+            adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
 
-        var payload = JsonDocument
-            .Parse(handler.CapturedRequestBody!)
-            .RootElement.GetProperty("payload");
-        payload.TryGetProperty("nation", out _).Should().BeFalse();
-    }
-
-    // RA-503: OrgId is resolved fresh from ReEx immediately before submission (see the Submit
-    // endpoint) and can be null on a lookup failure - the payload must omit operatorOrgNumber
-    // rather than send a fabricated value, same as every other nullable field here.
-    [Fact]
-    public async Task SubmitApplicationAsync_NullOrgId_OmitsOperatorOrgNumberFromPayload()
-    {
-        var (adapter, handler) = CreateAdapter();
-        var application = CreateTestApplication();
-        application.OrgId = null;
-
-        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
-
-        var doc = JsonDocument.Parse(handler.CapturedRequestBody!);
-        var payload = doc.RootElement.GetProperty("payload");
-        payload.TryGetProperty("operatorOrgNumber", out _).Should().BeFalse();
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage($"Cannot send {field} to Case Management for applicationId=*");
+        handler.CapturedRequest.Should().BeNull();
     }
 
     // RA-480
@@ -2236,6 +2235,7 @@ public class HttpCaseWorkingApiAdapterTests
             Year = accreditation.Year,
             AccreditationReference = accreditation.AccreditationReference,
             ChargePence = 32800,
+            PaymentReference = "PR/PK/EXP/50019",
             SubmittedBy = new SubmittedByModel
             {
                 FullName = "Jane Smith",
@@ -2290,6 +2290,8 @@ public class HttpCaseWorkingApiAdapterTests
         payload["accreditationYear"]!.GetValue<int>().Should().Be(2026);
         payload["wasteProcessingType"]!.GetValue<string>().Should().Be("exporter");
         payload["operatorOrgNumber"]!.GetValue<int>().Should().Be(50019);
+        payload["paymentReference"]!.GetValue<string>().Should().Be("PR/PK/EXP/50019");
+        payload["nation"]!.GetValue<string>().Should().Be("England");
         var site = payload["sites"]![0]!;
         site["orsId"]!.GetValue<string>().Should().Be("007");
         site["country"]!.GetValue<string>().Should().Be("Turkey");
@@ -2510,26 +2512,9 @@ public class HttpCaseWorkingApiAdapterTests
             .BeFalse("a null charge is dropped by WhenWritingNull, not sent as null or zero");
     }
 
-    [Fact]
-    public async Task SubmitApplicationAsync_NoPaymentReferenceSuppliedByOperator_OmitsIt()
-    {
-        // RA-503: PaymentReference is captured from SubmitRequest (the operator's real,
-        // frontend-computed bank reference) - a caller that predates this sends none, and it
-        // must be ABSENT rather than an empty string or a stand-in such as ApplicationReference
-        // or registrationReference.
-        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
-        application.PaymentReference = null;
-
-        var payload = await CapturedSubmitPayload(application);
-
-        payload.TryGetProperty("paymentReference", out _).Should().BeFalse();
-        payload.GetProperty("registrationNumber").GetString().Should().Be("R25ER1000230001PL");
-    }
-
-    // RA-503: PaymentReference is the operator's real, nation-specific bank reference
-    // (buildPaymentReference in epr-register-enrol-frontend) - it must be sent as-is, never
-    // substituted with the backend-generated ApplicationReference (which is a different value
-    // entirely, and null at initial-submit time regardless).
+    // RA-000: PaymentReference is the reference Submit built and stored - it must be sent as-is,
+    // never substituted with the ApplicationReference (a different value, and null at
+    // initial-submit time regardless).
     [Fact]
     public async Task SubmitApplicationAsync_WithPaymentReference_SendsItAsPaymentReferenceString()
     {
@@ -2552,9 +2537,6 @@ public class HttpCaseWorkingApiAdapterTests
         var application = ApplicationWithCharge(PlannedTonnageBand.Over10000, selectedSites: 1);
         application.CaseManagementWorkItemId = Guid.NewGuid();
         application.ApplicationReference = TestApplicationReference;
-        // RA-503: PaymentReference (the operator's real bank reference, persisted since the
-        // original Submit) must be resent as-is, never the backend-generated ApplicationReference.
-        application.PaymentReference = "PR/PK/REP/500500";
 
         var (adapter, handler) = CreateAdapter();
         await adapter.ResumeFromQueryAsync(
@@ -2573,7 +2555,6 @@ public class HttpCaseWorkingApiAdapterTests
 
         // £3,965 + £328 = £4,293 -> 429300 pence.
         root.GetProperty("chargeAmountPence").GetInt32().Should().Be(429_300);
-        root.GetProperty("paymentReference").GetString().Should().Be("PR/PK/REP/500500");
 
         // Siblings of sections, never entries within it: the sections dictionary is keyed by
         // section name and its projections must stay identical to BuildPayload's (RA-292 AC04).
@@ -2586,18 +2567,18 @@ public class HttpCaseWorkingApiAdapterTests
         sections.TryGetProperty("paymentReference", out _).Should().BeFalse();
     }
 
-    // RA-503 PR review (masante): PaymentReference is a brand-new field with no backfill for an
-    // application submitted before this deploy - such an application has ApplicationReference
-    // (populated since its original submission response) but no PaymentReference at all. Without
-    // this fallback, a resume-from-query round trip on that application would regress from
-    // sending its ApplicationReference (the pre-RA-503 behaviour) to sending nothing.
-    [Fact]
-    public async Task ResumeFromQueryAsync_NullPaymentReference_FallsBackToApplicationReference()
+    // RA-000: ManagementBe's resume-from-query request has no paymentReference member, so none is
+    // sent - in particular, never the ApplicationReference in its place, whether or not a
+    // payment reference is stored. The work item keeps the one sent at Submit.
+    [Theory]
+    [InlineData("PR/PK/REP/500500")]
+    [InlineData(null)]
+    public async Task ResumeFromQueryAsync_NeverSendsAPaymentReference(string? storedPaymentReference)
     {
         var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500);
         application.CaseManagementWorkItemId = Guid.NewGuid();
         application.ApplicationReference = TestApplicationReference;
-        application.PaymentReference = null;
+        application.PaymentReference = storedPaymentReference;
 
         var (adapter, handler) = CreateAdapter();
         await adapter.ResumeFromQueryAsync(
@@ -2613,7 +2594,8 @@ public class HttpCaseWorkingApiAdapterTests
         );
 
         var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
-        root.GetProperty("paymentReference").GetString().Should().Be(TestApplicationReference);
+        root.TryGetProperty("paymentReference", out _).Should().BeFalse();
+        handler.CapturedRequestBody.Should().NotContain(TestApplicationReference);
     }
 
     [Fact]
@@ -2724,6 +2706,9 @@ public class HttpCaseWorkingApiAdapterTests
         new()
         {
             OrganisationId = "org-123",
+            OrgId = 500500,
+            Nation = Nation.England,
+            PaymentReference = "PR/PK/REP/500500",
             Year = 2026,
             MaterialType = MaterialType.Steel,
             OverseasSites = new AccreditationApplicationOverseasSites

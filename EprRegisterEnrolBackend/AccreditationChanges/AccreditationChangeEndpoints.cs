@@ -85,6 +85,7 @@ public static class AccreditationChangeEndpoints
     internal sealed record SubmitServices(
         IValidator<SubmitRequest> Validator,
         ICaseWorkingApiAdapter CaseWorking,
+        IReExApiAdapter ReEx,
         IOptions<AccreditationChangesConfig> Config,
         ILoggerFactory LoggerFactory
     );
@@ -704,13 +705,29 @@ public static class AccreditationChangeEndpoints
                 statusCode: StatusCodes.Status422UnprocessableEntity
             );
 
+        // RA-000: the payment reference is built here from the accreditation's organisation
+        // number and nation, by the same rules as an application's Submit, before the request is
+        // saved as Submitted. Without either, nothing is saved or sent and the operator keeps the
+        // draft as it was. A looked-up value is used for this request only: the accreditation is
+        // only ever read here (see the class summary); its own read backfills save it.
+        var logger = submit.LoggerFactory.CreateLogger(typeof(AccreditationChangeEndpoints));
+        var (payment, unavailable) = await PaymentReferenceResolver.ResolveAsync(
+            accreditation!,
+            "AccreditationChange.Submit",
+            submit.ReEx,
+            logger,
+            services.CancellationToken
+        );
+        if (unavailable is not null)
+            return unavailable;
+
         draft.SubmittedBy = new SubmittedByModel
         {
             FullName = body.FullName,
             JobTitle = body.JobTitle,
             Email = body.Email,
         };
-        draft.PaymentReference = body.PaymentReference;
+        draft.PaymentReference = payment!.PaymentReference;
         draft.ChargePence = ChangeRequestRules.Charge(draft.Sites.Count).TotalPence;
         draft.Status = ChangeRequestStatus.Submitted;
         draft.SetItemStatuses(ChangeItemStatus.Submitted);
@@ -724,7 +741,6 @@ public static class AccreditationChangeEndpoints
         if (!submit.Config.Value.SubmitToCaseManagement)
             return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
 
-        var logger = submit.LoggerFactory.CreateLogger(typeof(AccreditationChangeEndpoints));
         CaseWorkingSubmissionResult result;
         try
         {
