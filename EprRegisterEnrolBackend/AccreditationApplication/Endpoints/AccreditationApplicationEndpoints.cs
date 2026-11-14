@@ -9,6 +9,7 @@ using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Logging;
@@ -1066,7 +1067,8 @@ public static class AccreditationApplicationEndpoints
 
     private static async Task<IResult> GetList(
         string organisationId,
-        IAccreditationApplicationPersistence persistence
+        IApplicationReader reader,
+        CancellationToken cancellationToken
     )
     {
         // RA-357: (organisationId, registrationId, materialType, year) is now one-to-many — a
@@ -1077,7 +1079,9 @@ public static class AccreditationApplicationEndpoints
         // wins" client land on the newest record rather than an arbitrary one; FE #204 relies on
         // exactly that. Withdrawn records are deliberately NOT filtered out — consumers
         // legitimately need to display them; choosing the live one is the caller's decision.
-        var applications = await persistence.GetByOrganisationAsync(organisationId);
+        // RA-705 — the reader keeps that order whichever source it reads (legacy, or the model
+        // with ReadFromModel on).
+        var applications = await reader.GetByOrganisationAsync(organisationId, cancellationToken);
         return Results.Ok(applications);
     }
 
@@ -1088,6 +1092,7 @@ public static class AccreditationApplicationEndpoints
         ICaseWorkingApiAdapter caseWorkingAdapter,
         IReExApiAdapter reExAdapter,
         IDualWriteUnitOfWork unitOfWork,
+        IApplicationReader reader,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
@@ -1176,6 +1181,17 @@ public static class AccreditationApplicationEndpoints
                 application = saved;
             }
         }
+
+        // The backfills work on the legacy document (the one that is saved); the response comes from
+        // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
+        // and UpdatedAt from legacy.
+        var served = await reader.ServeAsync(application, cancellationToken);
+        if (served is null)
+        {
+            return Results.NotFound();
+        }
+
+        application = served;
 
         // Skip the round-trip entirely when there is nothing to look up (e.g. older
         // applications submitted before the work-item id was persisted, or applications

@@ -21,7 +21,13 @@ public sealed class LegacyApplicationReaderTests
         Substitute.For<IAccreditationApplicationPersistence>();
 
     private static AccreditationApplicationModel Application() =>
-        new() { Id = ObjectId.GenerateNewId(), OrganisationId = OrganisationId };
+        new()
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = OrganisationId,
+            MaterialType = MaterialType.Steel,
+            Year = 2027,
+        };
 
     [Fact]
     public async Task GetById_ReturnsWhatPersistenceReturns()
@@ -64,5 +70,16 @@ public sealed class LegacyApplicationReaderTests
         );
 
         list.Should().Equal(newer, older);
+    }
+
+    [Fact]
+    public async Task Serve_ReturnsTheGivenApplication()
+    {
+        var application = Application();
+
+        var served = await new LegacyApplicationReader(_persistence).ServeAsync(application, Ct);
+
+        served.Should().BeSameAs(application);
+        await _persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default!, default!);
     }
 }

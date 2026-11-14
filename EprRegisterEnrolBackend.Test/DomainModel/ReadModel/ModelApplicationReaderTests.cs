@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
@@ -55,13 +56,27 @@ public sealed class ModelApplicationReaderTests : IDisposable
 
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
 
+    // The reconciler's builder fills every field the model holds, but with fixed references; ApplicationReference and
+    // CaseManagementWorkItemId carry unique indexes, so each application here gets its own.
+    private static AccreditationApplicationModel Application(DateTime updatedAt)
+    {
+        var application = ApplicationReconcilerTests.Application(updatedAt: updatedAt);
+        application.ApplicationReference = $"APP-{application.Id}";
+        if (application.CaseManagementWorkItemId is not null)
+        {
+            application.CaseManagementWorkItemId = Guid.NewGuid();
+        }
+
+        return application;
+    }
+
+    private async Task<AccreditationApplicationModel> CreateLegacyAsync(DateTime updatedAt) =>
+        await _applications.CreateAsync(Application(updatedAt: updatedAt))
+        ?? throw new InvalidOperationException("The legacy insert failed.");
+
     private async Task<AccreditationApplicationModel> CreateAndMigrateAsync(DateTime updatedAt)
     {
-        var created = (
-            await _applications.CreateAsync(
-                ApplicationReconcilerTests.Application(updatedAt: updatedAt)
-            )
-        )!;
+        var created = await CreateLegacyAsync(updatedAt);
         var id = created.Id!.Value;
         await InsertRaceRetry.RunInTransactionAsync(
             _factory,
@@ -156,9 +171,7 @@ public sealed class ModelApplicationReaderTests : IDisposable
     [Fact]
     public async Task GetById_InLegacyButNotInTheModel_ReturnsNull()
     {
-        var legacyOnly = (
-            await _applications.CreateAsync(ApplicationReconcilerTests.Application(updatedAt: Day1))
-        )!;
+        var legacyOnly = await CreateLegacyAsync(Day1);
 
         var read = await _reader.GetByIdAsync(
             legacyOnly.OrganisationId!,
@@ -173,9 +186,7 @@ public sealed class ModelApplicationReaderTests : IDisposable
     public async Task GetByOrganisation_LeavesOutApplicationsNotInTheModel()
     {
         var migrated = await CreateAndMigrateAsync(Day1);
-        await _applications.CreateAsync(
-            ApplicationReconcilerTests.Application(updatedAt: Day1.AddDays(2))
-        );
+        await CreateLegacyAsync(Day1.AddDays(2));
 
         var list = await _reader.GetByOrganisationAsync(migrated.OrganisationId!, Ct);
 
@@ -183,20 +194,58 @@ public sealed class ModelApplicationReaderTests : IDisposable
     }
 
     [Fact]
-    public async Task GetByOrganisation_ListsNewestFirstByLegacyUpdatedAt()
+    public async Task GetByOrganisation_KeepsTheLegacyOrderNewestCreatedFirst()
     {
         var older = await CreateAndMigrateAsync(Day1);
         var newer = await CreateAndMigrateAsync(Day1.AddDays(1));
-        // Legacy, not the model, decides the order: make the first one the newest there.
-        await SetLegacyAsync(
-            older.Id!.Value,
-            version: older.Version + 1,
-            updatedAt: Day1.AddDays(5)
-        );
+        // Legacy, not the model, decides the order (newest createdAt first): make the first one the newest there.
+        await _factory
+            .GetCollection<BsonDocument>(LegacyCollection)
+            .UpdateOneAsync(
+                Builders<BsonDocument>.Filter.Eq("_id", older.Id!.Value),
+                Builders<BsonDocument>.Update.Set("createdAt", newer.CreatedAt.AddDays(5)),
+                cancellationToken: Ct
+            );
 
         var list = await _reader.GetByOrganisationAsync(older.OrganisationId!, Ct);
 
         list.Select(a => a.Id).Should().Equal(older.Id, newer.Id);
-        list[0].UpdatedAt.Should().Be(Day1.AddDays(5));
+        list[0].CreatedAt.Should().Be(newer.CreatedAt.AddDays(5));
+    }
+
+    // GetById backfills the legacy document it read and then serves it: ServeAsync turns that legacy document into
+    // the response, so the route reads legacy once whichever reader is configured.
+    [Fact]
+    public async Task Serve_ServesTheProjectionWithVersionAndTimestampsFromTheGivenLegacy()
+    {
+        var legacy = await CreateAndMigrateAsync(Day1);
+        legacy.Version = 9;
+        legacy.UpdatedAt = Day1.AddDays(4);
+
+        var served = await _reader.ServeAsync(legacy, Ct);
+
+        served!.Version.Should().Be(9);
+        served.UpdatedAt.Should().Be(Day1.AddDays(4));
+        served.CreatedAt.Should().Be(legacy.CreatedAt);
+        served
+            .Should()
+            .BeEquivalentTo(
+                await ProjectionAsync(legacy.Id!.Value),
+                options =>
+                    options
+                        .Excluding(a => a.Version)
+                        .Excluding(a => a.CreatedAt)
+                        .Excluding(a => a.UpdatedAt)
+            );
+    }
+
+    [Fact]
+    public async Task Serve_NotInTheModel_ReturnsNull()
+    {
+        var legacyOnly = await CreateLegacyAsync(Day1);
+
+        var served = await _reader.ServeAsync(legacyOnly, Ct);
+
+        served.Should().BeNull();
     }
 }

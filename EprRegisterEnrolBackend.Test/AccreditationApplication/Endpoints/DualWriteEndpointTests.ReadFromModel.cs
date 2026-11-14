@@ -28,6 +28,7 @@ public sealed partial class DualWriteEndpointTests
     };
 
     // Migrated by a dual-written write, then renamed in legacy alone (no sync runs for a raw edit).
+    // Each restart starts a fresh database, so a test switches ReadFromModel on before it builds its data.
     private async Task<AccreditationApplicationModel> MigratedThenRenamedInLegacyAsync()
     {
         var application = await ApplicationAsync(null, ReExSite());
@@ -73,9 +74,9 @@ public sealed partial class DualWriteEndpointTests
     [Fact]
     public async Task ReadFromModel_On_GetById_ServesTheModel()
     {
+        Restart(s_readFromModelOn);
         ReExKnowsNothing();
         var application = await MigratedThenRenamedInLegacyAsync();
-        Restart(s_readFromModelOn);
 
         var body = await JsonAsync(await GetByIdAsync(application));
 
@@ -96,9 +97,9 @@ public sealed partial class DualWriteEndpointTests
     [Fact]
     public async Task ReadFromModel_On_GetById_TakesTheVersionFromLegacy()
     {
+        Restart(s_readFromModelOn);
         ReExKnowsNothing();
         var application = await MigratedThenRenamedInLegacyAsync();
-        Restart(s_readFromModelOn);
 
         var body = await JsonAsync(await GetByIdAsync(application));
 
@@ -112,9 +113,9 @@ public sealed partial class DualWriteEndpointTests
     [Fact]
     public async Task ReadFromModel_On_GetById_NotInTheModel_Answers404()
     {
+        Restart(s_readFromModelOn);
         ReExKnowsNothing();
         var legacyOnly = await ApplicationAsync(null, ReExSite());
-        Restart(s_readFromModelOn);
 
         var response = await GetByIdAsync(legacyOnly);
 
@@ -124,9 +125,9 @@ public sealed partial class DualWriteEndpointTests
     [Fact]
     public async Task ReadFromModel_On_GetList_ServesTheModel()
     {
+        Restart(s_readFromModelOn);
         ReExKnowsNothing();
         var application = await MigratedThenRenamedInLegacyAsync();
-        Restart(s_readFromModelOn);
 
         var list = await JsonAsync(await GetListAsync());
 
@@ -139,12 +140,12 @@ public sealed partial class DualWriteEndpointTests
     [Fact]
     public async Task ReadFromModel_On_GetById_StillBackfillsTheNation()
     {
+        Restart(s_readFromModelOn);
         var application = await MigratedWithoutNationOrOrgIdAsync();
         ReExKnowsNothing();
         _reEx
             .GetNationAsync(OrganisationId, ReExRegistrationId, Arg.Any<CancellationToken>())
             .Returns(ReExResult<Nation>.Success(Nation.Wales, 200));
-        Restart(s_readFromModelOn);
 
         var body = await JsonAsync(await GetByIdAsync(application));
 
