@@ -17,12 +17,15 @@
   legacy, and `createdAt` orders the GET list. Phase 6 must move all three before legacy writes stop.
 - **An application missing from the model answers 404, with no legacy fallback** (decided 2026-11-13): after the
   migration everything is in the model, and one that isn't should exist in neither. GET list and the API search leave
-  such an application out. Before the flag goes on in an environment, nothing may be missing (QA readiness check A).
+  such an application out. Before the flag goes on in an environment, nothing may be missing: readiness check A in
+  `tools/domain-model/read-switch-readiness-checks.js` (with its fixture test and acceptance criteria alongside).
 - **The read seam is `IApplicationReader`.** The legacy reader is today's behaviour. The model reader serves
   `ApplicationReadModel`'s projection with the three fields above from legacy. GetById still backfills the legacy
   document it read, then serves it through the reader. A write builds its response inside the dual-write transaction,
   before the sync reaches the model, so an endpoint filter serves it again once the handler has finished, including
-  the seed's `201 Created`. Write responses are strict like reads: if the model doesn't hold the application the
+  the seed's `201 Created` and the site and interim-site bodies (ORS add, update, promote, revert and recycling
+  operations; interim add, update and restore), which it takes from the model's copy of the application. The filter is
+  registered only with the flag on. Write responses are strict like reads: if the model doesn't hold the application the
   answer is 404 (decided 2026-11-14).
 - **A seed writes the initial Application version** (decided 2026-11-14). A seed happens when a user starts an
   application, so seed dual-write now also runs the migration's ensure-migrated step for the new application in the
@@ -36,10 +39,15 @@
   neither field is mapped; both are). The sync already filled a missing organisation number; it now also fills a missing
   Registration nation, as a new version (reason `ReExRefresh`), never overwriting one the model holds. Without this the
   model would keep no nation, and with the flag on the frontend would show the wrong nation's bank details.
-- **Evidence:** golden JSON is identical across all ten statuses, for exporters and reprocessors; the routes and the
-  accreditation API are tested in both flag states on a replica set; per-path dual-write tests now check the model's
-  content, not just its version.
-- **Follow-up:** GET list and the API search read each projection separately (about five reads per application).
+- **`wasteProcessingType` is served from the Registration, which always holds one.** A legacy application without one
+  would be served with one when the flag is on. Seed always sets it, so none is expected, but neither reconciliation nor
+  the survey compares this field, so readiness check E lists any such application.
+- **Evidence:** every route in scope, and each accreditation API route, answers the same JSON with the flag off and on
+  over the same data (two apps sharing one database, on a replica set); captured golden JSON files, one per status and
+  kind, are produced by legacy and by the model alike; the readiness scripts run in CI under Jint against Mongo;
+  per-path dual-write tests check the model's content, not just its version.
+- **Follow-up:** GET list and the API search read each projection separately (about five reads per application), in
+  one session.
 
 **Changes in v6.10 (2026-11-09): the migration service, and where reconciliation reports run (RA-704)**
 
