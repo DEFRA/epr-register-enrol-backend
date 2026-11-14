@@ -1163,9 +1163,11 @@ public static class AccreditationApplicationEndpoints
                 "GetByIdBackfill"
             );
 
-            var stored = saved is not null && result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 };
-
-            if (!stored)
+            if (saved is not null && result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 })
+            {
+                application = saved;
+            }
+            else
             {
                 loggerFactory
                     .CreateLogger("AccreditationApplicationEndpoints")
@@ -1176,10 +1178,6 @@ public static class AccreditationApplicationEndpoints
 
                 application.OrgId = originalOrgId;
                 application.Nation = originalNation;
-            }
-            else
-            {
-                application = saved;
             }
         }
 
