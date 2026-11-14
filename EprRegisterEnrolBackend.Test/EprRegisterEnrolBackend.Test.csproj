@@ -42,6 +42,12 @@
     <None Include="..\tools\domain-model\legacy-data-survey.js" Link="DomainModel\Diagnostics\legacy-data-survey.js" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The read-switch readiness scripts QA runs before ReadFromModel goes on, run by ReadSwitchReadinessScriptTests under Jint. -->
+  <ItemGroup>
+    <None Include="..\tools\domain-model\read-switch-readiness-checks.js" Link="DomainModel\ReadModel\read-switch-readiness-checks.js" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\tools\domain-model\read-switch-readiness-test.js" Link="DomainModel\ReadModel\read-switch-readiness-test.js" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\tools\CustomAnalyzers\CustomAnalyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>

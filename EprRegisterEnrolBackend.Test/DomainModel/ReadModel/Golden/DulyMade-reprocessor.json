@@ -1,0 +1,125 @@
+{
+  "applicationId": "\u003Cgenerated\u003E",
+  "organisationId": "\u003Cgenerated\u003E",
+  "orgId": 500500,
+  "organisationName": "Acme Recycling Ltd",
+  "year": 2027,
+  "registrationId": "\u003Cgenerated\u003E",
+  "isExporter": false,
+  "nation": "England",
+  "siteAddress": "2 Mill Rd, Leeds, LS2 2BB",
+  "companyRegisterAddressPostcode": "LS1 1AA",
+  "companyRegisteredAddress": "1 High St, Leeds, LS1 1AA",
+  "isUkRegisteredAddress": true,
+  "companiesHouseNumber": "01234567",
+  "permitNumbers": [
+    "EPR/AB1234",
+    "EPR/CD5678"
+  ],
+  "wasteProcessingType": "reprocessor",
+  "materialType": "Glass",
+  "glassRecyclingProcess": "glass_re_melt",
+  "applicationStatus": "DulyMade",
+  "sourceReExAccreditationId": "\u003Cgenerated\u003E",
+  "sourceYear": 2026,
+  "applicationReference": "APP-\u003Cgenerated\u003E",
+  "paymentReference": "PR/PK/REP/500500",
+  "caseManagementReference": null,
+  "caseManagementWorkItemId": "\u003Cgenerated\u003E",
+  "registrationReference": "R27EX1234567P",
+  "previousRegistrationNumbers": [],
+  "accreditationReference": "A2027EX5005000001PL",
+  "previousAccreditationNumbers": [
+    "A26EX5005000001PL"
+  ],
+  "submittedBy": {
+    "fullName": "Submitter",
+    "jobTitle": "Director",
+    "email": "submitter@example.com"
+  },
+  "submitterContactDetails": {
+    "fullName": "Org Submitter",
+    "email": "org@example.com",
+    "phone": "222",
+    "jobTitle": "Manager"
+  },
+  "withdrawalReason": "Reason",
+  "dateSent": "2026-11-01T09:00:00Z",
+  "caseManagementStatusUpdatedAt": "2026-11-01T09:00:00Z",
+  "dateLastEdited": "2026-11-01T09:00:00Z",
+  "createdAt": "2026-11-01T09:00:00Z",
+  "updatedAt": "2026-11-01T09:00:00Z",
+  "version": 0,
+  "prns": {
+    "plannedTonnageBand": "UpTo5000",
+    "authorisers": [
+      {
+        "fullName": "Authoriser",
+        "email": "auth@example.com",
+        "isNew": true
+      }
+    ],
+    "sectionStatus": "Submitted"
+  },
+  "businessPlan": {
+    "newInfrastructurePercent": 40,
+    "priceSupportPercent": 60,
+    "businessCollectionsPercent": null,
+    "communicationsPercent": null,
+    "newMarketsPercent": null,
+    "newUsesPercent": null,
+    "otherPercent": null,
+    "newInfrastructureDetail": "Detail",
+    "priceSupportDetail": null,
+    "businessCollectionsDetail": null,
+    "communicationsDetail": null,
+    "newMarketsDetail": null,
+    "newUsesDetail": null,
+    "otherDetail": null,
+    "sectionStatus": "Completed"
+  },
+  "samplingPlan": {
+    "files": [
+      {
+        "fileId": "plan-1",
+        "filename": "plan.pdf",
+        "contentType": "application/pdf",
+        "uploadedAt": "2026-11-01T09:00:00Z",
+        "uploadedByUserId": "user-1",
+        "scanStatus": "Clean",
+        "documentType": null,
+        "s3Key": "key",
+        "s3Bucket": "bucket"
+      }
+    ],
+    "sectionStatus": "Completed"
+  },
+  "overseasSites": {
+    "sites": [],
+    "sectionStatus": "Completed"
+  },
+  "besEvidence": {
+    "sectionStatus": "Completed"
+  },
+  "query": {
+    "queryNote": "Please check",
+    "querySubmissions": [
+      {
+        "querySubmissionTime": "2026-11-01T09:00:00Z",
+        "sectionKeys": [
+          "prns"
+        ],
+        "querySubmitterContactDetails": {
+          "fullName": "Regulator",
+          "email": "reg@example.com",
+          "role": "Officer"
+        }
+      }
+    ],
+    "queriedSectionKeys": [
+      "prns"
+    ]
+  },
+  "notificationStatus": null,
+  "dueDate": null
+}

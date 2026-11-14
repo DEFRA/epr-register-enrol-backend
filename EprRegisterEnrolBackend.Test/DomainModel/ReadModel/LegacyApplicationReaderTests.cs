@@ -82,4 +82,50 @@ public sealed class LegacyApplicationReaderTests
         served.Should().BeSameAs(application);
         await _persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default!, default!);
     }
+
+    [Fact]
+    public async Task ServeMany_ReturnsTheGivenApplicationsInOrder()
+    {
+        var first = Application();
+        var second = Application();
+
+        var served = await new LegacyApplicationReader(_persistence).ServeManyFromSourceAsync(
+            [first, second],
+            Ct
+        );
+
+        served.Should().Equal(first, second);
+        await _persistence.DidNotReceiveWithAnyArgs().GetByOrganisationAsync(default!);
+    }
+
+    [Fact]
+    public async Task GetById_Cancelled_Throws()
+    {
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        var act = () =>
+            new LegacyApplicationReader(_persistence).GetByIdAsync(
+                OrganisationId,
+                ObjectId.GenerateNewId().ToString(),
+                cancelled.Token
+            );
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task GetByOrganisation_Cancelled_Throws()
+    {
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        var act = () =>
+            new LegacyApplicationReader(_persistence).GetByOrganisationAsync(
+                OrganisationId,
+                cancelled.Token
+            );
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
 }

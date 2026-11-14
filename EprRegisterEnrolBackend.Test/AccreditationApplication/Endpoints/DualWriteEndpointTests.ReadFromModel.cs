@@ -155,8 +155,11 @@ public sealed partial class DualWriteEndpointTests
 
     // A write's response is built inside the dual-write transaction, before the sync reaches the model, so with
     // ReadFromModel on it is served again through the reader once the write has committed.
-    private Task<HttpResponseMessage> PatchPrnsAsync(AccreditationApplicationModel application) =>
-        _client.PatchAsync(
+    private Task<HttpResponseMessage> PatchPrnsAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    ) =>
+        (through ?? _client).PatchAsync(
             AppUrl(application, "prns"),
             new StringContent(
                 """{"plannedTonnageBand":"UpTo500"}""",

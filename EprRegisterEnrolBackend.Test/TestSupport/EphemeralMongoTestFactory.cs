@@ -21,17 +21,25 @@ public sealed class EphemeralMongoTestFactory : WebApplicationFactory<Program>
     private readonly string? _environment;
     private readonly IReadOnlyDictionary<string, string?> _settings;
 
+    // sharedDatabaseName: run this app over another factory's database, so two configurations (for example a feature
+    // flag off and on) can serve the same data. Null gives the factory a database of its own, as before.
     public EphemeralMongoTestFactory(
         MongoIntegrationFixture fixture,
         string databaseNamePrefix,
         string? environment = null,
-        IReadOnlyDictionary<string, string?>? settings = null)
+        IReadOnlyDictionary<string, string?>? settings = null,
+        string? sharedDatabaseName = null
+    )
     {
         _fixture = fixture;
-        _databaseName = MongoIntegrationFixture.NewDatabaseName(databaseNamePrefix);
+        _databaseName =
+            sharedDatabaseName ?? MongoIntegrationFixture.NewDatabaseName(databaseNamePrefix);
         _environment = environment;
         _settings = settings ?? new Dictionary<string, string?>();
     }
+
+    /// <summary>The database this app runs over; pass it as sharedDatabaseName to serve the same data.</summary>
+    public string DatabaseName => _databaseName;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {

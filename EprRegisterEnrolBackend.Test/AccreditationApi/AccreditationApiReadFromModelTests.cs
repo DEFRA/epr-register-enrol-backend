@@ -35,13 +35,31 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
     private readonly EphemeralMongoTestFactory _factory;
     private readonly HttpClient _client;
 
+    // The same app with ReadFromModel off, over the same database, to compare the two sources.
+    private readonly EphemeralMongoTestFactory _legacyFactory;
+    private readonly HttpClient _legacyClient;
+
     public AccreditationApiReadFromModelTests(MongoIntegrationFixture fixture)
     {
         _factory = new EphemeralMongoTestFactory(
             fixture,
             "accreditation_api_model",
             Environments.Production,
-            new Dictionary<string, string?>
+            Settings(readFromModel: true)
+        );
+        _client = _factory.CreateClient();
+        _legacyFactory = new EphemeralMongoTestFactory(
+            fixture,
+            "accreditation_api_model",
+            Environments.Production,
+            Settings(readFromModel: false),
+            _factory.DatabaseName
+        );
+        _legacyClient = _legacyFactory.CreateClient();
+    }
+
+    private static Dictionary<string, string?> Settings(bool readFromModel) =>
+        new Dictionary<string, string?>
             {
                 ["ServiceClients:Clients:0:Name"] = "reex",
                 ["ServiceClients:Clients:0:ClientId"] = ReExClientId,
@@ -52,14 +70,13 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
                 ["DomainModel:ExpandEnabled"] = "true",
                 ["DomainModel:DualWrite"] = "true",
                 ["DomainModel:DualWriteSeed"] = "true",
-                ["DomainModel:ReadFromModel"] = "true",
-            }
-        );
-        _client = _factory.CreateClient();
-    }
+                ["DomainModel:ReadFromModel"] = readFromModel ? "true" : "false",
+            };
 
     public void Dispose()
     {
+        _legacyClient.Dispose();
+        _legacyFactory.Dispose();
         _client.Dispose();
         _factory.Dispose();
     }
@@ -210,5 +227,37 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
             .Select(a => a.GetProperty("registrationNumber").GetString())
             .ToList();
         Assert.Equal([Registration], registrations);
+    }
+
+    private Task<HttpResponseMessage> GetLegacyAsync(string path) =>
+        _legacyClient.SendAsync(
+            ServiceClientSigner.Request(HttpMethod.Get, path, ReExClientId, ReExSecret),
+            Ct
+        );
+
+    // Every API route answers field for field the same JSON from the model as from legacy, over the same data.
+    [Theory]
+    [InlineData("")]
+    [InlineData("/overseas-sites")]
+    [InlineData("/overseas-sites/001")]
+    [InlineData("search")]
+    public async Task Parity_SameJsonFromBothSources(string route)
+    {
+        var application = await GrantedAsync();
+        await MigrateAsync(application);
+        var path = route == "search"
+            ? $"/v1/accreditations?organisationNumber={Org}"
+            : AccreditationPath() + route;
+
+        var fromLegacy = (await JsonAsync(await GetLegacyAsync(path))).GetRawText();
+        var fromModel = (await JsonAsync(await GetAsync(path))).GetRawText();
+
+        Assert.True(
+            System.Text.Json.Nodes.JsonNode.DeepEquals(
+                System.Text.Json.Nodes.JsonNode.Parse(fromLegacy),
+                System.Text.Json.Nodes.JsonNode.Parse(fromModel)
+            ),
+            $"legacy {fromLegacy}\nmodel {fromModel}"
+        );
     }
 }

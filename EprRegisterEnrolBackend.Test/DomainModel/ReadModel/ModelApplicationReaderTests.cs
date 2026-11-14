@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -354,5 +356,79 @@ public sealed class ModelApplicationReaderTests : IDisposable
 
         found.Should().Contain(d => d.StartsWith("$.organisationName:"));
         found.Should().Contain(d => d.StartsWith("$.prns.authorisers:"));
+    }
+
+    [Fact]
+    public async Task ServeMany_KeepsTheOrderAndLeavesOutApplicationsNotInTheModel()
+    {
+        // Migrating one application migrates its whole registration group, so the legacy-only one comes last.
+        var first = await CreateAndMigrateAsync(Day1);
+        var last = await CreateAndMigrateAsync(Day1.AddDays(2));
+        var legacyOnly = await CreateLegacyAsync(Day1.AddDays(1));
+
+        var served = await _reader.ServeManyFromSourceAsync([first, legacyOnly, last], Ct);
+
+        served.Select(a => a.Id).Should().Equal(first.Id, last.Id);
+    }
+
+    // Captured golden JSON (design doc phase 5 gate). The files under Golden/ hold today's legacy response for each
+    // status and kind; legacy and the model must both still produce it, so a change that moved both sides at once
+    // fails too. Generated ids are normalised. To re-capture after an intended contract change, run with
+    // GOLDEN_RECORD=1 and review the diff of Golden/.
+    private static readonly Regex s_generatedIds = new(
+        "[0-9a-f]{24}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        RegexOptions.Compiled
+    );
+
+    private static string GoldenDirectory([CallerFilePath] string thisFile = "") =>
+        Path.Combine(Path.GetDirectoryName(thisFile)!, "Golden");
+
+    private static JsonNode Golden(AccreditationApplicationModel application) =>
+        JsonNode.Parse(
+            s_generatedIds.Replace(JsonSerializer.Serialize(application, s_apiJson), "<generated>")
+        )!;
+
+    [Theory]
+    [MemberData(nameof(StatusesAndKinds))]
+    public async Task Golden_LegacyAndTheModelBothMatchTheCapturedResponse(
+        ApplicationStatus status,
+        bool exporter
+    )
+    {
+        var application = Application(Day1, status);
+        application.IsExporter = exporter;
+        application.WasteProcessingType = exporter ? "exporter" : "reprocessor";
+        var created =
+            await _applications.CreateAsync(application)
+            ?? throw new InvalidOperationException("The legacy insert failed.");
+        await InsertRaceRetry.RunInTransactionAsync(
+            _factory,
+            (session, token) => _migrator.EnsureMigratedAsync(created.Id!.Value, session, token),
+            _ => { },
+            Ct
+        );
+        var legacy = (
+            await _applications.GetByIdAsync(created.OrganisationId, created.Id!.Value.ToString())
+        )!;
+        var served = (await _reader.ServeFromSourceAsync(legacy, Ct))!;
+        var file = Path.Combine(GoldenDirectory(), $"{status}-{(exporter ? "exporter" : "reprocessor")}.json");
+        if (Environment.GetEnvironmentVariable("GOLDEN_RECORD") == "1")
+        {
+            Directory.CreateDirectory(GoldenDirectory());
+            await File.WriteAllTextAsync(
+                file,
+                Golden(legacy).ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n",
+                Ct
+            );
+        }
+
+        var captured = JsonNode.Parse(await File.ReadAllTextAsync(file, Ct));
+
+        var fromLegacy = new List<string>();
+        Differences(captured, Golden(legacy), "$", fromLegacy);
+        fromLegacy.Should().BeEmpty("legacy must still produce the captured response");
+        var fromModel = new List<string>();
+        Differences(captured, Golden(served), "$", fromModel);
+        fromModel.Should().BeEmpty("the model must produce the captured response");
     }
 }
