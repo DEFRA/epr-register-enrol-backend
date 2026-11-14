@@ -68,6 +68,15 @@ public sealed class ApplicationModelSync(
             );
         }
 
+        // A read's backfill reaches legacy first; the write fills the Registration while it has none.
+        await FillMissingRegistrationNationAsync(
+            current.RegistrationId,
+            legacy.Nation,
+            applicationId,
+            session,
+            cancellationToken
+        );
+
         var run = new SyncRun(
             stores,
             applications,
@@ -137,6 +146,39 @@ public sealed class ApplicationModelSync(
                 Reason = ChangeReason.RegistrationNumberIssued,
                 ApplicationId = applicationId,
             },
+            session,
+            cancellationToken
+        );
+    }
+
+    private async Task FillMissingRegistrationNationAsync(
+        ObjectId? registrationId,
+        Nation? nation,
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
+    )
+    {
+        if (registrationId is not { } id || nation is null)
+        {
+            return;
+        }
+
+        var registration = await stores.Registrations.Versions.FindCurrentAsync(
+            Builders<RegistrationEntity>.Filter.Eq(r => r.EntityId, id),
+            session,
+            cancellationToken
+        );
+        if (registration is null || registration.Nation is not null)
+        {
+            return;
+        }
+
+        registration.Nation = nation;
+        await stores.Registrations.Versions.UpdateAsync(
+            registration,
+            registration.Version,
+            new ChangeInfo { Reason = ChangeReason.ReExRefresh, ApplicationId = applicationId },
             session,
             cancellationToken
         );

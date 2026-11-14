@@ -1087,6 +1087,7 @@ public static class AccreditationApplicationEndpoints
         IAccreditationApplicationPersistence persistence,
         ICaseWorkingApiAdapter caseWorkingAdapter,
         IReExApiAdapter reExAdapter,
+        IDualWriteUnitOfWork unitOfWork,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
@@ -1094,6 +1095,10 @@ public static class AccreditationApplicationEndpoints
         var application = await persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        var originalOrgId = application.OrgId;
+        var originalNation = application.Nation;
+        var needsUpdate = false;
 
         // RA-503: backfill OrgId (ReEx's numeric organisation number) for any application read
         // before Submit's own resolution ran - older applications, or ones that never reached
@@ -1111,7 +1116,7 @@ public static class AccreditationApplicationEndpoints
             if (orgNumber is not null)
             {
                 application.OrgId = orgNumber;
-                application = await persistence.UpdateAsync(application) ?? application;
+                needsUpdate = true;
             }
         }
 
@@ -1132,7 +1137,43 @@ public static class AccreditationApplicationEndpoints
             if (nationResult.IsSuccess)
             {
                 application.Nation = nationResult.Value;
-                application = await persistence.UpdateAsync(application) ?? application;
+                needsUpdate = true;
+            }
+        }
+
+        // Write goes through the dual-write unit of work so the model's Organisation and Registration get the values
+        // too (RA-705); a failed or lost write still answers the read, with what is stored.
+        if (needsUpdate)
+        {
+            AccreditationApplicationModel? saved = null;
+            var result = await unitOfWork.InTransactionAsync(
+                applicationId,
+                async session =>
+                {
+                    saved = await persistence.UpdateAsync(application, session);
+                    return Results.Ok();
+                },
+                cancellationToken,
+                "GetByIdBackfill"
+            );
+
+            var stored = saved is not null && result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 };
+
+            if (!stored)
+            {
+                loggerFactory
+                    .CreateLogger("AccreditationApplicationEndpoints")
+                    .LogWarning(
+                        "Failed to persist backfilled data for applicationId={ApplicationId}",
+                        applicationId
+                    );
+
+                application.OrgId = originalOrgId;
+                application.Nation = originalNation;
+            }
+            else
+            {
+                application = saved;
             }
         }
 
