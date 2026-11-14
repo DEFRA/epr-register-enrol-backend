@@ -26,7 +26,7 @@ public sealed class ApplicationResponseReaderFilter(IApplicationReader reader) :
 
         if (result is Ok<AccreditationApplicationModel> { Value: { } legacy })
         {
-            var served = await reader.ServeAsync(legacy, context.HttpContext.RequestAborted);
+            var served = await reader.ServeFromSourceAsync(legacy, context.HttpContext.RequestAborted);
 
             // Write responses are strict like reads: the source not holding the application answers 404
             // (the seed now writes the initial Application version, so a successful write always leaves it in the
@@ -42,7 +42,7 @@ public sealed class ApplicationResponseReaderFilter(IApplicationReader reader) :
             }
         )
         {
-            var served = await reader.ServeAsync(created, context.HttpContext.RequestAborted);
+            var served = await reader.ServeFromSourceAsync(created, context.HttpContext.RequestAborted);
 
             return served is null
                 ? TypedResults.NotFound()

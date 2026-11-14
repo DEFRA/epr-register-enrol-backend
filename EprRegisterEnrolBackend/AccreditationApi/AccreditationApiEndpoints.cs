@@ -125,7 +125,7 @@ public static partial class AccreditationApiEndpoints
         var servedItems = new List<AccreditationApplicationModel>();
         foreach (var item in items)
         {
-            var served = await reader.ServeAsync(item, cancellationToken);
+            var served = await reader.ServeFromSourceAsync(item, cancellationToken);
             if (served is not null)
                 servedItems.Add(served);
         }
@@ -377,7 +377,7 @@ public static partial class AccreditationApiEndpoints
             config.Value.FirstAccreditationYear
         );
 
-        var served = application is null ? null : await reader.ServeAsync(application, cancellationToken);
+        var served = application is null ? null : await reader.ServeFromSourceAsync(application, cancellationToken);
 
         return served is null
             ? new Lookup(

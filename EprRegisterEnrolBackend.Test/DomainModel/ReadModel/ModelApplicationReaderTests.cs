@@ -219,7 +219,7 @@ public sealed class ModelApplicationReaderTests : IDisposable
         list[0].CreatedAt.Should().Be(newer.CreatedAt.AddDays(5));
     }
 
-    // GetById backfills the legacy document it read and then serves it: ServeAsync turns that legacy document into
+    // GetById backfills the legacy document it read and then serves it: ServeFromSourceAsync turns that legacy document into
     // the response, so the route reads legacy once whichever reader is configured.
     [Fact]
     public async Task Serve_ServesTheProjectionWithVersionAndTimestampsFromTheGivenLegacy()
@@ -228,7 +228,7 @@ public sealed class ModelApplicationReaderTests : IDisposable
         legacy.Version = 9;
         legacy.UpdatedAt = Day1.AddDays(4);
 
-        var served = await _reader.ServeAsync(legacy, Ct);
+        var served = await _reader.ServeFromSourceAsync(legacy, Ct);
 
         served!.Version.Should().Be(9);
         served.UpdatedAt.Should().Be(Day1.AddDays(4));
@@ -250,7 +250,7 @@ public sealed class ModelApplicationReaderTests : IDisposable
     {
         var legacyOnly = await CreateLegacyAsync(Day1);
 
-        var served = await _reader.ServeAsync(legacyOnly, Ct);
+        var served = await _reader.ServeFromSourceAsync(legacyOnly, Ct);
 
         served.Should().BeNull();
     }
@@ -322,7 +322,7 @@ public sealed class ModelApplicationReaderTests : IDisposable
         );
         var legacy = (await _applications.GetByIdAsync(created.OrganisationId, created.Id!.Value.ToString()))!;
 
-        var served = await _reader.ServeAsync(legacy, Ct);
+        var served = await _reader.ServeFromSourceAsync(legacy, Ct);
 
         served.Should().NotBeNull().And.NotBeSameAs(legacy);
         var found = new List<string>();
@@ -340,7 +340,7 @@ public sealed class ModelApplicationReaderTests : IDisposable
     public async Task Differences_ReportsAFieldServedDifferently()
     {
         var legacy = await CreateAndMigrateAsync(Day1);
-        var served = await _reader.ServeAsync(legacy, Ct);
+        var served = await _reader.ServeFromSourceAsync(legacy, Ct);
         served!.OrganisationName = "Something Else";
         served.Prns.Authorisers.Clear();
 

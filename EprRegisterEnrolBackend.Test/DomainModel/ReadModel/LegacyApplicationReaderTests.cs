@@ -77,7 +77,7 @@ public sealed class LegacyApplicationReaderTests
     {
         var application = Application();
 
-        var served = await new LegacyApplicationReader(_persistence).ServeAsync(application, Ct);
+        var served = await new LegacyApplicationReader(_persistence).ServeFromSourceAsync(application, Ct);
 
         served.Should().BeSameAs(application);
         await _persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default!, default!);

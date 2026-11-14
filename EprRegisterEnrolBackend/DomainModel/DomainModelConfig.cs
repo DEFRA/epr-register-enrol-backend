@@ -45,8 +45,9 @@ public class DomainModelConfig
     /// <summary>
     /// Phase 5, "Switch reads": the read routes and the ReEx accreditation API are served from the domain model
     /// through the ApplicationReadModel facade instead of the legacy accreditationApplications document.
-    /// Needs <see cref="DualWrite"/> and <see cref="ExpandEnabled"/>. Turning it off is the rollback: reads
-    /// return to legacy.
+    /// Its prerequisites are listed once, in
+    /// <see cref="EprRegisterEnrolBackend.Config.FeatureFlags.EnsureReadFromModelHasItsPrerequisites"/>.
+    /// Turning it off is the rollback: reads return to legacy.
     /// </summary>
     public bool ReadFromModel { get; set; }
 

@@ -22,7 +22,7 @@ public interface IApplicationReader
     );
 
     /// <summary>Returns the response for a legacy document already read; null if the source doesn't hold it.</summary>
-    Task<AccreditationApplicationModel?> ServeAsync(
+    Task<AccreditationApplicationModel?> ServeFromSourceAsync(
         AccreditationApplicationModel legacy,
         CancellationToken cancellationToken = default
     );

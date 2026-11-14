@@ -43,7 +43,7 @@ public sealed class ApplicationResponseReaderFilterTests
     {
         var legacy = Application("legacy");
         var served = Application("model");
-        _reader.ServeAsync(legacy, Arg.Any<CancellationToken>()).Returns(served);
+        _reader.ServeFromSourceAsync(legacy, Arg.Any<CancellationToken>()).Returns(served);
 
         var result = await InvokeAsync(HttpMethods.Patch, TypedResults.Ok(legacy));
 
@@ -59,7 +59,7 @@ public sealed class ApplicationResponseReaderFilterTests
     {
         var legacy = Application("legacy");
         _reader
-            .ServeAsync(legacy, Arg.Any<CancellationToken>())
+            .ServeFromSourceAsync(legacy, Arg.Any<CancellationToken>())
             .Returns((AccreditationApplicationModel?)null);
 
         var result = await InvokeAsync(HttpMethods.Patch, TypedResults.Ok(legacy));
@@ -72,7 +72,7 @@ public sealed class ApplicationResponseReaderFilterTests
     {
         var legacy = Application("legacy");
         var served = Application("model");
-        _reader.ServeAsync(legacy, Arg.Any<CancellationToken>()).Returns(served);
+        _reader.ServeFromSourceAsync(legacy, Arg.Any<CancellationToken>()).Returns(served);
 
         var result = await InvokeAsync(
             HttpMethods.Post,
@@ -89,7 +89,7 @@ public sealed class ApplicationResponseReaderFilterTests
     {
         var legacy = Application("legacy");
         _reader
-            .ServeAsync(legacy, Arg.Any<CancellationToken>())
+            .ServeFromSourceAsync(legacy, Arg.Any<CancellationToken>())
             .Returns((AccreditationApplicationModel?)null);
 
         var result = await InvokeAsync(
@@ -109,7 +109,7 @@ public sealed class ApplicationResponseReaderFilterTests
         var result = await InvokeAsync(HttpMethods.Get, ok);
 
         result.Should().BeSameAs(ok);
-        await _reader.DidNotReceiveWithAnyArgs().ServeAsync(default!, default);
+        await _reader.DidNotReceiveWithAnyArgs().ServeFromSourceAsync(default!, default);
     }
 
     [Fact]
@@ -120,6 +120,6 @@ public sealed class ApplicationResponseReaderFilterTests
         var result = await InvokeAsync(HttpMethods.Post, site);
 
         result.Should().BeSameAs(site);
-        await _reader.DidNotReceiveWithAnyArgs().ServeAsync(default!, default);
+        await _reader.DidNotReceiveWithAnyArgs().ServeFromSourceAsync(default!, default);
     }
 }

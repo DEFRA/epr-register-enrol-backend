@@ -18,7 +18,7 @@ public sealed class LegacyApplicationReader(IAccreditationApplicationPersistence
         CancellationToken cancellationToken = default
     ) => (await persistence.GetByOrganisationAsync(organisationId)).ToList();
 
-    public Task<AccreditationApplicationModel?> ServeAsync(
+    public Task<AccreditationApplicationModel?> ServeFromSourceAsync(
         AccreditationApplicationModel legacy,
         CancellationToken cancellationToken = default
     ) => Task.FromResult<AccreditationApplicationModel?>(legacy);

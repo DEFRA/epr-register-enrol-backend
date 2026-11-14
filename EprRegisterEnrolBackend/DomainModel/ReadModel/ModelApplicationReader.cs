@@ -24,12 +24,12 @@ public sealed class ModelApplicationReader(
     )
     {
         var legacy = await applications.GetByIdAsync(organisationId, applicationId);
-        if (legacy == null)
+        if (legacy is null)
         {
             return null;
         }
 
-        return await ServeAsync(legacy, cancellationToken);
+        return await ServeFromSourceAsync(legacy, cancellationToken);
     }
 
     /// <summary>Gets all applications for an organisation, served from the model with legacy metadata.</summary>
@@ -46,8 +46,8 @@ public sealed class ModelApplicationReader(
         var results = new List<AccreditationApplicationModel>();
         foreach (var legacy in legacyList)
         {
-            var served = await ServeAsync(legacy, session, cancellationToken);
-            if (served != null)
+            var served = await ServeFromSourceAsync(legacy, session, cancellationToken);
+            if (served is not null)
             {
                 results.Add(served);
             }
@@ -57,12 +57,12 @@ public sealed class ModelApplicationReader(
     }
 
     /// <summary>Transforms a legacy application into the model's projection while preserving legacy metadata.</summary>
-    public async Task<AccreditationApplicationModel?> ServeAsync(
+    public async Task<AccreditationApplicationModel?> ServeFromSourceAsync(
         AccreditationApplicationModel legacy,
         CancellationToken cancellationToken = default
     )
     {
-        if (legacy.Id == null)
+        if (legacy.Id is null)
         {
             return null;
         }
@@ -70,17 +70,17 @@ public sealed class ModelApplicationReader(
         using var session = await clientFactory
             .GetClient()
             .StartSessionAsync(cancellationToken: cancellationToken);
-        return await ServeAsync(legacy, session, cancellationToken);
+        return await ServeFromSourceAsync(legacy, session, cancellationToken);
     }
 
-    private async Task<AccreditationApplicationModel?> ServeAsync(
+    private async Task<AccreditationApplicationModel?> ServeFromSourceAsync(
         AccreditationApplicationModel legacy,
         IClientSessionHandle session,
         CancellationToken cancellationToken
     )
     {
         var projection = await readModel.GetAsync(legacy.Id!.Value, session, cancellationToken);
-        if (projection == null)
+        if (projection is null)
         {
             return null;
         }

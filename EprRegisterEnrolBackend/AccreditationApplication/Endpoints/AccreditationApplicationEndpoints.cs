@@ -38,7 +38,9 @@ public static class AccreditationApplicationEndpoints
     public static void UseAccreditationApplicationEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("api/v1/accreditation-applications");
-        group.AddEndpointFilter<ApplicationResponseReaderFilter>(); // RA-705
+        // RA-705: with DomainModel:ReadFromModel on, write responses are served again from the model once the
+        // write has committed (each handler builds its body from legacy inside the dual-write transaction).
+        group.AddEndpointFilter<ApplicationResponseReaderFilter>();
 
         FrontendOnly(group.MapPost("{organisationId}/{registrationId}/{materialType}/seed", Seed));
         FrontendOnly(group.MapGet("{organisationId}", GetList));
@@ -1159,8 +1161,7 @@ public static class AccreditationApplicationEndpoints
                     saved = await persistence.UpdateAsync(application, session);
                     return Results.Ok();
                 },
-                cancellationToken,
-                "GetByIdBackfill"
+                cancellationToken
             );
 
             if (saved is not null && result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 })
@@ -1184,7 +1185,7 @@ public static class AccreditationApplicationEndpoints
         // The backfills work on the legacy document (the one that is saved); the response comes from
         // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
         // and UpdatedAt from legacy.
-        var served = await reader.ServeAsync(application, cancellationToken);
+        var served = await reader.ServeFromSourceAsync(application, cancellationToken);
         if (served is null)
         {
             return Results.NotFound();
