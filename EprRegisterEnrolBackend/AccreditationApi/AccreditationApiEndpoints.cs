@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.AccreditationApi;
@@ -42,8 +43,10 @@ public static partial class AccreditationApiEndpoints
     private static async Task<IResult> SearchAccreditations(
         HttpContext http,
         IAccreditationApplicationPersistence persistence,
+        IApplicationReader reader,
         IOptions<ServiceClientsConfig> config,
-        ILoggerFactory loggerFactory
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
     )
     {
         var query = http.Request.Query;
@@ -119,14 +122,23 @@ public static partial class AccreditationApiEndpoints
             paging.Limit
         );
 
+        var servedItems = new List<AccreditationApplicationModel>();
+        foreach (var item in items)
+        {
+            var served = await reader.ServeAsync(item, cancellationToken);
+            if (served is not null)
+                servedItems.Add(served);
+        }
+
         return Results.Ok(
             new PageDto<AccreditationSummaryDto>
             {
                 PageNumber = paging.PageNumber,
                 Limit = paging.Limit,
+                // After the migration the model holds every granted accreditation, so the two agree.
                 TotalItems = (int)total,
                 Items = AccreditationApiMapper.ToSummaries(
-                    items,
+                    servedItems,
                     now,
                     loggerFactory.CreateLogger("EprRegisterEnrolBackend.AccreditationApi")
                 ),
@@ -140,7 +152,9 @@ public static partial class AccreditationApiEndpoints
         string year,
         HttpContext http,
         IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        IApplicationReader reader,
+        IOptions<ServiceClientsConfig> config,
+        CancellationToken cancellationToken
     )
     {
         var withdrawn = ParseIncludeWithdrawn(http.Request.Query["includeWithdrawn"]);
@@ -152,7 +166,9 @@ public static partial class AccreditationApiEndpoints
             registrationNumber,
             year,
             persistence,
-            config
+            reader,
+            config,
+            cancellationToken
         );
         return lookup.Problem
             ?? Results.Ok(
@@ -170,7 +186,9 @@ public static partial class AccreditationApiEndpoints
         string year,
         HttpContext http,
         IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        IApplicationReader reader,
+        IOptions<ServiceClientsConfig> config,
+        CancellationToken cancellationToken
     )
     {
         var query = http.Request.Query;
@@ -187,7 +205,9 @@ public static partial class AccreditationApiEndpoints
             registrationNumber,
             year,
             persistence,
-            config
+            reader,
+            config,
+            cancellationToken
         );
         if (lookup.Problem is not null)
             return lookup.Problem;
@@ -229,7 +249,9 @@ public static partial class AccreditationApiEndpoints
         string orsId,
         HttpContext http,
         IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        IApplicationReader reader,
+        IOptions<ServiceClientsConfig> config,
+        CancellationToken cancellationToken
     )
     {
         if (!OrsIdPattern().IsMatch(orsId))
@@ -250,7 +272,9 @@ public static partial class AccreditationApiEndpoints
             registrationNumber,
             year,
             persistence,
-            config
+            reader,
+            config,
+            cancellationToken
         );
         if (lookup.Problem is not null)
             return lookup.Problem;
@@ -305,7 +329,9 @@ public static partial class AccreditationApiEndpoints
         string registrationNumber,
         string year,
         IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        IApplicationReader reader,
+        IOptions<ServiceClientsConfig> config,
+        CancellationToken cancellationToken
     )
     {
         if (
@@ -351,7 +377,9 @@ public static partial class AccreditationApiEndpoints
             config.Value.FirstAccreditationYear
         );
 
-        return application is null
+        var served = application is null ? null : await reader.ServeAsync(application, cancellationToken);
+
+        return served is null
             ? new Lookup(
                 null,
                 new ServiceProblemResult(
@@ -360,7 +388,7 @@ public static partial class AccreditationApiEndpoints
                     $"No granted accreditation was found for organisation {orgId}, registration {registrationNumber} in {accreditationYear}."
                 )
             )
-            : new Lookup(application, null);
+            : new Lookup(served, null);
     }
 
     private static Lookup Bad(string code, string detail) =>
