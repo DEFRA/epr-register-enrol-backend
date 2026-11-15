@@ -45,7 +45,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         );
 
         _caseWorking
-            .GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .GetChargeStateAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns(call => _workItems[call.Arg<Guid>()]);
         _caseWorking
             .SetChargeAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
@@ -136,7 +136,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
 
         summary.Mode.Should().Be(RunMode.Disabled);
         _logger.Entries.Should().BeEmpty();
-        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _caseWorking.DidNotReceive().GetChargeStateAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         var summary = await RunAsync(apply: true);
 
         summary.SkippedNoBand.Should().Be(1);
-        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _caseWorking.DidNotReceive().GetChargeStateAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
         await DidNotWriteAsync();
         OutcomeLines()
             .Should()
@@ -322,7 +322,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         );
         // The exception message carries something that must never reach the logs.
         _caseWorking
-            .GetWorkItemAsync(failingId, Arg.Any<CancellationToken>())
+            .GetChargeStateAsync(failingId, Arg.Any<CancellationToken>())
             .ThrowsAsync(
                 new HttpRequestException(
                     "body said jane.doe@example.com",
@@ -356,7 +356,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     {
         var (workItemId, _) = await SeedAsync();
         _caseWorking
-            .GetWorkItemAsync(workItemId, Arg.Any<CancellationToken>())
+            .GetChargeStateAsync(workItemId, Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("CaseWorking API URL is not configured."));
 
         await RunAsync(apply: true);
@@ -378,7 +378,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         var summary = await RunAsync(apply: true);
 
         summary.Candidates.Should().Be(0);
-        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _caseWorking.DidNotReceive().GetChargeStateAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     [Theory]

@@ -55,18 +55,20 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
-    // RA-766 (temporary; removed with ChargeCorrectionMigration): reads the state, charge and
-    // duly-made marker of a work item (ManagementBe's GET /work-items/{id}). Allowed to throw
-    // (an HttpRequestException carrying the status code for a non-success response): the
-    // migration counts a failure and carries on.
-    Task<CaseWorkingWorkItem> GetWorkItemAsync(
+    // RA-766 (temporary; removed with ChargeCorrectionMigration): reads only the state, charge and
+    // duly-made marker of a work item (ManagementBe's GET /work-items/{id}), acting as the charge
+    // correction. Not a general work item read. Allowed to throw (an HttpRequestException
+    // carrying the status code for a non-success response): the migration counts a failure and
+    // carries on.
+    Task<CaseWorkingWorkItem> GetChargeStateAsync(
         Guid workItemId,
         CancellationToken cancellationToken = default
     );
 
     // RA-766 (temporary; removed with ChargeCorrectionMigration): sets the charge held on a work
-    // item (ManagementBe's PUT /work-items/re-accreditation/{id}/charge). A 409 (the work item
-    // is closed) is Closed; any other non-success response throws.
+    // item (ManagementBe's PUT /work-items/re-accreditation/{id}/charge). A 409 with errorCode
+    // work-item-closed is Closed; any other non-success response throws, including a 409 for a
+    // work item that stayed busy (errorCode concurrency-conflict).
     Task<SetChargeOutcome> SetChargeAsync(
         Guid workItemId,
         int chargeAmountPence,

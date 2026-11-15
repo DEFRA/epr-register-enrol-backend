@@ -2751,7 +2751,7 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task GetWorkItemAsync_ReadsStateChargeAndDulyMadeFromTheWorkItem()
+    public async Task GetChargeStateAsync_ReadsStateChargeAndDulyMadeFromTheWorkItem()
     {
         var workItemId = Guid.NewGuid();
         var (adapter, handler) = CreateAdapterResponding(
@@ -2764,7 +2764,7 @@ public class HttpCaseWorkingApiAdapterTests
             }
         );
 
-        var workItem = await adapter.GetWorkItemAsync(
+        var workItem = await adapter.GetChargeStateAsync(
             workItemId,
             TestContext.Current.CancellationToken
         );
@@ -2783,7 +2783,7 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task GetWorkItemAsync_ReadsNoChargeAndNotDulyMadeWhenThePayloadHasNeither()
+    public async Task GetChargeStateAsync_ReadsNoChargeAndNotDulyMadeWhenThePayloadHasNeither()
     {
         var (adapter, _) = CreateAdapterResponding(
             HttpStatusCode.OK,
@@ -2794,7 +2794,7 @@ public class HttpCaseWorkingApiAdapterTests
             }
         );
 
-        var workItem = await adapter.GetWorkItemAsync(
+        var workItem = await adapter.GetChargeStateAsync(
             Guid.NewGuid(),
             TestContext.Current.CancellationToken
         );
@@ -2805,12 +2805,12 @@ public class HttpCaseWorkingApiAdapterTests
     [Theory]
     [InlineData(HttpStatusCode.NotFound)]
     [InlineData(HttpStatusCode.InternalServerError)]
-    public async Task GetWorkItemAsync_ThrowsWithTheStatusForAFailureResponse(HttpStatusCode status)
+    public async Task GetChargeStateAsync_ThrowsWithTheStatusForAFailureResponse(HttpStatusCode status)
     {
         var (adapter, _) = CreateAdapterResponding(status, new { detail = "ignored" });
 
         var act = () =>
-            adapter.GetWorkItemAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+            adapter.GetChargeStateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
 
         (await act.Should().ThrowAsync<HttpRequestException>())
             .Which.StatusCode.Should()
@@ -2867,16 +2867,39 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task SetChargeAsync_ReportsClosedForA409()
+    public async Task SetChargeAsync_ReportsClosedForA409WithTheClosedErrorCode()
     {
         var (adapter, _) = CreateAdapterResponding(
             HttpStatusCode.Conflict,
-            new { title = "Could not set re-accreditation charge" }
+            new
+            {
+                title = "Could not set re-accreditation charge",
+                errorCode = "work-item-closed",
+            }
         );
 
         (await adapter.SetChargeAsync(Guid.NewGuid(), 327_600, TestContext.Current.CancellationToken))
             .Should()
             .Be(SetChargeOutcome.Closed);
+    }
+
+    [Theory]
+    [InlineData("concurrency-conflict")]
+    [InlineData("something-new")]
+    [InlineData(null)]
+    public async Task SetChargeAsync_ThrowsForA409ThatIsNotTheClosedErrorCode(string? errorCode)
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.Conflict,
+            new { title = "Could not set re-accreditation charge", errorCode }
+        );
+
+        var act = () =>
+            adapter.SetChargeAsync(Guid.NewGuid(), 327_600, TestContext.Current.CancellationToken);
+
+        (await act.Should().ThrowAsync<HttpRequestException>())
+            .Which.StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
     }
 
     [Theory]
@@ -2908,7 +2931,7 @@ public class HttpCaseWorkingApiAdapterTests
         );
 
         await adapter
-            .Invoking(a => a.GetWorkItemAsync(Guid.NewGuid(), TestContext.Current.CancellationToken))
+            .Invoking(a => a.GetChargeStateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken))
             .Should()
             .ThrowAsync<InvalidOperationException>();
         await adapter

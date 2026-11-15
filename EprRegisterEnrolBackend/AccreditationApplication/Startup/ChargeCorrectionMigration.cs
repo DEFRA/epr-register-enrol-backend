@@ -62,6 +62,11 @@ public class ChargeCorrectionMigration(
     // The Case Management service states a charge is never changed in. The two pending-contact
     // states are not terminal there, but are already a decided outcome (this service shows them
     // as AwaitingDecision, so the application status alone would not catch them).
+    //
+    // A copy: the source of truth is ReAccreditationChargeCorrectionService.IsClosed in
+    // epr-register-enrol-management-be (TerminalStates plus ReAccreditationConfirmContactGuard).
+    // The dry run needs it here because a dry run never sends the PUT. If either list changes
+    // before this migration is removed, change both.
     internal static readonly IReadOnlySet<string> ClosedWorkItemStates = new HashSet<string>(
         StringComparer.OrdinalIgnoreCase
     )
@@ -205,7 +210,7 @@ public class ChargeCorrectionMigration(
 
         try
         {
-            var workItem = await caseWorking.GetWorkItemAsync(workItemId, cancellationToken);
+            var workItem = await caseWorking.GetChargeStateAsync(workItemId, cancellationToken);
 
             if (
                 workItem.StateId is { } stateId

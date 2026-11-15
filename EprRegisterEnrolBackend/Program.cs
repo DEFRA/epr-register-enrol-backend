@@ -81,7 +81,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     // correction). Header propagation throws InvalidOperationException when there is no request
     // to propagate from, so this client deliberately omits it.
     builder.Services.AddHttpClient(
-        "BackgroundClient",
+        HttpCaseWorkingApiAdapter.BackgroundHttpClientName,
         client => client.Timeout = TimeSpan.FromSeconds(15)
     );
 

@@ -155,7 +155,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
 
     // RA-766 (temporary): the stub holds no work items, so the charge correction finds nothing to
     // change.
-    public Task<CaseWorkingWorkItem> GetWorkItemAsync(
+    public Task<CaseWorkingWorkItem> GetChargeStateAsync(
         Guid workItemId,
         CancellationToken cancellationToken = default
     )
@@ -163,7 +163,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "StubCaseWorkingApiAdapter.GetWorkItemAsync called for workItemId={WorkItemId}",
+                "StubCaseWorkingApiAdapter.GetChargeStateAsync called for workItemId={WorkItemId}",
                 workItemId
             );
         }

@@ -461,7 +461,7 @@ public class HttpCaseWorkingApiAdapter(
     internal const string ChargeCorrectionUserId = "ra-766-charge-correction";
     internal const string ChargeCorrectionUserName = "RA-766 charge correction";
 
-    public async Task<CaseWorkingWorkItem> GetWorkItemAsync(
+    public async Task<CaseWorkingWorkItem> GetChargeStateAsync(
         Guid workItemId,
         CancellationToken cancellationToken = default
     )
@@ -526,11 +526,16 @@ public class HttpCaseWorkingApiAdapter(
         var client = httpClientFactory.CreateClient(BackgroundHttpClientName);
 
         using var response = await client.SendAsync(request, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.Conflict)
+        if (
+            response.StatusCode == HttpStatusCode.Conflict
+            && await IsClosedConflictAsync(response, cancellationToken)
+        )
         {
             return SetChargeOutcome.Closed;
         }
 
+        // Any other non-success status throws, including a 409 for a work item that stayed busy
+        // after ManagementBe's retries, so the migration counts it as failed.
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<SetChargeResponseDto>(
@@ -540,6 +545,35 @@ public class HttpCaseWorkingApiAdapter(
         return string.Equals(result?.Outcome, "unchanged", StringComparison.OrdinalIgnoreCase)
             ? SetChargeOutcome.Unchanged
             : SetChargeOutcome.Updated;
+    }
+
+    // ManagementBe answers 409 both for a closed work item (errorCode work-item-closed) and when
+    // the work item stays busy after its retries (errorCode concurrency-conflict). Only the first
+    // is closed; a 409 with any other or no readable errorCode is left to throw, so the migration
+    // reports it as failed rather than skipping an item it did not correct.
+    internal const string ClosedWorkItemErrorCode = "work-item-closed";
+
+    private static async Task<bool> IsClosedConflictAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            var problem = await response.Content.ReadFromJsonAsync<ProblemErrorCodeDto>(
+                JsonOptions,
+                cancellationToken
+            );
+            return string.Equals(
+                problem?.ErrorCode,
+                ClosedWorkItemErrorCode,
+                StringComparison.Ordinal
+            );
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private string ConfiguredUrl() =>
@@ -1120,6 +1154,12 @@ public class HttpCaseWorkingApiAdapter(
     {
         public string? StateId { get; init; }
         public JsonElement Payload { get; init; }
+    }
+
+    // RA-766 (temporary): the errorCode of a ProblemDetails body. Nothing else of the body is read.
+    internal sealed class ProblemErrorCodeDto
+    {
+        public string? ErrorCode { get; init; }
     }
 
     // RA-766 (temporary): the response of PUT .../charge ("updated" or "unchanged").
