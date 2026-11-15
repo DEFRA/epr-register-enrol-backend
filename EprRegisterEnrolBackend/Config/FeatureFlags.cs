@@ -38,6 +38,19 @@ public static class FeatureFlags
         ];
 
     /// <summary>
+    /// RA-706: cut legacy writes.
+    /// </summary>
+    public const string LegacyWritesKey = $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.LegacyWrites)}";
+
+    private static readonly (string Key, string Reason)[] LegacyWritesCutPrerequisites =
+        [
+            (ReadFromModelKey, "Legacy is frozen, so every read must come from the model."),
+            (DualWriteKey, "Only dual-write writes the model."),
+            (DualWriteSeedKey, "Only seed dual-write writes a new application's initial version to the model."),
+            (ExpandEnabledKey, "On CDP only expand creates the model collections."),
+        ];
+
+    /// <summary>
     /// RA-697: the in-year changes routes read the domain model's registrations and ORSs. On CDP only dual-write
     /// (<c>DualWrite</c>, <c>DualWriteSeed</c> for seeded ones, and the <c>MigrateEnabled</c> migration, which
     /// itself needs <c>DualWrite</c>) fills those, so with the flag on and <c>DualWrite</c> off the pages would
@@ -82,6 +95,26 @@ public static class FeatureFlags
                     throw new InvalidOperationException(
                         $"{ReadFromModelKey} needs {key} outside Development: turn {key} on, or "
                             + $"{ReadFromModelKey} off. {reason}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// RA-706: LegacyWrites off is the cut. There is no Development exemption because a frozen legacy read,
+    /// or a write that reaches neither store, is wrong locally too.
+    /// </summary>
+    public static void EnsureLegacyWritesCutHasItsPrerequisites(IConfiguration configuration)
+    {
+        if (!configuration.GetValue(LegacyWritesKey, true))
+        {
+            foreach (var (key, reason) in LegacyWritesCutPrerequisites)
+            {
+                if (!configuration.GetValue<bool>(key))
+                {
+                    throw new InvalidOperationException(
+                        $"{LegacyWritesKey} off needs {key}: turn {key} on, or {LegacyWritesKey} back on. {reason}"
                     );
                 }
             }

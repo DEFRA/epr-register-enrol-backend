@@ -161,4 +161,89 @@ public class FeatureFlagsTests
 
         act.Should().NotThrow();
     }
+
+    // RA-706: LegacyWrites off is the cut: the legacy collection is no longer written and the domain model is the only
+    // source of truth. On by default, so a missing setting can never cut. Off needs every read served from the model
+    // and every write reaching it, in every environment: a frozen legacy read, or a write that reaches neither store,
+    // is wrong locally too.
+    private static IConfiguration CutSettings(
+        bool legacyWrites,
+        bool readFromModel,
+        bool dualWrite,
+        bool dualWriteSeed,
+        bool expand
+    ) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [FeatureFlags.LegacyWritesKey] = legacyWrites ? "true" : "false",
+                    [FeatureFlags.ReadFromModelKey] = readFromModel ? "true" : "false",
+                    ["DomainModel:DualWrite"] = dualWrite ? "true" : "false",
+                    ["DomainModel:DualWriteSeed"] = dualWriteSeed ? "true" : "false",
+                    ["DomainModel:ExpandEnabled"] = expand ? "true" : "false",
+                }
+            )
+            .Build();
+
+    [Fact]
+    public void LegacyWritesKey_IsUnderTheDomainModelSection() =>
+        FeatureFlags.LegacyWritesKey.Should().Be("DomainModel:LegacyWrites");
+
+    [Fact]
+    public void LegacyWrites_IsOnByDefault() =>
+        new EprRegisterEnrolBackend.DomainModel.DomainModelConfig().LegacyWrites.Should().BeTrue();
+
+    [Fact]
+    public void LegacyWritesUnset_StartsWithNoOtherFlags()
+    {
+        var act = () =>
+            FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites(new ConfigurationBuilder().Build());
+
+        act.Should().NotThrow();
+    }
+
+    [Theory]
+    [InlineData(false, true, true, true, "DomainModel:ReadFromModel")]
+    [InlineData(true, false, true, true, "DomainModel:DualWrite")]
+    [InlineData(true, true, false, true, "DomainModel:DualWriteSeed")]
+    [InlineData(true, true, true, false, "DomainModel:ExpandEnabled")]
+    [InlineData(false, false, false, false, "DomainModel:ReadFromModel")]
+    public void LegacyWritesOffWithoutItsPrerequisites_RefusesToStart(
+        bool readFromModel,
+        bool dualWrite,
+        bool dualWriteSeed,
+        bool expand,
+        string missing
+    )
+    {
+        var act = () =>
+            FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites(
+                CutSettings(legacyWrites: false, readFromModel, dualWrite, dualWriteSeed, expand)
+            );
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage($"DomainModel:LegacyWrites off needs {missing}*");
+    }
+
+    [Theory]
+    [InlineData(false, true, true, true, true)]
+    [InlineData(true, false, false, false, false)]
+    [InlineData(true, true, true, true, true)]
+    public void LegacyWritesOtherCombinations_Start(
+        bool legacyWrites,
+        bool readFromModel,
+        bool dualWrite,
+        bool dualWriteSeed,
+        bool expand
+    )
+    {
+        var act = () =>
+            FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites(
+                CutSettings(legacyWrites, readFromModel, dualWrite, dualWriteSeed, expand)
+            );
+
+        act.Should().NotThrow();
+    }
 }
