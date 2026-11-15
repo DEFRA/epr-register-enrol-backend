@@ -692,9 +692,10 @@ public sealed partial class DualWriteEndpointTests : IAsyncDisposable
 
     private Task<HttpResponseMessage> StatusPushAsync(
         AccreditationApplicationModel application,
-        string toStateId
+        string toStateId,
+        HttpClient? through = null
     ) =>
-        _client.PostAsJsonAsync(
+        (through ?? _client).PostAsJsonAsync(
             $"/api/v1/accreditation-applications/case-management/{application.CaseManagementWorkItemId}/status",
             new
             {
@@ -705,8 +706,11 @@ public sealed partial class DualWriteEndpointTests : IAsyncDisposable
             Ct
         );
 
-    private Task<HttpResponseMessage> WithdrawAsync(AccreditationApplicationModel application) =>
-        _client.PostAsJsonAsync(
+    private Task<HttpResponseMessage> WithdrawAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    ) =>
+        (through ?? _client).PostAsJsonAsync(
             $"/api/v1/accreditation-applications/{OrganisationId}/{application.Id}/withdraw",
             new { reason = "No longer needed" },
             Ct
@@ -1269,9 +1273,10 @@ public sealed partial class DualWriteEndpointTests : IAsyncDisposable
     }
 
     private Task<HttpResponseMessage> PatchRecyclingOperationsAsync(
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        HttpClient? through = null
     ) =>
-        _client.PatchAsJsonAsync(
+        (through ?? _client).PatchAsJsonAsync(
             AppUrl(application, "overseas-sites/1/recycling-operations"),
             new { operationCodes = new[] { "R4", "R12" } },
             Ct
@@ -1328,8 +1333,11 @@ public sealed partial class DualWriteEndpointTests : IAsyncDisposable
             .RecordAsync(Arg.Any<RecyclingOperationsAuditRecord>(), Arg.Any<CancellationToken>());
     }
 
-    private Task<HttpResponseMessage> QueryPushAsync(AccreditationApplicationModel application) =>
-        _client.PostAsJsonAsync(
+    private Task<HttpResponseMessage> QueryPushAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    ) =>
+        (through ?? _client).PostAsJsonAsync(
             $"/api/v1/accreditation-applications/case-management/{application.CaseManagementWorkItemId}/query",
             new
             {
@@ -1378,8 +1386,11 @@ public sealed partial class DualWriteEndpointTests : IAsyncDisposable
         return (await Applications.UpdateAsync(application))!;
     }
 
-    private Task<HttpResponseMessage> SubmitAsync(AccreditationApplicationModel application) =>
-        _client.PostAsJsonAsync(
+    private Task<HttpResponseMessage> SubmitAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    ) =>
+        (through ?? _client).PostAsJsonAsync(
             AppUrl(application, "submit"),
             new
             {
@@ -1578,7 +1589,10 @@ public sealed partial class DualWriteEndpointTests : IAsyncDisposable
         return (await Applications.UpdateAsync(application))!;
     }
 
-    private Task<HttpResponseMessage> ResubmitAsync(AccreditationApplicationModel application)
+    private Task<HttpResponseMessage> ResubmitAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    )
     {
         _caseWorking
             .ResumeFromQueryAsync(
@@ -1588,7 +1602,7 @@ public sealed partial class DualWriteEndpointTests : IAsyncDisposable
                 Arg.Any<CancellationToken>()
             )
             .Returns(new ResumeFromQueryResult(true));
-        return _client.PostAsJsonAsync(
+        return (through ?? _client).PostAsJsonAsync(
             AppUrl(application, "resubmit"),
             new
             {

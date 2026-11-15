@@ -22,8 +22,8 @@ namespace EprRegisterEnrolBackend.Test.DomainModel.ReadModel;
 /// RA-705: with <c>DomainModel:ReadFromModel</c> on, the routes read through <see cref="ModelApplicationReader"/>.
 /// It serves the facade's projection, except <c>Version</c>, <c>CreatedAt</c> and <c>UpdatedAt</c>, which still
 /// come from the legacy document: <c>Version</c> is the concurrency token every save and Submit check against
-/// legacy, and <c>UpdatedAt</c> decides the newest-first order. Legacy owns all three until the cut (decided
-/// 2026-11-13).
+/// legacy, and <c>CreatedAt</c> decides the newest-first order of GET list. Legacy owns all three until the cut
+/// (decided 2026-11-13).
 /// </summary>
 public sealed class ModelApplicationReaderTests : IDisposable
 {
