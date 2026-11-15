@@ -124,6 +124,9 @@ public static class DomainModelServiceCollectionExtensions
             .AddHealthChecks()
             .AddCheck<DomainModelMigrationHealthCheck>("domain-model-migration", tags: ["ready"]);
         services.AddHostedService<DomainModelMigrationService>();
+        // RA-706: backfill application.createdAt from legacy documents
+        services.AddSingleton<ApplicationCreatedAtBackfill>();
+        services.AddHostedService<ApplicationCreatedAtBackfillService>();
     }
 
     // Phase 4: the projection the reads will switch to, and the report comparing it with the legacy documents.

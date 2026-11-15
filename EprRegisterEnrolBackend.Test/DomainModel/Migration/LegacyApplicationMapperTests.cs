@@ -47,6 +47,7 @@ public class LegacyApplicationMapperTests
         legacy.WithdrawalReason = "reason";
         legacy.DateSent = FixedDate.AddDays(-1);
         legacy.DateLastEdited = FixedDate;
+        legacy.CreatedAt = FixedDate.AddDays(-30);
         legacy.AccreditationReference = "A27EX1234567P";
         legacy.SubmittedBy = new SubmittedByModel
         {
@@ -77,6 +78,8 @@ public class LegacyApplicationMapperTests
         Assert.Equal("reason", entity.WithdrawalReason);
         Assert.Equal(legacy.DateSent, entity.DateSent);
         Assert.Equal(FixedDate, entity.DateLastEdited);
+        // RA-706: legacy stops being written at the cut, so the model holds when the application was created.
+        Assert.Equal(FixedDate.AddDays(-30), entity.CreatedAt);
         Assert.Equal("A27EX1234567P", entity.AsAccreditation().ReservedAccreditationNumber);
         Assert.Same(overseasSites, entity.AsAccreditation().ApplicationOverseasSites);
         Assert.Equal("Test User", entity.SubmittedBy!.FullName);

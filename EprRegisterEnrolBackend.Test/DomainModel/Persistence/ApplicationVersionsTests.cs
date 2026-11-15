@@ -98,6 +98,53 @@ public sealed class ApplicationVersionsTests : IDisposable
         ((AnnualChargeDetails)read!.Details).ChargeYear.Should().Be(2028);
     }
 
+    // RA-706: legacy stops being written at the cut, so the model holds when the application was created.
+    [Fact]
+    public async Task GetCurrent_StoredWithItsCreationTime_ReturnsIt()
+    {
+        var createdAt = new DateTime(2026, 11, 2, 14, 30, 0, DateTimeKind.Utc);
+        var application = DomainModelBuilders.Application(
+            _registrationId,
+            DomainModelBuilders.AnnualChargeDetails()
+        );
+        application.CreatedAt = createdAt;
+        var created = await _applications.CreateAsync<AnnualChargeDetails>(
+            application,
+            Change(),
+            cancellationToken: Ct
+        );
+
+        var read = await _applications.GetCurrentAsync<AnnualChargeDetails>(
+            created.EntityId,
+            cancellationToken: Ct
+        );
+
+        read!.CreatedAt.Should().Be(createdAt);
+    }
+
+    // Versions written before RA-706 have no createdAt until the backfill reaches them.
+    [Fact]
+    public async Task GetCurrent_StoredBeforeCreationTimesWereKept_ReturnsNoCreationTime()
+    {
+        var created = await CreateAsync(DomainModelBuilders.AnnualChargeDetails());
+        await _factory
+            .GetClient()
+            .GetDatabase(_databaseName)
+            .GetCollection<BsonDocument>(DomainModelCollections.ApplicationVersions)
+            .UpdateManyAsync(
+                FilterDefinition<BsonDocument>.Empty,
+                Builders<BsonDocument>.Update.Unset("createdAt"),
+                cancellationToken: Ct
+            );
+
+        var read = await _applications.GetCurrentAsync<AnnualChargeDetails>(
+            created.EntityId,
+            cancellationToken: Ct
+        );
+
+        read!.CreatedAt.Should().BeNull();
+    }
+
     [Fact]
     public async Task GetCurrent_OfAnotherType_ReturnsNull()
     {

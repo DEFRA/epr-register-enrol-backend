@@ -1,3 +1,6 @@
+using EprRegisterEnrolBackend.DomainModel.Migration;
+using Microsoft.Extensions.DependencyInjection;
+
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
 /// <summary>
@@ -17,6 +20,28 @@ public sealed partial class DualWriteEndpointTests
 
         var ex = Assert.Throws<InvalidOperationException>(() => Start(cut));
 
-        Assert.StartsWith("DomainModel:LegacyWrites off needs DomainModel:ReadFromModel", ex.Message);
+        Assert.StartsWith(
+            "DomainModel:LegacyWrites off needs DomainModel:ReadFromModel",
+            ex.Message
+        );
+    }
+
+    // The createdAt backfill runs as a background service that logs and gives up on any failure, so a dependency the
+    // host can't supply would only ever show as a log line: resolve it from a real host with the migration on.
+    [Fact]
+    public void MigrateOn_TheCreatedAtBackfillResolvesFromTheHost()
+    {
+        var (factory, client) = Start(
+            new Dictionary<string, string?>(s_dualWriteOn)
+            {
+                ["DomainModel:MigrateEnabled"] = "true",
+            }
+        );
+        using var _ = factory;
+        using var __ = client;
+
+        var backfill = factory.Services.GetService<ApplicationCreatedAtBackfill>();
+
+        Assert.NotNull(backfill);
     }
 }

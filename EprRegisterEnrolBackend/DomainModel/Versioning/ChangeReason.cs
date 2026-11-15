@@ -47,4 +47,10 @@ public enum ChangeReason
 
     /// <summary>A write path changed the legacy application; its Application version follows it.</summary>
     ApplicationEdited,
+
+    /// <summary>
+    /// An Application version written before the model held createdAt
+    /// was given it from the legacy document (RA-706).
+    /// </summary>
+    CreatedAtBackfilled,
 }
