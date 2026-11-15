@@ -33,6 +33,7 @@ public sealed partial class ModelBackedApplicationPersistenceTests : IDisposable
     private readonly AccreditationApplicationPersistence _legacy;
     private readonly ApplicationGroupStores _stores;
     private readonly ApplicationGroupMigrator _migrator;
+    private readonly CutStagingPersistence _staging;
     private readonly ModelBackedApplicationPersistence _model;
 
     public ModelBackedApplicationPersistenceTests(MongoIntegrationFixture fixture)
@@ -51,10 +52,12 @@ public sealed partial class ModelBackedApplicationPersistenceTests : IDisposable
             new MigrationConflictPersistence(_factory, logs)
         );
         _migrator = new ApplicationGroupMigrator(_legacy, _stores, clock);
+        _staging = new CutStagingPersistence(_factory, logs);
         _model = new ModelBackedApplicationPersistence(
             _factory,
             _stores,
-            new ApplicationReadModel(_stores)
+            new ApplicationReadModel(_stores),
+            _staging
         );
     }
 

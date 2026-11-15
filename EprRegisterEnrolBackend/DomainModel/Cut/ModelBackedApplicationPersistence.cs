@@ -16,7 +16,8 @@ namespace EprRegisterEnrolBackend.DomainModel.Cut;
 public sealed class ModelBackedApplicationPersistence(
     IMongoDbClientFactory clientFactory,
     ApplicationGroupStores stores,
-    ApplicationReadModel readModel
+    ApplicationReadModel readModel,
+    CutStagingPersistence staging
 ) : IAccreditationApplicationPersistence
 {
     private async Task<List<AccreditationApplicationModel>> ProjectCurrentAsync(
@@ -36,11 +37,40 @@ public sealed class ModelBackedApplicationPersistence(
         var projected = new List<AccreditationApplicationModel>();
         foreach (var candidate in candidates)
         {
-            var p = await ProjectAsync(candidate.EntityId, s, ct);
+            var p = session != null
+                ? await ReadAsync(candidate.EntityId, s, ct)
+                : await ProjectAsync(candidate.EntityId, s, ct);
             if (p != null) projected.Add(p);
         }
 
         return projected;
+    }
+
+    private async Task<AccreditationApplicationModel?> ReadAsync(ObjectId id, IClientSessionHandle session, CancellationToken ct)
+    {
+        return await staging.GetByObjectIdAsync(id, session, ct) ?? await ProjectAsync(id, session, ct);
+    }
+
+    private async Task EnsureStagedAsync(ObjectId id, IClientSessionHandle session, CancellationToken ct)
+    {
+        if (await staging.GetByObjectIdAsync(id, session, ct) is null)
+        {
+            var projected = await ProjectAsync(id, session, ct);
+            if (projected != null)
+            {
+                await staging.StageAsync(projected, session, ct);
+            }
+        }
+        else
+        {
+            staging.Track(session, id);
+        }
+    }
+
+    private static IClientSessionHandle RequireTransaction(IClientSessionHandle? session)
+    {
+        if (session != null && session.IsInTransaction) return session;
+        throw new NotSupportedException("RA-706: a write without a transaction is not yet served from the model");
     }
 
     private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
@@ -81,7 +111,7 @@ public sealed class ModelBackedApplicationPersistence(
         ObjectId applicationId,
         IClientSessionHandle session,
         CancellationToken cancellationToken = default
-    ) => ProjectAsync(applicationId, session, cancellationToken);
+    ) => ReadAsync(applicationId, session, cancellationToken);
 
     public async Task<AccreditationApplicationModel?> GetByIdAsync(
         string organisationId,
@@ -91,7 +121,8 @@ public sealed class ModelBackedApplicationPersistence(
         if (!ObjectId.TryParse(applicationId, out var id)) return null;
 
         using var own = session is null ? await clientFactory.GetClient().StartSessionAsync() : null;
-        var projected = await ProjectAsync(id, session ?? own!, default);
+        var s = session ?? own!;
+        var projected = await ReadAsync(id, s, default);
 
         return projected?.OrganisationId == organisationId ? projected : null;
     }
@@ -274,11 +305,15 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
-    public Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
+    public async Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
         AccreditationApplicationModel application,
         string siteNumber,
-        IClientSessionHandle? session = null
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        IClientSessionHandle? session = null)
+    {
+        var s = RequireTransaction(session);
+        await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
+        return await staging.UpdateIfInterimSiteNumberAbsentAsync(application, siteNumber, s);
+    }
 
     public async Task<AccreditationApplicationModel?> GetNewestForOrganisationAsync(
         string organisationId,
@@ -336,31 +371,47 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
-    public Task<AccreditationApplicationModel?> UpdateAsync(
+    public async Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
-        IClientSessionHandle? session = null
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        IClientSessionHandle? session = null)
+    {
+        var s = RequireTransaction(session);
+        await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
+        return await staging.UpdateAsync(application, s);
+    }
 
-    public Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
+    public async Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
         AccreditationApplicationModel application,
         string orsId,
-        IClientSessionHandle? session = null
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        IClientSessionHandle? session = null)
+    {
+        var s = RequireTransaction(session);
+        await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
+        return await staging.UpdateIfOrsIdAbsentAsync(application, orsId, s);
+    }
 
-    public Task<AccreditationApplicationModel?> UpdateFieldsAsync(
+    public async Task<AccreditationApplicationModel?> UpdateFieldsAsync(
         ObjectId id,
         FilterDefinition<AccreditationApplicationModel>? guardFilter,
         UpdateDefinition<AccreditationApplicationModel> update,
         IClientSessionHandle? session = null,
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        CancellationToken cancellationToken = default)
+    {
+        var s = RequireTransaction(session);
+        await EnsureStagedAsync(id, s, cancellationToken);
+        return await staging.UpdateFieldsAsync(id, guardFilter, update, s, cancellationToken);
+    }
 
-    public Task StampDomainModelForeignKeysAsync(
+    public async Task StampDomainModelForeignKeysAsync(
         ObjectId applicationId,
         ObjectId registrationEntityId,
         IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
         ObjectId? accreditationEntityId,
         IClientSessionHandle session,
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        CancellationToken cancellationToken = default)
+    {
+        var s = RequireTransaction(session);
+        await EnsureStagedAsync(applicationId, s, cancellationToken);
+        await staging.StampDomainModelForeignKeysAsync(applicationId, registrationEntityId, overseasSiteEntityIds, accreditationEntityId, s, cancellationToken);
+    }
 }
