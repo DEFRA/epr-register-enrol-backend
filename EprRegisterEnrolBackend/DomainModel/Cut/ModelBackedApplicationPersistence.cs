@@ -15,9 +15,34 @@ namespace EprRegisterEnrolBackend.DomainModel.Cut;
 /// </summary>
 public sealed class ModelBackedApplicationPersistence(
     IMongoDbClientFactory clientFactory,
+    ApplicationGroupStores stores,
     ApplicationReadModel readModel
 ) : IAccreditationApplicationPersistence
 {
+    private async Task<List<AccreditationApplicationModel>> ProjectCurrentAsync(
+        FilterDefinition<ApplicationEntity> envelope,
+        IClientSessionHandle? session,
+        CancellationToken ct)
+    {
+        using var own = session is null ? await clientFactory.GetClient().StartSessionAsync(cancellationToken: ct) : null;
+        var s = session ?? own!;
+
+        var candidates = await stores.Applications.Versions.FindAllCurrentAsync(
+            envelope & Builders<ApplicationEntity>.Filter.Eq("applicationType", nameof(ApplicationType.Accreditation)),
+            s,
+            ct
+        );
+
+        var projected = new List<AccreditationApplicationModel>();
+        foreach (var candidate in candidates)
+        {
+            var p = await ProjectAsync(candidate.EntityId, s, ct);
+            if (p != null) projected.Add(p);
+        }
+
+        return projected;
+    }
+
     private async Task<AccreditationApplicationModel?> ProjectAsync(
         ObjectId id,
         IClientSessionHandle session,
@@ -71,25 +96,53 @@ public sealed class ModelBackedApplicationPersistence(
     public Task<long> DeleteManyAsync(IEnumerable<ObjectId> ids) =>
         throw new NotSupportedException("RA-706: not yet served from the model");
 
-    public Task<IEnumerable<AccreditationApplicationModel>> GetByOrganisationAsync(
-        string organisationId
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+    public async Task<IEnumerable<AccreditationApplicationModel>> GetByOrganisationAsync(
+        string organisationId)
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId);
+        var results = await ProjectCurrentAsync(envelope, null, CancellationToken.None);
+        return results.OrderByDescending(a => a.CreatedAt).ThenByDescending(a => a.Id).ToList();
+    }
 
-    public Task<AccreditationApplicationModel?> GetLiveByRegistrationAsync(
+    public async Task<AccreditationApplicationModel?> GetLiveByRegistrationAsync(
         string organisationId,
         string registrationId,
         MaterialType materialType,
         int year,
-        IClientSessionHandle? session = null
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        IClientSessionHandle? session = null)
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId)
+            & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
 
-    public Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
+        var results = await ProjectCurrentAsync(envelope, session, CancellationToken.None);
+        return results
+            .Where(a => a.MaterialType == materialType && a.Year == year && a.ApplicationStatus != ApplicationStatus.Withdrawn)
+            .OrderByDescending(a => a.CreatedAt)
+            .ThenByDescending(a => a.Id)
+            .FirstOrDefault();
+    }
+
+    public async Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
         string organisationId,
         string registrationId,
         MaterialType materialType,
         GlassRecyclingProcess? glassRecyclingProcess,
-        int beforeYear
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        int beforeYear)
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId)
+            & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+
+        var results = await ProjectCurrentAsync(envelope, null, CancellationToken.None);
+        return results
+            .Where(a => a.MaterialType == materialType
+                && a.GlassRecyclingProcess == glassRecyclingProcess
+                && a.Year < beforeYear
+                && a.ApplicationStatus == ApplicationStatus.Approved
+                && !string.IsNullOrEmpty(a.AccreditationReference))
+            .OrderByDescending(a => a.Year)
+            .ThenByDescending(a => a.DateLastEdited)
+            .FirstOrDefault();
+    }
 
     public Task<
         IReadOnlyList<AccreditationReferenceHolder>
@@ -120,15 +173,32 @@ public sealed class ModelBackedApplicationPersistence(
         CancellationToken cancellationToken = default
     ) => throw new NotSupportedException("RA-706: not yet served from the model");
 
-    public Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
+    public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
         string registrationId,
-        IClientSessionHandle? session = null
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        IClientSessionHandle? session = null)
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+        var results = await ProjectCurrentAsync(envelope, session, CancellationToken.None);
+        return results
+            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+            .Select(s => s.OrsId)
+            .OfType<string>()
+            .ToList();
+    }
 
-    public Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
+    public async Task<IReadOnlyList<string>> GetInterimSiteNumbersByRegistrationAsync(
         string registrationId,
-        IClientSessionHandle? session = null
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        IClientSessionHandle? session = null)
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+        var results = await ProjectCurrentAsync(envelope, session, CancellationToken.None);
+        return results
+            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+            .SelectMany(InterimSiteSync.All)
+            .Select(i => i.SiteNumber)
+            .OfType<string>()
+            .ToList();
+    }
 
     public Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
         AccreditationApplicationModel application,
@@ -136,19 +206,29 @@ public sealed class ModelBackedApplicationPersistence(
         IClientSessionHandle? session = null
     ) => throw new NotSupportedException("RA-706: not yet served from the model");
 
-    public Task<AccreditationApplicationModel?> GetNewestForOrganisationAsync(
+    public async Task<AccreditationApplicationModel?> GetNewestForOrganisationAsync(
         string organisationId,
         IClientSessionHandle session,
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        CancellationToken cancellationToken = default)
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId);
+        var results = await ProjectCurrentAsync(envelope, session, cancellationToken);
+        return results.OrderByDescending(a => a.UpdatedAt).ThenByDescending(a => a.Id).FirstOrDefault();
+    }
 
-    public Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetRegistrationGroupAsync(
         string organisationId,
         string registrationId,
         int limit,
         IClientSessionHandle session,
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        CancellationToken cancellationToken = default)
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId)
+            & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+
+        var results = await ProjectCurrentAsync(envelope, session, cancellationToken);
+        return results.Take(limit).ToList();
+    }
 
     public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
         Guid workItemId,

@@ -19,7 +19,7 @@ namespace EprRegisterEnrolBackend.Test.DomainModel.Cut;
 /// and lookups stay as they are. These tests hold it to the legacy persistence's behaviour, over the same data:
 /// each application is created in legacy and migrated, then read both ways.
 /// </summary>
-public sealed class ModelBackedApplicationPersistenceTests : IDisposable
+public sealed partial class ModelBackedApplicationPersistenceTests : IDisposable
 {
     private const string ReExOrganisationId = "6512a0f0c0ffee0000000001";
     private const string ReExRegistrationId = "6512a0f0c0ffee0000000002";
@@ -51,7 +51,11 @@ public sealed class ModelBackedApplicationPersistenceTests : IDisposable
             new MigrationConflictPersistence(_factory, logs)
         );
         _migrator = new ApplicationGroupMigrator(_legacy, _stores, clock);
-        _model = new ModelBackedApplicationPersistence(_factory, new ApplicationReadModel(_stores));
+        _model = new ModelBackedApplicationPersistence(
+            _factory,
+            _stores,
+            new ApplicationReadModel(_stores)
+        );
     }
 
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
