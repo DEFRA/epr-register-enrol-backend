@@ -198,7 +198,9 @@ public class FeatureFlagsTests
     public void LegacyWritesUnset_StartsWithNoOtherFlags()
     {
         var act = () =>
-            FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites(new ConfigurationBuilder().Build());
+            FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites(
+                new ConfigurationBuilder().Build()
+            );
 
         act.Should().NotThrow();
     }
@@ -225,6 +227,54 @@ public class FeatureFlagsTests
         act.Should()
             .Throw<InvalidOperationException>()
             .WithMessage($"DomainModel:LegacyWrites off needs {missing}*");
+    }
+
+    // The in-year changes routes still read the legacy collection, which the cut freezes; the in-year work moves them
+    // to the model (decided 2026-11-15). Until then the two can't be on together.
+    private static IConfiguration CutWithInYearChanges(bool legacyWrites, bool inYearChanges) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [FeatureFlags.LegacyWritesKey] = legacyWrites ? "true" : "false",
+                    [FeatureFlags.ReadFromModelKey] = "true",
+                    ["DomainModel:DualWrite"] = "true",
+                    ["DomainModel:DualWriteSeed"] = "true",
+                    ["DomainModel:ExpandEnabled"] = "true",
+                    [FeatureFlags.InYearChangesEnabledKey] = inYearChanges ? "true" : "false",
+                }
+            )
+            .Build();
+
+    [Fact]
+    public void LegacyWritesOffWithInYearChangesOn_RefusesToStart()
+    {
+        var act = () =>
+            FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites(
+                CutWithInYearChanges(legacyWrites: false, inYearChanges: true)
+            );
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage(
+                "DomainModel:LegacyWrites off needs FeatureFlags:InYearChangesEnabled off*"
+            );
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void LegacyWritesWithInYearChanges_OtherCombinations_Start(
+        bool legacyWrites,
+        bool inYearChanges
+    )
+    {
+        var act = () =>
+            FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites(
+                CutWithInYearChanges(legacyWrites, inYearChanges)
+            );
+
+        act.Should().NotThrow();
     }
 
     [Theory]

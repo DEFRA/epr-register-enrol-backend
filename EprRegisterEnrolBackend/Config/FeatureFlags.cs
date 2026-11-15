@@ -103,7 +103,7 @@ public static class FeatureFlags
 
     /// <summary>
     /// RA-706: LegacyWrites off is the cut. There is no Development exemption because a frozen legacy read,
-    /// or a write that reaches neither store, is wrong locally too.
+    /// or a write that reaches neither store, is wrong locally too. It also requires InYearChangesEnabled off.
     /// </summary>
     public static void EnsureLegacyWritesCutHasItsPrerequisites(IConfiguration configuration)
     {
@@ -117,6 +117,16 @@ public static class FeatureFlags
                         $"{LegacyWritesKey} off needs {key}: turn {key} on, or {LegacyWritesKey} back on. {reason}"
                     );
                 }
+            }
+
+            if (configuration.GetValue<bool>(InYearChangesEnabledKey))
+            {
+                throw new InvalidOperationException(
+                    $"{LegacyWritesKey} off needs {InYearChangesEnabledKey} off: turn "
+                        + $"{InYearChangesEnabledKey} off, or {LegacyWritesKey} back on. "
+                        + "The in-year changes routes still read the legacy collection, "
+                        + "which the cut freezes."
+                );
             }
         }
     }
