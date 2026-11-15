@@ -43,6 +43,14 @@ public sealed class ModelBackedApplicationPersistence(
         return projected;
     }
 
+    private async Task<List<AccreditationApplicationModel>> HoldingAccreditationReferenceAsync(string reference, CancellationToken ct)
+    {
+        var accreditations = await stores.Accreditations.Versions.FindAllCurrentAsync(Builders<AccreditationEntity>.Filter.Eq(a => a.AccreditationNumber, reference), null, ct);
+        var accreditationIds = accreditations.Select(a => a.EntityId).ToList();
+        var envelope = Builders<ApplicationEntity>.Filter.Eq("details.reservedAccreditationNumber", reference) | Builders<ApplicationEntity>.Filter.In("details.accreditationId", accreditationIds);
+        return (await ProjectCurrentAsync(envelope, null, ct)).Where(a => a.AccreditationReference == reference).ToList();
+    }
+
     private async Task<AccreditationApplicationModel?> ProjectAsync(
         ObjectId id,
         IClientSessionHandle session,
@@ -144,12 +152,16 @@ public sealed class ModelBackedApplicationPersistence(
             .FirstOrDefault();
     }
 
-    public Task<
-        IReadOnlyList<AccreditationReferenceHolder>
-    > GetOtherAccreditationReferenceHoldersAsync(
+    public async Task<IReadOnlyList<AccreditationReferenceHolder>> GetOtherAccreditationReferenceHoldersAsync(
         string accreditationReference,
-        ObjectId applicationId
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        ObjectId applicationId)
+    {
+        var holders = await HoldingAccreditationReferenceAsync(accreditationReference, CancellationToken.None);
+        return holders
+            .Where(a => a.Id != applicationId)
+            .Select(a => new AccreditationReferenceHolder(a.Id!.Value, a.ApplicationStatus))
+            .ToList();
+    }
 
     public Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(
         int orgId,
@@ -230,21 +242,37 @@ public sealed class ModelBackedApplicationPersistence(
         return results.Take(limit).ToList();
     }
 
-    public Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
+    public async Task<AccreditationApplicationModel?> GetByCaseManagementWorkItemIdAsync(
         Guid workItemId,
-        IClientSessionHandle? session = null
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        IClientSessionHandle? session = null)
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.CaseManagementWorkItemId, workItemId);
+        var results = await ProjectCurrentAsync(envelope, session, CancellationToken.None);
+        return results.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
+    }
 
-    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByAccreditationReferenceAsync(
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByAccreditationReferenceAsync(
         string accreditationReference,
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        CancellationToken cancellationToken = default)
+    {
+        return await HoldingAccreditationReferenceAsync(accreditationReference, cancellationToken);
+    }
 
-    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
         int orgId,
         int year,
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+        CancellationToken cancellationToken = default)
+    {
+        var organisation = await stores.Organisations.FindByOrganisationNumberAsync(orgId, null, cancellationToken);
+        if (organisation is null) return [];
+
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisation.ReExOrganisationId);
+        var results = await ProjectCurrentAsync(envelope, null, cancellationToken);
+        return results
+            .Where(a => a.OrgId == orgId && a.Year == year)
+            .OrderBy(a => a.Id)
+            .ToList();
+    }
 
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,

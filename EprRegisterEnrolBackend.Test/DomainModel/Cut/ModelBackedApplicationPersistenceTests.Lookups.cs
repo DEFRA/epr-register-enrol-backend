@@ -288,4 +288,81 @@ public sealed partial class ModelBackedApplicationPersistenceTests
 
         Assert.Equal(legacy?.Id, model?.Id);
     }
+
+    // --- not scoped to an organisation ----------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetByCaseManagementWorkItemId_FindsTheSameApplication()
+    {
+        var data = await LookupDataAsync();
+        var workItem = data.OtherOrganisation.CaseManagementWorkItemId!.Value;
+
+        var legacy = await _legacy.GetByCaseManagementWorkItemIdAsync(workItem);
+        var model = await _model.GetByCaseManagementWorkItemIdAsync(workItem);
+
+        Assert.Equal(data.OtherOrganisation.Id, legacy!.Id);
+        Assert.Equal(legacy.Id, model!.Id);
+    }
+
+    [Fact]
+    public async Task GetByCaseManagementWorkItemId_Unknown_IsNull()
+    {
+        await LookupDataAsync();
+
+        Assert.Null(await _model.GetByCaseManagementWorkItemIdAsync(Guid.NewGuid()));
+    }
+
+    [Theory]
+    [InlineData("A26EX1234567P")]
+    [InlineData("A27EX0000000P")]
+    public async Task GetByAccreditationReference_FindsTheSameApplications(string reference)
+    {
+        await LookupDataAsync();
+
+        var legacy = await _legacy.GetByAccreditationReferenceAsync(reference, Ct);
+        var model = await _model.GetByAccreditationReferenceAsync(reference, Ct);
+
+        Assert.Equal(Ids(legacy).OrderBy(id => id), Ids(model).OrderBy(id => id));
+    }
+
+    [Fact]
+    public async Task GetOtherAccreditationReferenceHolders_FindsTheSameHolders()
+    {
+        var data = await LookupDataAsync();
+
+        foreach (var excluded in new[] { data.Current, data.Approved2026 })
+        {
+            var legacy = await _legacy.GetOtherAccreditationReferenceHoldersAsync("A26EX1234567P", excluded.Id!.Value);
+            var model = await _model.GetOtherAccreditationReferenceHoldersAsync("A26EX1234567P", excluded.Id!.Value);
+
+            Assert.Equal(legacy.OrderBy(h => h.Id), model.OrderBy(h => h.Id));
+        }
+    }
+
+    [Theory]
+    [InlineData(500001, 2027)]
+    [InlineData(500001, 2026)]
+    [InlineData(500027, 2027)]
+    [InlineData(599999, 2027)]
+    public async Task GetByOrgIdAndYear_FindsTheSameApplicationsInIdOrder(int orgId, int year)
+    {
+        await LookupDataAsync();
+
+        var legacy = await _legacy.GetByOrgIdAndYearAsync(orgId, year, Ct);
+        var model = await _model.GetByOrgIdAndYearAsync(orgId, year, Ct);
+
+        Assert.Equal(Ids(legacy), Ids(model));
+    }
+
+    // The organisation number's unique index makes this one match at most.
+    [Fact]
+    public async Task FindOrganisationByNumber_FindsItsOrganisation()
+    {
+        await LookupDataAsync();
+
+        var found = await _stores.Organisations.FindByOrganisationNumberAsync(500027, null, Ct);
+
+        Assert.Equal(OtherOrganisationId, found!.ReExOrganisationId);
+        Assert.Null(await _stores.Organisations.FindByOrganisationNumberAsync(599999, null, Ct));
+    }
 }

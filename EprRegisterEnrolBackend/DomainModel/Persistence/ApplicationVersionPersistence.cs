@@ -52,6 +52,34 @@ public class ApplicationVersionPersistence(
                 VersionedIndexes.StringPresent<ApplicationEntity>(x => x.ApplicationReference)
             )
         );
+        // RA-706: index for current versions by case management work item ID.
+        indexes.Add(
+            VersionedIndexes.Current(
+                "caseManagementWorkItemId_current",
+                builder.Ascending(x => x.CaseManagementWorkItemId)
+            )
+        );
+        // RA-706: index for current versions by re-ex organisation ID and type.
+        indexes.Add(
+            VersionedIndexes.Current(
+                "reExOrganisationId_current",
+                builder.Ascending(x => x.ReExOrganisationId).Ascending(x => x.ApplicationType)
+            )
+        );
+        // RA-706: index for current versions by re-ex registration ID and type.
+        indexes.Add(
+            VersionedIndexes.Current(
+                "reExRegistrationId_current",
+                builder.Ascending(x => x.ReExRegistrationId).Ascending(x => x.ApplicationType)
+            )
+        );
+        // RA-706: index for current versions by reserved accreditation number.
+        indexes.Add(
+            VersionedIndexes.Current(
+                "reservedAccreditationNumber_current",
+                Builders<ApplicationEntity>.IndexKeys.Ascending("details.reservedAccreditationNumber")
+            )
+        );
         return indexes;
     }
 
