@@ -43,6 +43,8 @@ public sealed class ModelBackedApplicationPersistence(
         return projected;
     }
 
+    private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
+
     private async Task<List<AccreditationApplicationModel>> HoldingAccreditationReferenceAsync(string reference, CancellationToken ct)
     {
         var accreditations = await stores.Accreditations.Versions.FindAllCurrentAsync(Builders<AccreditationEntity>.Filter.Eq(a => a.AccreditationNumber, reference), null, ct);
@@ -163,27 +165,87 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
-    public Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(
+    public async Task<AccreditationApplicationModel?> GetGrantedAccreditationAsync(
         int orgId,
         string registrationNumber,
         int year,
         int firstYear
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+    )
+    {
+        var organisation = await stores.Organisations.FindByOrganisationNumberAsync(orgId, null, CancellationToken.None);
+        if (organisation is null) return null;
 
-    public Task<(
-        IReadOnlyList<AccreditationApplicationModel> Items,
-        long Total
-    )> SearchGrantedAccreditationsAsync(
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.Status, ApplicationStatus.Approved)
+            & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisation.ReExOrganisationId);
+
+        var results = await ProjectCurrentAsync(envelope, null, CancellationToken.None);
+
+        return results
+            .Where(a => a.OrgId == orgId
+                && a.RegistrationReference == registrationNumber
+                && a.Year == year
+                && a.Year >= firstYear
+                && a.ApplicationStatus == ApplicationStatus.Approved
+                && !IsBlank(a.AccreditationReference))
+            .OrderByDescending(a => a.DateLastEdited)
+            .FirstOrDefault();
+    }
+
+    public async Task<(IReadOnlyList<AccreditationApplicationModel> Items, long Total)> SearchGrantedAccreditationsAsync(
         GrantedAccreditationFilter filter,
         int firstYear,
         int skip,
         int limit
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+    )
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.Status, ApplicationStatus.Approved);
+        if (filter.OrganisationNumber.HasValue)
+        {
+            var organisation = await stores.Organisations.FindByOrganisationNumberAsync(filter.OrganisationNumber.Value, null, CancellationToken.None);
+            if (organisation is null) return ([], 0);
+            envelope &= Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisation.ReExOrganisationId);
+        }
 
-    public Task<UnservableApprovedCounts> CountUnservableApprovedAsync(
+        var results = await ProjectCurrentAsync(envelope, null, CancellationToken.None);
+
+        var granted = results.Where(a =>
+            a.OrgId != null
+            && a.Year >= firstYear
+            && a.ApplicationStatus == ApplicationStatus.Approved
+            && !IsBlank(a.AccreditationReference)
+            && !IsBlank(a.RegistrationReference)
+            && (!filter.Year.HasValue || a.Year == filter.Year)
+            && (!filter.OrganisationNumber.HasValue || a.OrgId == filter.OrganisationNumber)
+            && (filter.RegistrationNumber is null || a.RegistrationReference == filter.RegistrationNumber)
+        ).ToList();
+
+        var total = (long)granted.Count;
+        var items = granted
+            .OrderBy(a => a.AccreditationReference, StringComparer.Ordinal)
+            .ThenBy(a => a.Id)
+            .Skip(skip)
+            .Take(limit)
+            .ToList();
+
+        return (items, total);
+    }
+
+    public async Task<UnservableApprovedCounts> CountUnservableApprovedAsync(
         int firstYear,
         CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+    )
+    {
+        var envelope = Builders<ApplicationEntity>.Filter.Eq(a => a.Status, ApplicationStatus.Approved);
+        var results = await ProjectCurrentAsync(envelope, null, cancellationToken);
+
+        var approved = results.Where(a => a.ApplicationStatus == ApplicationStatus.Approved && a.Year >= firstYear).ToList();
+
+        return new UnservableApprovedCounts(
+            approved.Count(a => a.OrgId == null),
+            approved.Count(a => IsBlank(a.RegistrationReference)),
+            approved.Count(a => IsBlank(a.AccreditationReference))
+        );
+    }
 
     public async Task<IReadOnlyList<string>> GetOrsIdsByRegistrationAsync(
         string registrationId,
