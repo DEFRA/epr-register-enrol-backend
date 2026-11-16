@@ -1175,6 +1175,11 @@ public static class AccreditationApplicationEndpoints
             return Results.NotFound();
         }
 
+        // Served from the model, a failed backfill save holds neither value; the response still answers with what
+        // ReEx resolved (RA-526: no nation would show the wrong nation's bank details). A value the source holds wins.
+        served.OrgId ??= application.OrgId;
+        served.Nation ??= application.Nation;
+
         await AddNotificationStatusAsync(served, applicationId, services, cancellationToken);
 
         return Results.Ok(served);
