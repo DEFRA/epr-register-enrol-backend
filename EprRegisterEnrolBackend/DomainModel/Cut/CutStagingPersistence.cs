@@ -37,6 +37,16 @@ public sealed class CutStagingPersistence(
     }
 
     /// <summary>
+    /// Deletes the specified staged application copies in the same transaction.
+    /// </summary>
+    public async Task DeleteStagedAsync(IEnumerable<ObjectId> applicationIds, IClientSessionHandle session, CancellationToken cancellationToken)
+    {
+        var ids = applicationIds.ToList();
+        if (ids.Count == 0) return;
+        await Collection.DeleteManyAsync(session, Builders<AccreditationApplicationModel>.Filter.In(a => a.Id, ids.Select(id => (ObjectId?)id)), cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
     /// Adds an application ID to the session's staged list if it is not already present.
     /// </summary>
     public void Track(IClientSessionHandle session, ObjectId applicationId)
