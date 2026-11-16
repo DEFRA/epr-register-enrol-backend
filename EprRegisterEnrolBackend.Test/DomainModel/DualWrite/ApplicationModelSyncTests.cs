@@ -1233,6 +1233,98 @@ public sealed class ApplicationModelSyncTests : IDisposable
         Assert.Equal("R27ER5000270001PL", registration.RegistrationNumber);
     }
 
+    // --- RA-763: last year's accreditation number -------------------------------------------------------------------
+
+    private static AccreditationNumberForYearModel LastYears(string number) =>
+        new() { Year = 2026, AccreditationNumber = number };
+
+    private Task<List<MigrationConflict>> NumberConflictsAsync() =>
+        AllAsync(
+            DomainModelCollections.MigrationConflicts,
+            Builders<MigrationConflict>.Filter.Eq(
+                c => c.Kind,
+                MigrationConflictKind.AccreditationNumberDiffers
+            )
+        );
+
+    // A number that reaches a migrated application later still reaches the Registration.
+    [Fact]
+    public async Task LastYearsAccreditationNumberAddedAfterMigration_IsAddedToTheRegistration()
+    {
+        var application = await MigratedApplicationAsync(ApplicationStatus.Started);
+        var before = await CurrentRegistrationAsync(await CurrentApplicationAsync(application));
+        Assert.Empty(before.AccreditationNumbers);
+
+        await EditAsync(
+            application,
+            a => a.LastYearsAccreditationNumber = LastYears("A26ER5000270063PL")
+        );
+        await SyncAsync(application);
+
+        var registration = await CurrentRegistrationAsync(
+            await CurrentApplicationAsync(application)
+        );
+        Assert.Equal(before.Version + 1, registration.Version);
+        var held = Assert.Single(registration.AccreditationNumbers);
+        Assert.Equal(2026, held.Year);
+        Assert.Equal("A26ER5000270063PL", held.AccreditationNumber);
+        Assert.Equal(ChangeReason.AccreditationNumberAdded, registration.LastChange.Reason);
+        Assert.Equal(application.Id, registration.LastChange.ApplicationId);
+        Assert.Empty(await NumberConflictsAsync());
+    }
+
+    [Fact]
+    public async Task LastYearsAccreditationNumberAlreadyHeld_WritesNothing()
+    {
+        var application = await MigratedApplicationAsync(ApplicationStatus.Started);
+        await EditAsync(
+            application,
+            a => a.LastYearsAccreditationNumber = LastYears("A26ER5000270063PL")
+        );
+        await SyncAsync(application);
+        var added = await CurrentRegistrationAsync(await CurrentApplicationAsync(application));
+
+        await SyncAsync(application);
+
+        var registration = await CurrentRegistrationAsync(
+            await CurrentApplicationAsync(application)
+        );
+        Assert.Equal(added.Version, registration.Version);
+        Assert.Empty(await NumberConflictsAsync());
+    }
+
+    // The Registration keeps the number it holds for the year, and the difference is recorded once.
+    [Fact]
+    public async Task DifferentLastYearsAccreditationNumber_KeepsTheRegistrationsAndRecordsOneConflict()
+    {
+        var application = await MigratedApplicationAsync(ApplicationStatus.Started);
+        await EditAsync(
+            application,
+            a => a.LastYearsAccreditationNumber = LastYears("A26ER5000270063PL")
+        );
+        await SyncAsync(application);
+        var held = await CurrentRegistrationAsync(await CurrentApplicationAsync(application));
+
+        await EditAsync(
+            application,
+            a => a.LastYearsAccreditationNumber = LastYears("A26ER5000270099PL")
+        );
+        await SyncAsync(application);
+        await SyncAsync(application);
+
+        var registration = await CurrentRegistrationAsync(
+            await CurrentApplicationAsync(application)
+        );
+        Assert.Equal(held.Version, registration.Version);
+        Assert.Equal(
+            "A26ER5000270063PL",
+            Assert.Single(registration.AccreditationNumbers).AccreditationNumber
+        );
+        var conflict = Assert.Single(await NumberConflictsAsync());
+        Assert.Equal([application.Id!.Value], conflict.ApplicationIds);
+        Assert.Equal(registration.EntityId, conflict.RegistrationId);
+    }
+
     [Fact]
     public async Task ApplicationNotFoundOrNotMigrated_DoesNothing()
     {
