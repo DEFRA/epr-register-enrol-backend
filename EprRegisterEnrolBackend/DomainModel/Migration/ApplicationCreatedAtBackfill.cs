@@ -23,16 +23,13 @@ public sealed class ApplicationCreatedAtBackfill(
     {
         var candidates = await applications.Versions.FindAllCurrentAsync(
             Builders<ApplicationEntity>.Filter.Eq(a => a.CreatedAt, null)
-                & Builders<ApplicationEntity>.Filter.Eq(
-                    "applicationType",
-                    nameof(ApplicationType.Accreditation)
-                ),
+                & ApplicationFields.Accreditations,
             cancellationToken: cancellationToken
         );
 
-        int filled = 0;
-        int missing = 0;
-        int conflicts = 0;
+        var filled = 0;
+        var missing = 0;
+        var conflicts = 0;
 
         foreach (var candidate in candidates)
         {

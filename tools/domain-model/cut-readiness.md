@@ -41,7 +41,7 @@ Run `cut-readiness-checks.js` (read-only). Before the cut:
 
 | # | Criterion | Check | Expected |
 |---|---|---|---|
-| 1 | Every current Accreditation application version holds `createdAt` (the GET list's order) | A | count 0 |
+| 1 | Every current Accreditation application version holds `createdAt` (the GET list's order; one without it serves its `validFrom` and logs a warning) | A | count 0 |
 | 2 | Every legacy application holds `createdAt`, so the backfill copied a real time | B | `[]` |
 | 3 | Nothing is staged | C | `[]` |
 | 4 | The legacy total, recorded at the moment `LegacyWrites` goes off | D's total | written down |

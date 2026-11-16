@@ -141,7 +141,9 @@ public class VersionedMongoRepository<T>(
 
     /// <summary>
     /// Deletes every version document matching the filter.
-    /// For removing test data only: the versioned collections are otherwise append-only.
+    /// The versioned collections are otherwise append-only. Its one caller is the cut's
+    /// <c>ModelBackedApplicationPersistence.DeleteManyAsync</c>, whose only caller is the test-data teardown
+    /// (RA-706 decision 7); a production delete path would need its own decision first.
     /// </summary>
     public async Task<long> DeleteAllVersionsAsync(
         FilterDefinition<T> filter,

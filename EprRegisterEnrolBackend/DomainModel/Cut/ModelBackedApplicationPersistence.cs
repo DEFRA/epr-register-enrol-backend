@@ -18,7 +18,7 @@ public sealed class ModelBackedApplicationPersistence(
     ApplicationGroupStores stores,
     ApplicationReadModel readModel,
     CutStagingPersistence staging,
-    Func<CutFlush> flush,
+    Func<CutFlush> cutFlush,
     ILogger<ModelBackedApplicationPersistence> logger
 ) : IAccreditationApplicationPersistence
 {
@@ -31,10 +31,10 @@ public sealed class ModelBackedApplicationPersistence(
             clientFactory,
             async (session, token) =>
             {
-                var cut = flush();
-                cut.Begin(session);
+                var flush = cutFlush();
+                flush.Begin(session);
                 var result = await write(session, token);
-                await cut.FlushAsync(session, token);
+                await flush.FlushAsync(session, token);
                 return result;
             },
             attempt =>
@@ -52,30 +52,27 @@ public sealed class ModelBackedApplicationPersistence(
         CancellationToken ct
     )
     {
-        using var own = session is null
+        using var ownSession = session is null
             ? await clientFactory.GetClient().StartSessionAsync(cancellationToken: ct)
             : null;
-        var s = session ?? own!;
+        var readSession = session ?? ownSession!;
 
         var candidates = await stores.Applications.Versions.FindAllCurrentAsync(
-            envelope
-                & Builders<ApplicationEntity>.Filter.Eq(
-                    "applicationType",
-                    nameof(ApplicationType.Accreditation)
-                ),
-            s,
+            envelope & ApplicationFields.Accreditations,
+            readSession,
             ct
         );
 
         var projected = new List<AccreditationApplicationModel>();
         foreach (var candidate in candidates)
         {
-            var p =
+            // Inside a caller's transaction a staged copy is the current state.
+            var application =
                 session != null
-                    ? await ReadAsync(candidate.EntityId, s, ct)
-                    : await ProjectAsync(candidate.EntityId, s, ct);
-            if (p != null)
-                projected.Add(p);
+                    ? await ReadAsync(candidate.EntityId, readSession, ct)
+                    : await ProjectAsync(candidate.EntityId, readSession, ct);
+            if (application != null)
+                projected.Add(application);
         }
 
         return projected;
@@ -120,24 +117,63 @@ public sealed class ModelBackedApplicationPersistence(
         );
     }
 
-    private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
-
-    private async Task<List<AccreditationApplicationModel>> HoldingAccreditationReferenceAsync(
-        string reference,
+    // A write to one application: inside the caller's transaction it edits the staged copy (staging it first); with no
+    // session it runs in a transaction of its own, which flushes.
+    private async Task<T> WriteStagedAsync<T>(
+        ObjectId id,
+        IClientSessionHandle? session,
+        Func<IClientSessionHandle, CancellationToken, Task<T>> write,
         CancellationToken ct
     )
     {
+        if (session is null)
+        {
+            return await RunInOwnTransactionAsync(
+                (own, token) => WriteStagedAsync(id, own, write, token),
+                ct
+            );
+        }
+        var transaction = RequireTransaction(session);
+        await EnsureStagedAsync(id, transaction, ct);
+        return await write(transaction, ct);
+    }
+
+    private static FilterDefinition<ApplicationEntity> OnRegistration(
+        string organisationId,
+        string registrationId
+    ) =>
+        Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId)
+        & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+
+    private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
+
+    public async Task<
+        IReadOnlyList<AccreditationApplicationModel>
+    > GetByAccreditationReferenceAsync(
+        string accreditationReference,
+        CancellationToken cancellationToken = default
+    )
+    {
         var accreditations = await stores.Accreditations.Versions.FindAllCurrentAsync(
-            Builders<AccreditationEntity>.Filter.Eq(a => a.AccreditationNumber, reference),
+            Builders<AccreditationEntity>.Filter.Eq(
+                a => a.AccreditationNumber,
+                accreditationReference
+            ),
             null,
-            ct
+            cancellationToken
         );
         var accreditationIds = accreditations.Select(a => a.EntityId).ToList();
         var envelope =
-            Builders<ApplicationEntity>.Filter.Eq("details.reservedAccreditationNumber", reference)
-            | Builders<ApplicationEntity>.Filter.In("details.accreditationId", accreditationIds);
-        return (await ProjectCurrentAsync(envelope, null, ct))
-            .Where(a => a.AccreditationReference == reference)
+            Builders<ApplicationEntity>.Filter.Eq(
+                ApplicationFields.ReservedAccreditationNumber,
+                accreditationReference
+            )
+            | Builders<ApplicationEntity>.Filter.In(
+                ApplicationFields.AccreditationId,
+                accreditationIds
+            );
+        return (await ProjectCurrentAsync(envelope, null, cancellationToken))
+            .Where(a => a.AccreditationReference == accreditationReference)
             .ToList();
     }
 
@@ -194,11 +230,10 @@ public sealed class ModelBackedApplicationPersistence(
         if (!ObjectId.TryParse(applicationId, out var id))
             return null;
 
-        using var own = session is null
+        using var ownSession = session is null
             ? await clientFactory.GetClient().StartSessionAsync()
             : null;
-        var s = session ?? own!;
-        var projected = await ReadAsync(id, s, default);
+        var projected = await ReadAsync(id, session ?? ownSession!, default);
 
         return projected?.OrganisationId == organisationId ? projected : null;
     }
@@ -305,9 +340,7 @@ public sealed class ModelBackedApplicationPersistence(
         IClientSessionHandle? session = null
     )
     {
-        var envelope =
-            Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId)
-            & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+        var envelope = OnRegistration(organisationId, registrationId);
 
         var results = await ProjectCurrentAsync(envelope, session, CancellationToken.None);
         return results
@@ -329,9 +362,7 @@ public sealed class ModelBackedApplicationPersistence(
         int beforeYear
     )
     {
-        var envelope =
-            Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId)
-            & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+        var envelope = OnRegistration(organisationId, registrationId);
 
         var results = await ProjectCurrentAsync(envelope, null, CancellationToken.None);
         return results
@@ -340,6 +371,7 @@ public sealed class ModelBackedApplicationPersistence(
                 && a.GlassRecyclingProcess == glassRecyclingProcess
                 && a.Year < beforeYear
                 && a.ApplicationStatus == ApplicationStatus.Approved
+                // As legacy's query: null or empty, not blank, unlike the accreditation API's lookups.
                 && !string.IsNullOrEmpty(a.AccreditationReference)
             )
             .OrderByDescending(a => a.Year)
@@ -354,7 +386,7 @@ public sealed class ModelBackedApplicationPersistence(
         ObjectId applicationId
     )
     {
-        var holders = await HoldingAccreditationReferenceAsync(
+        var holders = await GetByAccreditationReferenceAsync(
             accreditationReference,
             CancellationToken.None
         );
@@ -522,16 +554,13 @@ public sealed class ModelBackedApplicationPersistence(
         IClientSessionHandle? session = null
     )
     {
-        if (session is null)
-        {
-            return await RunInOwnTransactionAsync(
-                (own, token) => UpdateIfInterimSiteNumberAbsentAsync(application, siteNumber, own),
-                CancellationToken.None
-            );
-        }
-        var s = RequireTransaction(session);
-        await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
-        return await staging.UpdateIfInterimSiteNumberAbsentAsync(application, siteNumber, s);
+        return await WriteStagedAsync(
+            application.Id!.Value,
+            session,
+            (transaction, _) =>
+                staging.UpdateIfInterimSiteNumberAbsentAsync(application, siteNumber, transaction),
+            CancellationToken.None
+        );
     }
 
     public async Task<AccreditationApplicationModel?> GetNewestForOrganisationAsync(
@@ -559,9 +588,7 @@ public sealed class ModelBackedApplicationPersistence(
         CancellationToken cancellationToken = default
     )
     {
-        var envelope =
-            Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId)
-            & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+        var envelope = OnRegistration(organisationId, registrationId);
 
         var results = await ProjectCurrentAsync(envelope, session, cancellationToken);
 
@@ -599,16 +626,6 @@ public sealed class ModelBackedApplicationPersistence(
         return results.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
     }
 
-    public async Task<
-        IReadOnlyList<AccreditationApplicationModel>
-    > GetByAccreditationReferenceAsync(
-        string accreditationReference,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return await HoldingAccreditationReferenceAsync(accreditationReference, cancellationToken);
-    }
-
     public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
         int orgId,
         int year,
@@ -636,16 +653,12 @@ public sealed class ModelBackedApplicationPersistence(
         IClientSessionHandle? session = null
     )
     {
-        if (session is null)
-        {
-            return await RunInOwnTransactionAsync(
-                (own, token) => UpdateAsync(application, own),
-                CancellationToken.None
-            );
-        }
-        var s = RequireTransaction(session);
-        await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
-        return await staging.UpdateAsync(application, s);
+        return await WriteStagedAsync(
+            application.Id!.Value,
+            session,
+            (transaction, _) => staging.UpdateAsync(application, transaction),
+            CancellationToken.None
+        );
     }
 
     public async Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
@@ -654,16 +667,12 @@ public sealed class ModelBackedApplicationPersistence(
         IClientSessionHandle? session = null
     )
     {
-        if (session is null)
-        {
-            return await RunInOwnTransactionAsync(
-                (own, token) => UpdateIfOrsIdAbsentAsync(application, orsId, own),
-                CancellationToken.None
-            );
-        }
-        var s = RequireTransaction(session);
-        await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
-        return await staging.UpdateIfOrsIdAbsentAsync(application, orsId, s);
+        return await WriteStagedAsync(
+            application.Id!.Value,
+            session,
+            (transaction, _) => staging.UpdateIfOrsIdAbsentAsync(application, orsId, transaction),
+            CancellationToken.None
+        );
     }
 
     public async Task<AccreditationApplicationModel?> UpdateFieldsAsync(
@@ -674,16 +683,13 @@ public sealed class ModelBackedApplicationPersistence(
         CancellationToken cancellationToken = default
     )
     {
-        if (session is null)
-        {
-            return await RunInOwnTransactionAsync(
-                (own, token) => UpdateFieldsAsync(id, guardFilter, update, own, token),
-                cancellationToken
-            );
-        }
-        var s = RequireTransaction(session);
-        await EnsureStagedAsync(id, s, cancellationToken);
-        return await staging.UpdateFieldsAsync(id, guardFilter, update, s, cancellationToken);
+        return await WriteStagedAsync(
+            id,
+            session,
+            (transaction, token) =>
+                staging.UpdateFieldsAsync(id, guardFilter, update, transaction, token),
+            cancellationToken
+        );
     }
 
     public async Task StampDomainModelForeignKeysAsync(

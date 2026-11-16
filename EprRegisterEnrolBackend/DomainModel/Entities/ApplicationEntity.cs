@@ -30,7 +30,7 @@ public class ApplicationEntity : VersionedEntityBase
     /// Which type this application is, taken from <see cref="Details"/> so the two can never disagree. Stored for
     /// queries and indexes; it is the same string as <c>details._t</c>. Never read back: <see cref="Details"/> decides.
     /// </summary>
-    [BsonElement("applicationType")]
+    [BsonElement(ApplicationFields.ApplicationType)]
     [BsonRepresentation(BsonType.String)]
     public ApplicationType ApplicationType => Details.ApplicationType;
 

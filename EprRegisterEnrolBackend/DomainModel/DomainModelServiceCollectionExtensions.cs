@@ -27,12 +27,15 @@ public static class DomainModelServiceCollectionExtensions
     {
         var section = configuration.GetSection(DomainModelConfig.SectionName);
         var config = section.Get<DomainModelConfig>() ?? new DomainModelConfig();
-        RequireExpand(config.DualWriteSeed, "DualWriteSeed", config);
-        RequireExpand(config.DualWrite, "DualWrite", config);
-        RequireDualWrite(config.MigrateEnabled, "MigrateEnabled", config);
-        RequireDualWrite(config.ReconcileEnabled, "ReconcileEnabled", config);
-        RequireLegacyWrites(config.MigrateEnabled, "MigrateEnabled", config);
-        RequireLegacyWrites(config.ReconcileEnabled, "ReconcileEnabled", config);
+        const string NoCollections = "without it there are no collections to write to.";
+        const string GoesStale = "without it a migrated application goes stale.";
+        const string ReadsFrozenLegacy = "it reads legacy, which is frozen after the cut.";
+        Require(config.DualWriteSeed, "DualWriteSeed", config.ExpandEnabled, "ExpandEnabled", NoCollections);
+        Require(config.DualWrite, "DualWrite", config.ExpandEnabled, "ExpandEnabled", NoCollections);
+        Require(config.MigrateEnabled, "MigrateEnabled", config.DualWrite, "DualWrite", GoesStale);
+        Require(config.ReconcileEnabled, "ReconcileEnabled", config.DualWrite, "DualWrite", GoesStale);
+        Require(config.MigrateEnabled, "MigrateEnabled", config.LegacyWrites, "LegacyWrites", ReadsFrozenLegacy);
+        Require(config.ReconcileEnabled, "ReconcileEnabled", config.LegacyWrites, "LegacyWrites", ReadsFrozenLegacy);
 
         services.Configure<DomainModelConfig>(section);
         services.AddHostedService<DomainModelDiagnosticsService>();
@@ -188,32 +191,13 @@ public static class DomainModelServiceCollectionExtensions
         );
     }
 
-    private static void RequireDualWrite(bool flag, string name, DomainModelConfig config)
+    // A flag that is on needs its prerequisite on too.
+    private static void Require(bool flag, string name, bool prerequisite, string prerequisiteName, string reason)
     {
-        if (flag && !config.DualWrite)
+        if (flag && !prerequisite)
         {
             throw new InvalidOperationException(
-                $"DomainModel:{name} needs DomainModel:DualWrite: without it a migrated application goes stale."
-            );
-        }
-    }
-
-    private static void RequireLegacyWrites(bool flag, string name, DomainModelConfig config)
-    {
-        if (flag && !config.LegacyWrites)
-        {
-            throw new InvalidOperationException(
-                $"DomainModel:{name} needs DomainModel:LegacyWrites: it reads legacy, which is frozen after the cut."
-            );
-        }
-    }
-
-    private static void RequireExpand(bool flag, string name, DomainModelConfig config)
-    {
-        if (flag && !config.ExpandEnabled)
-        {
-            throw new InvalidOperationException(
-                $"DomainModel:{name} needs DomainModel:ExpandEnabled: without it there are no collections to write to."
+                $"DomainModel:{name} needs DomainModel:{prerequisiteName}: {reason}"
             );
         }
     }

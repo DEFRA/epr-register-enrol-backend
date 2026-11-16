@@ -16,7 +16,7 @@ public static class FeatureFlags
     private const string DualWriteKey = $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.DualWrite)}";
 
     /// <summary>
-    /// RA-705: serves every read from the domain model. See <see cref="ReadFromModelPrerequisites"/>.
+    /// RA-705: serves every read from the domain model. See <see cref="s_readFromModelPrerequisites"/>.
     /// </summary>
     public const string ReadFromModelKey =
         $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.ReadFromModel)}";
@@ -30,7 +30,7 @@ public static class FeatureFlags
     /// <summary>
     /// The one place that lists ReadFromModel's prerequisites.
     /// </summary>
-    private static readonly (string Key, string Reason)[] ReadFromModelPrerequisites =
+    private static readonly (string Key, string Reason)[] s_readFromModelPrerequisites =
         [
             (DualWriteKey, "On CDP only dual-write keeps the model current."),
             (DualWriteSeedKey, "Only seed dual-write writes a new application's initial version to the model."),
@@ -42,7 +42,7 @@ public static class FeatureFlags
     /// </summary>
     public const string LegacyWritesKey = $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.LegacyWrites)}";
 
-    private static readonly (string Key, string Reason)[] LegacyWritesCutPrerequisites =
+    private static readonly (string Key, string Reason)[] s_legacyWritesCutPrerequisites =
         [
             (ReadFromModelKey, "Legacy is frozen, so every read must come from the model."),
             (DualWriteKey, "Only dual-write writes the model."),
@@ -78,7 +78,7 @@ public static class FeatureFlags
     }
 
     /// <summary>
-    /// RA-705: ReadFromModel serves every read from the domain model. See <see cref="ReadFromModelPrerequisites"/>.
+    /// RA-705: ReadFromModel serves every read from the domain model. See <see cref="s_readFromModelPrerequisites"/>.
     /// Development is exempt: there the dev seeds write the model directly.
     /// </summary>
     public static void EnsureReadFromModelHasItsPrerequisites(
@@ -88,7 +88,7 @@ public static class FeatureFlags
     {
         if (configuration.GetValue<bool>(ReadFromModelKey) && !environment.IsDevelopment())
         {
-            foreach (var (key, reason) in ReadFromModelPrerequisites)
+            foreach (var (key, reason) in s_readFromModelPrerequisites)
             {
                 if (!configuration.GetValue<bool>(key))
                 {
@@ -109,7 +109,7 @@ public static class FeatureFlags
     {
         if (!configuration.GetValue(LegacyWritesKey, true))
         {
-            foreach (var (key, reason) in LegacyWritesCutPrerequisites)
+            foreach (var (key, reason) in s_legacyWritesCutPrerequisites)
             {
                 if (!configuration.GetValue<bool>(key))
                 {

@@ -77,7 +77,7 @@ public class ApplicationVersionPersistence(
         indexes.Add(
             VersionedIndexes.Current(
                 "reservedAccreditationNumber_current",
-                Builders<ApplicationEntity>.IndexKeys.Ascending("details.reservedAccreditationNumber")
+                Builders<ApplicationEntity>.IndexKeys.Ascending(ApplicationFields.ReservedAccreditationNumber)
             )
         );
         return indexes;
