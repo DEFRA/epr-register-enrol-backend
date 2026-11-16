@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -12,11 +13,13 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 /// <summary>
 /// RA-705: a write's whole-application response (Ok, or a seed's Created) is served again through the reader once the
 /// write has committed. Write responses are strict like reads: when the configured source doesn't hold the application
-/// the answer is 404 (decided 2026-11-14, once the seed writes the initial Application version).
+/// the answer is 404 (decided 2026-11-14, once the seed writes the initial Application version), unless migrating it
+/// through the dual-write unit of work puts it there (self-heal, decided 2026-11-16).
 /// </summary>
 public sealed class ApplicationResponseReaderFilterTests
 {
     private readonly IApplicationReader _reader = Substitute.For<IApplicationReader>();
+    private readonly IDualWriteUnitOfWork _unitOfWork = Substitute.For<IDualWriteUnitOfWork>();
     private static readonly string ApplicationId = ObjectId.GenerateNewId().ToString();
 
     private static AccreditationApplicationModel Application(string name) =>
@@ -29,11 +32,7 @@ public sealed class ApplicationResponseReaderFilterTests
             Year = 2027,
         };
 
-    private ValueTask<object?> InvokeAsync(
-        string method,
-        object? handlerResult,
-        int? siteId = null
-    )
+    private ValueTask<object?> InvokeAsync(string method, object? handlerResult, int? siteId = null)
     {
         var http = new DefaultHttpContext();
         http.Request.Method = method;
@@ -46,7 +45,7 @@ public sealed class ApplicationResponseReaderFilterTests
             );
         }
 
-        return new ApplicationResponseReaderFilter(_reader).InvokeAsync(
+        return new ApplicationResponseReaderFilter(_reader, _unitOfWork).InvokeAsync(
             new DefaultEndpointFilterInvocationContext(http),
             _ => ValueTask.FromResult(handlerResult)
         );
@@ -68,17 +67,76 @@ public sealed class ApplicationResponseReaderFilterTests
             .BeSameAs(served);
     }
 
+    private void MigrationAnswers(IResult result) =>
+        _unitOfWork
+            .RunAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<
+                    Func<MongoDB.Driver.IClientSessionHandle?, CancellationToken, Task<IResult>>
+                >(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(result);
+
     [Fact]
-    public async Task Ok_NotHeldByTheSource_Answers404()
+    public async Task Ok_NotHeldByTheSource_MigratesItThenServesIt()
+    {
+        var legacy = Application("legacy");
+        var served = Application("model");
+        _reader
+            .ServeFromSourceAsync(legacy, Arg.Any<CancellationToken>())
+            .Returns((AccreditationApplicationModel?)null, served);
+        MigrationAnswers(TypedResults.Ok());
+
+        var result = await InvokeAsync(HttpMethods.Patch, TypedResults.Ok(legacy));
+
+        result
+            .Should()
+            .BeOfType<Ok<AccreditationApplicationModel>>()
+            .Which.Value.Should()
+            .BeSameAs(served);
+        await _unitOfWork
+            .Received(1)
+            .RunAsync(
+                Arg.Any<string>(),
+                legacy.Id.ToString()!,
+                Arg.Any<
+                    Func<MongoDB.Driver.IClientSessionHandle?, CancellationToken, Task<IResult>>
+                >(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Ok_NotHeldByTheSourceAndTheMigrationFails_Answers404()
     {
         var legacy = Application("legacy");
         _reader
             .ServeFromSourceAsync(legacy, Arg.Any<CancellationToken>())
             .Returns((AccreditationApplicationModel?)null);
+        MigrationAnswers(
+            TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError)
+        );
 
         var result = await InvokeAsync(HttpMethods.Patch, TypedResults.Ok(legacy));
 
         result.Should().BeOfType<NotFound>();
+    }
+
+    [Fact]
+    public async Task Ok_HeldByTheSource_RunsNoMigration()
+    {
+        var legacy = Application("legacy");
+        _reader
+            .ServeFromSourceAsync(legacy, Arg.Any<CancellationToken>())
+            .Returns(Application("model"));
+
+        await InvokeAsync(HttpMethods.Patch, TypedResults.Ok(legacy));
+
+        await _unitOfWork
+            .DidNotReceiveWithAnyArgs()
+            .RunAsync(default!, default!, default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -99,12 +157,15 @@ public sealed class ApplicationResponseReaderFilterTests
     }
 
     [Fact]
-    public async Task Created_NotHeldByTheSource_Answers404()
+    public async Task Created_NotHeldByTheSourceAndTheMigrationFails_Answers404()
     {
         var legacy = Application("legacy");
         _reader
             .ServeFromSourceAsync(legacy, Arg.Any<CancellationToken>())
             .Returns((AccreditationApplicationModel?)null);
+        MigrationAnswers(
+            TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError)
+        );
 
         var result = await InvokeAsync(
             HttpMethods.Post,
@@ -123,7 +184,9 @@ public sealed class ApplicationResponseReaderFilterTests
         var result = await InvokeAsync(HttpMethods.Get, ok);
 
         result.Should().BeSameAs(ok);
-        await _reader.DidNotReceiveWithAnyArgs().ServeFromSourceAsync(default!, TestContext.Current.CancellationToken);
+        await _reader
+            .DidNotReceiveWithAnyArgs()
+            .ServeFromSourceAsync(default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -134,13 +197,19 @@ public sealed class ApplicationResponseReaderFilterTests
         var result = await InvokeAsync(HttpMethods.Post, site);
 
         result.Should().BeSameAs(site);
-        await _reader.DidNotReceiveWithAnyArgs().ServeFromSourceAsync(default!, TestContext.Current.CancellationToken);
+        await _reader
+            .DidNotReceiveWithAnyArgs()
+            .ServeFromSourceAsync(default!, TestContext.Current.CancellationToken);
     }
 
     // Site and interim-site write responses (ORS add, update, promote, revert and recycling operations; interim add,
     // update and restore) are served from the source's application too: the site with the same SiteId, and for an
     // interim site the one with the same SiteId under the route's ORS.
-    private static OverseasSiteModel Site(int siteId, string name, params InterimSiteModel[] interims) =>
+    private static OverseasSiteModel Site(
+        int siteId,
+        string name,
+        params InterimSiteModel[] interims
+    ) =>
         new()
         {
             SiteId = siteId,
@@ -165,8 +234,13 @@ public sealed class ApplicationResponseReaderFilterTests
     private void SourceHolds(params OverseasSiteModel[] sites)
     {
         var application = Application("model");
-        application.OverseasSites = new AccreditationApplicationOverseasSites { Sites = [.. sites] };
-        _reader.GetByIdAsync("org", ApplicationId, Arg.Any<CancellationToken>()).Returns(application);
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites = [.. sites],
+        };
+        _reader
+            .GetByIdAsync("org", ApplicationId, Arg.Any<CancellationToken>())
+            .Returns(application);
     }
 
     [Fact]
@@ -174,7 +248,11 @@ public sealed class ApplicationResponseReaderFilterTests
     {
         SourceHolds(Site(1, "other"), Site(2, "from the model"));
 
-        var result = await InvokeAsync(HttpMethods.Patch, TypedResults.Ok(Site(2, "from legacy")), siteId: 2);
+        var result = await InvokeAsync(
+            HttpMethods.Patch,
+            TypedResults.Ok(Site(2, "from legacy")),
+            siteId: 2
+        );
 
         result
             .Should()
@@ -203,7 +281,11 @@ public sealed class ApplicationResponseReaderFilterTests
     {
         SourceHolds(Site(1, "other"));
 
-        var result = await InvokeAsync(HttpMethods.Patch, TypedResults.Ok(Site(2, "from legacy")), siteId: 2);
+        var result = await InvokeAsync(
+            HttpMethods.Patch,
+            TypedResults.Ok(Site(2, "from legacy")),
+            siteId: 2
+        );
 
         result.Should().BeOfType<NotFound>();
     }
@@ -215,7 +297,11 @@ public sealed class ApplicationResponseReaderFilterTests
             .GetByIdAsync("org", ApplicationId, Arg.Any<CancellationToken>())
             .Returns((AccreditationApplicationModel?)null);
 
-        var result = await InvokeAsync(HttpMethods.Patch, TypedResults.Ok(Site(2, "from legacy")), siteId: 2);
+        var result = await InvokeAsync(
+            HttpMethods.Patch,
+            TypedResults.Ok(Site(2, "from legacy")),
+            siteId: 2
+        );
 
         result.Should().BeOfType<NotFound>();
     }

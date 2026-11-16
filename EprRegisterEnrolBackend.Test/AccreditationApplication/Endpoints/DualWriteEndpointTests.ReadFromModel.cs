@@ -3,9 +3,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
+using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using NSubstitute;
@@ -109,17 +111,74 @@ public sealed partial class DualWriteEndpointTests
         );
     }
 
-    // Decided 2026-11-13: after the migration an application missing from the model exists nowhere; no legacy fallback.
+    // Decided 2026-11-13: no legacy fallback. Decided 2026-11-16 (self-heal): an application legacy holds but the model
+    // doesn't (a seed whose model write failed) is migrated through the dual-write unit of work, then served from the
+    // model, instead of answering 404 for good.
     [Fact]
-    public async Task ReadFromModel_On_GetById_NotInTheModel_Answers404()
+    public async Task ReadFromModel_On_GetById_NotInTheModel_MigratesItAndServesItFromTheModel()
     {
         Restart(s_readFromModelOn);
         ReExKnowsNothing();
         var legacyOnly = await ApplicationAsync(null, ReExSite());
+        Assert.Null(await CurrentApplicationAsync(legacyOnly));
+
+        var body = await JsonAsync(await GetByIdAsync(legacyOnly));
+
+        Assert.Equal(legacyOnly.Id.ToString(), body.GetProperty("applicationId").GetString());
+        Assert.NotNull(await CurrentApplicationAsync(legacyOnly));
+    }
+
+    // A group no write can migrate (over the transaction size limit) still answers 404, and nothing is written.
+    [Fact]
+    public async Task ReadFromModel_On_GetById_NotInTheModelAndCannotBeMigrated_Answers404()
+    {
+        Restart(s_readFromModelOn);
+        ReExKnowsNothing();
+        var legacyOnly = await ApplicationAsync(null, ReExSite());
+        for (var i = 0; i < MaxGroupSize; i++)
+        {
+            var other = await ApplicationAsync(null, ReExSite());
+            other.ApplicationStatus = ApplicationStatus.Withdrawn;
+            await Applications.UpdateAsync(other);
+        }
 
         var response = await GetByIdAsync(legacyOnly);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Null(await CurrentApplicationAsync(legacyOnly));
+    }
+
+    // A seed whose model write failed (only logged and counted) is migrated before its 201 is served from the model.
+    [Fact]
+    public async Task ReadFromModel_On_Seed_ModelWriteFailed_MigratesItAndAnswers201FromTheModel()
+    {
+        var seedWriterThatWritesNothing = Substitute.For<ISeedDualWriter>();
+        Restart(
+            s_readFromModelOn,
+            services => services.Replace(ServiceDescriptor.Singleton(seedWriterThatWritesNothing))
+        );
+        ReExHoldsTheRegistration();
+
+        var response = await SeedAsync();
+
+        var created = await SeededApplicationAsync(response);
+        Assert.NotNull(await CurrentApplicationAsync(created));
+    }
+
+    // A repeat seed finds the application legacy already holds and answers it: migrated first, then from the model.
+    [Fact]
+    public async Task ReadFromModel_On_RepeatSeed_NotInTheModel_MigratesItAndAnswers200FromTheModel()
+    {
+        Restart(s_readFromModelOn);
+        ReExHoldsTheRegistration();
+        var legacyOnly = await ApplicationAsync(null, ReExSite());
+
+        var response = await SeedAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await JsonAsync(response);
+        Assert.Equal(legacyOnly.Id.ToString(), body.GetProperty("applicationId").GetString());
+        Assert.NotNull(await CurrentApplicationAsync(legacyOnly));
     }
 
     [Fact]
@@ -179,7 +238,10 @@ public sealed partial class DualWriteEndpointTests
         var body = await JsonAsync(await PatchPrnsAsync(application));
 
         Assert.Equal(ModelName, body.GetProperty("organisationName").GetString());
-        Assert.Equal("UpTo500", body.GetProperty("prns").GetProperty("plannedTonnageBand").GetString());
+        Assert.Equal(
+            "UpTo500",
+            body.GetProperty("prns").GetProperty("plannedTonnageBand").GetString()
+        );
     }
 
     [Fact]
@@ -219,9 +281,15 @@ public sealed partial class DualWriteEndpointTests
 
         var body = await JsonAsync(await GetByIdAsync(application));
 
-        Assert.Equal("UpTo500", body.GetProperty("prns").GetProperty("plannedTonnageBand").GetString());
+        Assert.Equal(
+            "UpTo500",
+            body.GetProperty("prns").GetProperty("plannedTonnageBand").GetString()
+        );
         Assert.Equal(ModelName, body.GetProperty("organisationName").GetString());
-        Assert.Equal((await LegacyAsync(application))!.Version, body.GetProperty("version").GetInt64());
+        Assert.Equal(
+            (await LegacyAsync(application))!.Version,
+            body.GetProperty("version").GetInt64()
+        );
     }
 
     // A seed writes the initial Application version, so with ReadFromModel on its Created response is served from the
@@ -236,6 +304,9 @@ public sealed partial class DualWriteEndpointTests
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
-        Assert.Equal(response.Headers.Location!.OriginalString.Split('/')[^1], body.GetProperty("applicationId").GetString());
+        Assert.Equal(
+            response.Headers.Location!.OriginalString.Split('/')[^1],
+            body.GetProperty("applicationId").GetString()
+        );
     }
 }

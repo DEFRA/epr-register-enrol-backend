@@ -124,7 +124,7 @@ public class FakeOrganisationPersistenceTests
         org.CompanyDetails.RegistrationNumber.Should().Be("R26EX0500190001PL");
         var registration = org.Registrations!.Should().ContainSingle().Subject;
         registration.Id.ToString().Should().Be("aaa000000000000000050019");
-        registration.OverseasSites.Should().Equal("901901", "901910", "901911", "901912");
+        registration.OverseasSites.Should().Equal("901901", "901910", "901914", "901911", "901912");
     }
 
     [Fact]

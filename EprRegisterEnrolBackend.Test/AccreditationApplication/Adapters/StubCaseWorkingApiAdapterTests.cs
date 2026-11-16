@@ -260,11 +260,13 @@ public class StubCaseWorkingApiAdapterTests
         await act.Should().NotThrowAsync();
     }
 
-    // RA-492: the stub mirrors ManagementBe's in-year change reference (format: see "Application
-    // reference" in ManagementBe's docs/work-items.md).
+    // RA-492, RA-739: the stub mirrors ManagementBe's add-ORS response: one in-year change reference
+    // per site (format: see "Application reference" in ManagementBe's docs/work-items.md) and a
+    // SUB-{yyyy}-{seq:D4} submission reference they share.
     private static AccreditationChangeRequest CreateChangeRequest(
         int year = 2026,
-        string changeType = AccreditationChangeRequest.AddOverseasSiteChangeType
+        string changeType = AccreditationChangeRequest.AddOverseasSiteChangeType,
+        int sites = 1
     )
     {
         var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(
@@ -278,10 +280,16 @@ public class StubCaseWorkingApiAdapterTests
             ApplicationId = accreditation.ApplicationId!,
             MaterialType = accreditation.MaterialType,
             Year = year,
+            Sites =
+            [
+                .. Enumerable
+                    .Range(1, sites)
+                    .Select(n => new ChangeRequestSite { SiteId = 900 + n, OrsId = $"{n:D3}", SiteName = $"Site {n}" }),
+            ],
         };
     }
 
-    private static Task<CaseWorkingSubmissionResult> SubmitChange(
+    private static Task<ChangeRequestSubmissionResult> SubmitChange(
         StubCaseWorkingApiAdapter sut,
         AccreditationChangeRequest request
     ) =>
@@ -291,31 +299,51 @@ public class StubCaseWorkingApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
+    private static async Task<string> SubmitOneSite(StubCaseWorkingApiAdapter sut, int year = 2026) =>
+        (await SubmitChange(sut, CreateChangeRequest(year: year))).Sites.Single().CaseReference;
+
     [Fact]
-    public async Task SubmitChangeRequestAsync_ReturnsAnInYearChangeReferenceForTheRequestYear()
+    public async Task SubmitChangeRequestAsync_ReturnsAnInYearChangeReferenceAndASubmissionReferenceForTheRequestYear()
     {
         var result = await SubmitChange(BuildSut(), CreateChangeRequest(year: 2026));
 
-        result.CaseReference.Should().Be("IYC-ORS-2026-00000");
-        result.WorkItemId.Should().NotBeNull();
+        result.SubmissionReference.Should().Be("SUB-2026-0001");
+        var site = result.Sites.Single();
+        site.SiteId.Should().Be(901);
+        site.CaseReference.Should().Be("IYC-ORS-2026-00001");
+        site.WorkItemId.Should().NotBeNull();
     }
 
     [Fact]
-    public async Task SubmitChangeRequestAsync_NumbersEachChangeInTurnFromZero_ZeroPaddedToFiveDigits()
+    public async Task SubmitChangeRequestAsync_SeveralSites_EachGetsItsOwnReferenceAndWorkItemUnderOneSubmission()
+    {
+        var sut = BuildSut();
+
+        var first = await SubmitChange(sut, CreateChangeRequest(sites: 3));
+        var second = await SubmitChange(sut, CreateChangeRequest(sites: 2));
+
+        first.SubmissionReference.Should().Be("SUB-2026-0001");
+        first.Sites.Select(s => s.SiteId).Should().Equal(901, 902, 903);
+        first.Sites.Select(s => s.CaseReference)
+            .Should().Equal("IYC-ORS-2026-00001", "IYC-ORS-2026-00002", "IYC-ORS-2026-00003");
+        first.Sites.Select(s => s.WorkItemId).Should().OnlyHaveUniqueItems().And.NotContainNulls();
+        second.SubmissionReference.Should().Be("SUB-2026-0002");
+        second.Sites.Select(s => s.CaseReference).Should().Equal("IYC-ORS-2026-00004", "IYC-ORS-2026-00005");
+    }
+
+    [Fact]
+    public async Task SubmitChangeRequestAsync_NumbersEachSiteInTurnFromOne_ZeroPaddedToFiveDigits()
     {
         var sut = BuildSut();
 
         var references = new List<string>();
         for (var i = 0; i < 12; i++)
-            references.Add((await SubmitChange(sut, CreateChangeRequest())).CaseReference);
+            references.Add(await SubmitOneSite(sut));
 
-        references[0].Should().Be("IYC-ORS-2026-00000");
-        references[1].Should().Be("IYC-ORS-2026-00001");
-        references[11].Should().Be("IYC-ORS-2026-00011");
-        references.Should().OnlyContain(r => Regex.IsMatch(
-            r,
-            "^IYC-ORS-2026-[0-9]{5}$"
-        ));
+        references[0].Should().Be("IYC-ORS-2026-00001");
+        references[1].Should().Be("IYC-ORS-2026-00002");
+        references[11].Should().Be("IYC-ORS-2026-00012");
+        references.Should().OnlyContain(r => Regex.IsMatch(r, "^IYC-ORS-2026-[0-9]{5}$"));
     }
 
     [Fact]
@@ -327,20 +355,34 @@ public class StubCaseWorkingApiAdapterTests
         var first2027 = await SubmitChange(sut, CreateChangeRequest(year: 2027));
         var second2026 = await SubmitChange(sut, CreateChangeRequest(year: 2026));
 
-        first2026.CaseReference.Should().Be("IYC-ORS-2026-00000");
-        first2027.CaseReference.Should().Be("IYC-ORS-2027-00000");
-        second2026.CaseReference.Should().Be("IYC-ORS-2026-00001");
+        first2026.Sites.Single().CaseReference.Should().Be("IYC-ORS-2026-00001");
+        first2027.Sites.Single().CaseReference.Should().Be("IYC-ORS-2027-00001");
+        second2026.Sites.Single().CaseReference.Should().Be("IYC-ORS-2026-00002");
+        first2026.SubmissionReference.Should().Be("SUB-2026-0001");
+        first2027.SubmissionReference.Should().Be("SUB-2027-0001");
+        second2026.SubmissionReference.Should().Be("SUB-2026-0002");
     }
 
-    // The counter keeps increasing; the reference shows it modulo 100000.
+    // As ManagementBe: the counter keeps increasing from 1, and the reference cycles through 00001
+    // to 99999, so 99999 is followed by 00001 and 00000 is never shown.
     [Theory]
+    [InlineData(1L, "IYC-ORS-2026-00001")]
     [InlineData(99_998L, "IYC-ORS-2026-99998")]
     [InlineData(99_999L, "IYC-ORS-2026-99999")]
-    [InlineData(100_000L, "IYC-ORS-2026-00000")]
-    [InlineData(100_001L, "IYC-ORS-2026-00001")]
-    [InlineData(200_000L, "IYC-ORS-2026-00000")]
-    public void FormatChangeReference_WrapsTheSequenceToFiveDigits(long sequence, string expected) =>
+    [InlineData(100_000L, "IYC-ORS-2026-00001")]
+    [InlineData(100_001L, "IYC-ORS-2026-00002")]
+    [InlineData(199_998L, "IYC-ORS-2026-99999")]
+    [InlineData(199_999L, "IYC-ORS-2026-00001")]
+    public void FormatChangeReference_WrapsTheSequenceFrom99999To00001(long sequence, string expected) =>
         StubCaseWorkingApiAdapter.FormatChangeReference("ORS", 2026, sequence).Should().Be(expected);
+
+    // As ManagementBe: at least four digits, growing rather than wrapping past 9999.
+    [Theory]
+    [InlineData(1L, "SUB-2026-0001")]
+    [InlineData(9_999L, "SUB-2026-9999")]
+    [InlineData(10_000L, "SUB-2026-10000")]
+    public void FormatSubmissionReference_GrowsPast9999(long sequence, string expected) =>
+        StubCaseWorkingApiAdapter.FormatSubmissionReference(2026, sequence).Should().Be(expected);
 
     [Fact]
     public async Task SubmitChangeRequestAsync_ConcurrentSubmissions_EachGetADifferentNumber()
@@ -352,9 +394,13 @@ public class StubCaseWorkingApiAdapterTests
         );
 
         results
-            .Select(r => r.CaseReference)
+            .Select(r => r.Sites.Single().CaseReference)
             .Should()
-            .BeEquivalentTo(Enumerable.Range(0, 200).Select(n => $"IYC-ORS-2026-{n:D5}"));
+            .BeEquivalentTo(Enumerable.Range(1, 200).Select(n => $"IYC-ORS-2026-{n:D5}"));
+        results
+            .Select(r => r.SubmissionReference)
+            .Should()
+            .BeEquivalentTo(Enumerable.Range(1, 200).Select(n => $"SUB-2026-{n:D4}"));
     }
 
     // ManagementBe refuses an accreditation year that is not four digits with a 400.
@@ -371,13 +417,13 @@ public class StubCaseWorkingApiAdapterTests
     }
 
     [Theory]
-    [InlineData(1000, "IYC-ORS-1000-00000")]
-    [InlineData(9999, "IYC-ORS-9999-00000")]
+    [InlineData(1000, "IYC-ORS-1000-00001")]
+    [InlineData(9999, "IYC-ORS-9999-00001")]
     public async Task SubmitChangeRequestAsync_FourDigitYearBounds_AreAccepted(int year, string expected)
     {
-        var result = await SubmitChange(BuildSut(), CreateChangeRequest(year: year));
+        var reference = await SubmitOneSite(BuildSut(), year);
 
-        result.CaseReference.Should().Be(expected);
+        reference.Should().Be(expected);
     }
 
     [Fact]

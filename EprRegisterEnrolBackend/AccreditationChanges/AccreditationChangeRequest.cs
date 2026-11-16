@@ -66,10 +66,18 @@ public class AccreditationChangeRequest
     /// <summary>The charge the operator confirmed, snapshotted at submit.</summary>
     public int? ChargePence { get; set; }
 
-    public string? CaseManagementReference { get; set; }
+    /// <summary>
+    /// RA-739: Case Management's <c>SUB-{yyyy}-{seq}</c> reference, shared by the work items one submission
+    /// created. Stored for support and not shown to the operator: each item holds its own application reference.
+    /// </summary>
+    public string? SubmissionReference { get; set; }
 
-    [BsonGuidRepresentation(GuidRepresentation.Standard)]
-    public Guid? CaseManagementWorkItemId { get; set; }
+    /// <summary>
+    /// RA-739: set when a submit was sent to Case Management but the request was reopened because no confirmed reply
+    /// came back. Case Management may already hold the submission and replays a resubmit with the sites it first
+    /// received, so from then on the request's sites can't be added or removed.
+    /// </summary>
+    public bool SentToCaseManagement { get; set; }
 
     /// <summary>Optimistic-concurrency token, bumped by every update.</summary>
     public long Version { get; set; }
@@ -78,6 +86,24 @@ public class AccreditationChangeRequest
     [JsonIgnore]
     public IEnumerable<ChangeRequestItem> Items =>
         TonnageBandUpgrade is null ? Sites : [.. Sites, TonnageBandUpgrade];
+
+    /// <summary>
+    /// RA-739: snapshots the charge at submit: the request's total and each site's own (every site is chargeable).
+    /// </summary>
+    public void SetCharge(ChargeView charge)
+    {
+        ChargePence = charge.TotalPence;
+        foreach (var site in Sites)
+            site.ChargePence = charge.ChargePerSitePence;
+    }
+
+    /// <summary>Clears the total and every site's charge together, when a request is reopened.</summary>
+    public void ClearCharge()
+    {
+        ChargePence = null;
+        foreach (var site in Sites)
+            site.ChargePence = null;
+    }
 
     /// <summary>Moves every item with the request: to Submitted on submit, back to InProgress on reopen.</summary>
     public void SetItemStatuses(ChangeItemStatus status)
@@ -108,6 +134,15 @@ public abstract class ChangeRequestItem
     public DateTime? ValidFrom { get; set; }
 
     public DateTime? WithdrawnAt { get; set; }
+
+    /// <summary>
+    /// RA-739: the application reference of this item's own Case Management work item, such as an add-ORS
+    /// item's <c>IYC-ORS-{yyyy}-{seq}</c>. Null until submitted, and while submission to Case Management is off.
+    /// </summary>
+    public string? CaseManagementReference { get; set; }
+
+    [BsonGuidRepresentation(GuidRepresentation.Standard)]
+    public Guid? CaseManagementWorkItemId { get; set; }
 }
 
 public class TonnageBandUpgradeItem : ChangeRequestItem
@@ -132,6 +167,12 @@ public class ChangeRequestSite : ChangeRequestItem
     public ChangeRequestSiteAnswers Answers { get; set; } = new();
 
     public BesEvidenceModel? BesEvidence { get; set; }
+
+    /// <summary>
+    /// RA-739: this site's own charge, the per-site in-year ORS fee, snapshotted at submit beside the request's
+    /// total <see cref="AccreditationChangeRequest.ChargePence"/> and cleared with it when the request is reopened.
+    /// </summary>
+    public int? ChargePence { get; set; }
 }
 
 public class ChangeRequestSiteAnswers

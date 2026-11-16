@@ -336,16 +336,18 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task SeedAsync_InYearChangeExporterHasOneAccreditedThreeRegisteredOnlyAndOneNeverRegisteredOrs()
+    public async Task SeedAsync_InYearChangeExporterHasOneAccreditedFourRegisteredOnlyAndOneNeverRegisteredOrs()
     {
         var seeded = await SeedOnce(organisationId: "50019");
         var sites = seeded.OverseasSites!.Sites;
 
+        // The Registered tab lists them in this order: the two complete ones first.
         sites.Select(s => (s.SiteId, s.OrsId, s.SiteName, s.Country, s.Selected))
             .Should()
             .Equal(
                 (901901, "001", "Hamburg Kunststoff GmbH", "Germany", true),
                 (901910, "005", "Lyon Plastiques SA", "France", false),
+                (901914, "009", "Rotterdam Recycling BV", "Netherlands", false),
                 (901911, "006", "Delhi Polymers Pvt", "India", false),
                 (901912, "007", "Izmir Recycling AS", "Turkey", false),
                 (901913, "008", "Valencia Reciclaje SL", "Spain", false)
@@ -355,6 +357,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
             .Equal(
                 ("53.5511, 9.9937", "R3", true, true, true),
                 ("45.7640, 4.8357", "R3", true, true, true),
+                ("51.9244, 4.4777", "R3", true, true, true),
                 (null, "", null, false, false),
                 ("38.4237, 27.1428", "", null, false, true),
                 ("39.4699, -0.3763", "R3", true, true, true)
@@ -362,7 +365,13 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         // Added by the operator and deselected: never registered, so on neither tab.
         sites.Where(s => s.IsNewSite).Select(s => s.SiteId).Should().Equal(901913);
         sites[0].ValidFrom.Should().Be("2026-01-01T00:00:00Z");
-        sites.Should().OnlyContain(s => s.ContactName != null && s.Code1 != null && s.InterimSites.Count == 0);
+        sites.Should().OnlyContain(s => s.ContactName != null && s.Code1 != null);
+        // RA-739: Rotterdam has one interim site, so Case Management's Application summary shows the section.
+        sites.Where(s => s.InterimSites.Count > 0).Select(s => s.SiteId).Should().Equal(901914);
+        var rotterdam = sites.Single(s => s.SiteId == 901914);
+        rotterdam.InterimSites.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new { SiteId = 901915, SiteNumber = "001", SiteName = "Antwerp Transfer Hub", Country = "Belgium", RemovedAt = (DateTime?)null });
+        rotterdam.InterimSite!.SiteId.Should().Be(901915);
     }
 
     [Fact]
