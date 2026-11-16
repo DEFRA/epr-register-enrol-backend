@@ -1,0 +1,106 @@
+using System.Net.Http.Json;
+using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
+using EprRegisterEnrolBackend.Utils.Mongo;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using MongoDB.Bson;
+using MongoDB.Driver;
+
+namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
+
+/// <summary>
+/// RA-706, the cut: with <c>DomainModel:LegacyWrites</c> off, each write route goes through the handlers as before,
+/// but the change reaches the model alone. The legacy document keeps the version and timestamp it had before the
+/// write, and no staged copy is left behind.
+/// </summary>
+public sealed partial class DualWriteEndpointTests
+{
+    private Task<long> StagedCopiesAsync() =>
+        _factory
+            .Services.GetRequiredService<IMongoDbClientFactory>()
+            .GetCollection<BsonDocument>(DomainModelCollections.CutStagingApplications)
+            .CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct);
+
+    [Theory]
+    [InlineData("update-site")]
+    [InlineData("promote-site")]
+    [InlineData("revert-site")]
+    [InlineData("patch-sites")]
+    [InlineData("update-interim")]
+    [InlineData("withdraw-interim")]
+    [InlineData("restore-interim")]
+    [InlineData("add-file")]
+    [InlineData("delete-file")]
+    [InlineData("accreditation-number")]
+    public async Task Cut_WriteRoute_WritesTheModelAndLeavesLegacyAlone(string route)
+    {
+        var application = await MigratedEveryRouteWritableAsync();
+        var modelBefore = (await CurrentApplicationAsync(application))!.Version;
+        var legacyBefore = (await LegacyAsync(application))!;
+        var (cutFactory, cutClient) = Alongside(
+            s_cut,
+            services =>
+                services.Replace(ServiceDescriptor.Singleton(ScannedUpload("file-2", "extra.pdf")))
+        );
+        using var _ = cutFactory;
+        using var __ = cutClient;
+
+        var response = await WriteAsync(application, route, cutClient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            $"{route}: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync(Ct)}"
+        );
+        Assert.True((await CurrentApplicationAsync(application))!.Version > modelBefore);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal(legacyBefore.Version, legacy.Version);
+        Assert.Equal(legacyBefore.UpdatedAt, legacy.UpdatedAt, TimeSpan.FromMilliseconds(1));
+        Assert.Equal(0, await StagedCopiesAsync());
+    }
+
+    [Fact]
+    public async Task Cut_AddSite_WritesTheModelAndLeavesLegacyAlone()
+    {
+        var application = await MigratedEveryRouteWritableAsync();
+        var legacyBefore = (await LegacyAsync(application))!;
+        var (cutFactory, cutClient) = Alongside(s_cut);
+        using var _ = cutFactory;
+        using var __ = cutClient;
+
+        var response = await cutClient.PostAsJsonAsync(
+            Url(application),
+            AddRequest("Cut Site"),
+            Ct
+        );
+
+        Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
+        Assert.Contains((await CurrentSitesAsync()), s => s.SiteName == "Cut Site");
+        Assert.Equal(legacyBefore.Version, (await LegacyAsync(application))!.Version);
+        Assert.Equal(0, await StagedCopiesAsync());
+    }
+
+    // A read after a cut write comes from the model, so the client sees its own change.
+    [Fact]
+    public async Task Cut_ReadAfterWrite_ShowsTheChange()
+    {
+        var application = await MigratedEveryRouteWritableAsync();
+        var (cutFactory, cutClient) = Alongside(s_cut);
+        using var _ = cutFactory;
+        using var __ = cutClient;
+
+        await WriteAsync(application, "update-site", cutClient);
+        var read = await JsonAsync(
+            await cutClient.GetAsync(
+                $"/api/v1/accreditation-applications/{OrganisationId}/{application.Id}",
+                Ct
+            )
+        );
+
+        var site = read.GetProperty("overseasSites")
+            .GetProperty("sites")
+            .EnumerateArray()
+            .Single(s => s.GetProperty("siteId").GetInt32() == 2);
+        Assert.Equal("Renamed", site.GetProperty("siteName").GetString());
+    }
+}
