@@ -173,6 +173,16 @@ public class StubReExApiAdapter(
         if (isTestOrganisation)
             organisationName = $"E2E Organisation {organisationId}";
 
+        var registrationReference = DerivedRegistrationReference(
+            organisationId,
+            registrationId,
+            materialType,
+            glassRecyclingProcess,
+            year,
+            nation,
+            isExporter
+        );
+
         var fixture = new ReExAccreditationDto
         {
             AccreditationId = $"reex-acc-{organisationId}-{materialType}-{year}",
@@ -181,14 +191,11 @@ public class StubReExApiAdapter(
             Year = year,
             OrganisationName = organisationName ?? "Stub Reprocessing Ltd",
             OrganisationNumber = StubOrganisationNumber(organisationId),
-            RegistrationReference = DerivedRegistrationReference(
-                organisationId,
+            RegistrationReference = registrationReference,
+            AccreditationNumber = DerivedAccreditationNumber(
+                registrationReference,
                 registrationId,
-                materialType,
-                glassRecyclingProcess,
-                year,
-                nation,
-                isExporter
+                year
             ),
             SiteAddress = siteAddress,
             IsExporter = isExporter,
@@ -370,6 +377,32 @@ public class StubReExApiAdapter(
     // (FakeOrganisationPersistence.PerfTestRegulatorAreas).
     private static Nation FixtureNation(string? submittedToRegulator) =>
         RegulatorNationMapper.TryMap(submittedToRegulator, out var nation) ? nation : Nation.England;
+
+    // RA-763: like real ReEx, the accreditation's sequence always differs from the registration's,
+    // so a renewal derived from the registration number instead is caught; a hash that lands on the
+    // registration's sequence moves on by one. The year is in the hash, so each year's number differs
+    // and a test can tell last year's number from ReEx apart from one this backend issued and holds.
+    // Positions 11-14 are the sequence.
+    private static string DerivedAccreditationNumber(
+        string registrationReference,
+        string registrationId,
+        int year
+    )
+    {
+        var registrationSequence = int.Parse(
+            registrationReference[11..15],
+            System.Globalization.CultureInfo.InvariantCulture
+        );
+        var sequence = (int)(
+            Fnv1a($"accreditation:{registrationId}:{year}") % RegistrationSequenceRange
+        );
+        if (sequence == registrationSequence)
+        {
+            sequence = (int)((sequence + 1) % RegistrationSequenceRange);
+        }
+
+        return $"A{registrationReference[1..11]}{sequence:D4}{registrationReference[15..]}";
+    }
 
     // RA-690: a valid 17-character registration reference, derived so it is the same every time
     // a given registration is seeded and differs between registrations - approval derives the

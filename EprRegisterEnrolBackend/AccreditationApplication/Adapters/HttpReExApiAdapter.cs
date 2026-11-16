@@ -335,6 +335,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             new ReExAccreditationDto
             {
                 AccreditationId = accreditation.Id,
+                AccreditationNumber = accreditation.AccreditationNumber,
                 OrganisationId = organisationId,
                 MaterialType = materialType,
                 Year = year,

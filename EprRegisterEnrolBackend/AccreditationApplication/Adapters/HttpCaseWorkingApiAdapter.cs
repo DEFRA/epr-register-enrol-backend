@@ -858,6 +858,10 @@ public class HttpCaseWorkingApiAdapter(
             // RA-000: always present - Submit refuses to submit without it (503), and ManagementBe
             // rejects a submission without it.
             operatorOrgNumber = Require(application.OrgId, "operatorOrgNumber", application.ApplicationId),
+            // RA-763: last year's accreditation number ({ year, accreditationNumber } under
+            // JsonOptions' camel case), so the case records the number its own accreditation number
+            // is derived from. Null (ReEx gave none) is dropped by JsonOptions' WhenWritingNull.
+            lastYearsAccreditationNumber = application.LastYearsAccreditationNumber,
             operatorRegistrationId = application.RegistrationId,
             operatorEmail = application.SubmittedBy?.Email,
             // RA-316: the charge the operator was shown on the payment-details page, echoed so

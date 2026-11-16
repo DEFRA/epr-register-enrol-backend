@@ -84,6 +84,31 @@ public class LegacyApplicationMapperTests
         Assert.Equal("test@example.com", entity.SubmittedBy.Email);
     }
 
+    // RA-763: the reconciler's fully populated application covers the way back, through the projection.
+    [Fact]
+    public void ToEntity_CopiesLastYearsAccreditationNumber()
+    {
+        var legacy = Legacy();
+        legacy.LastYearsAccreditationNumber = new AccreditationNumberForYearModel
+        {
+            Year = 2026,
+            AccreditationNumber = "A26ER5000270063PL",
+        };
+
+        var details = LegacyApplicationMapper.ToEntity(legacy, RegistrationId, []).AsAccreditation();
+
+        Assert.Equal(2026, details.LastYearsAccreditationNumber?.Year);
+        Assert.Equal("A26ER5000270063PL", details.LastYearsAccreditationNumber?.AccreditationNumber);
+    }
+
+    [Fact]
+    public void ToEntity_NoLastYearsAccreditationNumber_LeavesItNull()
+    {
+        var details = LegacyApplicationMapper.ToEntity(Legacy(), RegistrationId, []).AsAccreditation();
+
+        Assert.Null(details.LastYearsAccreditationNumber);
+    }
+
     [Fact]
     public void ToEntity_ApplicationWithoutAnId_Throws()
     {
