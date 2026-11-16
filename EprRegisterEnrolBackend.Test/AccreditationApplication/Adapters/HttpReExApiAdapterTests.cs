@@ -1247,12 +1247,14 @@ public class HttpReExApiAdapterTests
         result.Value!.Nation.Should().Be(Nation.Wales);
     }
 
-    // RA-526: a registration with no submittedToRegulator at all must default to England, not
-    // throw or block the seed.
+    // RA-000: a registration with no submittedToRegulator is a ReEx defect (ReEx's schema
+    // requires it). The seed still goes ahead, but with no nation rather than a guessed England,
+    // and the gap is logged at Error; submit then refuses until it is fixed.
     [Fact]
-    public async Task GetAccreditationAsync_RegistrationHasNoSubmittedToRegulator_DefaultsToEngland()
+    public async Task GetAccreditationAsync_RegistrationHasNoSubmittedToRegulator_LeavesNationNullAndLogsError()
     {
-        var sut = BuildSut(OrganisationJsonRegistrationNoSubmittedToRegulator);
+        var logger = new CapturingLogger<HttpReExApiAdapter>();
+        var sut = BuildSut(OrganisationJsonRegistrationNoSubmittedToRegulator, logger: logger);
 
         var result = await sut.GetAccreditationAsync(
             "6a2fcd74e16883c137d01188",
@@ -1262,7 +1264,11 @@ public class HttpReExApiAdapterTests
         );
 
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.Nation.Should().Be(Nation.England);
+        result.Value!.Nation.Should().BeNull();
+        var error = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Subject;
+        error.Message.Should().Contain("organisationId=6a2fcd74e16883c137d01188");
+        error.Message.Should().Contain("registrationId=reg-reprocessor-1");
+        error.Message.Should().Contain("(none)");
     }
 
     // RA-526 AC5: the missing-postcode warning must still fire (not error) when registeredAddress
@@ -1543,18 +1549,28 @@ public class HttpReExApiAdapterTests
         result.Value.Should().Be(Nation.England);
     }
 
-    [Fact]
-    public async Task GetNationAsync_UnrecognisedRegulatorCode_DefaultsToEngland()
+    // RA-000: an unrecognised or missing regulator code is a ReEx defect - a failure with an
+    // Error log, never a guessed England.
+    [Theory]
+    [InlineData("\"submittedToRegulator\": \"not-a-real-regulator\"", "not-a-real-regulator")]
+    [InlineData("\"submittedToRegulator\": null", "(none)")]
+    [InlineData("\"submittedToRegulator\": \"\"", "regulator code  for")]
+    public async Task GetNationAsync_UnmappedRegulatorCode_FailsAndLogsError(
+        string regulatorField,
+        string loggedCode
+    )
     {
+        var logger = new CapturingLogger<HttpReExApiAdapter>();
         var sut = BuildSut(
-            """
+            $$"""
             {
               "id": "6a2fcd74e16883c137d01188",
               "registrations": [
-                { "id": "reg-1", "submittedToRegulator": "not-a-real-regulator" }
+                { "id": "reg-1", {{regulatorField}} }
               ]
             }
-            """
+            """,
+            logger: logger
         );
 
         var result = await sut.GetNationAsync(
@@ -1563,8 +1579,12 @@ public class HttpReExApiAdapterTests
             TestContext.Current.CancellationToken
         );
 
-        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value.Should().Be(Nation.England);
+        result.IsSuccess.Should().BeFalse();
+        result.Error!.Kind.Should().Be(ReExErrorKind.InvalidData);
+        var error = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Subject;
+        error.Message.Should().Contain("organisationId=6a2fcd74e16883c137d01188");
+        error.Message.Should().Contain("registrationId=reg-1");
+        error.Message.Should().Contain(loggedCode);
     }
 
     [Fact]

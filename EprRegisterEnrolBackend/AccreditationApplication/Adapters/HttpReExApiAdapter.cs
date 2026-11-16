@@ -146,18 +146,17 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
 
         // RA-526: Regulator Nation is derived from THIS registration's own regulator, never the
         // organisation's (an org can hold registrations approved by different regulators) and
-        // never from postcode. Missing/unrecognised codes default to England; an unrecognised
-        // non-null code is logged so the gap stays observable, same precedent as the postcode
-        // warning above.
-        if (!RegulatorNationMapper.TryMap(registration.SubmittedToRegulator, out var nation))
-        {
-            logger.LogWarning(
-                "Unrecognised regulator code {RegulatorCode} for org={OrganisationId} reg={RegistrationId}; defaulting to England",
-                registration.SubmittedToRegulator,
-                organisationId,
-                registrationId
-            );
-        }
+        // never from postcode. RA-000: a missing or unrecognised code is a ReEx defect (see
+        // RegulatorNationMapper), so Nation is left null - submit then refuses until it is fixed -
+        // rather than guessed.
+        Nation? nation = RegulatorNationMapper.TryMap(
+            registration.SubmittedToRegulator,
+            out var regulatorNation
+        )
+            ? regulatorNation
+            : null;
+        if (nation is null)
+            LogUnmappedRegulatorCode(registration.SubmittedToRegulator, organisationId, registrationId);
 
         string? siteAddress = registration is ReprocessorRegistrationDto reprocessor
             ? FormatAddress(reprocessor.Site?.Address)
@@ -522,16 +521,35 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             );
         }
 
+        // RA-000: a missing or unrecognised code is a ReEx defect (see RegulatorNationMapper) -
+        // a failure, never a guessed nation.
         if (!RegulatorNationMapper.TryMap(registration.SubmittedToRegulator, out var nation))
-            logger.LogWarning(
-                "Unrecognised regulator code {RegulatorCode} for org={OrganisationId} reg={RegistrationId}; defaulting to England",
-                registration.SubmittedToRegulator,
-                organisationId,
-                registrationId
+        {
+            LogUnmappedRegulatorCode(registration.SubmittedToRegulator, organisationId, registrationId);
+            return ReExResult<Nation>.Fail(
+                new ReExError(
+                    ReExErrorKind.InvalidData,
+                    $"Registration {registrationId} has no recognised submittedToRegulator"
+                ),
+                200
             );
+        }
 
         return ReExResult<Nation>.Success(nation, 200);
     }
+
+    private void LogUnmappedRegulatorCode(
+        string? regulatorCode,
+        string organisationId,
+        string registrationId
+    ) =>
+        logger.LogError(
+            "ReEx registration has no recognised regulator code {RegulatorCode} for "
+                + "organisationId={OrganisationId} registrationId={RegistrationId}; no nation is set",
+            regulatorCode ?? "(none)",
+            organisationId,
+            registrationId
+        );
 
     private static OverseasSiteModel MapOverseasSite(string key, OverseasSiteDto dto) =>
         new()

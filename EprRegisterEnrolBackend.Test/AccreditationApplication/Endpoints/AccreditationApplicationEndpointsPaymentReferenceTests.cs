@@ -292,6 +292,24 @@ public class AccreditationApplicationEndpointsPaymentReferenceTests
         await AssertBlocked(response, app, "Nation unavailable", "ReEx status=404 kind=NotFound");
     }
 
+    // ReEx's nation lookup fails for a registration with no recognised regulator code (a ReEx
+    // defect) - never an England guess.
+    [Fact]
+    public async Task Submit_NoRecognisedRegulatorCode_Returns503SendsNothingSavesNothingAndLogsError()
+    {
+        var app = SeedStarted(orgId: 500500, nation: null);
+        NationLookupReturns(
+            ReExResult<Nation>.Fail(
+                new ReExError(ReExErrorKind.InvalidData, "no recognised submittedToRegulator"),
+                200
+            )
+        );
+
+        var response = await Submit(app);
+
+        await AssertBlocked(response, app, "Nation unavailable", "ReEx status=200 kind=InvalidData");
+    }
+
     // No nation and no registration to look it up from.
     [Fact]
     public async Task Submit_NoNationAndNoRegistrationId_Returns503WithoutALookup()

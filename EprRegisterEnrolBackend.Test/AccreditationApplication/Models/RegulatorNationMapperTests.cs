@@ -25,30 +25,13 @@ public class RegulatorNationMapperTests
         nation.Should().Be(expected);
     }
 
+    // RA-000: no default nation. ReEx's own schema requires one of the four codes, so a null,
+    // blank or unknown code is a ReEx defect the caller fails on.
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void TryMap_NullOrBlankCode_ReturnsTrueAndDefaultsToEngland(string? code)
-    {
-        var result = RegulatorNationMapper.TryMap(code, out var nation);
-
-        result
-            .Should()
-            .BeTrue(because: "a missing regulator code is the expected default, not a data gap");
-        nation.Should().Be(Nation.England);
-    }
-
-    [Fact]
-    public void TryMap_UnrecognisedCode_ReturnsFalseButStillDefaultsToEngland()
-    {
-        var result = RegulatorNationMapper.TryMap("not-a-real-regulator", out var nation);
-
-        result
-            .Should()
-            .BeFalse(because: "an unrecognised code is a data gap the caller should warn about");
-        nation
-            .Should()
-            .Be(Nation.England, because: "callers must still get a usable Nation, not a throw");
-    }
+    [InlineData("not-a-real-regulator")]
+    public void TryMap_NullBlankOrUnrecognisedCode_ReturnsFalse(string? code) =>
+        RegulatorNationMapper.TryMap(code, out _).Should().BeFalse();
 }

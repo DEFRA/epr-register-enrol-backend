@@ -157,6 +157,42 @@ public class AccreditationApplicationEndpointsLifecycleTests
         body.OverseasSites!.Sites.Should().ContainSingle(s => s.OrsId == "ORS-1");
     }
 
+    // RA-000: ReEx gave no recognised regulator code for the registration, so there is no
+    // nation - the application is seeded with none rather than a guessed England.
+    [Fact]
+    public async Task Seed_NoNationFromReEx_StoresTheApplicationWithNoNation()
+    {
+        Reset();
+        var dto = MinimalAdapterSuccess();
+        dto.Value!.Nation = null;
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(dto));
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            new SeedRequest { Year = 2026 },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Nation.Should().BeNull();
+        (await _factory.FakePersistence.GetByOrganisationAsync("org-123"))
+            .Should()
+            .ContainSingle()
+            .Which.Nation.Should()
+            .BeNull();
+    }
+
     // --- Submit ---
 
     [Fact]
