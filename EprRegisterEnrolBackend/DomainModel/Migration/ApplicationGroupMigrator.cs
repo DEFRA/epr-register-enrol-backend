@@ -710,7 +710,7 @@ public sealed class ApplicationGroupMigrator(
                     existing.FirstApprovedAt is null && firstApproval is not null;
                 if (firstApproval is { } approval)
                 {
-                    existing.RecordFirstApproval(approval.At, approval.Source);
+                    existing.RecordFirstApproval(approval.At, approval.Source, approval.ReExValidFrom);
                 }
 
                 // The newest approval wins over details the seed copied from ReEx, when it is being migrated now. One
@@ -746,13 +746,21 @@ public sealed class ApplicationGroupMigrator(
             site.ProposedByApplicationId =
                 site.Origin == SiteOrigin.Operator ? winner.ApplicationId : null;
             site.InterimSites = plan.NewInterimSites;
-            site.AdoptFirstApproval(firstApproval?.At, firstApproval?.Source);
+            site.AdoptFirstApproval(
+                firstApproval?.At,
+                firstApproval?.Source,
+                firstApproval?.ReExValidFrom
+            );
             plan.Saved = await versions.InsertAsync(site, change, session, cancellationToken);
         }
 
         // ReEx's earliest date for the site whenever any application holds one, because only that goes back out as
         // validFrom. Otherwise the earliest approval here, for a site ReEx has no date for.
-        private static (DateTime At, FirstApprovalSource Source)? FirstApproval(SitePlan plan) =>
+        private static (
+            DateTime At,
+            FirstApprovalSource Source,
+            string? ReExValidFrom
+        )? FirstApproval(SitePlan plan) =>
             plan
                 .Holdings.Select(ApprovalOf)
                 .Where(approval => approval is not null)
@@ -761,17 +769,22 @@ public sealed class ApplicationGroupMigrator(
                 .ThenBy(approval => approval!.Value.At)
                 .FirstOrDefault();
 
-        private static (DateTime At, FirstApprovalSource Source)? ApprovalOf(Holding holding)
+        // ReEx's date comes with its string as received, so the ORS serves what the winning copy held.
+        private static (
+            DateTime At,
+            FirstApprovalSource Source,
+            string? ReExValidFrom
+        )? ApprovalOf(Holding holding)
         {
             if (SiteApprovalDate.Parse(holding.Site.ValidFrom) is { } fromReEx)
             {
-                return (fromReEx, FirstApprovalSource.ReEx);
+                return (fromReEx, FirstApprovalSource.ReEx, holding.Site.ValidFrom);
             }
 
             return
                 holding.Accredits
                 && holding.Application.CaseManagementStatusUpdatedAt is { } approvedHere
-                ? (approvedHere, FirstApprovalSource.ThisService)
+                ? (approvedHere, FirstApprovalSource.ThisService, null)
                 : null;
         }
 

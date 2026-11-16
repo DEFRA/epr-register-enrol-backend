@@ -29,7 +29,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 /// to end over HTTP against a real replica set: the legacy write and the model writes commit together or not at
 /// all, and side effects run only after the commit.
 /// </summary>
-public sealed class DualWriteEndpointTests : IAsyncDisposable
+public sealed partial class DualWriteEndpointTests : IAsyncDisposable
 {
     private const string OrganisationId = "6512a0f0c0ffee0000000001";
     private const string ReExRegistrationId = "6512a0f0c0ffee0000000002";
@@ -49,6 +49,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     private readonly IReExApiAdapter _reEx = Substitute.For<IReExApiAdapter>();
     private WebApplicationFactory<Program> _factory;
     private HttpClient _client;
+    private string _databaseName = "";
 
     public DualWriteEndpointTests(MongoIntegrationFixture fixture)
     {
@@ -64,15 +65,23 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
 
     private (WebApplicationFactory<Program>, HttpClient) Start(
         Dictionary<string, string?> settings,
-        Action<IServiceCollection>? configure = null
+        Action<IServiceCollection>? configure = null,
+        string? sharedDatabaseName = null
     )
     {
-        var factory = new EphemeralMongoTestFactory(
+        var app = new EphemeralMongoTestFactory(
             _fixture,
             "sitedualwrite",
             Environments.Development,
-            settings
-        ).WithWebHostBuilder(builder =>
+            settings,
+            sharedDatabaseName
+        );
+        if (sharedDatabaseName is null)
+        {
+            _databaseName = app.DatabaseName;
+        }
+
+        var factory = app.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
                 services.AddSingleton(_caseWorking);
@@ -92,6 +101,12 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         _factory.Dispose();
         (_factory, _client) = Start(settings, configure);
     }
+
+    // A second app over the current database, for example with another flag setting, so both serve the same data.
+    private (WebApplicationFactory<Program> Factory, HttpClient Client) Alongside(
+        Dictionary<string, string?> settings,
+        Action<IServiceCollection>? configure = null
+    ) => Start(settings, configure, _databaseName);
 
     private IAccreditationApplicationPersistence Applications =>
         _factory.Services.GetRequiredService<IAccreditationApplicationPersistence>();
@@ -677,9 +692,10 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
 
     private Task<HttpResponseMessage> StatusPushAsync(
         AccreditationApplicationModel application,
-        string toStateId
+        string toStateId,
+        HttpClient? through = null
     ) =>
-        _client.PostAsJsonAsync(
+        (through ?? _client).PostAsJsonAsync(
             $"/api/v1/accreditation-applications/case-management/{application.CaseManagementWorkItemId}/status",
             new
             {
@@ -690,8 +706,11 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
             Ct
         );
 
-    private Task<HttpResponseMessage> WithdrawAsync(AccreditationApplicationModel application) =>
-        _client.PostAsJsonAsync(
+    private Task<HttpResponseMessage> WithdrawAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    ) =>
+        (through ?? _client).PostAsJsonAsync(
             $"/api/v1/accreditation-applications/{OrganisationId}/{application.Id}/withdraw",
             new { reason = "No longer needed" },
             Ct
@@ -1168,50 +1187,55 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
 
     private Task<HttpResponseMessage> WriteAsync(
         AccreditationApplicationModel application,
-        string route
-    ) =>
-        route switch
+        string route,
+        HttpClient? through = null
+    )
+    {
+        var client = through ?? _client;
+        return route switch
         {
-            "update-site" => _client.PatchAsJsonAsync(
+            "update-site" => client.PatchAsJsonAsync(
                 Url(application, "/2"),
                 EditRequest("Renamed"),
                 Ct
             ),
-            "promote-site" => _client.PostAsJsonAsync(
+            "promote-site" => client.PostAsJsonAsync(
                 Url(application, "/1/promote"),
                 EditRequest("Promoted"),
                 Ct
             ),
-            "revert-site" => _client.PostAsync(Url(application, "/3/revert"), null, Ct),
-            "patch-sites" => PatchSitesAsync(application),
-            "update-interim" => _client.PatchAsJsonAsync(
+            "revert-site" => client.PostAsync(Url(application, "/3/revert"), null, Ct),
+            "patch-sites" => PatchSitesAsync(application, client),
+            "update-interim" => client.PatchAsJsonAsync(
                 InterimUrl(application, "/1"),
                 InterimRequest("Dock"),
                 Ct
             ),
-            "withdraw-interim" => _client.DeleteAsync(InterimUrl(application, "/1"), Ct),
-            "restore-interim" => _client.PostAsync(InterimUrl(application, "/2/restore"), null, Ct),
-            "add-file" => _client.PostAsJsonAsync(
+            "withdraw-interim" => client.DeleteAsync(InterimUrl(application, "/1"), Ct),
+            "restore-interim" => client.PostAsync(InterimUrl(application, "/2/restore"), null, Ct),
+            "add-file" => client.PostAsJsonAsync(
                 AppUrl(application, "files"),
                 new { fileUploadId = "upload-1" },
                 Ct
             ),
-            "delete-file" => _client.DeleteAsync(AppUrl(application, "files/file-1"), Ct),
-            "accreditation-number" => _client.PostAsync(
+            "delete-file" => client.DeleteAsync(AppUrl(application, "files/file-1"), Ct),
+            "accreditation-number" => client.PostAsync(
                 NumberUrl(application, "accreditation"),
                 null,
                 Ct
             ),
             _ => throw new ArgumentOutOfRangeException(nameof(route), route, null),
         };
+    }
 
     private async Task<HttpResponseMessage> PatchSitesAsync(
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        HttpClient client
     )
     {
         var sites = (await LegacyAsync(application))!.OverseasSites!.Sites;
         sites.Single(s => s.SiteId == 2).SiteName = "Patched";
-        return await _client.PatchAsJsonAsync(Url(application), new { sites }, Ct);
+        return await client.PatchAsJsonAsync(Url(application), new { sites }, Ct);
     }
 
     // Each route reaches its legacy write (a 4xx would fail here, not pass), and a model failure rolls it back:
@@ -1249,9 +1273,10 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
     }
 
     private Task<HttpResponseMessage> PatchRecyclingOperationsAsync(
-        AccreditationApplicationModel application
+        AccreditationApplicationModel application,
+        HttpClient? through = null
     ) =>
-        _client.PatchAsJsonAsync(
+        (through ?? _client).PatchAsJsonAsync(
             AppUrl(application, "overseas-sites/1/recycling-operations"),
             new { operationCodes = new[] { "R4", "R12" } },
             Ct
@@ -1308,8 +1333,11 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
             .RecordAsync(Arg.Any<RecyclingOperationsAuditRecord>(), Arg.Any<CancellationToken>());
     }
 
-    private Task<HttpResponseMessage> QueryPushAsync(AccreditationApplicationModel application) =>
-        _client.PostAsJsonAsync(
+    private Task<HttpResponseMessage> QueryPushAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    ) =>
+        (through ?? _client).PostAsJsonAsync(
             $"/api/v1/accreditation-applications/case-management/{application.CaseManagementWorkItemId}/query",
             new
             {
@@ -1358,8 +1386,11 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         return (await Applications.UpdateAsync(application))!;
     }
 
-    private Task<HttpResponseMessage> SubmitAsync(AccreditationApplicationModel application) =>
-        _client.PostAsJsonAsync(
+    private Task<HttpResponseMessage> SubmitAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    ) =>
+        (through ?? _client).PostAsJsonAsync(
             AppUrl(application, "submit"),
             new
             {
@@ -1558,7 +1589,10 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
         return (await Applications.UpdateAsync(application))!;
     }
 
-    private Task<HttpResponseMessage> ResubmitAsync(AccreditationApplicationModel application)
+    private Task<HttpResponseMessage> ResubmitAsync(
+        AccreditationApplicationModel application,
+        HttpClient? through = null
+    )
     {
         _caseWorking
             .ResumeFromQueryAsync(
@@ -1568,7 +1602,7 @@ public sealed class DualWriteEndpointTests : IAsyncDisposable
                 Arg.Any<CancellationToken>()
             )
             .Returns(new ResumeFromQueryResult(true));
-        return _client.PostAsJsonAsync(
+        return (through ?? _client).PostAsJsonAsync(
             AppUrl(application, "resubmit"),
             new
             {

@@ -155,7 +155,7 @@ public sealed class ApplicationReconcilerTests : IDisposable
             S3Bucket = "bucket",
         };
 
-    private static AccreditationApplicationModel Application(
+    internal static AccreditationApplicationModel Application(
         ApplicationStatus status = ApplicationStatus.Queried,
         DateTime? updatedAt = null,
         int year = 2027,

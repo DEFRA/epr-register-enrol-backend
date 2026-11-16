@@ -42,6 +42,7 @@ public static class DomainModelServiceCollectionExtensions
         AddDualWrite(services, config.DualWrite);
         AddMigration(services, config.MigrateEnabled);
         AddReconciliation(services, config.ReconcileEnabled);
+        AddReadFromModel(services, config.ReadFromModel);
 
         return services;
     }
@@ -82,6 +83,9 @@ public static class DomainModelServiceCollectionExtensions
 
         services.AddSingleton<SeedModelStores>();
         services.AddSingleton<SeedDualWriteMetrics>();
+        // The seed writes the initial Application version through the migrator, RA-705.
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
         services.AddSingleton<ISeedDualWriter, SeedDualWriter>();
     }
 
@@ -98,8 +102,8 @@ public static class DomainModelServiceCollectionExtensions
         }
 
         services.AddSingleton<DualWriteMetrics>();
-        services.AddSingleton<ApplicationGroupStores>();
-        services.AddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
         services.AddSingleton<IApplicationModelSync, ApplicationModelSync>();
         services.AddSingleton<IModelInterimSiteNumbers, ModelInterimSiteNumbers>();
         services.AddSingleton<IRegistrationNumberRules, RegistrationNumberRules>();
@@ -130,9 +134,23 @@ public static class DomainModelServiceCollectionExtensions
             return;
         }
 
-        services.AddSingleton<ApplicationReadModel>();
+        services.TryAddSingleton<ApplicationReadModel>();
         services.AddSingleton<ApplicationReconciler>();
         services.AddHostedService<DomainModelReconciliationService>();
+    }
+
+    // Phase 5, "Switch reads": switches the IApplicationReader implementation based on the configuration.
+    private static void AddReadFromModel(IServiceCollection services, bool enabled)
+    {
+        if (!enabled)
+        {
+            services.AddSingleton<IApplicationReader, LegacyApplicationReader>();
+            return;
+        }
+
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<ApplicationReadModel>();
+        services.AddSingleton<IApplicationReader, ModelApplicationReader>();
     }
 
     private static void RequireDualWrite(bool flag, string name, DomainModelConfig config)

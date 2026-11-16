@@ -51,15 +51,27 @@ public class OverseasSiteEntity : VersionedEntityBase
     [BsonRepresentation(BsonType.String)]
     public FirstApprovalSource? FirstApprovalSource { get; set; }
 
+    /// <summary>
+    /// ReEx's <c>validFrom</c> for <see cref="FirstApprovedAt"/>, exactly as received ("2026-01-01",
+    /// "2026-01-01T00:00:00.000Z" and other shapes), so the read model serves what legacy holds (RA-705, decided
+    /// 2026-11-16). Set only with a ReEx date; null for a date approved here, and on sites recorded before it existed.
+    /// </summary>
+    public string? ReExValidFrom { get; set; }
+
     public List<InterimSiteEntry> InterimSites { get; set; } = [];
 
     /// <summary>Sets the first approved date unless the site already has one: it is written once and never overwritten.</summary>
-    public void RecordFirstApproval(DateTime at, FirstApprovalSource source)
+    public void RecordFirstApproval(
+        DateTime at,
+        FirstApprovalSource source,
+        string? reExValidFrom = null
+    )
     {
         if (FirstApprovedAt is null)
         {
             FirstApprovedAt = at;
             FirstApprovalSource = source;
+            ReExValidFrom = ReExStringFor(source, reExValidFrom);
         }
     }
 
@@ -67,14 +79,22 @@ public class OverseasSiteEntity : VersionedEntityBase
     /// For a version being built from a legacy site, which sets the date that site holds: an earlier or better one
     /// replaces it before the version is saved. Does nothing when there is none.
     /// </summary>
-    public void AdoptFirstApproval(DateTime? at, FirstApprovalSource? source)
+    public void AdoptFirstApproval(
+        DateTime? at,
+        FirstApprovalSource? source,
+        string? reExValidFrom = null
+    )
     {
         if (at is not null)
         {
             FirstApprovedAt = at;
             FirstApprovalSource = source;
+            ReExValidFrom = source is { } known ? ReExStringFor(known, reExValidFrom) : null;
         }
     }
+
+    private static string? ReExStringFor(FirstApprovalSource source, string? reExValidFrom) =>
+        source == Entities.FirstApprovalSource.ReEx ? reExValidFrom : null;
 
     /// <summary>
     /// Site numbers that appear more than once in this ORS's own <see cref="InterimSites"/>. The unique index

@@ -8,6 +8,7 @@ using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -546,6 +547,33 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
         await RunAsync(CreateMigration(enabled: true, apply: true));
 
         (await ConflictsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void The_shipped_appsettings_has_the_migration_off_and_logs_it_at_information()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var configuration = new ConfigurationBuilder().AddJsonFile(path).Build();
+
+        configuration
+            .GetSection(OrganisationNameCorrectionOptions.SectionName)
+            .Get<OrganisationNameCorrectionOptions>()
+            .Should()
+            .BeEquivalentTo(
+                new OrganisationNameCorrectionOptions
+                {
+                    Enabled = false,
+                    Apply = false,
+                    SpotCheckConfirmedBy = "",
+                }
+            );
+        // CDP defaults to Warning, so without this a successful dry run or apply logs nothing
+        // in ext-test or prod.
+        configuration[
+            "Serilog:MinimumLevel:Override:EprRegisterEnrolBackend.AccreditationApplication.Startup.OrganisationNameCorrectionMigration"
+        ]
+            .Should()
+            .Be("Information");
     }
 
     private static BsonDocument Without(BsonDocument document, params string[] fields)

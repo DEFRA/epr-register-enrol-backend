@@ -112,6 +112,8 @@ public class FakeChangeRequestPersistence : IChangeRequestPersistence
 
     public Task<bool> UpdateAsync(AccreditationChangeRequest request, CancellationToken ct = default)
     {
+        // As the Mongo driver does, a cancelled token fails the write before it is made.
+        ct.ThrowIfCancellationRequested();
         lock (_lock)
         {
             UpdateCount++;
