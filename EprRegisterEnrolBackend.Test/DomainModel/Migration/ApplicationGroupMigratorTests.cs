@@ -489,7 +489,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         application.PermitNumbers = ["EPR/AB1234"];
         application.SourceReExAccreditationId = "reex-accreditation";
         application.SourceYear = 2026;
-        application.LastYearsAccreditation = new AccreditationNumberForYearModel
+        application.LastYearsAccreditationNumber = new AccreditationNumberForYearModel
         {
             Year = 2026,
             AccreditationNumber = "A26ER5000270063WO",
@@ -516,8 +516,8 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         );
         Assert.Equal("reex-accreditation", details.SourceReExAccreditationId);
         Assert.Equal(2026, details.SeedDataSourceYear);
-        Assert.Equal(2026, details.LastYearsAccreditation?.Year);
-        Assert.Equal("A26ER5000270063WO", details.LastYearsAccreditation?.AccreditationNumber);
+        Assert.Equal(2026, details.LastYearsAccreditationNumber?.Year);
+        Assert.Equal("A26ER5000270063WO", details.LastYearsAccreditationNumber?.AccreditationNumber);
         Assert.Equal(["A26OLD"], details.PreviousReservedAccreditationNumbers);
     }
 
@@ -1249,7 +1249,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     public async Task NewRegistration_TakesLastYearsAccreditationNumberFromTheApplications()
     {
         var application = NewApplication(ApplicationStatus.Started, Day1);
-        application.LastYearsAccreditation = LastYears("A26ER5000270063WO");
+        application.LastYearsAccreditationNumber = LastYears("A26ER5000270063WO");
         await _applications.CreateAsync(application);
 
         await MigrateAsync(application);
@@ -1267,7 +1267,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
     {
         await SeededRegistrationAsync(RegistrationNumber);
         var application = NewApplication(ApplicationStatus.Started, Day1);
-        application.LastYearsAccreditation = LastYears("A26ER5000270063WO");
+        application.LastYearsAccreditationNumber = LastYears("A26ER5000270063WO");
         await _applications.CreateAsync(application);
 
         await MigrateAsync(application);
@@ -1295,7 +1295,7 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
             cancellationToken: Ct
         );
         var application = NewApplication(ApplicationStatus.Started, Day1);
-        application.LastYearsAccreditation = LastYears("A26FROMREGISTER");
+        application.LastYearsAccreditationNumber = LastYears("A26FROMREGISTER");
         await _applications.CreateAsync(application);
 
         await MigrateAsync(application);
@@ -1308,10 +1308,67 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
             "A26FROMREEX",
             Assert.Single(registration.AccreditationNumbers).AccreditationNumber
         );
+        var conflict = Assert.Single(
+            await ConflictsAsync(),
+            c => c.Kind == MigrationConflictKind.AccreditationNumberDiffers
+        );
+        Assert.Equal([application.Id!.Value], conflict.ApplicationIds);
+        Assert.Null(conflict.WinnerApplicationId);
     }
 
     [Fact]
-    public async Task ApplicationsHoldingNoLastYearsAccreditation_LeaveTheRegistrationsListEmpty()
+    public async Task ApplicationHoldingTheNumberTheRegistrationHolds_IsNotAConflict()
+    {
+        var seeded = await SeededRegistrationAsync(RegistrationNumber);
+        seeded.AccreditationNumbers = [new() { Year = 2026, AccreditationNumber = "A26FROMREEX" }];
+        await _stores.Registrations.Versions.UpdateAsync(
+            seeded,
+            seeded.Version,
+            new ChangeInfo { Reason = ChangeReason.ReExRefresh },
+            cancellationToken: Ct
+        );
+        var application = NewApplication(ApplicationStatus.Started, Day1);
+        application.LastYearsAccreditationNumber = LastYears("A26FROMREEX");
+        await _applications.CreateAsync(application);
+
+        await MigrateAsync(application);
+
+        Assert.DoesNotContain(
+            await ConflictsAsync(),
+            c => c.Kind == MigrationConflictKind.AccreditationNumberDiffers
+        );
+    }
+
+    // A new Registration takes the newest application's number; an older one holding another is the conflict.
+    [Fact]
+    public async Task NewRegistration_ApplicationsDisagreeingOnLastYearsAccreditationNumber_NewestWins()
+    {
+        var older = NewApplication(ApplicationStatus.Withdrawn, Day1);
+        older.LastYearsAccreditationNumber = LastYears("A26OLDER");
+        await _applications.CreateAsync(older);
+        var newer = NewApplication(ApplicationStatus.Started, Day1.AddDays(1));
+        newer.LastYearsAccreditationNumber = LastYears("A26NEWER");
+        await _applications.CreateAsync(newer);
+
+        await MigrateAsync(newer);
+
+        var registration = Assert.Single(
+            await CurrentAsync<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+        );
+        Assert.Equal(
+            "A26NEWER",
+            Assert.Single(registration.AccreditationNumbers).AccreditationNumber
+        );
+        var conflict = Assert.Single(
+            await ConflictsAsync(),
+            c => c.Kind == MigrationConflictKind.AccreditationNumberDiffers
+        );
+        Assert.Equal([older.Id!.Value], conflict.ApplicationIds);
+        Assert.Equal(newer.Id, conflict.WinnerApplicationId);
+    }
+
+    [Fact]
+    public async Task ApplicationsHoldingNoLastYearsAccreditationNumber_LeaveTheRegistrationsListEmpty()
     {
         var application = await ApplicationAsync(ApplicationStatus.Started, Day1);
 

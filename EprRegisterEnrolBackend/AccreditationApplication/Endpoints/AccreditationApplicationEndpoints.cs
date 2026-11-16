@@ -551,15 +551,29 @@ public static class AccreditationApplicationEndpoints
                 application.GlassRecyclingProcess,
                 application.Year
             );
-        var (sourceKind, sourceReference) = (previous, application.LastYearsAccreditation) switch
+        var lastYears = application.LastYearsAccreditationNumber;
+        // Last year's number must be for the year before. Seed always stores that, so another
+        // year means the data was changed; it fails visibly rather than falling back to the
+        // registration reference, which is how RA-763's wrong numbers were issued.
+        if (previous is null && lastYears is not null && lastYears.Year != application.Year - 1)
+            return (
+                Results.UnprocessableEntity(
+                    $"Last year's accreditation number '{lastYears.AccreditationNumber}' is for "
+                        + $"{lastYears.Year}, not {application.Year - 1}, so no accreditation "
+                        + "reference can be derived from it."
+                ),
+                null
+            );
+
+        var (sourceKind, sourceReference) = (previous, lastYears) switch
         {
             ({ } held, _) => (
                 AccreditationReferenceSourceKind.PreviousAccreditation,
                 held.AccreditationReference!
             ),
-            (null, { } lastYears) => (
-                AccreditationReferenceSourceKind.PreviousAccreditation,
-                lastYears.AccreditationNumber
+            (null, { } number) => (
+                AccreditationReferenceSourceKind.LastYearsAccreditationNumber,
+                number.AccreditationNumber
             ),
             _ => (AccreditationReferenceSourceKind.Registration, registrationReference),
         };
@@ -570,7 +584,7 @@ public static class AccreditationApplicationEndpoints
             application.Year
         );
         // A malformed source must fail visibly rather than issue a wrong reference. A malformed
-        // previous reference deliberately does not fall back to the registration reference.
+        // accreditation number deliberately does not fall back to the registration reference.
         if (!derivation.IsValid)
             return (Results.UnprocessableEntity(derivation.Error), null);
 
@@ -1014,7 +1028,7 @@ public static class AccreditationApplicationEndpoints
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData.AccreditationId,
             SourceYear = request.Year - 1,
-            LastYearsAccreditation = string.IsNullOrWhiteSpace(priorYearData.AccreditationNumber)
+            LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(priorYearData.AccreditationNumber)
                 ? null
                 : new AccreditationNumberForYearModel
                 {

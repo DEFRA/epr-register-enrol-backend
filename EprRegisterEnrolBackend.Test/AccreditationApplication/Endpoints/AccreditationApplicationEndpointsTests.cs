@@ -305,7 +305,7 @@ public class AccreditationApplicationEndpointsTests
         body!.SourceReExAccreditationId.Should().Be("reex-abc");
         body.SourceYear.Should().Be(2025);
         // RA-763: kept, so the 2026 number is derived from it rather than the registration number.
-        body.LastYearsAccreditation.Should()
+        body.LastYearsAccreditationNumber.Should()
             .BeEquivalentTo(
                 new AccreditationNumberForYearModel
                 {
@@ -319,7 +319,7 @@ public class AccreditationApplicationEndpointsTests
 
     // RA-763: a ReEx accreditation with no number leaves nothing to keep.
     [Fact]
-    public async Task Seed_ReExAccreditationWithNoNumber_HasNoLastYearsAccreditation()
+    public async Task Seed_ReExAccreditationWithNoNumber_HasNoLastYearsAccreditationNumber()
     {
         Reset();
         _factory
@@ -351,7 +351,7 @@ public class AccreditationApplicationEndpointsTests
             JsonOptions,
             cancellationToken: TestContext.Current.CancellationToken
         );
-        body!.LastYearsAccreditation.Should().BeNull();
+        body!.LastYearsAccreditationNumber.Should().BeNull();
     }
 
     // RA-456: ReEx already sends the "Activities or investment not covered by the other
