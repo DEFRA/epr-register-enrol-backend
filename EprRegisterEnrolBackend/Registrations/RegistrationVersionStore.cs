@@ -50,6 +50,16 @@ public sealed class RegistrationVersionStore(
             Builders<RegistrationEntity>.Filter.Eq(x => x.ReExRegistrationId, reExRegistrationId),
             cancellationToken: cancellationToken
         );
+
+    // RA-739: backed by RegistrationPersistence's registrationNumber_current_u index.
+    public Task<RegistrationEntity?> FindCurrentByRegistrationNumberAsync(
+        string registrationNumber,
+        CancellationToken cancellationToken
+    ) =>
+        Versions.FindCurrentAsync(
+            Builders<RegistrationEntity>.Filter.Eq(x => x.RegistrationNumber, registrationNumber),
+            cancellationToken: cancellationToken
+        );
 }
 
 public static class RegistrationVersionStoreServiceCollectionExtensions

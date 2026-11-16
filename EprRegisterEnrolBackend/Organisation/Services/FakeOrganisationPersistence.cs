@@ -707,7 +707,7 @@ public class FakeOrganisationPersistence
             _store.Add(
                 DevExporterOrganisation(
                     DevExporterOrg.InYearChange,
-                    ["901901", "901910", "901911", "901912"]
+                    ["901901", "901910", "901914", "901911", "901912"]
                 )
             );
             _store.Add(DevExporterOrganisation(DevExporterOrg.NoChangeRequests, ["902001", "902002"]));
