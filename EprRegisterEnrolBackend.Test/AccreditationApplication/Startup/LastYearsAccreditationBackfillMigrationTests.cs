@@ -211,6 +211,33 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
     // --- last year's accreditation ----------------------------------------------------------------------------------
 
+    // Whoever reviews the dry run sees which organisation each line is about, and what would be written.
+    [Fact]
+    public async Task Dry_run_and_applied_lines_name_the_organisation()
+    {
+        var egger = Egger();
+        egger.OrganisationName = "Egger (UK) Limited";
+        var id = await SeedAsync(egger);
+        var clearfield = Clearfield();
+        clearfield.OrganisationName = "Clearfield Envirotech Ltd";
+        await SeedAsync(clearfield);
+
+        await ApplyAsync();
+
+        var plan = LoggedFor(id);
+        plan.Should().Contain("org 500027 Egger (UK) Limited").And.Contain(EggerAccreditation);
+        Logged(LogLevel.Information)
+            .Should()
+            .Contain(m =>
+                m.StartsWith("RA-763 APPLIED") && m.Contains("org 500027 Egger (UK) Limited")
+            )
+            .And.Contain(m =>
+                m.StartsWith("RA-763 APPLIED")
+                && m.Contains("org 500324 Clearfield Envirotech Ltd")
+                && m.Contains("->")
+            );
+    }
+
     [Fact]
     public async Task Apply_gives_an_application_last_years_accreditation_from_the_register()
     {

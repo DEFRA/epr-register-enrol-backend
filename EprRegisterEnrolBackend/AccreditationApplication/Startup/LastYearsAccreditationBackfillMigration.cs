@@ -437,13 +437,14 @@ public class LastYearsAccreditationBackfillMigration(
         {
             logger.Log(
                 level,
-                "RA-763 {Mode}: application {ApplicationId} ({ApplicationReference}, org {OrgId}, "
-                    + "{MaterialType}, registration {RegistrationReference}): {Outcome}, issued number "
-                    + "{IssuedNumber}. {Detail}",
+                "RA-763 {Mode}: application {ApplicationId} ({ApplicationReference}, org {OrgId} "
+                    + "{OrganisationName}, {MaterialType}, registration {RegistrationReference}): "
+                    + "{Outcome}, issued number {IssuedNumber}. {Detail}",
                 mode,
                 plan.Id,
                 plan.Application.ApplicationReference,
                 plan.Application.OrgId,
+                plan.Application.OrganisationName,
                 plan.Application.MaterialType,
                 plan.Application.RegistrationReference,
                 plan.Outcome,
@@ -504,10 +505,13 @@ public class LastYearsAccreditationBackfillMigration(
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "RA-763 APPLIED: application {ApplicationId} ({ApplicationReference}) now holds "
-                    + "{Year} accreditation {AccreditationNumber}. Spot check confirmed by {ConfirmedBy}",
+                "RA-763 APPLIED: application {ApplicationId} ({ApplicationReference}, org {OrgId} "
+                    + "{OrganisationName}) now holds {Year} accreditation {AccreditationNumber}. Spot "
+                    + "check confirmed by {ConfirmedBy}",
                 plan.Id,
                 plan.Application.ApplicationReference,
+                plan.Application.OrgId,
+                plan.Application.OrganisationName,
                 LastYear,
                 plan.RegisterAccreditationNumber,
                 confirmedBy
@@ -550,10 +554,13 @@ public class LastYearsAccreditationBackfillMigration(
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "RA-763 APPLIED: application {ApplicationId} ({ApplicationReference}) accreditation "
-                    + "number {Incorrect} -> {Corrected}. Spot check confirmed by {ConfirmedBy}",
+                "RA-763 APPLIED: application {ApplicationId} ({ApplicationReference}, org {OrgId} "
+                    + "{OrganisationName}) accreditation number {Incorrect} -> {Corrected}. Spot check "
+                    + "confirmed by {ConfirmedBy}",
                 plan.Id,
                 plan.Application.ApplicationReference,
+                plan.Application.OrgId,
+                plan.Application.OrganisationName,
                 incorrect,
                 corrected,
                 confirmedBy
