@@ -139,6 +139,20 @@ public class VersionedMongoRepository<T>(
             )
             .FirstOrDefaultAsync(cancellationToken);
 
+    /// <summary>
+    /// Deletes every version document matching the filter.
+    /// For removing test data only: the versioned collections are otherwise append-only.
+    /// </summary>
+    public async Task<long> DeleteAllVersionsAsync(
+        FilterDefinition<T> filter,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var result = await collection.DeleteManyAsync(session, filter, null, cancellationToken);
+        return result.DeletedCount;
+    }
+
     /// <summary>Every version, oldest first.</summary>
     public async Task<List<T>> GetVersionsAsync(
         ObjectId entityId,
