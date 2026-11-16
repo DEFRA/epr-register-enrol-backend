@@ -1,3 +1,5 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel.Cut;
 using EprRegisterEnrolBackend.DomainModel.Diagnostics;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
@@ -43,6 +45,7 @@ public static class DomainModelServiceCollectionExtensions
         AddMigration(services, config.MigrateEnabled);
         AddReconciliation(services, config.ReconcileEnabled);
         AddReadFromModel(services, config.ReadFromModel);
+        AddCut(services, config.LegacyWrites);
 
         return services;
     }
@@ -154,6 +157,29 @@ public static class DomainModelServiceCollectionExtensions
         services.TryAddSingleton<ApplicationGroupStores>();
         services.TryAddSingleton<ApplicationReadModel>();
         services.AddSingleton<IApplicationReader, ModelApplicationReader>();
+    }
+
+    // Phase 6, "Cut": replaces legacy persistence with model-backed persistence and registers the flush mechanism.
+    // The cut serves every application read and write from the model; the unit of work picks up CutFlush through its optional constructor parameter.
+    private static void AddCut(IServiceCollection services, bool legacyWrites)
+    {
+        if (legacyWrites)
+        {
+            return;
+        }
+
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<ApplicationReadModel>();
+        services.AddSingleton<CutStagingPersistence>();
+        services.AddSingleton<CutFlush>();
+        services.AddSingleton<Func<CutFlush>>(sp => () => sp.GetRequiredService<CutFlush>());
+
+        services.Replace(
+            ServiceDescriptor.Singleton<
+                IAccreditationApplicationPersistence,
+                ModelBackedApplicationPersistence
+            >()
+        );
     }
 
     private static void RequireDualWrite(bool flag, string name, DomainModelConfig config)

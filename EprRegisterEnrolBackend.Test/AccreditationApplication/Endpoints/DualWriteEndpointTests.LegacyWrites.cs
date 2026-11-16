@@ -1,3 +1,6 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel.Cut;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Migration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -43,5 +46,56 @@ public sealed partial class DualWriteEndpointTests
         var backfill = factory.Services.GetService<ApplicationCreatedAtBackfill>();
 
         Assert.NotNull(backfill);
+    }
+
+    private static readonly Dictionary<string, string?> s_cut = new(s_dualWriteOn)
+    {
+        ["DomainModel:DualWriteSeed"] = "true",
+        ["DomainModel:ReadFromModel"] = "true",
+        ["DomainModel:LegacyWrites"] = "false",
+    };
+
+    [Fact]
+    public void LegacyWritesOff_ApplicationsArePersistedThroughTheModel()
+    {
+        var (factory, client) = Start(s_cut);
+        using var _ = factory;
+        using var __ = client;
+
+        var persistence =
+            factory.Services.GetRequiredService<IAccreditationApplicationPersistence>();
+
+        Assert.IsType<ModelBackedApplicationPersistence>(persistence);
+    }
+
+    // The migrator and sync the flush runs read and write applications through the same persistence the handlers use,
+    // so a staged copy is what they see.
+    [Fact]
+    public void LegacyWritesOff_TheUnitOfWorkFlushesTheCut()
+    {
+        var (factory, client) = Start(s_cut);
+        using var _ = factory;
+        using var __ = client;
+
+        Assert.NotNull(factory.Services.GetService<CutFlush>());
+        Assert.IsType<DualWriteUnitOfWork>(
+            factory.Services.GetRequiredService<IDualWriteUnitOfWork>()
+        );
+    }
+
+    [Fact]
+    public void LegacyWritesOn_ApplicationsArePersistedToLegacyAndThereIsNoCut()
+    {
+        var (factory, client) = Start(
+            new Dictionary<string, string?>(s_cut) { ["DomainModel:LegacyWrites"] = "true" }
+        );
+        using var _ = factory;
+        using var __ = client;
+
+        Assert.IsType<AccreditationApplicationPersistence>(
+            factory.Services.GetRequiredService<IAccreditationApplicationPersistence>()
+        );
+        Assert.Null(factory.Services.GetService<CutFlush>());
+        Assert.Null(factory.Services.GetService<CutStagingPersistence>());
     }
 }
