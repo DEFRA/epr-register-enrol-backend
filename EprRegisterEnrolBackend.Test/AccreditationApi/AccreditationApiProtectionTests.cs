@@ -151,6 +151,30 @@ public class AccreditationApiProtectionTests : IDisposable
     }
 
     [Fact]
+    public async Task ARequestWithNoClientIdClaim_FailsLoudly_AndIsNotCountedInASharedBucket()
+    {
+        var limiter = new ServiceClientRateLimiter(
+            Options.Create(new ServiceClientsConfig { RateLimitPermitsPerMinute = Limit })
+        );
+        var filter = new ServiceClientRateLimitFilter(limiter);
+        var http = new DefaultHttpContext();
+        var nextCalled = false;
+
+        var act = async () =>
+            await filter.InvokeAsync(
+                new DefaultEndpointFilterInvocationContext(http),
+                _ =>
+                {
+                    nextCalled = true;
+                    return ValueTask.FromResult<object?>(null);
+                }
+            );
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*NameIdentifier*");
+        nextCalled.Should().BeFalse();
+    }
+
+    [Fact]
     public void ALimitOfZero_TurnsTheLimitOff()
     {
         var limiter = new ServiceClientRateLimiter(

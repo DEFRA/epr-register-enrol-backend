@@ -5,7 +5,7 @@ info:
   description: |
     DRAFT v2 read-only API over Register & Enrol **accreditations**. It is an internal Defra API
     (first consumer: Re-Ex), not a public one. It replaces the v0.1 draft
-    (`registration-accreditation-api.yaml`) after architecture review. The changes are:
+    (removed from the repository; see git history) after architecture review. The changes are:
 
     * **Accreditation is the only top-level resource.** An accreditation exists only once its
       application has been approved. Organisation is internal (we do not own it). Registration

@@ -68,7 +68,14 @@ public sealed class ServiceClientRateLimitFilter(ServiceClientRateLimiter limite
     )
     {
         var http = context.HttpContext;
-        var clientId = http.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "(unknown)";
+        // Every request here has passed the Read policy, and the handler always sets this claim. A
+        // missing one is a bug, and sharing one bucket for the clients without it would let one client
+        // lock out the rest, so fail loudly (logged at Error) instead of guessing a client id.
+        var clientId = http.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(clientId))
+            throw new InvalidOperationException(
+                "The authenticated service client has no NameIdentifier claim, so it cannot be rate limited."
+            );
         if (limiter.TryAcquire(clientId, out var retryAfter))
             return await next(context);
 
