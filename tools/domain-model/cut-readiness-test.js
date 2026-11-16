@@ -24,6 +24,9 @@ function cleanup() {
     db.getCollection("applicationVersions").deleteMany({
         reExOrganisationId: TAG,
     });
+    db.getCollection("accreditationApplicationsCutStaging").deleteMany({
+        organisationId: TAG,
+    });
 }
 
 // The same filters as the read-only checks, restricted to this script's fixtures.
@@ -44,6 +47,31 @@ const versionsWithoutCreatedAt = () =>
         ])
         .toArray()
         .map((d) => hex(d.entityId));
+
+const stagedCopies = () =>
+    db
+        .getCollection("accreditationApplicationsCutStaging")
+        .aggregate([{ $match: { organisationId: TAG } }])
+        .toArray()
+        .map((d) => hex(d._id));
+
+const legacyWrittenSince = (cutAt) =>
+    db
+        .getCollection("accreditationApplications")
+        .aggregate([
+            {
+                $match: {
+                    organisationId: TAG,
+                    $or: [
+                        { updatedAt: { $gt: cutAt } },
+                        { createdAt: { $gt: cutAt } },
+                    ],
+                },
+            },
+        ])
+        .toArray()
+        .map((d) => hex(d._id))
+        .sort();
 
 const legacyWithoutCreatedAt = () =>
     db
@@ -100,6 +128,48 @@ db.getCollection("applicationVersions").insertMany([
     },
 ]);
 
+// C: a copy left in the staging collection. D: a legacy document written after the cut.
+const cutAt = new Date(now.getTime() - 60000);
+const stagedLeftOver = new ObjectId();
+db.getCollection("accreditationApplicationsCutStaging").insertOne({
+    _id: stagedLeftOver,
+    organisationId: TAG,
+});
+db.getCollection("accreditationApplications").updateOne(
+    { _id: withCreatedAt },
+    { $set: { updatedAt: now } },
+);
+db.getCollection("accreditationApplications").updateOne(
+    { _id: withoutCreatedAt },
+    { $set: { updatedAt: new Date(cutAt.getTime() - 60000) } },
+);
+
+check("C flags the staged copy left over", () => {
+    const flagged = stagedCopies();
+    return flagged.length === 1 && flagged[0] === hex(stagedLeftOver);
+});
+// An insert stamps createdAt, not updatedAt.
+const insertedAfter = new ObjectId();
+db.getCollection("accreditationApplications").insertOne({
+    _id: insertedAfter,
+    organisationId: TAG,
+    applicationStatus: "Started",
+    createdAt: now,
+});
+
+check(
+    "D flags the legacy applications updated or inserted after the cut, and not one written before it",
+    () => {
+        const flagged = legacyWrittenSince(cutAt);
+        const expected = [hex(withCreatedAt), hex(insertedAfter)].sort();
+        return (
+            flagged.length === 2 &&
+            flagged[0] === expected[0] &&
+            flagged[1] === expected[1]
+        );
+    },
+);
+
 check(
     "A flags the Accreditation version without createdAt, and nothing else",
     () => {
@@ -125,6 +195,11 @@ db.getCollection("accreditationApplications").updateOne(
     { $set: { createdAt: now } },
 );
 
+db.getCollection("accreditationApplicationsCutStaging").deleteMany({
+    _id: stagedLeftOver,
+});
+check("C clears once the staged copy is gone", () => stagedCopies().length === 0);
+
 check(
     "A clears once the version holds createdAt",
     () => versionsWithoutCreatedAt().length === 0,
@@ -143,7 +218,10 @@ check(
             .countDocuments({ organisationId: TAG }) +
             db
                 .getCollection("applicationVersions")
-                .countDocuments({ reExOrganisationId: TAG }) ===
+                .countDocuments({ reExOrganisationId: TAG }) +
+            db
+                .getCollection("accreditationApplicationsCutStaging")
+                .countDocuments({ organisationId: TAG }) ===
         0,
 );
 

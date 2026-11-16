@@ -21,6 +21,8 @@ public sealed class MongoshScriptRunner(
             constructor(hex) { this.$oid = hex ?? __newId(); }
             toHexString() { return this.$oid; }
         }
+        // mongosh sends a Date as a BSON date; extended JSON's $date does the same here.
+        Date.prototype.toJSON = function () { return { $date: this.toISOString() }; };
         const db = {
             getCollection: (name) => ({
                 insertOne: (doc) => __insert(name, JSON.stringify([doc])),

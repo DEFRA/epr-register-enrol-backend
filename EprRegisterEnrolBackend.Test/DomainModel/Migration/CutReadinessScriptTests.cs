@@ -35,7 +35,7 @@ public sealed class CutReadinessScriptTests : IDisposable
         var printed = Run("cut-readiness-test.js");
 
         printed.Should().NotContain(line => line.StartsWith("FAIL", StringComparison.Ordinal));
-        printed.Last().Should().Be("ALL PASS (5)");
+        printed.Last().Should().Be("ALL PASS (8)");
     }
 
     [Fact]
@@ -43,9 +43,17 @@ public sealed class CutReadinessScriptTests : IDisposable
     {
         var printed = Run("cut-readiness-checks.js");
 
-        var sections = printed.Where((_, i) => i % 2 == 1).ToList();
-        sections.Should().HaveCount(2, "the script prints A and B, each with its result");
+        // A, B and C each print a heading and their result. D's search needs the time of the cut, which isn't set until
+        // the cut has happened, so on its own the script says it skipped it.
+        var sections = printed.Take(6).Where((_, i) => i % 2 == 1).ToList();
+        sections.Should().HaveCount(3, "the script prints A, B and C, each with its result");
         JsonSerializer.Deserialize<JsonElement[]>(sections[0]).Should().BeEmpty("A");
         JsonSerializer.Deserialize<JsonElement[]>(sections[1]).Should().BeEmpty("B");
+        JsonSerializer.Deserialize<JsonElement[]>(sections[2]).Should().BeEmpty("C");
+        // D always prints the legacy total, which is recorded at the cut and must not change after it (a delete or an
+        // untimestamped write shows only there).
+        printed[6].Should().StartWith("D. legacy applications in total: 0");
+        printed[7].Should().StartWith("D. skipped: set CUT_AT");
+        printed.Should().HaveCount(8);
     }
 }
