@@ -16,6 +16,12 @@ public sealed class GrantedAccreditations(
     IOptions<ServiceClientsConfig> config
 )
 {
+    // RA-702: the database stops a query that runs past this, and the API answers 503.
+    private TimeSpan? QueryTimeout =>
+        config.Value.QueryTimeoutSeconds > 0
+            ? TimeSpan.FromSeconds(config.Value.QueryTimeoutSeconds)
+            : null;
+
     public async Task<AccreditationApplicationModel?> FindAsync(
         int organisationNumber,
         string registrationNumber,
@@ -27,7 +33,8 @@ public sealed class GrantedAccreditations(
             organisationNumber,
             registrationNumber,
             year,
-            config.Value.FirstAccreditationYear
+            config.Value.FirstAccreditationYear,
+            QueryTimeout
         );
 
         return application is null
@@ -46,7 +53,8 @@ public sealed class GrantedAccreditations(
             filter,
             config.Value.FirstAccreditationYear,
             skip,
-            limit
+            limit,
+            QueryTimeout
         );
 
         return (await reader.ServeManyFromSourceAsync([.. items], cancellationToken), total);

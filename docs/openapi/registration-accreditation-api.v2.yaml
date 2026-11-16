@@ -5,7 +5,7 @@ info:
   description: |
     DRAFT v2 read-only API over Register & Enrol **accreditations**. It is an internal Defra API
     (first consumer: Re-Ex), not a public one. It replaces the v0.1 draft
-    (`registration-accreditation-api.yaml`) after architecture review. The changes are:
+    (removed from the repository; see git history) after architecture review. The changes are:
 
     * **Accreditation is the only top-level resource.** An accreditation exists only once its
       application has been approved. Organisation is internal (we do not own it). Registration
@@ -62,11 +62,18 @@ paths:
       summary: Search accreditations across all organisations
       description: |
         Returns `AccreditationSummary` items, which carry the current `status` and `tonnageBand`
-        but no history, so the response stays small.
+        but no history, so the response stays small. Results are ordered by accreditation number,
+        so the order is the same from one page to the next.
+
+        Only accreditation years from 2027 are served. A search for an earlier year, such as
+        `year=2026`, is a valid request and returns an empty page (`totalItems` 0), even where
+        an accreditation was granted for that year. Getting one accreditation for an earlier
+        year is a `404` (`accreditation_not_found`).
       parameters:
         - $ref: '#/components/parameters/Year'
         - $ref: '#/components/parameters/OrganisationNumberFilter'
         - $ref: '#/components/parameters/RegistrationNumberFilter'
+        - $ref: '#/components/parameters/StatusFilter'
         - $ref: '#/components/parameters/PageNumber'
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -84,6 +91,11 @@ paths:
                         type: array
                         items: { $ref: '#/components/schemas/AccreditationSummary' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}:
     get:
@@ -103,6 +115,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Accreditation' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}/overseas-sites:
     get:
@@ -135,6 +152,11 @@ paths:
                         items: { $ref: '#/components/schemas/AccreditedOverseasSite' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}/overseas-sites/{orsId}:
     get:
@@ -154,6 +176,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AccreditedOverseasSite' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
 components:
   parameters:
@@ -200,6 +227,14 @@ components:
       in: query
       description: Only accreditations of this organisation (the numeric ReEx organisation number), e.g. 500027.
       schema: { type: integer, format: int32, minimum: 1 }
+    StatusFilter:
+      name: status
+      in: query
+      description: |
+        Only accreditations with this current status. Only `approved` accreditations are served
+        today, so `suspended` and `cancelled` are valid and return an empty page until case
+        management can send them.
+      schema: { type: string, enum: [approved, suspended, cancelled] }
     RegistrationNumberFilter:
       name: registrationNumber
       in: query
@@ -218,7 +253,40 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
     NotFound:
-      description: No such resource.
+      description: No such resource, or no such route (`code` `not_found`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: The request is not signed correctly (`code` says why, for example `missing_header` or `invalid_signature`).
+      headers:
+        WWW-Authenticate: { schema: { type: string } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: The client is known but not allowed to make this request (`code` `forbidden`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    MethodNotAllowed:
+      description: The API is read-only. Any method other than GET is refused (`code` `method_not_allowed`).
+      headers:
+        Allow: { schema: { type: string } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooManyRequests:
+      description: The client made too many requests (`code` `rate_limited`). Wait for `Retry-After` seconds.
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ServiceUnavailable:
+      description: The database stopped a query for taking too long (`code` `query_timeout`). Retry, with a narrower search if you can.
+      headers:
+        Retry-After: { schema: { type: integer } }
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -240,6 +308,8 @@ components:
         title: { type: string }
         status: { type: integer }
         detail: { type: string }
+        code: { type: string, description: A stable code for the kind of error, for example `invalid_year`. }
+        traceId: { type: string, description: Quote this when asking for support. }
     MaterialType:
       type: string
       description: Mirrors the `MaterialType` enum.

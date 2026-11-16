@@ -46,10 +46,13 @@ public sealed class ModelBackedApplicationPersistence(
         );
     }
 
+    // maxTime limits the lookup query (RA-702); the per-application projection reads aren't limited yet: batching
+    // them, before the cut goes live, is where the limit covers them too.
     private async Task<List<AccreditationApplicationModel>> ProjectCurrentAsync(
         FilterDefinition<ApplicationEntity> envelope,
         IClientSessionHandle? session,
-        CancellationToken ct
+        CancellationToken ct,
+        TimeSpan? maxTime = null
     )
     {
         using var ownSession = session is null
@@ -60,7 +63,8 @@ public sealed class ModelBackedApplicationPersistence(
         var candidates = await stores.Applications.Versions.FindAllCurrentAsync(
             envelope & ApplicationFields.Accreditations,
             readSession,
-            ct
+            ct,
+            maxTime
         );
 
         var projected = new List<AccreditationApplicationModel>();
@@ -400,7 +404,8 @@ public sealed class ModelBackedApplicationPersistence(
         int orgId,
         string registrationNumber,
         int year,
-        int firstYear
+        int firstYear,
+        TimeSpan? maxTime = null
     )
     {
         var organisation = await stores.Organisations.FindByOrganisationNumberAsync(
@@ -418,7 +423,12 @@ public sealed class ModelBackedApplicationPersistence(
                 organisation.ReExOrganisationId
             );
 
-        var results = await ProjectCurrentAsync(envelope, null, CancellationToken.None);
+        var results = await ProjectCurrentAsync(
+            envelope,
+            null,
+            CancellationToken.None,
+            maxTime
+        );
 
         return results
             .Where(a =>
@@ -440,9 +450,14 @@ public sealed class ModelBackedApplicationPersistence(
         GrantedAccreditationFilter filter,
         int firstYear,
         int skip,
-        int limit
+        int limit,
+        TimeSpan? maxTime = null
     )
     {
+        // RA-702, as legacy: every accreditation served is approved, so a search for any other status finds none.
+        if (filter.Status is not null && filter.Status != "approved")
+            return ([], 0);
+
         var envelope = Builders<ApplicationEntity>.Filter.Eq(
             a => a.Status,
             ApplicationStatus.Approved
@@ -462,7 +477,12 @@ public sealed class ModelBackedApplicationPersistence(
             );
         }
 
-        var results = await ProjectCurrentAsync(envelope, null, CancellationToken.None);
+        var results = await ProjectCurrentAsync(
+            envelope,
+            null,
+            CancellationToken.None,
+            maxTime
+        );
 
         var granted = results
             .Where(a =>

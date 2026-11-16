@@ -31,6 +31,7 @@ public sealed partial class ModelBackedApplicationPersistenceTests : IDisposable
 
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;
+    private readonly string _connectionString;
     private readonly AccreditationApplicationPersistence _legacy;
     private readonly ApplicationGroupStores _stores;
     private readonly ApplicationGroupMigrator _migrator;
@@ -41,6 +42,7 @@ public sealed partial class ModelBackedApplicationPersistenceTests : IDisposable
     public ModelBackedApplicationPersistenceTests(MongoIntegrationFixture fixture)
     {
         _databaseName = MongoIntegrationFixture.NewDatabaseName("modelbacked");
+        _connectionString = fixture.ConnectionString;
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
         var logs = NullLoggerFactory.Instance;

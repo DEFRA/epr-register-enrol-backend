@@ -63,7 +63,7 @@ public class AccreditationApiEndpointTests : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private async Task Seed(
+    private async Task<AccreditationApplicationModel> Seed(
         int year = 2027,
         ApplicationStatus status = ApplicationStatus.Approved,
         string? accreditation = "A27EX5000270012AL",
@@ -100,6 +100,7 @@ public class AccreditationApiEndpointTests : IDisposable
             .Services.GetRequiredService<IAccreditationApplicationPersistence>()
             .CreateAsync(application);
         created.Should().NotBeNull();
+        return created!;
     }
 
     private static OverseasSiteModel Site(int id, string orsId, bool selected, string? validFrom) =>
@@ -785,11 +786,143 @@ public class AccreditationApiEndpointTests : IDisposable
     [InlineData("registrationNumber=bad%20number", "invalid_registration_number")]
     [InlineData("pageNumber=0", "invalid_paging")]
     [InlineData("limit=101", "invalid_paging")]
+    [InlineData("status=pending", "invalid_status")]
+    [InlineData("status=Approved", "invalid_status")]
+    [InlineData("status=", "invalid_status")]
     public async Task Search_InvalidQuery_Is400(string query, string code)
     {
         var response = await Get($"/v1/accreditations?{query}");
 
         await AssertProblem(response, HttpStatusCode.BadRequest, code);
+    }
+
+    // RA-702: the status filter. Everything served is approved today, and nothing records a suspension
+    // or cancellation yet, so those two are valid to ask for and find none.
+    [Fact]
+    public async Task Search_FiltersByStatus_Approved()
+    {
+        await Seed(accreditation: "A27EX5000270011AL", registration: "R27EX5000270011AL");
+        await Seed(accreditation: "A27EX5000270012AL");
+
+        var body = await Json(await Get("/v1/accreditations?status=approved"));
+
+        body.GetProperty("totalItems").GetInt32().Should().Be(2);
+        body.GetProperty("items")
+            .EnumerateArray()
+            .Should()
+            .OnlyContain(i => i.GetProperty("status").GetString() == "approved");
+    }
+
+    [Theory]
+    [InlineData("suspended")]
+    [InlineData("cancelled")]
+    public async Task Search_FiltersByStatus_NoneAreSuspendedOrCancelledYet(string status)
+    {
+        await Seed();
+
+        var response = await Get($"/v1/accreditations?status={status}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("totalItems").GetInt32().Should().Be(0);
+        body.GetProperty("items").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Search_FiltersByStatus_CombinesWithTheOtherFilters()
+    {
+        await Seed();
+
+        var body = await Json(
+            await Get($"/v1/accreditations?organisationNumber={Org}&year=2027&status=approved")
+        );
+
+        body.GetProperty("totalItems").GetInt32().Should().Be(1);
+    }
+
+    // RA-702: a search for a year before the first the API serves is an empty page, even where one is
+    // granted, and a lookup of one is a 404 (Year_BeforeTheFirstServedYear_IsNotServed_EvenIfGranted).
+    [Fact]
+    public async Task Search_ForAYearBeforeTheFirstServed_IsAnEmptyPage()
+    {
+        await Seed(year: 2026, accreditation: "A26EX5000270012AL");
+
+        var response = await Get("/v1/accreditations?year=2026");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("totalItems").GetInt32().Should().Be(0);
+        body.GetProperty("items").GetArrayLength().Should().Be(0);
+    }
+
+    // RA-702: no database id in any response. A real ObjectId is used for the application and the
+    // organisation, every route is read, and neither value, nor any property called id, may appear.
+    [Fact]
+    public async Task NoDatabaseId_AppearsInAnyResponse()
+    {
+        var organisationObjectId = MongoDB.Bson.ObjectId.GenerateNewId().ToString();
+        var application = await Seed(
+            configure: a =>
+            {
+                a.OrganisationId = organisationObjectId;
+                a.OverseasSites!.Sites[0].InterimSites = [Interim(11, removed: false)];
+            }
+        );
+
+        var paths = new[]
+        {
+            "/v1/accreditations",
+            $"/v1/accreditations?organisationNumber={Org}&year=2027&status=approved",
+            AccreditationPath,
+            $"{AccreditationPath}/overseas-sites",
+            $"{AccreditationPath}/overseas-sites/001",
+        };
+        foreach (var path in paths)
+        {
+            var response = await Get(path);
+            response.StatusCode.Should().Be(HttpStatusCode.OK, path);
+            var text = await response.Content.ReadAsStringAsync(Ct);
+
+            text.Should().NotContain(application.Id.ToString()!, path);
+            text.Should().NotContain(organisationObjectId, path);
+            System.Text.RegularExpressions.Regex.IsMatch(text, "[0-9a-f]{24}").Should().BeFalse(
+                $"{path} must not carry anything shaped like an ObjectId"
+            );
+            AssertNoIdProperty(JsonDocument.Parse(text).RootElement, path);
+        }
+    }
+
+    private static void AssertNoIdProperty(JsonElement element, string where)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    new[] { "id", "_id", "applicationid", "organisationid", "registrationid" }
+                        .Should()
+                        .NotContain(property.Name.ToLowerInvariant(), where);
+                    AssertNoIdProperty(property.Value, where);
+                }
+
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                    AssertNoIdProperty(item, where);
+                break;
+        }
+    }
+
+    // RA-702: errors for a route that does not exist, in the same format as the others.
+    [Theory]
+    [InlineData("/v1/nothing-here")]
+    [InlineData("/v1/organisations")]
+    [InlineData("/v1/accreditations/some-id")]
+    public async Task UnknownRoute_Is404_AsAProblem(string path)
+    {
+        var response = await Get(path);
+
+        await AssertProblem(response, HttpStatusCode.NotFound, "not_found");
     }
 
     // ---- authentication ----
@@ -956,8 +1089,25 @@ public class AccreditationApiEndpointTests : IDisposable
                 Ct
             );
 
-            response.StatusCode.Should().Be(HttpStatusCode.MethodNotAllowed, path);
+            await AssertProblem(response, HttpStatusCode.MethodNotAllowed, "method_not_allowed");
+            response.Content.Headers.Allow.Should().Contain("GET", path);
         }
+    }
+
+    [Fact]
+    public async Task WritingToTheSearchRoute_IsNotAllowed_AsAProblem()
+    {
+        var response = await _client.SendAsync(
+            ServiceClientSigner.Request(
+                HttpMethod.Post,
+                "/v1/accreditations",
+                ReExClientId,
+                ReExSecret
+            ),
+            Ct
+        );
+
+        await AssertProblem(response, HttpStatusCode.MethodNotAllowed, "method_not_allowed");
     }
 
     [Theory]

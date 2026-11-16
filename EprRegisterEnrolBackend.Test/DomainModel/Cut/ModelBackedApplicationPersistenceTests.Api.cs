@@ -1,5 +1,14 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel;
+using EprRegisterEnrolBackend.DomainModel.Cut;
+using EprRegisterEnrolBackend.DomainModel.Migration;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
+using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Utils.Mongo;
+using Microsoft.Extensions.Logging.Abstractions;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.Cut;
 
@@ -129,6 +138,95 @@ public sealed partial class ModelBackedApplicationPersistenceTests
 
         Assert.Equal(legacyTotal, modelTotal);
         Assert.Equal(Ids(legacyItems), Ids(modelItems));
+    }
+
+    // RA-702: every accreditation served is approved, so a search for any other status finds none.
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("suspended")]
+    [InlineData("cancelled")]
+    public async Task SearchGrantedAccreditations_ByStatus_FindsTheSamePageAndTotal(string status)
+    {
+        await ApiDataAsync();
+        var filter = new GrantedAccreditationFilter(Status: status);
+
+        var (legacyItems, legacyTotal) = await _legacy.SearchGrantedAccreditationsAsync(
+            filter,
+            FirstYear,
+            0,
+            10
+        );
+        var (modelItems, modelTotal) = await _model.SearchGrantedAccreditationsAsync(
+            filter,
+            FirstYear,
+            0,
+            10
+        );
+
+        Assert.Equal(status == "approved", legacyTotal > 0);
+        Assert.Equal(legacyTotal, modelTotal);
+        Assert.Equal(Ids(legacyItems), Ids(modelItems));
+    }
+
+    // RA-702's load protection: the API passes a time limit, and the model's lookup query asks the server for it, as
+    // legacy's does. The server stopping a query past it is what answers 503 query_timeout.
+    [Fact]
+    public async Task SearchAndGetGranted_SendTheTimeLimitWithTheLookupQuery()
+    {
+        await ApiDataAsync();
+        var commands = new List<BsonDocument>();
+        var model = ModelOver(
+            TestMongoDbClientFactory.WatchingCommands(_connectionString, _databaseName, commands)
+        );
+
+        await model.SearchGrantedAccreditationsAsync(
+            new GrantedAccreditationFilter(),
+            FirstYear,
+            0,
+            10,
+            TimeSpan.FromSeconds(7)
+        );
+        await model.GetGrantedAccreditationAsync(
+            500027,
+            "R27EX0000001P",
+            2027,
+            FirstYear,
+            TimeSpan.FromSeconds(7)
+        );
+
+        var lookups = commands
+            .Where(c =>
+                c.TryGetValue("find", out var collection)
+                && collection.AsString == DomainModelCollections.ApplicationVersions
+            )
+            .ToList();
+        Assert.Equal(
+            2,
+            lookups.Count(c => c.TryGetValue("maxTimeMS", out var ms) && ms.ToInt64() == 7000)
+        );
+    }
+
+    // The model-backed persistence over another client on the same database; reads only, so nothing flushes.
+    private ModelBackedApplicationPersistence ModelOver(IMongoDbClientFactory factory)
+    {
+        var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
+        var logs = NullLoggerFactory.Instance;
+        var stores = new ApplicationGroupStores(
+            new OrganisationPersistence(factory, logs),
+            new RegistrationPersistence(factory, logs, clock),
+            new OverseasSitePersistence(factory, logs, clock),
+            new ApplicationVersionPersistence(factory, logs, clock),
+            new AccreditationPersistence(factory, logs, clock),
+            new MigrationConflictPersistence(factory, logs)
+        );
+        return new ModelBackedApplicationPersistence(
+            factory,
+            stores,
+            new ApplicationReadModel(stores),
+            new CutStagingPersistence(factory, logs),
+            () => throw new InvalidOperationException("A read flushes nothing."),
+            NullLogger<ModelBackedApplicationPersistence>.Instance
+        );
     }
 
     [Fact]
