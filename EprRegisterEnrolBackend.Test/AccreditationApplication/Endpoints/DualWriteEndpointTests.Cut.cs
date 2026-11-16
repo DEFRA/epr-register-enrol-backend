@@ -5,6 +5,7 @@ using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
+using EprRegisterEnrolBackend.TestData;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -209,4 +210,39 @@ public sealed partial class DualWriteEndpointTests
         Assert.Equal(registration.EntityId, (await CurrentRegistrationAsync())!.EntityId);
         Assert.Equal(0, await CountAsync(DomainModelCollections.LegacyApplications));
     }
+
+    // RA-646's fixed test accreditations, seeded at every startup in dev and test: after the cut a redeploy seeds them
+    // into the model again, and a reset (teardown, then seed) leaves exactly them, read from the model.
+    [Fact]
+    public async Task Cut_TestDataSeedReseedAndReset_ServeTheScenariosFromTheModel()
+    {
+        Restart(s_cut);
+        var seeder = _factory.Services.GetRequiredService<AccreditationApiTestDataSeeder>();
+
+        await seeder.SeedAsync();
+        await seeder.SeedAsync();
+        await seeder.ResetAsync();
+
+        foreach (var scenario in AccreditationApiTestData.All)
+        {
+            var read = await Applications.GetByIdAsync(
+                scenario.OrgId.ToString(),
+                scenario.Id.ToString()
+            );
+            Assert.True(read is not null, $"scenario {scenario.OrgId} is not served");
+            Assert.Equal(scenario.Build().Year, read!.Year);
+        }
+        Assert.Equal(AccreditationApiTestData.All.Count, await CountCurrentApplicationsAsync());
+        Assert.Equal(0, await CountAsync(DomainModelCollections.LegacyApplications));
+        Assert.Equal(0, await StagedCopiesAsync());
+    }
+
+    private Task<long> CountCurrentApplicationsAsync() =>
+        _factory
+            .Services.GetRequiredService<IMongoDbClientFactory>()
+            .GetCollection<BsonDocument>(DomainModelCollections.ApplicationVersions)
+            .CountDocumentsAsync(
+                Builders<BsonDocument>.Filter.Eq("isCurrent", true),
+                cancellationToken: Ct
+            );
 }
