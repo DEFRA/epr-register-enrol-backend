@@ -79,12 +79,13 @@ public interface IAccreditationApplicationPersistence
         int orgId,
         string registrationNumber,
         int year,
-        int firstYear
+        int firstYear,
+        TimeSpan? maxTime = null
     );
 
     /// <summary>
     /// A page of the granted accreditations across all organisations, optionally narrowed by year,
-    /// organisation number and registration number (<paramref name="filter"/>), from
+    /// organisation number, registration number and status (<paramref name="filter"/>), from
     /// <paramref name="firstYear"/> on, ordered by accreditation number. Granted means the
     /// same as <see cref="GetGrantedAccreditationAsync"/>, and the application must also carry an
     /// organisation number, since one without cannot be addressed by a service client. Also
@@ -97,7 +98,8 @@ public interface IAccreditationApplicationPersistence
         GrantedAccreditationFilter filter,
         int firstYear,
         int skip,
-        int limit
+        int limit,
+        TimeSpan? maxTime = null
     );
 
     /// <summary>

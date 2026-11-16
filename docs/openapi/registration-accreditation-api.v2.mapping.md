@@ -60,9 +60,19 @@ after the migration (domain model design, decision D3).
 
 `AccreditationSummary` is returned by search; `Accreditation` adds the two histories.
 
-Search (`GET /v1/accreditations`) filters on `year`, `organisationNumber` and `registrationNumber`.
-They map to App `year`, `orgId` and `registrationReference`, are covered by the
-`(orgId, registrationReference, year)` index, and combine with AND.
+Search (`GET /v1/accreditations`) filters on `year`, `organisationNumber`, `registrationNumber` and
+`status`. They map to App `year`, `orgId`, `registrationReference` and `applicationStatus`, and
+combine with AND. A search that names an organisation or registration is covered by the
+`(orgId, registrationReference, year)` index.
+
+Results are ordered by accreditation number (App `accreditationReference`, then `_id`), so the order
+is the same from one page to the next. The `granted_search_sort` index
+`(applicationStatus, accreditationReference, _id)` backs that sort for a search across all
+organisations.
+
+`status` maps only for `approved` today: it is the only API status with stored data. `suspended` and
+`cancelled` are valid values and always return an empty page (`totalItems` 0), until case management
+sends them and the filter has a source for them.
 
 `Accreditation` also carries `overseasSites[]` (exporters only, omitted for a reprocessor): every
 accredited overseas site, as described in [Accredited overseas sites](#accredited-overseas-sites),

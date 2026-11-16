@@ -201,7 +201,8 @@ public class AccreditationApplicationPersistence(
         int orgId,
         string registrationNumber,
         int year,
-        int firstYear
+        int firstYear,
+        TimeSpan? maxTime = null
     )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
@@ -215,7 +216,7 @@ public class AccreditationApplicationPersistence(
         );
 
         return await Collection
-            .Find(filter)
+            .Find(filter, new FindOptions { MaxTime = maxTime })
             .SortByDescending(a => a.DateLastEdited)
             .FirstOrDefaultAsync();
     }
@@ -227,9 +228,16 @@ public class AccreditationApplicationPersistence(
         GrantedAccreditationFilter filter,
         int firstYear,
         int skip,
-        int limit
+        int limit,
+        TimeSpan? maxTime = null
     )
     {
+        // RA-702: every accreditation served today is approved, and nothing yet records a suspension
+        // or cancellation, so a search for any other status finds none. When a source for them lands,
+        // this is where the status filter becomes a real query.
+        if (filter.Status is not null && filter.Status != "approved")
+            return ([], 0);
+
         var filters = Builders<AccreditationApplicationModel>.Filter;
         var granted = filters.And(
             filters.Ne(a => a.OrgId, null),
@@ -252,9 +260,12 @@ public class AccreditationApplicationPersistence(
                 filters.Eq(a => a.RegistrationReference, filter.RegistrationNumber)
             );
 
-        var total = await Collection.CountDocumentsAsync(granted);
+        var total = await Collection.CountDocumentsAsync(
+            granted,
+            new CountOptions { MaxTime = maxTime }
+        );
         var items = await Collection
-            .Find(granted)
+            .Find(granted, new FindOptions { MaxTime = maxTime })
             .SortBy(a => a.AccreditationReference)
             .ThenBy(a => a.Id)
             .Skip(skip)
@@ -715,6 +726,17 @@ public class AccreditationApplicationPersistence(
                     builder.Ascending(a => a.RegistrationReference),
                     builder.Ascending(a => a.Year)
                 )
+            ),
+            // RA-702: backs the service client search's sort (accreditation number, then id) for a
+            // search with no organisation, so the page is read in order from the index and not sorted
+            // in memory. An organisation's own search is small and uses the index above.
+            new CreateIndexModel<AccreditationApplicationModel>(
+                builder.Combine(
+                    builder.Ascending(a => a.ApplicationStatus),
+                    builder.Ascending(a => a.AccreditationReference),
+                    builder.Ascending(a => a.Id)
+                ),
+                new CreateIndexOptions { Name = "granted_search_sort" }
             ),
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Combine(

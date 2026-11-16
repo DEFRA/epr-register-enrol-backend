@@ -1,6 +1,7 @@
 # Data document to API mapping
 
-Companion to [registration-accreditation-api.yaml](registration-accreditation-api.yaml). Every API
+Companion to the v0.1 draft `registration-accreditation-api.yaml`, which has been removed (see git
+history) in favour of [the v2 spec](registration-accreditation-api.v2.yaml). Every API
 field is traced through three layers:
 
 **API field (YAML)** → **C# property** → **Mongo field**

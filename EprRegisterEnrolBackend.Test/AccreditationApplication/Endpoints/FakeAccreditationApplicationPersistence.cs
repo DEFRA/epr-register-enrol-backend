@@ -188,7 +188,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         int orgId,
         string registrationNumber,
         int year,
-        int firstYear
+        int firstYear,
+        TimeSpan? maxTime = null
     ) =>
         Task.FromResult(
             _store
@@ -211,7 +212,8 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         GrantedAccreditationFilter filter,
         int firstYear,
         int skip,
-        int limit
+        int limit,
+        TimeSpan? maxTime = null
     )
     {
         var matches = _store

@@ -7,5 +7,6 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 public sealed record GrantedAccreditationFilter(
     int? Year = null,
     int? OrganisationNumber = null,
-    string? RegistrationNumber = null
+    string? RegistrationNumber = null,
+    string? Status = null
 );
