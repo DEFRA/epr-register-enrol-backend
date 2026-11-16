@@ -30,19 +30,9 @@ public static class DomainModelSchemaCheck
                     missing.Add($"{collection.CollectionName}: {string.Join(", ", absent)}");
                 }
 
-                if (collection.GetExpectedValidation() is { } expected)
+                if (await ValidatorProblemAsync(collection, cancellationToken) is { } problem)
                 {
-                    var current = await collection.GetValidationAsync(cancellationToken);
-                    if (current is null)
-                    {
-                        validators.Add($"{collection.CollectionName}: no validator");
-                    }
-                    else if (current != expected)
-                    {
-                        validators.Add(
-                            $"{collection.CollectionName}: validator differs from the expected one"
-                        );
-                    }
+                    validators.Add(problem);
                 }
             }
 
@@ -73,5 +63,31 @@ public static class DomainModelSchemaCheck
                 $"Domain model schema could not be checked ({ex.GetType().Name})."
             );
         }
+    }
+
+    /// <summary>
+    /// What is wrong with the collection's validator on the server, or null when it is as expected or the collection
+    /// has none. The one place the expected and current validators are compared: the startup retry uses it too, so the
+    /// two cannot drift apart. Mongo errors are thrown to the caller.
+    /// </summary>
+    public static async Task<string?> ValidatorProblemAsync(
+        IDomainModelCollection collection,
+        CancellationToken cancellationToken
+    )
+    {
+        if (collection.GetExpectedValidation() is not { } expected)
+        {
+            return null;
+        }
+
+        var current = await collection.GetValidationAsync(cancellationToken);
+        if (current is null)
+        {
+            return $"{collection.CollectionName}: no validator";
+        }
+
+        return current == expected
+            ? null
+            : $"{collection.CollectionName}: validator differs from the expected one";
     }
 }

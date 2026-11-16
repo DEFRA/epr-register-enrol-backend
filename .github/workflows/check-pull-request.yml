@@ -14,7 +14,7 @@ on:
 jobs:
   pr-validator:
     name: Run Pull Request Checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
@@ -82,7 +82,7 @@ jobs:
   # falls back to the published image (or main) where there is none.
   test-e2e-operator:
     name: Run Operator E2E Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -111,7 +111,7 @@ jobs:
 
   test-e2e-management:
     name: Run Management E2E Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
