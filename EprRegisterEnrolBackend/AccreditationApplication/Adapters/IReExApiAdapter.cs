@@ -98,7 +98,8 @@ public class ReExAccreditationDto
 
     // RA-526: derived from the matched registration's SubmittedToRegulator (never the
     // organisation's) - see RegulatorNationMapper. Replaces postcode-derived nation lookup.
-    public Nation Nation { get; set; }
+    // RA-000: null when ReEx gives no recognised regulator code, rather than a guessed England.
+    public Nation? Nation { get; set; }
 
     public string? CompanyRegisterAddressPostcode { get; set; }
     public string? CompanyRegisteredAddress { get; set; }

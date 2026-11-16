@@ -164,10 +164,10 @@ public class StubReExApiAdapter(
         // code, mirroring HttpReExApiAdapter.GetAccreditationAsync deriving Nation from the
         // real ReEx registration's regulator. Without this, seeded stub applications always
         // defaulted to Nation.England regardless of the org's actual regulator/postcode.
-        RegulatorNationMapper.TryMap(submittedToRegulator, out var nation);
+        var nation = FixtureNation(submittedToRegulator);
 
         // RA-000: E2E test organisations get a recognisable, per-org name so each test can find
-        // its own items in Case Management. Nation is England via the mapper default above (no
+        // its own items in Case Management. Nation is England via FixtureNation's default (no
         // fixture org, so no regulator code).
         var isTestOrganisation = TestOrganisationsConfig.IsTestOrganisation(organisationId);
         if (isTestOrganisation)
@@ -358,9 +358,8 @@ public class StubReExApiAdapter(
         }
 
         // RA-553: resolve nation from the fixture's SubmittedToRegulator code, same as
-        // HttpReExApiAdapter does from the real ReEx API's regulator field. Falls back to
-        // England when the org can't be found or has no regulator code set - the same
-        // default RegulatorNationMapper itself applies.
+        // HttpReExApiAdapter does from the real ReEx API's regulator field. England when the
+        // org can't be found or has no regulator code set - see FixtureNation.
         string? submittedToRegulator = null;
         if (int.TryParse(organisationId, out var orgIdInt))
         {
@@ -368,9 +367,16 @@ public class StubReExApiAdapter(
             submittedToRegulator = org?.SubmittedToRegulator;
         }
 
-        RegulatorNationMapper.TryMap(submittedToRegulator, out var nation);
-        return ReExResult<Nation>.Success(nation, 200);
+        return ReExResult<Nation>.Success(FixtureNation(submittedToRegulator), 200);
     }
+
+    // RA-000: a stub fixture default, Development only. Fixture organisations with no regulator
+    // code (most of them, and every e2e- test organisation) are England. The real adapter has no
+    // such default: ReEx always holds a regulator code on a registration (see
+    // RegulatorNationMapper). Every code a fixture does set is a recognised one
+    // (FakeOrganisationPersistence.PerfTestRegulatorAreas).
+    private static Nation FixtureNation(string? submittedToRegulator) =>
+        RegulatorNationMapper.TryMap(submittedToRegulator, out var nation) ? nation : Nation.England;
 
     // RA-763: like real ReEx, the accreditation's sequence always differs from the registration's,
     // so a renewal derived from the registration number instead is caught; a hash that lands on the

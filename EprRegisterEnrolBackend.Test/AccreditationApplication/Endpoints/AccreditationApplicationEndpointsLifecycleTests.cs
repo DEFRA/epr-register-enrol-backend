@@ -157,6 +157,42 @@ public class AccreditationApplicationEndpointsLifecycleTests
         body.OverseasSites!.Sites.Should().ContainSingle(s => s.OrsId == "ORS-1");
     }
 
+    // RA-000: ReEx gave no recognised regulator code for the registration, so there is no
+    // nation - the application is seeded with none rather than a guessed England.
+    [Fact]
+    public async Task Seed_NoNationFromReEx_StoresTheApplicationWithNoNation()
+    {
+        Reset();
+        var dto = MinimalAdapterSuccess();
+        dto.Value!.Nation = null;
+        _factory
+            .MockReExAdapter.GetAccreditationAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MaterialType>(),
+                Arg.Any<int>()
+            )
+            .Returns(Task.FromResult(dto));
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/accreditation-applications/org-123/reg-1/Steel/seed",
+            new SeedRequest { Year = 2026 },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<AccreditationApplicationModel>(
+            JsonOptions,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        body!.Nation.Should().BeNull();
+        (await _factory.FakePersistence.GetByOrganisationAsync("org-123"))
+            .Should()
+            .ContainSingle()
+            .Which.Nation.Should()
+            .BeNull();
+    }
+
     // --- Submit ---
 
     [Fact]
@@ -209,6 +245,9 @@ public class AccreditationApplicationEndpointsLifecycleTests
             configure: a =>
             {
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
             }
@@ -246,157 +285,6 @@ public class AccreditationApplicationEndpointsLifecycleTests
         );
         stored!.ApplicationStatus.Should().Be(ApplicationStatus.Started);
         stored.ApplicationReference.Should().BeNull();
-    }
-
-    // RA-503: OrgId must be resolved from ReEx and threaded onto the application passed to
-    // SubmitApplicationAsync, so BuildPayload can send the operator/regulator-safe numeric
-    // organisation number rather than leaving it unset.
-    [Fact]
-    public async Task Submit_ResolvesOrgIdFromReExAndPassesItToCaseWorkingAdapter()
-    {
-        Reset();
-        var app = SeedApplication(
-            status: ApplicationStatus.Started,
-            configure: a =>
-            {
-                a.Prns.SectionStatus = SectionStatus.Completed;
-                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
-                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
-            }
-        );
-        _factory
-            .MockReExAdapter.GetOrganisationNumberAsync(
-                Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult(ReExResult<int?>.Success(500500, 200)));
-        _factory
-            .MockCaseWorkingAdapter.SubmitApplicationAsync(
-                Arg.Any<AccreditationApplicationModel>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult(new CaseWorkingSubmissionResult("AP26EA500500", null)));
-
-        var request = new SubmitRequest
-        {
-            FullName = "John",
-            JobTitle = "Manager",
-            Email = "j@x.com",
-        };
-        var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
-            request,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        await _factory
-            .MockCaseWorkingAdapter.Received(1)
-            .SubmitApplicationAsync(
-                Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 500500),
-                Arg.Any<CancellationToken>()
-            );
-    }
-
-    // RA-503: a ReEx lookup failure must not block submission - OrgId is left null and the
-    // adapter is still called, same fallback-friendly behaviour as ResolveOrgIdAsync elsewhere.
-    [Fact]
-    public async Task Submit_ReExOrgIdLookupFails_StillSubmitsWithNullOrgId()
-    {
-        Reset();
-        var app = SeedApplication(
-            status: ApplicationStatus.Started,
-            configure: a =>
-            {
-                a.Prns.SectionStatus = SectionStatus.Completed;
-                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
-                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
-            }
-        );
-        _factory
-            .MockReExAdapter.GetOrganisationNumberAsync(
-                Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(
-                Task.FromResult(
-                    ReExResult<int?>.Fail(new ReExError(ReExErrorKind.ServerError, "down"), 500)
-                )
-            );
-        _factory
-            .MockCaseWorkingAdapter.SubmitApplicationAsync(
-                Arg.Any<AccreditationApplicationModel>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult(new CaseWorkingSubmissionResult("AP26EA", null)));
-
-        var request = new SubmitRequest
-        {
-            FullName = "John",
-            JobTitle = "Manager",
-            Email = "j@x.com",
-        };
-        var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
-            request,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        await _factory
-            .MockCaseWorkingAdapter.Received(1)
-            .SubmitApplicationAsync(
-                Arg.Is<AccreditationApplicationModel>(a => a.OrgId == null),
-                Arg.Any<CancellationToken>()
-            );
-    }
-
-    // RA-503: the operator's real, frontend-computed bank payment reference (SubmitRequest.
-    // PaymentReference) must reach the case-working adapter on the application it submits, so
-    // BuildPayload can forward it to management-be instead of leaving the regulator's
-    // duly-making page to show a different reference than the one the operator was told to quote.
-    [Fact]
-    public async Task Submit_ForwardsPaymentReferenceFromRequestToTheSubmittedApplication()
-    {
-        Reset();
-        var app = SeedApplication(
-            status: ApplicationStatus.Started,
-            configure: a =>
-            {
-                a.Prns.SectionStatus = SectionStatus.Completed;
-                a.BusinessPlan.SectionStatus = SectionStatus.Completed;
-                a.SamplingPlan.SectionStatus = SectionStatus.Completed;
-            }
-        );
-        _factory
-            .MockCaseWorkingAdapter.SubmitApplicationAsync(
-                Arg.Any<AccreditationApplicationModel>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult(new CaseWorkingSubmissionResult("AP26EA500500", null)));
-
-        var request = new SubmitRequest
-        {
-            FullName = "John",
-            JobTitle = "Manager",
-            Email = "j@x.com",
-            PaymentReference = "PR/PK/REP/500500",
-        };
-        var response = await _client.PostAsJsonAsync(
-            $"/api/v1/accreditation-applications/org-123/{app.Id!.Value}/submit",
-            request,
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        await _factory
-            .MockCaseWorkingAdapter.Received(1)
-            .SubmitApplicationAsync(
-                Arg.Is<AccreditationApplicationModel>(a =>
-                    a.PaymentReference == "PR/PK/REP/500500"
-                ),
-                Arg.Any<CancellationToken>()
-            );
     }
 
     // --- Resubmit ---

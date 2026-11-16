@@ -278,7 +278,7 @@ Swagger UI is available at `/swagger` when running locally.
 Seeding sequence (`HttpReExApiAdapter.GetAccreditationAsync`):
 
 1. Fetch the organisation, locate the registration matching the requested `registrationId`, and derive whether it's a reprocessor or exporter registration.
-2. Resolve the company's registered-office address (see the `ROA` comments in the adapter for the address/postcode fallback rules) and the registration's Regulator Nation, derived from that registration's own `SubmittedToRegulator` via `RegulatorNationMapper` (see the `RA-526` comments in the adapter and on `ReExAccreditationDto.Nation`) — unrecognised or missing regulator codes default to England.
+2. Resolve the company's registered-office address (see the `ROA` comments in the adapter for the address/postcode fallback rules) and the registration's Regulator Nation, derived from that registration's own `SubmittedToRegulator` via `RegulatorNationMapper` (see the `RA-526` comments in the adapter and on `ReExAccreditationDto.Nation`). A missing or unrecognised regulator code leaves `Nation` null and is logged at Error: ReEx's own schema requires one of `EA`, `NRW`, `SEPA` or `NIEA`, so it is a ReEx defect, and submit refuses (503) until it is fixed. The Development stub (`StubReExApiAdapter`) treats its fixture organisations with no code as England.
 3. Locate the accreditation linked to that registration and confirm it matches the requested year.
 4. For exporter registrations only, call the overseas-sites endpoint and map the result onto the seeded application.
 5. Map PRN issuance, business-plan, and contact-detail fields from the fetched organisation, together with the resolved address and Nation, into the returned `ReExAccreditationDto`.

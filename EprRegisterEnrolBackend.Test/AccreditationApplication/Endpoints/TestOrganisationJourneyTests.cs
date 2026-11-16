@@ -103,7 +103,6 @@ public class TestOrganisationJourneyTests(MongoIntegrationFixture fixture)
                 fullName = "E2E Submitter",
                 jobTitle = "Tester",
                 email = Simulated,
-                paymentReference = $"E2E-{hex}",
             },
             ct
         );
@@ -114,7 +113,11 @@ public class TestOrganisationJourneyTests(MongoIntegrationFixture fixture)
         read.GetProperty("caseManagementWorkItemId").GetGuid().Should().NotBeEmpty();
         read.GetProperty("organisationName").GetString().Should().Be($"E2E Organisation {org}");
         read.GetProperty("nation").GetString().Should().Be("England");
-        read.GetProperty("orgId").GetInt32().Should().BeInRange(900_000, 999_999);
+        var orgNumber = read.GetProperty("orgId").GetInt32();
+        orgNumber.Should().BeInRange(900_000, 999_999);
+        // RA-000: built by the backend from the stub's org number and England.
+        var kind = read.GetProperty("isExporter").GetBoolean() ? "EXP" : "REP";
+        read.GetProperty("paymentReference").GetString().Should().Be($"PR/PK/{kind}/{orgNumber}");
     }
 
     // RA-690: approval derives the accreditation reference from the seeded registration

@@ -2339,6 +2339,9 @@ public class AccreditationApplicationEndpointsTests
             configure: a =>
             {
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
             }
@@ -2387,6 +2390,9 @@ public class AccreditationApplicationEndpointsTests
             configure: a =>
             {
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
             }
@@ -2428,6 +2434,9 @@ public class AccreditationApplicationEndpointsTests
             configure: a =>
             {
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
             }
@@ -2494,6 +2503,9 @@ public class AccreditationApplicationEndpointsTests
             {
                 a.IsExporter = true;
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
                 a.OverseasSites = new AccreditationApplicationOverseasSites
@@ -2535,6 +2547,9 @@ public class AccreditationApplicationEndpointsTests
             {
                 a.IsExporter = true;
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
                 a.OverseasSites = new AccreditationApplicationOverseasSites
@@ -2573,6 +2588,9 @@ public class AccreditationApplicationEndpointsTests
             {
                 a.IsExporter = true;
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
                 a.OverseasSites = new AccreditationApplicationOverseasSites
@@ -2620,6 +2638,9 @@ public class AccreditationApplicationEndpointsTests
             configure: a =>
             {
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
             }
@@ -2734,6 +2755,9 @@ public class AccreditationApplicationEndpointsTests
             configure: a =>
             {
                 a.Prns.SectionStatus = SectionStatus.Completed;
+                // RA-000: Submit needs the organisation number and nation.
+                a.OrgId = 500500;
+                a.Nation = Nation.England;
                 a.BusinessPlan.SectionStatus = SectionStatus.Completed;
                 a.SamplingPlan.SectionStatus = SectionStatus.Completed;
             }

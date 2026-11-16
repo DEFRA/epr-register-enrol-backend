@@ -230,11 +230,8 @@ public class SubmitRequest
     public required string JobTitle { get; set; }
     public string? Email { get; set; }
 
-    // RA-503: the operator's nation-specific bank payment reference, computed by
-    // buildPaymentReference in epr-register-enrol-frontend and forwarded so management-be
-    // can show the regulator the same reference the operator was shown. Optional so a caller
-    // that predates this (or doesn't compute one) doesn't fail submission.
-    public string? PaymentReference { get; set; }
+    // RA-000: no PaymentReference - the backend builds it at submit (PaymentReferenceBuilder).
+    // A caller still sending one has it ignored (System.Text.Json skips unknown properties).
 }
 
 // Pushed by ManagementBe when the Case Management service raises a query (RA-311 §3/§5/§6).

@@ -19,26 +19,25 @@ public static class RegulatorNationMapper
     };
 
     /// <summary>
-    /// Maps a regulator code to a Nation, defaulting to England when the code is null/blank
-    /// (most test registrations don't set submittedToRegulator yet) or unrecognised. Returns
-    /// false only for the unrecognised-non-null case, so the caller can log a warning and keep
-    /// the gap observable - null/blank is treated as the expected default, not a data gap.
+    /// Maps a regulator code to a Nation. Returns false, with no nation, for a null, blank or
+    /// unrecognised code: <paramref name="nation"/> is meaningless then.
+    ///
+    /// RA-000: there is no default. ReEx never stores a registration without a regulator code -
+    /// epr-backend's <c>src/repositories/organisations/schema/registration.js</c> has
+    /// <c>submittedToRegulator: Joi.string().valid(EA, NRW, SEPA, NIEA).required()</c> - so a
+    /// missing or unknown code from ReEx is a ReEx defect, and callers fail loudly on it. (The
+    /// England default this replaced came from RA-526, for this service's own test data; the
+    /// Development stub keeps that as its own fixture default.)
     /// </summary>
     public static bool TryMap(string? regulatorCode, out Nation nation)
     {
-        if (string.IsNullOrWhiteSpace(regulatorCode))
-        {
-            nation = Nation.England;
-            return true;
-        }
-
-        if (CodeToNation.TryGetValue(regulatorCode, out var mapped))
+        if (regulatorCode is not null && CodeToNation.TryGetValue(regulatorCode, out var mapped))
         {
             nation = mapped;
             return true;
         }
 
-        nation = Nation.England;
+        nation = default;
         return false;
     }
 }

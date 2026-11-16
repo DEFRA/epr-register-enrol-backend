@@ -19,7 +19,7 @@ public sealed class ReExResult<T>
     public bool IsClientError => !IsSuccess && Error?.Kind == ReExErrorKind.ClientError;
     public bool IsUpstreamFailure =>
         !IsSuccess
-        && Error?.Kind is ReExErrorKind.ServerError or ReExErrorKind.Timeout or ReExErrorKind.TransportError or ReExErrorKind.DeserializationError;
+        && Error?.Kind is ReExErrorKind.ServerError or ReExErrorKind.Timeout or ReExErrorKind.TransportError or ReExErrorKind.DeserializationError or ReExErrorKind.InvalidData;
 
     public static ReExResult<T> Success(T value, int statusCode) =>
         new(true, value, statusCode, null);
@@ -49,4 +49,8 @@ public enum ReExErrorKind
     Timeout,
     TransportError,
     DeserializationError,
+
+    // RA-000: ReEx answered, but with a value its own schema doesn't allow (e.g. a registration
+    // with no recognised submittedToRegulator).
+    InvalidData,
 }
