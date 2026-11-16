@@ -17,9 +17,27 @@ public sealed class ModelBackedApplicationPersistence(
     IMongoDbClientFactory clientFactory,
     ApplicationGroupStores stores,
     ApplicationReadModel readModel,
-    CutStagingPersistence staging
+    CutStagingPersistence staging,
+    Func<CutFlush> flush,
+    ILogger<ModelBackedApplicationPersistence> logger
 ) : IAccreditationApplicationPersistence
 {
+    private async Task<T> RunInOwnTransactionAsync<T>(Func<IClientSessionHandle, CancellationToken, Task<T>> write, CancellationToken cancellationToken)
+    {
+        return await InsertRaceRetry.RunInTransactionAsync(
+            clientFactory,
+            async (session, token) =>
+            {
+                var cut = flush();
+                cut.Begin(session);
+                var result = await write(session, token);
+                await cut.FlushAsync(session, token);
+                return result;
+            },
+            attempt => logger.LogWarning("Model-backed write lost an insert race and will retry: attempt {Attempt}", attempt),
+            cancellationToken);
+    }
+
     private async Task<List<AccreditationApplicationModel>> ProjectCurrentAsync(
         FilterDefinition<ApplicationEntity> envelope,
         IClientSessionHandle? session,
@@ -70,7 +88,7 @@ public sealed class ModelBackedApplicationPersistence(
     private static IClientSessionHandle RequireTransaction(IClientSessionHandle? session)
     {
         if (session != null && session.IsInTransaction) return session;
-        throw new NotSupportedException("RA-706: a write without a transaction is not yet served from the model");
+        throw new NotSupportedException("RA-706: a write with a session must run in its transaction");
     }
 
     private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
@@ -127,12 +145,27 @@ public sealed class ModelBackedApplicationPersistence(
         return projected?.OrganisationId == organisationId ? projected : null;
     }
 
-    public Task<AccreditationApplicationModel?> CreateAsync(
-        AccreditationApplicationModel application
-    ) => throw new NotSupportedException("RA-706: not yet served from the model");
+    public async Task<AccreditationApplicationModel?> CreateAsync(AccreditationApplicationModel application)
+    {
+        try
+        {
+            return await RunInOwnTransactionAsync(async (own, token) =>
+            {
+                await staging.StageAsync(application, own, token);
+                return application;
+            }, CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            logger.LogError(e, "Failed to insert accreditation application for org={OrganisationId}", application.OrganisationId);
+            return null;
+        }
+    }
 
-    public Task UpsertAsync(AccreditationApplicationModel application) =>
-        throw new NotSupportedException("RA-706: not yet served from the model");
+    public async Task UpsertAsync(AccreditationApplicationModel application)
+    {
+        await RunInOwnTransactionAsync(async (own, token) => { await staging.DeleteStagedAsync([application.Id!.Value], own, token); await staging.StageAsync(application, own, token); return true; }, CancellationToken.None);
+    }
 
     public Task<long> DeleteManyAsync(IEnumerable<ObjectId> ids) =>
         throw new NotSupportedException("RA-706: not yet served from the model");
@@ -305,11 +338,12 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
-    public async Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(
-        AccreditationApplicationModel application,
-        string siteNumber,
-        IClientSessionHandle? session = null)
+    public async Task<AccreditationApplicationModel?> UpdateIfInterimSiteNumberAbsentAsync(AccreditationApplicationModel application, string siteNumber, IClientSessionHandle? session = null)
     {
+        if (session is null)
+        {
+            return await RunInOwnTransactionAsync((own, token) => UpdateIfInterimSiteNumberAbsentAsync(application, siteNumber, own), CancellationToken.None);
+        }
         var s = RequireTransaction(session);
         await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
         return await staging.UpdateIfInterimSiteNumberAbsentAsync(application, siteNumber, s);
@@ -336,6 +370,20 @@ public sealed class ModelBackedApplicationPersistence(
             & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
 
         var results = await ProjectCurrentAsync(envelope, session, cancellationToken);
+
+        if (session != null)
+        {
+            foreach (var id in staging.StagedIds(session))
+            {
+                if (results.Any(a => a.Id == id)) continue;
+                var staged = await staging.GetByObjectIdAsync(id, session, cancellationToken);
+                if (staged is not null && staged.OrganisationId == organisationId && staged.RegistrationId == registrationId)
+                {
+                    results.Add(staged);
+                }
+            }
+        }
+
         return results.Take(limit).ToList();
     }
 
@@ -371,47 +419,44 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
-    public async Task<AccreditationApplicationModel?> UpdateAsync(
-        AccreditationApplicationModel application,
-        IClientSessionHandle? session = null)
+    public async Task<AccreditationApplicationModel?> UpdateAsync(AccreditationApplicationModel application, IClientSessionHandle? session = null)
     {
+        if (session is null)
+        {
+            return await RunInOwnTransactionAsync((own, token) => UpdateAsync(application, own), CancellationToken.None);
+        }
         var s = RequireTransaction(session);
         await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
         return await staging.UpdateAsync(application, s);
     }
 
-    public async Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(
-        AccreditationApplicationModel application,
-        string orsId,
-        IClientSessionHandle? session = null)
+    public async Task<AccreditationApplicationModel?> UpdateIfOrsIdAbsentAsync(AccreditationApplicationModel application, string orsId, IClientSessionHandle? session = null)
     {
+        if (session is null)
+        {
+            return await RunInOwnTransactionAsync((own, token) => UpdateIfOrsIdAbsentAsync(application, orsId, own), CancellationToken.None);
+        }
         var s = RequireTransaction(session);
         await EnsureStagedAsync(application.Id!.Value, s, CancellationToken.None);
         return await staging.UpdateIfOrsIdAbsentAsync(application, orsId, s);
     }
 
-    public async Task<AccreditationApplicationModel?> UpdateFieldsAsync(
-        ObjectId id,
-        FilterDefinition<AccreditationApplicationModel>? guardFilter,
-        UpdateDefinition<AccreditationApplicationModel> update,
-        IClientSessionHandle? session = null,
-        CancellationToken cancellationToken = default)
+    public async Task<AccreditationApplicationModel?> UpdateFieldsAsync(ObjectId id, FilterDefinition<AccreditationApplicationModel>? guardFilter, UpdateDefinition<AccreditationApplicationModel> update, IClientSessionHandle? session = null, CancellationToken cancellationToken = default)
     {
+        if (session is null)
+        {
+            return await RunInOwnTransactionAsync((own, token) => UpdateFieldsAsync(id, guardFilter, update, own, token), cancellationToken);
+        }
         var s = RequireTransaction(session);
         await EnsureStagedAsync(id, s, cancellationToken);
         return await staging.UpdateFieldsAsync(id, guardFilter, update, s, cancellationToken);
     }
 
-    public async Task StampDomainModelForeignKeysAsync(
-        ObjectId applicationId,
-        ObjectId registrationEntityId,
-        IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds,
-        ObjectId? accreditationEntityId,
-        IClientSessionHandle session,
-        CancellationToken cancellationToken = default)
+    public async Task StampDomainModelForeignKeysAsync(ObjectId applicationId, ObjectId registrationEntityId,
+        IReadOnlyDictionary<string, ObjectId> overseasSiteEntityIds, ObjectId? accreditationEntityId,
+        IClientSessionHandle session, CancellationToken cancellationToken = default)
     {
-        var s = RequireTransaction(session);
-        await EnsureStagedAsync(applicationId, s, cancellationToken);
-        await staging.StampDomainModelForeignKeysAsync(applicationId, registrationEntityId, overseasSiteEntityIds, accreditationEntityId, s, cancellationToken);
+        if (await staging.GetByObjectIdAsync(applicationId, session, cancellationToken) is null) return;
+        await staging.StampDomainModelForeignKeysAsync(applicationId, registrationEntityId, overseasSiteEntityIds, accreditationEntityId, session, cancellationToken);
     }
 }

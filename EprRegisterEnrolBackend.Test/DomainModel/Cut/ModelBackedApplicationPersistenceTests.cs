@@ -53,11 +53,14 @@ public sealed partial class ModelBackedApplicationPersistenceTests : IDisposable
         );
         _migrator = new ApplicationGroupMigrator(_legacy, _stores, clock);
         _staging = new CutStagingPersistence(_factory, logs);
+        // The flush reads through the model-backed persistence, so it is resolved lazily, as the container will.
         _model = new ModelBackedApplicationPersistence(
             _factory,
             _stores,
             new ApplicationReadModel(_stores),
-            _staging
+            _staging,
+            () => Flush(),
+            NullLogger<ModelBackedApplicationPersistence>.Instance
         );
     }
 
