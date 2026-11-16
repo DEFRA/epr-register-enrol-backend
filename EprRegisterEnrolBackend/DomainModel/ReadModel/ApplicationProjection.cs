@@ -39,6 +39,9 @@ public static class ApplicationProjection
             SourceReExAccreditationId = details.SourceReExAccreditationId,
             SourceYear = details.SeedDataSourceYear,
             PreviousAccreditationNumbers = details.PreviousReservedAccreditationNumbers,
+            LastYearsAccreditationNumber = AccreditationNumberForYear.ToLegacy(
+                details.LastYearsAccreditationNumber
+            ),
             Year = details.Year,
             RegistrationId = application.ReExRegistrationId,
             IsExporter = registration?.WasteProcessingType == WasteProcessingKind.Exporter,

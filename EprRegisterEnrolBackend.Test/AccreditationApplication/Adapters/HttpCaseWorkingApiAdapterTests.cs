@@ -441,6 +441,46 @@ public class HttpCaseWorkingApiAdapterTests
         payload.TryGetProperty("nation", out _).Should().BeFalse();
     }
 
+    // RA-763: the case carries last year's accreditation number, in the shape management-be's RA-763
+    // migration backfills onto older cases.
+    [Fact]
+    public async Task SubmitApplicationAsync_SendsLastYearsAccreditationNumber()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var application = CreateTestApplication();
+        application.LastYearsAccreditationNumber = new AccreditationNumberForYearModel
+        {
+            Year = 2026,
+            AccreditationNumber = "A26ER5000270063WO",
+        };
+
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        var lastYears = JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload")
+            .GetProperty("lastYearsAccreditationNumber");
+        lastYears.GetProperty("year").GetInt32().Should().Be(2026);
+        lastYears.GetProperty("accreditationNumber").GetString().Should().Be("A26ER5000270063WO");
+    }
+
+    [Fact]
+    public async Task SubmitApplicationAsync_NoLastYearsAccreditationNumber_OmitsIt()
+    {
+        var (adapter, handler) = CreateAdapter();
+        var application = CreateTestApplication();
+        application.LastYearsAccreditationNumber = null;
+
+        await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
+
+        JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("payload")
+            .TryGetProperty("lastYearsAccreditationNumber", out _)
+            .Should()
+            .BeFalse();
+    }
+
     // RA-503: OrgId is resolved fresh from ReEx immediately before submission (see the Submit
     // endpoint) and can be null on a lookup failure - the payload must omit operatorOrgNumber
     // rather than send a fabricated value, same as every other nullable field here.
@@ -2690,7 +2730,258 @@ public class HttpCaseWorkingApiAdapterTests
             .Be(527_700);
     }
 
+    [Fact]
+    public async Task ResumeFromQueryAsync_ChargeFollowsTheBandAndSitesChangedWhileAnsweringTheQuery()
+    {
+        // RA-766: the charge sent on resume must be the one for the application AS IT NOW
+        // STANDS, not the one sent at submit - the Case Management service stores whatever
+        // arrives here, so a stale value is what the duly-making page would show.
+        var application = ApplicationWithCharge(PlannedTonnageBand.UpTo500, selectedSites: 1);
+        application.CaseManagementWorkItemId = Guid.NewGuid();
+        var submitted = await CapturedSubmitPayload(application);
+        // £546 + £328 = £874 -> 87400 pence.
+        submitted.GetProperty("chargeAmountPence").GetInt32().Should().Be(87_400);
+
+        // The operator answers the query by moving to a bigger band and adding two sites.
+        application.Prns.PlannedTonnageBand = PlannedTonnageBand.Over10000;
+        application.OverseasSites!.Sites.Add(new OverseasSiteModel { SiteId = 2, SiteName = "Two" });
+        application.OverseasSites.Sites.Add(
+            new OverseasSiteModel { SiteId = 3, SiteName = "Three" }
+        );
+
+        var (adapter, handler) = CreateAdapter();
+        await adapter.ResumeFromQueryAsync(
+            application,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            ["prn-tonnage", "overseas-reprocessing-sites"],
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        // £3,965 + £328 x 3 = £4,949 -> 494900 pence, as a JSON number at the top level.
+        var charge = JsonDocument
+            .Parse(handler.CapturedRequestBody!)
+            .RootElement.GetProperty("chargeAmountPence");
+        charge.ValueKind.Should().Be(JsonValueKind.Number);
+        charge.GetInt32().Should().Be(494_900);
+    }
+
     #endregion
+
+    // -- RA-766: temporary charge correction calls ------------------------------
+
+    private static (
+        HttpCaseWorkingApiAdapter adapter,
+        CapturingHttpMessageHandler handler
+    ) CreateAdapterResponding(HttpStatusCode status, object body)
+    {
+        var handler = new CapturingHttpMessageHandler(status, body);
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("BackgroundClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            Options.Create(new CaseWorkingApiConfig { Url = TestUrl + "/", ClientId = TestClientId }),
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        return (adapter, handler);
+    }
+
+    [Fact]
+    public async Task GetChargeStateAsync_ReadsStateChargeAndDulyMadeFromTheWorkItem()
+    {
+        var workItemId = Guid.NewGuid();
+        var (adapter, handler) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new
+            {
+                id = workItemId,
+                stateId = "duly-made",
+                payload = new { chargeAmountPence = 218_400, paymentDate = "2026-07-15" },
+            }
+        );
+
+        var workItem = await adapter.GetChargeStateAsync(
+            workItemId,
+            TestContext.Current.CancellationToken
+        );
+
+        workItem.Should().Be(new CaseWorkingWorkItem("duly-made", 218_400, true));
+        handler.CapturedRequest!.Method.Should().Be(HttpMethod.Get);
+        handler
+            .CapturedRequest.RequestUri!.ToString()
+            .Should()
+            .Be($"{TestUrl}/work-items/{workItemId}");
+        handler
+            .CapturedRequest.Headers.GetValues("x-cdp-user-id")
+            .Single()
+            .Should()
+            .Be(HttpCaseWorkingApiAdapter.ChargeCorrectionUserId);
+    }
+
+    [Fact]
+    public async Task GetChargeStateAsync_ReadsNoChargeAndNotDulyMadeWhenThePayloadHasNeither()
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new
+            {
+                stateId = "queried",
+                payload = new { paymentDate = (string?)null },
+            }
+        );
+
+        var workItem = await adapter.GetChargeStateAsync(
+            Guid.NewGuid(),
+            TestContext.Current.CancellationToken
+        );
+
+        workItem.Should().Be(new CaseWorkingWorkItem("queried", null, false));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task GetChargeStateAsync_ThrowsWithTheStatusForAFailureResponse(HttpStatusCode status)
+    {
+        var (adapter, _) = CreateAdapterResponding(status, new { detail = "ignored" });
+
+        var act = () =>
+            adapter.GetChargeStateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        (await act.Should().ThrowAsync<HttpRequestException>())
+            .Which.StatusCode.Should()
+            .Be(status);
+    }
+
+    [Fact]
+    public async Task SetChargeAsync_PutsTheChargeInPenceAndReportsUpdated()
+    {
+        var workItemId = Guid.NewGuid();
+        var (adapter, handler) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new
+            {
+                outcome = "updated",
+                chargeAmountPence = 327_600,
+                dulyMade = false,
+            }
+        );
+
+        var outcome = await adapter.SetChargeAsync(
+            workItemId,
+            327_600,
+            TestContext.Current.CancellationToken
+        );
+
+        outcome.Should().Be(SetChargeOutcome.Updated);
+        handler.CapturedRequest!.Method.Should().Be(HttpMethod.Put);
+        handler
+            .CapturedRequest.RequestUri!.ToString()
+            .Should()
+            .Be($"{TestUrl}/work-items/re-accreditation/{workItemId}/charge");
+        var body = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+        body.GetProperty("chargeAmountPence").ValueKind.Should().Be(JsonValueKind.Number);
+        body.GetProperty("chargeAmountPence").GetInt32().Should().Be(327_600);
+        handler
+            .CapturedRequest.Headers.GetValues("x-cdp-user-name")
+            .Single()
+            .Should()
+            .Be(HttpCaseWorkingApiAdapter.ChargeCorrectionUserName);
+    }
+
+    [Fact]
+    public async Task SetChargeAsync_ReportsUnchangedWhenTheWorkItemAlreadyHoldsTheCharge()
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new { outcome = "unchanged", chargeAmountPence = 327_600 }
+        );
+
+        (await adapter.SetChargeAsync(Guid.NewGuid(), 327_600, TestContext.Current.CancellationToken))
+            .Should()
+            .Be(SetChargeOutcome.Unchanged);
+    }
+
+    [Fact]
+    public async Task SetChargeAsync_ReportsClosedForA409WithTheClosedErrorCode()
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.Conflict,
+            new
+            {
+                title = "Could not set re-accreditation charge",
+                errorCode = "work-item-closed",
+            }
+        );
+
+        (await adapter.SetChargeAsync(Guid.NewGuid(), 327_600, TestContext.Current.CancellationToken))
+            .Should()
+            .Be(SetChargeOutcome.Closed);
+    }
+
+    [Theory]
+    [InlineData("concurrency-conflict")]
+    [InlineData("something-new")]
+    [InlineData(null)]
+    public async Task SetChargeAsync_ThrowsForA409ThatIsNotTheClosedErrorCode(string? errorCode)
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.Conflict,
+            new { title = "Could not set re-accreditation charge", errorCode }
+        );
+
+        var act = () =>
+            adapter.SetChargeAsync(Guid.NewGuid(), 327_600, TestContext.Current.CancellationToken);
+
+        (await act.Should().ThrowAsync<HttpRequestException>())
+            .Which.StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task SetChargeAsync_ThrowsWithTheStatusForAnyOtherFailure(HttpStatusCode status)
+    {
+        var (adapter, _) = CreateAdapterResponding(status, new { detail = "ignored" });
+
+        var act = () =>
+            adapter.SetChargeAsync(Guid.NewGuid(), 327_600, TestContext.Current.CancellationToken);
+
+        (await act.Should().ThrowAsync<HttpRequestException>())
+            .Which.StatusCode.Should()
+            .Be(status);
+    }
+
+    [Fact]
+    public async Task ChargeCorrectionCalls_ThrowWhenTheCaseWorkingUrlIsNotConfigured()
+    {
+        var handler = new CapturingHttpMessageHandler(HttpStatusCode.OK, new { });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("BackgroundClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            Options.Create(new CaseWorkingApiConfig { Url = "", ClientId = TestClientId }),
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        await adapter
+            .Invoking(a => a.GetChargeStateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken))
+            .Should()
+            .ThrowAsync<InvalidOperationException>();
+        await adapter
+            .Invoking(a =>
+                a.SetChargeAsync(Guid.NewGuid(), 1, TestContext.Current.CancellationToken)
+            )
+            .Should()
+            .ThrowAsync<InvalidOperationException>();
+        handler.CapturedRequest.Should().BeNull();
+    }
 
     // -- RA-603 AC09: every interim site reaches case management ---------------
 

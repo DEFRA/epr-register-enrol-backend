@@ -1,8 +1,8 @@
-using System.Text.RegularExpressions;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel;
@@ -265,7 +265,12 @@ public sealed class ModelApplicationReaderTests : IDisposable
         Converters = { new JsonStringEnumConverter() },
     };
 
-    private static void Differences(JsonNode? legacy, JsonNode? served, string path, List<string> found)
+    private static void Differences(
+        JsonNode? legacy,
+        JsonNode? served,
+        string path,
+        List<string> found
+    )
     {
         switch (legacy, served)
         {
@@ -289,7 +294,9 @@ public sealed class ModelApplicationReaderTests : IDisposable
             default:
                 if (!JsonNode.DeepEquals(legacy, served))
                 {
-                    found.Add($"{path}: legacy {legacy?.ToJsonString() ?? "null"}, served {served?.ToJsonString() ?? "null"}");
+                    found.Add(
+                        $"{path}: legacy {legacy?.ToJsonString() ?? "null"}, served {served?.ToJsonString() ?? "null"}"
+                    );
                 }
                 break;
         }
@@ -314,7 +321,8 @@ public sealed class ModelApplicationReaderTests : IDisposable
         var application = Application(Day1, status);
         application.IsExporter = exporter;
         application.WasteProcessingType = exporter ? "exporter" : "reprocessor";
-        var created = await _applications.CreateAsync(application)
+        var created =
+            await _applications.CreateAsync(application)
             ?? throw new InvalidOperationException("The legacy insert failed.");
         await InsertRaceRetry.RunInTransactionAsync(
             _factory,
@@ -322,7 +330,9 @@ public sealed class ModelApplicationReaderTests : IDisposable
             _ => { },
             Ct
         );
-        var legacy = (await _applications.GetByIdAsync(created.OrganisationId, created.Id!.Value.ToString()))!;
+        var legacy = (
+            await _applications.GetByIdAsync(created.OrganisationId, created.Id!.Value.ToString())
+        )!;
 
         var served = await _reader.ServeFromSourceAsync(legacy, Ct);
 
@@ -398,6 +408,75 @@ public sealed class ModelApplicationReaderTests : IDisposable
         var application = Application(Day1, status);
         application.IsExporter = exporter;
         application.WasteProcessingType = exporter ? "exporter" : "reprocessor";
+
+        await AssertGoldenAsync(
+            application,
+            $"{status}-{(exporter ? "exporter" : "reprocessor")}.json"
+        );
+    }
+
+    // The status cases carry no sites; this one carries overseas sites, one with interim sites, so the site and
+    // interim-site shapes are in the golden set too. The sites carry no validFrom: legacy keeps ReEx's raw string
+    // ("2026-01-01", "...T00:00:00.000Z" and others), while the model holds a date and serves one form
+    // (SiteApprovalDate.Format), so with ReadFromModel on a site's validFrom string can differ from legacy's. That is a
+    // known gap, not covered here.
+    [Fact]
+    public async Task Golden_WithOverseasAndInterimSites_LegacyAndTheModelBothMatchTheCapturedResponse()
+    {
+        var application = Application(Day1, ApplicationStatus.Approved);
+        application.IsExporter = true;
+        application.WasteProcessingType = "exporter";
+        application.OverseasSites = new AccreditationApplicationOverseasSites
+        {
+            Sites =
+            [
+                GoldenSite(1, "001", GoldenInterim(1, "001"), GoldenInterim(2, "002")),
+                GoldenSite(2, "002"),
+            ],
+        };
+        // Every write path keeps the singular interimSite mirror in step with the list, so a real document has it.
+        foreach (var site in application.OverseasSites.Sites)
+        {
+            InterimSiteSync.SyncMirror(site);
+        }
+
+        await AssertGoldenAsync(application, "Approved-exporter-with-sites.json");
+    }
+
+    private static OverseasSiteModel GoldenSite(
+        int id,
+        string orsId,
+        params InterimSiteModel[] interims
+    ) =>
+        new()
+        {
+            SiteId = id,
+            OrsId = orsId,
+            SiteName = $"Site {orsId}",
+            AddressLine1 = $"{id} Hafenstrasse",
+            TownOrCity = "Hamburg",
+            Country = "Germany",
+            Selected = true,
+            InterimSites = [.. interims],
+        };
+
+    private static InterimSiteModel GoldenInterim(int id, string siteNumber) =>
+        new()
+        {
+            SiteId = id,
+            SiteNumber = siteNumber,
+            Country = "Belgium",
+            SiteName = $"Interim {siteNumber}",
+            AddressLine1 = "1 Quai",
+            TownOrCity = "Antwerp",
+            ContactName = "Contact",
+            ContactEmail = "contact@example.com",
+            ContactPhone = "000",
+        };
+
+    // GOLDEN_RECORD=1 re-captures the file from legacy. Never in CI: there it would make the legacy half vacuous.
+    private async Task AssertGoldenAsync(AccreditationApplicationModel application, string fileName)
+    {
         var created =
             await _applications.CreateAsync(application)
             ?? throw new InvalidOperationException("The legacy insert failed.");
@@ -411,13 +490,18 @@ public sealed class ModelApplicationReaderTests : IDisposable
             await _applications.GetByIdAsync(created.OrganisationId, created.Id!.Value.ToString())
         )!;
         var served = (await _reader.ServeFromSourceAsync(legacy, Ct))!;
-        var file = Path.Combine(GoldenDirectory(), $"{status}-{(exporter ? "exporter" : "reprocessor")}.json");
+        var file = Path.Combine(GoldenDirectory(), fileName);
         if (Environment.GetEnvironmentVariable("GOLDEN_RECORD") == "1")
         {
+            Assert.True(
+                string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")),
+                "GOLDEN_RECORD=1 re-captures the golden files from legacy; it must never run in CI."
+            );
             Directory.CreateDirectory(GoldenDirectory());
             await File.WriteAllTextAsync(
                 file,
-                Golden(legacy).ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n",
+                Golden(legacy).ToJsonString(new JsonSerializerOptions { WriteIndented = true })
+                    + "\n",
                 Ct
             );
         }

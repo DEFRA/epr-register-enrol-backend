@@ -374,12 +374,19 @@ public sealed class SeedDualWriterTests : IDisposable
             .Find(FilterDefinition<MigrationConflict>.Empty)
             .ToListAsync(Ct);
 
-    // What the seed itself records: ReEx disagreeing with an accredited site. Since RA-705 the seed also writes the
-    // initial Application version by migrating the application's group, and the migration records its own conflicts
-    // about these fixtures (several live applications for one material and year, an approval with no accreditation
-    // number). Those are the migrator's tests' business, so the seed's tests look at the seed's own records only.
+    // What the seed itself records: ReEx disagreeing with an accredited site, and (RA-763) ReEx replacing the
+    // Registration's accreditation number for a year. Since RA-705 the seed also writes the initial Application version
+    // by migrating the application's group, and the migration records its own conflicts about these fixtures (several
+    // live applications for one material and year, an approval with no accreditation number). Those are the migrator's
+    // tests' business, so the seed's tests look at the seed's own records only.
     private async Task<List<MigrationConflict>> SeedConflictsAsync() =>
-        [.. (await ConflictsAsync()).Where(c => c.Kind == MigrationConflictKind.ReExDetailsDiffer)];
+        [
+            .. (await ConflictsAsync()).Where(c =>
+                c.Kind
+                    is MigrationConflictKind.ReExDetailsDiffer
+                        or MigrationConflictKind.AccreditationNumberDiffers
+            ),
+        ];
 
     private List<CapturingLogger<SeedDualWriter>.Entry> SeedLogEntries() =>
         [
@@ -388,6 +395,61 @@ public sealed class SeedDualWriterTests : IDisposable
                 || e.Message.Contains("kind ReExDetailsDiffer", StringComparison.Ordinal)
             ),
         ];
+
+    // RA-763: the Registration keeps ReEx's accreditation number, because no Accreditation is held here for that year.
+    [Fact]
+    public async Task WriteAsync_ReExGivesAnAccreditationNumber_KeepsItOnTheRegistrationWithItsYear()
+    {
+        var reEx = ReEx();
+        reEx.Year = 2026;
+        reEx.AccreditationNumber = "A26EX1234567012P";
+
+        await SeedAsync(reEx);
+
+        var held = Assert.Single(
+            Assert.Single(await RegistrationVersionsAsync()).AccreditationNumbers
+        );
+        Assert.Equal(2026, held.Year);
+        Assert.Equal("A26EX1234567012P", held.AccreditationNumber);
+    }
+
+    [Fact]
+    public async Task WriteAsync_AccreditationNumberChangedInReEx_TakesReExsAndRecordsTheDifference()
+    {
+        var first = ReEx();
+        first.Year = 2026;
+        first.AccreditationNumber = "A26EX1234567012P";
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+
+        var changed = ReEx();
+        changed.Year = 2026;
+        changed.AccreditationNumber = "A26EX1234567099P";
+        var seeded = await LegacyApplicationAsync(changed);
+        await Writer().WriteAsync(Seed(changed, seeded), Ct);
+
+        var current = (await RegistrationVersionsAsync()).Single(r => r.IsCurrent);
+        Assert.Equal(
+            "A26EX1234567099P",
+            Assert.Single(current.AccreditationNumbers).AccreditationNumber
+        );
+        var conflict = Assert.Single(await SeedConflictsAsync());
+        Assert.Equal(MigrationConflictKind.AccreditationNumberDiffers, conflict.Kind);
+        Assert.Equal(ReExRegistrationId, conflict.ReExRegistrationId);
+        Assert.Equal(current.EntityId, conflict.RegistrationId);
+        Assert.Equal(seeded.Id, Assert.Single(conflict.ApplicationIds));
+    }
+
+    [Fact]
+    public async Task WriteAsync_SameAccreditationNumberAgain_RecordsNoDifference()
+    {
+        var reEx = ReEx();
+        reEx.Year = 2026;
+        reEx.AccreditationNumber = "A26EX1234567012P";
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+
+        Assert.Empty(await SeedConflictsAsync());
+    }
 
     [Fact]
     public async Task WriteAsync_NumberChangedInReEx_WritesANewVersionKeepingTheOldNumber()
@@ -735,5 +797,99 @@ public sealed class SeedDualWriterTests : IDisposable
         {
             Assert.DoesNotContain(personal, entry.Message);
         }
+    }
+
+    // RA-705: the seed writes the initial Application version through the migrator, inside the seed's own transaction.
+
+    private SeedDualWriter WriterWith(IApplicationGroupMigrator migrator) =>
+        new(
+            _factory,
+            new SeedModelStores(
+                _organisations,
+                _registrations,
+                _overseasSites,
+                new MigrationConflictPersistence(_factory, NullLoggerFactory.Instance)
+            ),
+            migrator,
+            _applications,
+            new SeedDualWriteMetrics(_metricsProvider.GetRequiredService<IMeterFactory>()),
+            _clock,
+            _logger
+        );
+
+    private Task<List<ApplicationEntity>> ApplicationVersionsAsync() =>
+        _factory
+            .GetCollection<ApplicationEntity>(DomainModelCollections.ApplicationVersions)
+            .Find(FilterDefinition<ApplicationEntity>.Empty)
+            .ToListAsync(Ct);
+
+    // Runs the real migration, then fails, so anything it wrote has to be rolled back with the rest of the seed.
+    private sealed class FailsAfterMigrating(IApplicationGroupMigrator inner) : IApplicationGroupMigrator
+    {
+        public async Task<GroupMigrationResult> EnsureMigratedAsync(
+            ObjectId applicationId,
+            IClientSessionHandle session,
+            CancellationToken cancellationToken = default
+        )
+        {
+            await inner.EnsureMigratedAsync(applicationId, session, cancellationToken);
+            throw new InvalidOperationException("The migration failed after writing.");
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_MigrationFailsAfterWriting_RollsBackTheWholeModelWriteAndTheSeedCompletes()
+    {
+        var reEx = ReEx();
+        var seeded = await LegacyApplicationAsync(reEx);
+
+        await WriterWith(new FailsAfterMigrating(Migrator(_factory))).WriteAsync(Seed(reEx, seeded), Ct);
+
+        Assert.Empty(await RegistrationVersionsAsync());
+        Assert.Empty(await SiteVersionsAsync());
+        Assert.Empty(await ApplicationVersionsAsync());
+        Assert.Empty(await ConflictsAsync());
+        Assert.Equal(1, Interlocked.Read(ref _failures));
+        var legacy = await _applications.GetByIdAsync(ReExOrganisationId, seeded.Id.ToString()!);
+        Assert.NotNull(legacy);
+        Assert.Null(legacy.RegistrationEntityId);
+    }
+
+    [Fact]
+    public async Task WriteAsync_Succeeds_WritesTheInitialApplicationVersion()
+    {
+        var reEx = ReEx();
+        var seeded = await LegacyApplicationAsync(reEx);
+
+        await Writer().WriteAsync(Seed(reEx, seeded), Ct);
+
+        var version = Assert.Single(await ApplicationVersionsAsync());
+        Assert.Equal(seeded.Id, version.EntityId);
+        Assert.Equal(Assert.Single(await RegistrationVersionsAsync()).EntityId, version.RegistrationId);
+    }
+
+    // A conflict the migration records (here a second live application for the same material and year) is stored and
+    // logged once the seed commits, alongside the seed's own.
+    [Fact]
+    public async Task WriteAsync_MigrationRecordsAConflict_ItIsStoredAndLogged()
+    {
+        var reEx = ReEx();
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+        _logger.Entries.Clear();
+
+        var second = await LegacyApplicationAsync(reEx);
+        await Writer().WriteAsync(Seed(reEx, second), Ct);
+
+        var conflict = Assert.Single(
+            await ConflictsAsync(),
+            c => c.Kind == MigrationConflictKind.DuplicateLiveApplications
+        );
+        Assert.Contains(second.Id!.Value, conflict.ApplicationIds);
+        Assert.Contains(
+            _logger.Entries,
+            e =>
+                e.LogLevel == LogLevel.Warning
+                && e.Message.Contains("kind DuplicateLiveApplications", StringComparison.Ordinal)
+        );
     }
 }

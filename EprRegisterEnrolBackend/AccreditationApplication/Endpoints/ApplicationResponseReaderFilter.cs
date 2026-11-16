@@ -27,83 +27,89 @@ public sealed class ApplicationResponseReaderFilter(IApplicationReader reader) :
 
         var ct = context.HttpContext.RequestAborted;
 
-        if (result is Ok<AccreditationApplicationModel> or Created<AccreditationApplicationModel>)
-        {
-            var rewrapped = await Rewrap<AccreditationApplicationModel>(
-                result,
-                v => reader.ServeFromSourceAsync(v, ct)
-            );
-            if (rewrapped is not null)
+        // Each step answers null when the result is not its kind, so the first match wins and anything else passes
+        // through unchanged.
+        return await RewrapApplicationAsync(result, ct)
+            ?? await RewrapOverseasSiteAsync(result, context, ct)
+            ?? await RewrapInterimSiteAsync(result, context, ct)
+            ?? result;
+    }
+
+    private Task<object?> RewrapApplicationAsync(object? result, CancellationToken ct)
+    {
+        return Rewrap<AccreditationApplicationModel>(
+            result,
+            v => reader.ServeFromSourceAsync(v, ct)
+        );
+    }
+
+    private Task<object?> RewrapOverseasSiteAsync(
+        object? result,
+        EndpointFilterInvocationContext context,
+        CancellationToken ct
+    )
+    {
+        var orgId = RouteValue(context, "organisationId");
+        var appId = RouteValue(context, "applicationId");
+
+        return Rewrap<OverseasSiteModel>(
+            result,
+            async v =>
             {
-                return rewrapped;
+                var app = await reader.GetByIdAsync(orgId, appId, ct);
+                return app?.OverseasSites?.Sites?.FirstOrDefault(s => s.SiteId == v.SiteId);
+            }
+        );
+    }
+
+    private Task<object?> RewrapInterimSiteAsync(
+        object? result,
+        EndpointFilterInvocationContext context,
+        CancellationToken ct
+    )
+    {
+        var orgId = RouteValue(context, "organisationId");
+        var appId = RouteValue(context, "applicationId");
+        var routeSiteIdStr = context.HttpContext.Request.RouteValues["siteId"]?.ToString();
+
+        return Rewrap<InterimSiteModel>(
+            result,
+            async v =>
+            {
+                var app = await reader.GetByIdAsync(orgId, appId, ct);
+                return app is null ? null : FindInterimSite(app, routeSiteIdStr, v);
+            }
+        );
+    }
+
+    // Looks under the site the route names, and only there: interim site ids repeat across sites, so a site that
+    // doesn't hold it answers null (404, as for a read) rather than another site's interim with the same id. Only a
+    // route that names no site, or one that doesn't parse, searches the whole application.
+    private static InterimSiteModel? FindInterimSite(
+        AccreditationApplicationModel app,
+        string? routeSiteIdStr,
+        InterimSiteModel written
+    )
+    {
+        if (
+            int.TryParse(
+                routeSiteIdStr,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var routeSiteId
+            )
+        )
+        {
+            var site = app.OverseasSites?.Sites?.FirstOrDefault(s => s.SiteId == routeSiteId);
+            if (site is not null)
+            {
+                return site.InterimSites?.FirstOrDefault(i => i.SiteId == written.SiteId);
             }
         }
 
-        if (result is Ok<OverseasSiteModel> or Created<OverseasSiteModel>)
-        {
-            var orgId = RouteValue(context, "organisationId");
-            var appId = RouteValue(context, "applicationId");
-
-            var rewrapped = await Rewrap<OverseasSiteModel>(
-                result,
-                async v =>
-                {
-                    var app = await reader.GetByIdAsync(orgId, appId, ct);
-                    return app?.OverseasSites?.Sites?.FirstOrDefault(s => s.SiteId == v.SiteId);
-                }
-            );
-            if (rewrapped is not null)
-            {
-                return rewrapped;
-            }
-        }
-
-        if (result is Ok<InterimSiteModel> or Created<InterimSiteModel>)
-        {
-            var orgId = RouteValue(context, "organisationId");
-            var appId = RouteValue(context, "applicationId");
-            var routeSiteIdStr = context.HttpContext.Request.RouteValues["siteId"]?.ToString();
-
-            var rewrapped = await Rewrap<InterimSiteModel>(
-                result,
-                async v =>
-                {
-                    var app = await reader.GetByIdAsync(orgId, appId, ct);
-                    if (app is null)
-                    {
-                        return null;
-                    }
-
-                    if (
-                        int.TryParse(
-                            routeSiteIdStr,
-                            NumberStyles.Integer,
-                            CultureInfo.InvariantCulture,
-                            out var routeSiteId
-                        )
-                    )
-                    {
-                        var site = app.OverseasSites?.Sites?.FirstOrDefault(s =>
-                            s.SiteId == routeSiteId
-                        );
-                        if (site is not null)
-                        {
-                            return site.InterimSites?.FirstOrDefault(i => i.SiteId == v.SiteId);
-                        }
-                    }
-
-                    return app
-                        .OverseasSites?.Sites?.SelectMany(s => s.InterimSites ?? [])
-                        .FirstOrDefault(i => i.SiteId == v.SiteId);
-                }
-            );
-            if (rewrapped is not null)
-            {
-                return rewrapped;
-            }
-        }
-
-        return result;
+        return app
+            .OverseasSites?.Sites?.SelectMany(s => s.InterimSites ?? [])
+            .FirstOrDefault(i => i.SiteId == written.SiteId);
     }
 
     private static string RouteValue(EndpointFilterInvocationContext context, string name)
@@ -111,7 +117,7 @@ public sealed class ApplicationResponseReaderFilter(IApplicationReader reader) :
         return context.HttpContext.Request.RouteValues[name]?.ToString() ?? string.Empty;
     }
 
-    private static async Task<object?> Rewrap<T>(object result, Func<T, Task<T?>> fromSource)
+    private static async Task<object?> Rewrap<T>(object? result, Func<T, Task<T?>> fromSource)
         where T : class
     {
         if (result is Ok<T> { Value: { } ok })

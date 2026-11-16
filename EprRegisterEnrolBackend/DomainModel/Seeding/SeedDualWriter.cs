@@ -91,17 +91,17 @@ public sealed class SeedDualWriter(
             session,
             cancellationToken
         );
-        var (registration, replacedNumber) = await UpsertRegistrationAsync(
-            session,
-            seed,
-            organisationId,
-            now,
-            cancellationToken
-        );
+        var (registration, replacedNumber, accreditationNumberReplaced) =
+            await UpsertRegistrationAsync(session, seed, organisationId, now, cancellationToken);
 
         var accredited = await AccreditedOrsIdsAsync(session, seed, cancellationToken);
         var siteIds = new Dictionary<string, ObjectId>();
         var conflicts = new List<MigrationConflict>();
+        if (accreditationNumberReplaced)
+        {
+            conflicts.Add(AccreditationNumberDifference(seed, registration));
+        }
+
         foreach (var site in seed.ReEx.OverseasSites)
         {
             WarnIfApprovalDateUnreadable(seed, site);
@@ -175,7 +175,8 @@ public sealed class SeedDualWriter(
 
     private async Task<(
         RegistrationEntity Registration,
-        string? ReplacedNumber
+        string? ReplacedNumber,
+        bool AccreditationNumberReplaced
     )> UpsertRegistrationAsync(
         IClientSessionHandle session,
         SeedDualWrite seed,
@@ -194,6 +195,9 @@ public sealed class SeedDualWriter(
             cancellationToken
         );
         var oldNumber = current?.RegistrationNumber;
+        var oldAccreditationNumber = current
+            ?.AccreditationNumbers.Find(a => a.Year == seed.ReEx.Year)
+            ?.AccreditationNumber;
         var registration = current ?? new RegistrationEntity();
         registration.OrganisationId = organisationId;
         SeedEntityMapper.ApplyTo(registration, seed.ReEx, seed.ReExRegistrationId, seed.Material);
@@ -207,7 +211,7 @@ public sealed class SeedDualWriter(
                 session,
                 cancellationToken
             );
-            return (created, null);
+            return (created, null, false);
         }
 
         var result = await versions.UpdateAsync(
@@ -218,7 +222,12 @@ public sealed class SeedDualWriter(
             cancellationToken
         );
         var replaced = oldNumber != result.Entity.RegistrationNumber ? oldNumber : null;
-        return (result.Entity, replaced);
+        var accreditationNumberReplaced =
+            oldAccreditationNumber is not null
+            && result.Entity.AccreditationNumbers.Exists(a =>
+                a.Year == seed.ReEx.Year && a.AccreditationNumber != oldAccreditationNumber
+            );
+        return (result.Entity, replaced, accreditationNumberReplaced);
     }
 
     // One bad value must not fail a seed: the site just has no first approved date.
@@ -288,6 +297,21 @@ public sealed class SeedDualWriter(
         );
         return result.Entity.EntityId;
     }
+
+    // RA-763: the Registration held a different accreditation number for the year, which ReEx's has now replaced.
+    private MigrationConflict AccreditationNumberDifference(
+        SeedDualWrite seed,
+        RegistrationEntity registration
+    ) =>
+        new()
+        {
+            Id = ObjectId.GenerateNewId(),
+            Kind = MigrationConflictKind.AccreditationNumberDiffers,
+            ReExRegistrationId = seed.ReExRegistrationId,
+            RegistrationId = registration.EntityId,
+            ApplicationIds = [seed.Application.Id!.Value],
+            RecordedAt = clock.GetUtcNow().UtcDateTime,
+        };
 
     private MigrationConflict ReExDifference(SeedDualWrite seed, OverseasSiteEntity site) =>
         new()

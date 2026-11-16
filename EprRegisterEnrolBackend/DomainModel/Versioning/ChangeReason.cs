@@ -49,6 +49,12 @@ public enum ChangeReason
     ApplicationEdited,
 
     /// <summary>
+    /// RA-763: a Registration with no accreditation number for a year was given the one an application holds as last
+    /// year's. A number already held for the year is never changed by a write path.
+    /// </summary>
+    AccreditationNumberAdded,
+
+    /// <summary>
     /// An Application version written before the model held createdAt
     /// was given it from the legacy document (RA-706).
     /// </summary>

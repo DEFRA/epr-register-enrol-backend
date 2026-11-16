@@ -118,20 +118,85 @@ public sealed partial class DualWriteEndpointTests
         );
     }
 
+    // Several applications, end to end: the model keeps legacy's order, leaves out one it doesn't hold (decided
+    // 2026-11-13, no legacy fallback), and serves one with no waste processing type with the type its Registration holds
+    // (the known gap readiness check E lists). Apart from those two, every field is the same.
+    [Fact]
+    public async Task Parity_GetList_SeveralApplications_SameOrderWithTheKnownDifferencesOnly()
+    {
+        var withType = await MigratedEveryRouteWritableAsync();
+        var withoutType = await ApplicationAsync();
+        Assert.Null(withoutType.WasteProcessingType);
+        // A seed takes the registration reference from ReEx, so a second application in the group carries it too.
+        withoutType.RegistrationReference = (await LegacyAsync(withType))!.RegistrationReference;
+        withoutType = (await Applications.UpdateAsync(withoutType))!;
+        var migrated = await _client.PatchAsync(
+            AppUrl(withoutType, "prns"),
+            new StringContent(
+                """{"plannedTonnageBand":"UpTo500"}""",
+                System.Text.Encoding.UTF8,
+                "application/json"
+            ),
+            Ct
+        );
+        Assert.Equal(HttpStatusCode.OK, migrated.StatusCode);
+        // Another registration's group, never written, so the model has never held it.
+        var missing = await ApplicationAsync();
+        missing.RegistrationId = "reex-registration-never-written";
+        missing = (await Applications.UpdateAsync(missing))!;
+        var (onFactory, on) = Alongside(s_readFromModelOn);
+        using var _ = onFactory;
+
+        var fromLegacy = await NodeAsync(await GetAsync(_client, ListPath));
+        var fromModel = await NodeAsync(await GetAsync(on, ListPath));
+
+        var legacyIds = fromLegacy
+            .AsArray()
+            .Select(a => a!["applicationId"]!.GetValue<string>())
+            .ToList();
+        Assert.Equal(3, legacyIds.Count);
+        Assert.Contains(missing.Id.ToString(), legacyIds);
+        var expected = new JsonArray([
+            .. fromLegacy
+                .AsArray()
+                .Where(a => a!["applicationId"]!.GetValue<string>() != missing.Id.ToString())
+                .Select(a => a!.DeepClone()),
+        ]);
+        var servedWithoutType = fromModel
+            .AsArray()
+            .Single(a => a!["applicationId"]!.GetValue<string>() == withoutType.Id.ToString())!;
+        Assert.Equal("exporter", servedWithoutType["wasteProcessingType"]!.GetValue<string>());
+        var expectedWithoutType = expected.Single(a =>
+            a!["applicationId"]!.GetValue<string>() == withoutType.Id.ToString()
+        )!;
+        Assert.Null(expectedWithoutType["wasteProcessingType"]);
+        expectedWithoutType["wasteProcessingType"] = "exporter";
+        Assert.Contains(withType.Id.ToString(), legacyIds);
+        Assert.True(
+            JsonNode.DeepEquals(expected, fromModel),
+            $"expected {expected}\nmodel {fromModel}"
+        );
+    }
+
     // A write through the flag-on app answers from the model; the flag-off app then reads the same state from legacy.
-    // A whole-application response must equal that GET, and a site or interim site response must equal its element in
-    // it, field for field.
+    // Each route names exactly what its response is: the whole application, the one site or interim site the route
+    // writes (found by its ids, not by shape, so another site of the same shape can't pass), or no body at all.
     [Theory]
-    [InlineData("update-site")]
-    [InlineData("promote-site")]
-    [InlineData("revert-site")]
-    [InlineData("patch-sites")]
-    [InlineData("update-interim")]
-    [InlineData("withdraw-interim")]
-    [InlineData("restore-interim")]
-    [InlineData("delete-file")]
-    [InlineData("accreditation-number")]
-    public async Task Parity_WriteResponse_SameJsonAsLegacyAfterTheWrite(string route)
+    [InlineData("update-site", ResponseBody.Element, 2, null)]
+    [InlineData("promote-site", ResponseBody.Element, 1, null)]
+    [InlineData("revert-site", ResponseBody.Element, 3, null)]
+    [InlineData("patch-sites", ResponseBody.Application, null, null)]
+    [InlineData("update-interim", ResponseBody.Element, 1, 1)]
+    [InlineData("withdraw-interim", ResponseBody.None, null, null)]
+    [InlineData("restore-interim", ResponseBody.Element, 1, 2)]
+    [InlineData("delete-file", ResponseBody.None, null, null)]
+    [InlineData("accreditation-number", ResponseBody.Application, null, null)]
+    public async Task Parity_WriteResponse_SameJsonAsLegacyAfterTheWrite(
+        string route,
+        ResponseBody expected,
+        int? siteId,
+        int? interimSiteId
+    )
     {
         var application = await MigratedEveryRouteWritableAsync();
         var (onFactory, on) = Alongside(s_readFromModelOn);
@@ -139,16 +204,14 @@ public sealed partial class DualWriteEndpointTests
 
         var written = await WriteAsync(application, route, on);
         Assert.True(written.IsSuccessStatusCode, $"{route}: {(int)written.StatusCode}");
-        if ((await written.Content.ReadAsStringAsync(Ct)).Length == 0)
-        {
-            return; // no body (204, or a bare 200): nothing to serve from either source
-        }
 
         await AssertServedAsLegacyAsync(
             route,
             application,
             written,
-            ResponseBody.ApplicationOrElement
+            expected,
+            siteId,
+            interimSiteId
         );
     }
 
@@ -157,20 +220,35 @@ public sealed partial class DualWriteEndpointTests
         None,
         Application,
         Element,
-        ApplicationOrElement,
 
         // Not built from the application (Submit's receipt): it must equal the flag-off app's answer to the same
         // write on an identical fixture. Its reference is unique per application, so each is checked against its own.
         SameAsFlagOff,
     }
 
+    // The site with the given id in an application's JSON, or that site's interim site with the given id.
+    private static JsonNode? ElementOf(JsonNode application, int siteId, int? interimSiteId)
+    {
+        var site = application["overseasSites"]
+            ?["sites"]?.AsArray()
+            .FirstOrDefault(s => s?["siteId"]?.GetValue<int>() == siteId);
+        return interimSiteId is null
+            ? site
+            : site
+                ?["interimSites"]?.AsArray()
+                .FirstOrDefault(i => i?["siteId"]?.GetValue<int>() == interimSiteId);
+    }
+
     // The response equals the flag-off app's GET after the write: the whole application, or one element of it
-    // (a site or an interim site), field for field.
+    // (a site or an interim site), field for field. An element named by its ids must be that element; one without
+    // (an add, whose id the write assigns) must be some element of the application other than its root.
     private async Task AssertServedAsLegacyAsync(
         string route,
         AccreditationApplicationModel application,
         HttpResponseMessage written,
-        ResponseBody expected
+        ResponseBody expected,
+        int? siteId = null,
+        int? interimSiteId = null
     )
     {
         var body = await written.Content.ReadAsStringAsync(Ct);
@@ -187,10 +265,17 @@ public sealed partial class DualWriteEndpointTests
         var matches = expected switch
         {
             ResponseBody.Application => JsonNode.DeepEquals(legacy, response),
+            ResponseBody.Element when siteId is not null => JsonNode.DeepEquals(
+                ElementOf(legacy, siteId.Value, interimSiteId)
+                    ?? throw new InvalidOperationException(
+                        $"{route}: site {siteId} interim {interimSiteId} is not in legacy {legacy}"
+                    ),
+                response
+            ),
             ResponseBody.Element => Descendants(legacy)
                 .Skip(1)
                 .Any(node => JsonNode.DeepEquals(node, response)),
-            _ => Descendants(legacy).Any(node => JsonNode.DeepEquals(node, response)),
+            _ => throw new ArgumentOutOfRangeException(nameof(expected), expected, null),
         };
         Assert.True(matches, $"{route}: response {response}\nis not {expected} in legacy {legacy}");
     }

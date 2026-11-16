@@ -29,6 +29,10 @@
   "registrationReference": "R27EX1234567P",
   "previousRegistrationNumbers": [],
   "accreditationReference": "A2027EX5005000001PL",
+  "lastYearsAccreditationNumber": {
+    "year": 2026,
+    "accreditationNumber": "A26EX5005000002PL"
+  },
   "previousAccreditationNumbers": [
     "A26EX5005000001PL"
   ],

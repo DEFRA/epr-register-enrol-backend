@@ -123,7 +123,7 @@ public sealed class ApplicationResponseReaderFilterTests
         var result = await InvokeAsync(HttpMethods.Get, ok);
 
         result.Should().BeSameAs(ok);
-        await _reader.DidNotReceiveWithAnyArgs().ServeFromSourceAsync(default!, default);
+        await _reader.DidNotReceiveWithAnyArgs().ServeFromSourceAsync(default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public sealed class ApplicationResponseReaderFilterTests
         var result = await InvokeAsync(HttpMethods.Post, site);
 
         result.Should().BeSameAs(site);
-        await _reader.DidNotReceiveWithAnyArgs().ServeFromSourceAsync(default!, default);
+        await _reader.DidNotReceiveWithAnyArgs().ServeFromSourceAsync(default!, TestContext.Current.CancellationToken);
     }
 
     // Site and interim-site write responses (ORS add, update, promote, revert and recycling operations; interim add,
