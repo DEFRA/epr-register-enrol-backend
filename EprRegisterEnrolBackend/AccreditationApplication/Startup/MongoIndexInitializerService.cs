@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Services;
@@ -69,8 +70,10 @@ public class MongoIndexInitializerService(
                     {
                         // Resolving each singleton runs its MongoService<T>
                         // constructor, which is where EnsureIndexes lives.
-                        _ = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
-                        _ = serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
+                        _ =
+                            serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
+                        _ =
+                            serviceProvider.GetRequiredService<IRecyclingOperationsAuditPersistence>();
                         _ = serviceProvider.GetRequiredService<IPendingUploadService>();
                         _ = serviceProvider.GetRequiredService<ICaseManagementAuthNonceStore>();
                     },
@@ -101,6 +104,142 @@ public class MongoIndexInitializerService(
         {
             return true;
         }
+    }
+
+    // RA-758: a validator the constructor could not apply is tried again after each of these delays, about 30
+    // seconds of waiting in all, so a brief Mongo error during collMod (a failover, a dropped connection) does not
+    // leave it off until the next restart. While Mongo is unreachable each attempt can also wait out the driver's
+    // server-selection timeout, so the whole retry can take several minutes; the final warning logs the real time.
+    // Settable for tests.
+    internal IReadOnlyList<TimeSpan> ValidatorRetryDelays { get; init; } =
+    [
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(4),
+        TimeSpan.FromSeconds(8),
+        TimeSpan.FromSeconds(15),
+    ];
+
+    // Re-applies each validator that is missing or different, rechecking the schema after every round, until the
+    // check is Healthy or the delays run out. A collection whose last attempt was NotPermitted (the constructor's
+    // included) is never retried: a database user that may not run collMod will not gain the permission between
+    // retries. When only those are left it stops, and it checks for that before the first delay so a refused-only
+    // startup does not wait. A round that fails (Mongo unreachable mid-retry) or whose recheck is Unhealthy is not
+    // recorded: the indexes were present when this started, so readiness stays at the last Degraded result rather than
+    // dropping because of the retry itself. A later round with nothing left to apply still rechecks and records, so a
+    // validator applied in a round whose recheck failed (or by another instance) does not leave readiness Degraded.
+    private async Task<HealthCheckResult> RetryValidatorsAsync(
+        IReadOnlyList<IDomainModelCollection> collections,
+        IDomainModelSchemaStatus status,
+        HealthCheckResult degraded,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = degraded;
+        var elapsed = Stopwatch.StartNew();
+        if (await NothingToRetryAsync(collections, cancellationToken))
+        {
+            return result;
+        }
+
+        foreach (var delay in ValidatorRetryDelays)
+        {
+            await Task.Delay(delay, cancellationToken);
+            try
+            {
+                var missing = await CollectionsMissingValidatorAsync(
+                    collections,
+                    cancellationToken
+                );
+                foreach (var collection in missing)
+                {
+                    await Task.Run(collection.TryApplyValidator, cancellationToken)
+                        .WaitAsync(cancellationToken);
+                }
+
+                var recheck = await DomainModelSchemaCheck.RunAsync(collections, cancellationToken);
+                if (recheck.Status != HealthStatus.Unhealthy)
+                {
+                    result = recheck;
+                    status.Record(result);
+                }
+
+                if (recheck.Status == HealthStatus.Healthy)
+                {
+                    logger.LogInformation(
+                        "MongoIndexInitializerService: domain model validators applied after retrying"
+                    );
+                    return recheck;
+                }
+
+                if (missing.Count == 0 && recheck.Status == HealthStatus.Degraded)
+                {
+                    // Nothing was left to apply, so whatever is still Degraded was refused permission.
+                    return result;
+                }
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(
+                    ex,
+                    "MongoIndexInitializerService: a domain model validator retry failed; trying again"
+                );
+            }
+        }
+
+        logger.LogWarning(
+            "MongoIndexInitializerService: domain model validators still not applied after retrying for {Duration}. {Description}",
+            elapsed.Elapsed,
+            result.Description
+        );
+        return result;
+    }
+
+    private static bool IsRetryable(IDomainModelCollection collection) =>
+        collection.GetExpectedValidation() is not null
+        && collection.LastValidatorApplyResult != ValidatorApplyResult.NotPermitted;
+
+    // True when every validator still wrong was refused permission, so there is no point waiting for a retry. If Mongo
+    // fails to answer, it is treated as worth retrying: the retry rounds handle that.
+    private async Task<bool> NothingToRetryAsync(
+        IReadOnlyList<IDomainModelCollection> collections,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            return (await CollectionsMissingValidatorAsync(collections, cancellationToken)).Count
+                == 0;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                ex,
+                "MongoIndexInitializerService: could not read the domain model validators; retrying"
+            );
+            return false;
+        }
+    }
+
+    // The retryable collections whose validator on the server is missing or not the expected one.
+    private static async Task<List<IDomainModelCollection>> CollectionsMissingValidatorAsync(
+        IReadOnlyList<IDomainModelCollection> collections,
+        CancellationToken cancellationToken
+    )
+    {
+        var missing = new List<IDomainModelCollection>();
+        foreach (var collection in collections.Where(IsRetryable))
+        {
+            if (
+                await DomainModelSchemaCheck.ValidatorProblemAsync(collection, cancellationToken)
+                is not null
+            )
+            {
+                missing.Add(collection);
+            }
+        }
+
+        return missing;
     }
 
     // Retries the domain model schema until its check passes or the host stops.
@@ -146,10 +285,16 @@ public class MongoIndexInitializerService(
                 return true;
             }
 
+            var status = serviceProvider.GetRequiredService<IDomainModelSchemaStatus>();
             var result = await DomainModelSchemaCheck.RunAsync(collections, cancellationToken);
-            serviceProvider.GetRequiredService<IDomainModelSchemaStatus>().Record(result);
-            // Only missing indexes are worth retrying for. A missing or different validator is Degraded: a collMod
-            // permission won't appear between retries, so it is reported and left (RA-746).
+            status.Record(result);
+            if (result.Status == HealthStatus.Degraded)
+            {
+                result = await RetryValidatorsAsync(collections, status, result, cancellationToken);
+            }
+
+            // Only missing indexes keep the outer loop retrying. A validator still missing after RetryValidatorsAsync
+            // is Degraded and left until the next startup (RA-746, RA-758).
             return result.Status != HealthStatus.Unhealthy;
         }
         catch (OperationCanceledException)
