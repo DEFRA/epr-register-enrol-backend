@@ -154,9 +154,11 @@ public static class ApplicationProjection
                 : null,
             IsEu = fields["isEu"].AsBoolean,
             IsOecd = fields["isOecd"].AsBoolean,
+            // ReEx's string as received, so the JSON matches legacy whichever shape ReEx sent; an ORS recorded before the
+            // string was kept serves its date in the one form the model has.
             ValidFrom =
                 ors.FirstApprovalSource == FirstApprovalSource.ReEx
-                    ? SiteApprovalDate.Format(ors.FirstApprovedAt)
+                    ? ors.ReExValidFrom ?? SiteApprovalDate.Format(ors.FirstApprovedAt)
                     : null,
             Selected = entry.Selected,
             BesEvidence = Convert<BesEvidenceModel>(entry.BesEvidence),

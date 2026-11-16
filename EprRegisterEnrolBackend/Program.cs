@@ -142,6 +142,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
     FeatureFlags.EnsureInYearChangesHasDualWrite(builder.Configuration, builder.Environment);
+    FeatureFlags.EnsureReadFromModelHasItsPrerequisites(builder.Configuration, builder.Environment);
     // RA-492: in-year change requests (add registered ORS to a granted accreditation). Registered only
     // with the in-year changes flag, like the routes that use them, so with it off the change-request
     // collection and its indexes are never touched.
@@ -228,6 +229,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.Configure<TestDataConfig>(
         builder.Configuration.GetSection(TestDataConfig.SectionName)
     );
+    builder.Services.AddSingleton<GrantedAccreditations>();
     builder.Services.AddSingleton<AccreditationApiTestDataSeeder>();
     builder.Services.AddHostedService<AccreditationApiTestDataSeedingService>();
 

@@ -68,4 +68,97 @@ public class FeatureFlagsTests
 
         act.Should().NotThrow();
     }
+
+    // RA-705: ReadFromModel serves every read from the domain model, which on CDP only dual-write keeps current, only
+    // seed dual-write starts (the initial Application version) and Expand creates. Off by default, so deploying changes
+    // nothing until an environment opts in.
+    private static IConfiguration ReadSettings(
+        bool readFromModel,
+        bool dualWrite,
+        bool dualWriteSeed,
+        bool expand
+    ) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [FeatureFlags.ReadFromModelKey] = readFromModel ? "true" : "false",
+                    ["DomainModel:DualWrite"] = dualWrite ? "true" : "false",
+                    ["DomainModel:DualWriteSeed"] = dualWriteSeed ? "true" : "false",
+                    ["DomainModel:ExpandEnabled"] = expand ? "true" : "false",
+                }
+            )
+            .Build();
+
+    [Fact]
+    public void ReadFromModelKey_IsUnderTheDomainModelSection() =>
+        FeatureFlags.ReadFromModelKey.Should().Be("DomainModel:ReadFromModel");
+
+    [Fact]
+    public void ReadFromModel_IsOffByDefault() =>
+        new EprRegisterEnrolBackend.DomainModel.DomainModelConfig()
+            .ReadFromModel.Should()
+            .BeFalse();
+
+    [Theory]
+    [InlineData(false, true, true, "DomainModel:DualWrite")]
+    [InlineData(true, false, true, "DomainModel:DualWriteSeed")]
+    [InlineData(true, true, false, "DomainModel:ExpandEnabled")]
+    [InlineData(false, false, false, "DomainModel:DualWrite")]
+    public void ReadFromModelWithoutItsPrerequisites_OutsideDevelopment_RefusesToStart(
+        bool dualWrite,
+        bool dualWriteSeed,
+        bool expand,
+        string missing
+    )
+    {
+        var act = () =>
+            FeatureFlags.EnsureReadFromModelHasItsPrerequisites(
+                ReadSettings(readFromModel: true, dualWrite, dualWriteSeed, expand),
+                new FakeHostEnvironment(Environments.Production)
+            );
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage($"DomainModel:ReadFromModel needs {missing}*");
+    }
+
+    [Theory]
+    [InlineData(true, true, true, true)]
+    [InlineData(false, false, false, false)]
+    [InlineData(false, true, true, true)]
+    [InlineData(false, false, false, true)]
+    public void ReadFromModelOtherCombinations_OutsideDevelopment_Start(
+        bool readFromModel,
+        bool dualWrite,
+        bool dualWriteSeed,
+        bool expand
+    )
+    {
+        var act = () =>
+            FeatureFlags.EnsureReadFromModelHasItsPrerequisites(
+                ReadSettings(readFromModel, dualWrite, dualWriteSeed, expand),
+                new FakeHostEnvironment(Environments.Production)
+            );
+
+        act.Should().NotThrow();
+    }
+
+    // Locally and in the fe-tests stack the dev seeds write the domain model directly.
+    [Fact]
+    public void ReadFromModelWithoutDualWrite_InDevelopment_Starts()
+    {
+        var act = () =>
+            FeatureFlags.EnsureReadFromModelHasItsPrerequisites(
+                ReadSettings(
+                    readFromModel: true,
+                    dualWrite: false,
+                    dualWriteSeed: false,
+                    expand: false
+                ),
+                new FakeHostEnvironment(Environments.Development)
+            );
+
+        act.Should().NotThrow();
+    }
 }

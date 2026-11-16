@@ -8,7 +8,9 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Logging;
@@ -37,6 +39,17 @@ public static class AccreditationApplicationEndpoints
     public static void UseAccreditationApplicationEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("api/v1/accreditation-applications");
+        // RA-705: with DomainModel:ReadFromModel on, write responses are served again from the model once the
+        // write has committed (each handler builds its body from legacy inside the dual-write transaction).
+        // Registered only with the flag on.
+        if (
+            app
+                .ServiceProvider.GetRequiredService<IOptions<DomainModelConfig>>()
+                .Value.ReadFromModel
+        )
+        {
+            group.AddEndpointFilter<ApplicationResponseReaderFilter>();
+        }
 
         FrontendOnly(group.MapPost("{organisationId}/{registrationId}/{materialType}/seed", Seed));
         FrontendOnly(group.MapGet("{organisationId}", GetList));
@@ -1028,7 +1041,9 @@ public static class AccreditationApplicationEndpoints
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData.AccreditationId,
             SourceYear = request.Year - 1,
-            LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(priorYearData.AccreditationNumber)
+            LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(
+                priorYearData.AccreditationNumber
+            )
                 ? null
                 : new AccreditationNumberForYearModel
                 {
@@ -1097,7 +1112,8 @@ public static class AccreditationApplicationEndpoints
 
     private static async Task<IResult> GetList(
         string organisationId,
-        IAccreditationApplicationPersistence persistence
+        IApplicationReader reader,
+        CancellationToken cancellationToken
     )
     {
         // RA-357: (organisationId, registrationId, materialType, year) is now one-to-many — a
@@ -1108,23 +1124,116 @@ public static class AccreditationApplicationEndpoints
         // wins" client land on the newest record rather than an arbitrary one; FE #204 relies on
         // exactly that. Withdrawn records are deliberately NOT filtered out — consumers
         // legitimately need to display them; choosing the live one is the caller's decision.
-        var applications = await persistence.GetByOrganisationAsync(organisationId);
+        // RA-705 — the reader keeps that order whichever source it reads (legacy, or the model
+        // with ReadFromModel on).
+        var applications = await reader.GetByOrganisationAsync(organisationId, cancellationToken);
         return Results.Ok(applications);
     }
+
+    // Bundles GetById's DI services under one [AsParameters] argument so the handler stays under Sonar's
+    // 7-parameter limit (S107) - same reasoning, and the same positional-record shape, as SeedServices above.
+    private sealed record GetByIdServices(
+        IAccreditationApplicationPersistence Persistence,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IReExApiAdapter ReExAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        IApplicationReader Reader,
+        ILoggerFactory LoggerFactory
+    );
 
     private static async Task<IResult> GetById(
         string organisationId,
         string applicationId,
-        IAccreditationApplicationPersistence persistence,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        IReExApiAdapter reExAdapter,
-        ILoggerFactory loggerFactory,
+        [AsParameters] GetByIdServices services,
         CancellationToken cancellationToken
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        application = await BackfillFromReExAsync(
+            application,
+            organisationId,
+            applicationId,
+            services,
+            cancellationToken
+        );
+
+        // The backfills work on the legacy document (the one that is saved); the response comes from
+        // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
+        // and UpdatedAt from legacy.
+        // An application the model doesn't hold yet is migrated first, rather than answering 404 for good (self-heal,
+        // decided 2026-11-16).
+        var served = await services.Reader.ServeOrMigrateAsync(
+            application,
+            services.UnitOfWork,
+            cancellationToken
+        );
+        if (served is null)
+        {
+            return Results.NotFound();
+        }
+
+        await AddNotificationStatusAsync(served, applicationId, services, cancellationToken);
+
+        return Results.Ok(served);
+    }
+
+    // RA-503 (OrgId) and RA-526 (Nation) backfills for GetById. Write goes through the dual-write unit of work so the
+    // model's Organisation and Registration get the values too (RA-705). A failed or lost write still answers the
+    // read with the values ReEx resolved, as before RA-705: nothing is persisted, so the next read retries, but the
+    // frontend (which no longer falls back to postcode) still shows the right nation. With ReadFromModel on the
+    // response is served from the model, which the failed write left untouched.
+    private static async Task<AccreditationApplicationModel> BackfillFromReExAsync(
+        AccreditationApplicationModel application,
+        string organisationId,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        var resolved = await ResolveMissingFromReExAsync(
+            application,
+            organisationId,
+            services.ReExAdapter,
+            cancellationToken
+        );
+        if (!resolved)
+        {
+            return application;
+        }
+
+        var saved = await TrySaveBackfillAsync(
+            application,
+            applicationId,
+            services,
+            cancellationToken
+        );
+        if (saved is not null)
+        {
+            return saved;
+        }
+
+        services
+            .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+            .LogWarning(
+                "Failed to persist backfilled data for applicationId={ApplicationId}",
+                applicationId
+            );
+
+        return application;
+    }
+
+    // True when something was resolved and set on the application.
+    private static async Task<bool> ResolveMissingFromReExAsync(
+        AccreditationApplicationModel application,
+        string organisationId,
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
+    )
+    {
+        var resolved = false;
 
         // RA-503: backfill OrgId (ReEx's numeric organisation number) for any application read
         // before Submit's own resolution ran - older applications, or ones that never reached
@@ -1142,7 +1251,7 @@ public static class AccreditationApplicationEndpoints
             if (orgNumber is not null)
             {
                 application.OrgId = orgNumber;
-                application = await persistence.UpdateAsync(application) ?? application;
+                resolved = true;
             }
         }
 
@@ -1163,39 +1272,74 @@ public static class AccreditationApplicationEndpoints
             if (nationResult.IsSuccess)
             {
                 application.Nation = nationResult.Value;
-                application = await persistence.UpdateAsync(application) ?? application;
+                resolved = true;
             }
         }
 
-        // Skip the round-trip entirely when there is nothing to look up (e.g. older
-        // applications submitted before the work-item id was persisted, or applications
-        // never submitted at all). Defence in depth otherwise: GetNotificationStatusAsync
-        // already guarantees it never throws, but this lookup must never be able to fail
-        // the response regardless of adapter implementation (RA102-j7s).
-        if (application.CaseManagementWorkItemId is not null)
+        return resolved;
+    }
+
+    // The saved document, or null when the save failed or was lost. The box carries the saved document out of the
+    // unit of work's callback.
+    private static async Task<AccreditationApplicationModel?> TrySaveBackfillAsync(
+        AccreditationApplicationModel application,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        var savedBox = new StrongBox<AccreditationApplicationModel?>();
+        var result = await services.UnitOfWork.InTransactionAsync(
+            applicationId,
+            async session =>
+            {
+                savedBox.Value = await services.Persistence.UpdateAsync(application, session);
+                return Results.Ok();
+            },
+            cancellationToken
+        );
+
+        return result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 }
+            ? savedBox.Value
+            : null;
+    }
+
+    // Skip the round-trip entirely when there is nothing to look up (e.g. older
+    // applications submitted before the work-item id was persisted, or applications
+    // never submitted at all). Defence in depth otherwise: GetNotificationStatusAsync
+    // already guarantees it never throws, but this lookup must never be able to fail
+    // the response regardless of adapter implementation (RA102-j7s).
+    private static async Task AddNotificationStatusAsync(
+        AccreditationApplicationModel application,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        if (application.CaseManagementWorkItemId is null)
         {
-            try
-            {
-                var notificationStatus = await caseWorkingAdapter.GetNotificationStatusAsync(
-                    application,
-                    cancellationToken
-                );
-                application.NotificationStatus = notificationStatus.NotificationStatus;
-                application.DueDate = notificationStatus.SlaDueDate;
-            }
-            catch (Exception ex)
-            {
-                loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
-                    .LogWarning(
-                        ex,
-                        "Failed to resolve notification status for applicationId={ApplicationId}",
-                        applicationId
-                    );
-            }
+            return;
         }
 
-        return Results.Ok(application);
+        try
+        {
+            var notificationStatus = await services.CaseWorkingAdapter.GetNotificationStatusAsync(
+                application,
+                cancellationToken
+            );
+            application.NotificationStatus = notificationStatus.NotificationStatus;
+            application.DueDate = notificationStatus.SlaDueDate;
+        }
+        catch (Exception ex)
+        {
+            services
+                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LogWarning(
+                    ex,
+                    "Failed to resolve notification status for applicationId={ApplicationId}",
+                    applicationId
+                );
+        }
     }
 
     private static Task<IResult> PatchPrns(
@@ -5041,10 +5185,7 @@ public static class AccreditationApplicationEndpoints
         // still trims surrounding whitespace, hence the length check. Only the re-formatted
         // canonical value is looked up and logged, so a caller on this unauthenticated route
         // cannot put text of its choosing into the Error log.
-        if (
-            fileUploadId.Length != 36
-            || !Guid.TryParseExact(fileUploadId, "D", out var uploadId)
-        )
+        if (fileUploadId.Length != 36 || !Guid.TryParseExact(fileUploadId, "D", out var uploadId))
             return Results.BadRequest("Invalid fileUploadId in callback metadata.");
 
         var file = payload.Form?.File;

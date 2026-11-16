@@ -40,7 +40,11 @@ public static class LegacySiteMapper
         next.Status = current.Status;
         next.Origin = current.Origin;
         next.ProposedByApplicationId = current.ProposedByApplicationId;
-        next.AdoptFirstApproval(current.FirstApprovedAt, current.FirstApprovalSource);
+        next.AdoptFirstApproval(
+            current.FirstApprovedAt,
+            current.FirstApprovalSource,
+            current.ReExValidFrom
+        );
 
         next.InterimSites = current.InterimSites;
         next.Coordinates ??= current.Coordinates;

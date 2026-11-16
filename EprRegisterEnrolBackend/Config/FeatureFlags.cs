@@ -16,6 +16,28 @@ public static class FeatureFlags
     private const string DualWriteKey = $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.DualWrite)}";
 
     /// <summary>
+    /// RA-705: serves every read from the domain model. See <see cref="ReadFromModelPrerequisites"/>.
+    /// </summary>
+    public const string ReadFromModelKey =
+        $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.ReadFromModel)}";
+
+    private const string ExpandEnabledKey =
+        $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.ExpandEnabled)}";
+
+    private const string DualWriteSeedKey =
+        $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.DualWriteSeed)}";
+
+    /// <summary>
+    /// The one place that lists ReadFromModel's prerequisites.
+    /// </summary>
+    private static readonly (string Key, string Reason)[] ReadFromModelPrerequisites =
+        [
+            (DualWriteKey, "On CDP only dual-write keeps the model current."),
+            (DualWriteSeedKey, "Only seed dual-write writes a new application's initial version to the model."),
+            (ExpandEnabledKey, "On CDP only expand creates the model collections."),
+        ];
+
+    /// <summary>
     /// RA-697: the in-year changes routes read the domain model's registrations and ORSs. On CDP only dual-write
     /// (<c>DualWrite</c>, <c>DualWriteSeed</c> for seeded ones, and the <c>MigrateEnabled</c> migration, which
     /// itself needs <c>DualWrite</c>) fills those, so with the flag on and <c>DualWrite</c> off the pages would
@@ -39,6 +61,30 @@ public static class FeatureFlags
                     + $"{InYearChangesEnabledKey} off. The in-year changes routes read the domain model, which on CDP "
                     + "only dual-write fills."
             );
+        }
+    }
+
+    /// <summary>
+    /// RA-705: ReadFromModel serves every read from the domain model. See <see cref="ReadFromModelPrerequisites"/>.
+    /// Development is exempt: there the dev seeds write the model directly.
+    /// </summary>
+    public static void EnsureReadFromModelHasItsPrerequisites(
+        IConfiguration configuration,
+        IHostEnvironment environment
+    )
+    {
+        if (configuration.GetValue<bool>(ReadFromModelKey) && !environment.IsDevelopment())
+        {
+            foreach (var (key, reason) in ReadFromModelPrerequisites)
+            {
+                if (!configuration.GetValue<bool>(key))
+                {
+                    throw new InvalidOperationException(
+                        $"{ReadFromModelKey} needs {key} outside Development: turn {key} on, or "
+                            + $"{ReadFromModelKey} off. {reason}"
+                    );
+                }
+            }
         }
     }
 }
