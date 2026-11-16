@@ -28,4 +28,36 @@ public class DefaultHttpClientConfigurationTests : IClassFixture<AccreditationAp
 
         client.Timeout.Should().Be(TimeSpan.FromSeconds(15));
     }
+
+    [Fact]
+    public void BackgroundClient_IsConfiguredWithFifteenSecondTimeout()
+    {
+        var httpClientFactory = _factory.Services.GetRequiredService<IHttpClientFactory>();
+        var client = httpClientFactory.CreateClient("BackgroundClient");
+
+        client.Timeout.Should().Be(TimeSpan.FromSeconds(15));
+    }
+
+    // RA-766: the charge correction runs in a hosted service, outside any HTTP request. The
+    // "DefaultClient" has header propagation, which throws InvalidOperationException with no
+    // request to propagate from, so a call through it fails before it is sent. The
+    // "BackgroundClient" must get as far as the network (port 1 refuses the connection).
+    [Fact]
+    public async Task BackgroundClient_CanSendOutsideAnHttpRequest_WhereDefaultClientCannot()
+    {
+        var httpClientFactory = _factory.Services.GetRequiredService<IHttpClientFactory>();
+        var url = "http://127.0.0.1:1/";
+
+        var viaDefault = async () =>
+            await httpClientFactory
+                .CreateClient("DefaultClient")
+                .GetAsync(url, TestContext.Current.CancellationToken);
+        var viaBackground = async () =>
+            await httpClientFactory
+                .CreateClient("BackgroundClient")
+                .GetAsync(url, TestContext.Current.CancellationToken);
+
+        await viaDefault.Should().ThrowAsync<InvalidOperationException>();
+        await viaBackground.Should().ThrowAsync<HttpRequestException>();
+    }
 }
