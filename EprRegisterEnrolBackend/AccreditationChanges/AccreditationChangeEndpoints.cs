@@ -821,17 +821,28 @@ public static class AccreditationChangeEndpoints
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
     }
 
-    // Not configured means nothing was sent, and ManagementBe validates a submission before it saves
-    // anything, so a 4xx means it holds nothing. A timeout, a 5xx or an unreadable 2xx may follow a save.
+    // The statuses ManagementBe returns from validating a submission, before it saves anything, so
+    // they are proof it holds nothing. Deliberately not every 4xx: a 408 or 429, or any 4xx from a
+    // gateway or proxy in front of ManagementBe, says nothing about whether the submission was saved.
+    private static readonly HttpStatusCode[] s_holdsNothingStatuses =
+    [
+        HttpStatusCode.BadRequest,
+        HttpStatusCode.Unauthorized,
+        HttpStatusCode.Forbidden,
+        HttpStatusCode.NotFound,
+        HttpStatusCode.Conflict,
+    ];
+
+    // Not configured means nothing was sent, and the statuses above mean ManagementBe rejected the
+    // submission before saving it. Any other 4xx, a timeout, a 5xx or an unreadable 2xx may follow a
+    // save, so the request's sites are fixed from then on.
     private static bool MayHoldSubmission(Exception ex) =>
-        ex
-            is not (
-                CaseWorkingNotConfiguredException
-                or HttpRequestException
-                {
-                    StatusCode: >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError,
-                }
-            );
+        ex switch
+        {
+            CaseWorkingNotConfiguredException => false,
+            HttpRequestException { StatusCode: { } status } => !s_holdsNothingStatuses.Contains(status),
+            _ => true,
+        };
 
     // Undoes Submit's save after Case Management failed. Not cancellable: the caller may have gone,
     // and the request must not be left Submitted.

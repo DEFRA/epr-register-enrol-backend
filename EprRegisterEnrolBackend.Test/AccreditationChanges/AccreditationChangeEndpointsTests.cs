@@ -1226,6 +1226,11 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
     [InlineData("unreachable")]
     [InlineData("server error")]
     [InlineData("timeout")]
+    // RA-739 PR review: a 408 or 429, or any 4xx from a gateway in front of ManagementBe, is not
+    // ManagementBe answering after validation, so it is no proof the submission was not saved.
+    [InlineData("request timeout")]
+    [InlineData("rate limited")]
+    [InlineData("gateway rejected")]
     public async Task Submit_FlagOn_AfterACaseManagementFailure_TheSitesAreFixedButTheDraftCanBeResubmitted(
         string failure
     )
@@ -1235,6 +1240,13 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
             {
                 "timeout" => new CaseWorkingApiTimeoutException("timed out", new TaskCanceledException()),
                 "server error" => new HttpRequestException("failed", null, HttpStatusCode.InternalServerError),
+                "request timeout" => new HttpRequestException("timed out", null, HttpStatusCode.RequestTimeout),
+                "rate limited" => new HttpRequestException("slow down", null, HttpStatusCode.TooManyRequests),
+                "gateway rejected" => new HttpRequestException(
+                    "denied",
+                    null,
+                    HttpStatusCode.ProxyAuthenticationRequired
+                ),
                 _ => new HttpRequestException("unavailable"),
             }
         );
@@ -1683,6 +1695,9 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
         var stored = _factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        // None of these failures is ManagementBe rejecting the submission, so it may already hold the
+        // work items: the sites are fixed from here, or a resubmit's replay would not match them.
+        stored.SentToCaseManagement.Should().BeTrue();
         stored.SubmittedAt.Should().BeNull();
         stored.SubmittedBy.Should().BeNull();
         stored.PaymentReference.Should().BeNull();
