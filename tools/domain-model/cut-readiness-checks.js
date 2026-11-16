@@ -14,6 +14,7 @@
 
 const TAG = "QA-RA706"; // the fixture script's marker; ignored here
 const CUT_AT = null; // after the cut: the time LegacyWrites went off, e.g. ISODate("2027-01-04T09:00:00Z")
+const SAMPLE_SIZE = 5; // ids listed per finding
 
 // A. Current Accreditation application versions with no createdAt. The createdAt backfill, which runs with the
 // migration (DomainModel:MigrateEnabled), fills them from legacy; anything left needs a look before the cut.
@@ -46,7 +47,7 @@ printjson(
                 $project: {
                     _id: 0,
                     n: 1,
-                    sampleIds: { $slice: ["$sampleIds", 5] },
+                    sampleIds: { $slice: ["$sampleIds", SAMPLE_SIZE] },
                 },
             },
         ])

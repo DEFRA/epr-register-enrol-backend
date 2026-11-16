@@ -8,6 +8,9 @@ const TAG = "QA-RA706";
 const hex = (id) =>
     typeof id.toHexString === "function" ? id.toHexString() : id.$oid;
 const results = [];
+const ONE_MINUTE_MS = 60000;
+// Hex ids compare as text; an explicit compare function keeps the order independent of the engine.
+const byText = (a, b) => a.localeCompare(b);
 
 function check(name, fn) {
     try {
@@ -55,7 +58,7 @@ const stagedCopies = () =>
         .toArray()
         .map((d) => hex(d._id));
 
-const legacyWrittenSince = (cutAt) =>
+const legacyWrittenSince = (since) =>
     db
         .getCollection("accreditationApplications")
         .aggregate([
@@ -63,15 +66,15 @@ const legacyWrittenSince = (cutAt) =>
                 $match: {
                     organisationId: TAG,
                     $or: [
-                        { updatedAt: { $gt: cutAt } },
-                        { createdAt: { $gt: cutAt } },
+                        { updatedAt: { $gt: since } },
+                        { createdAt: { $gt: since } },
                     ],
                 },
             },
         ])
         .toArray()
         .map((d) => hex(d._id))
-        .sort();
+        .sort(byText);
 
 const legacyWithoutCreatedAt = () =>
     db
@@ -129,7 +132,7 @@ db.getCollection("applicationVersions").insertMany([
 ]);
 
 // C: a copy left in the staging collection. D: a legacy document written after the cut.
-const cutAt = new Date(now.getTime() - 60000);
+const cutAt = new Date(now.getTime() - ONE_MINUTE_MS);
 const stagedLeftOver = new ObjectId();
 db.getCollection("accreditationApplicationsCutStaging").insertOne({
     _id: stagedLeftOver,
@@ -141,7 +144,7 @@ db.getCollection("accreditationApplications").updateOne(
 );
 db.getCollection("accreditationApplications").updateOne(
     { _id: withoutCreatedAt },
-    { $set: { updatedAt: new Date(cutAt.getTime() - 60000) } },
+    { $set: { updatedAt: new Date(cutAt.getTime() - ONE_MINUTE_MS) } },
 );
 
 check("C flags the staged copy left over", () => {
@@ -161,7 +164,7 @@ check(
     "D flags the legacy applications updated or inserted after the cut, and not one written before it",
     () => {
         const flagged = legacyWrittenSince(cutAt);
-        const expected = [hex(withCreatedAt), hex(insertedAfter)].sort();
+        const expected = [hex(withCreatedAt), hex(insertedAfter)].sort(byText);
         return (
             flagged.length === 2 &&
             flagged[0] === expected[0] &&
