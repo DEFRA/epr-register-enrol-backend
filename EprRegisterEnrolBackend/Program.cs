@@ -317,6 +317,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Configuration.GetSection(ServiceClientsConfig.SectionName)
     );
     builder.Services.AddSingleton<IServiceClientRegistry, ServiceClientRegistry>();
+    builder.Services.AddSingleton<ServiceClientRateLimiter>();
     builder.Services.AddSingleton<IAuthorizationHandler, ReadOnlyMethodHandler>();
     builder.Services.AddAuthorization(options => options.AddServiceClientPolicies());
 
@@ -483,6 +484,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
+    // RA-702: a 404 or 405 under /v1 in the service API's problem format, like its other errors.
+    app.UseServiceApiProblems();
     // No app.UseAuthentication(): CaseManagement is the only scheme registered, so ASP.NET Core
     // treats it as the implicit default and this middleware would eagerly run
     // CaseManagementAuthenticationHandler against every request — including /health — logging a

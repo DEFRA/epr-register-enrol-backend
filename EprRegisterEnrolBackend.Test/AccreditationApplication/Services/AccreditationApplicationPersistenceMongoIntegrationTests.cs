@@ -33,7 +33,7 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
 
     [Fact]
-    public async Task Constructor_creates_the_ten_declared_indexes()
+    public async Task Constructor_creates_the_eleven_declared_indexes()
     {
         _ = new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance);
 
@@ -44,7 +44,7 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
             .Select(i => i["key"].AsBsonDocument.ToString())
             .ToList();
 
-        Assert.Equal(10, keyDocs.Count);
+        Assert.Equal(11, keyDocs.Count);
 
         Assert.Contains(keyDocs, k => k == "{ \"organisationId\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"applicationStatus\" : 1 }");
@@ -76,6 +76,15 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
                 k.Contains("\"organisationId\" : 1")
                 && k.Contains("\"createdAt\" : -1")
                 && k.Contains("\"_id\" : -1")
+        );
+        // RA-702: backs the service client search's sort (accreditation number, then id) when no
+        // organisation is given.
+        Assert.Contains(
+            keyDocs,
+            k =>
+                k.Contains("\"applicationStatus\" : 1")
+                && k.Contains("\"accreditationReference\" : 1")
+                && k.Contains("\"_id\" : 1")
         );
         Assert.Contains(keyDocs, k => k == "{ \"applicationReference\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"caseManagementWorkItemId\" : 1 }");

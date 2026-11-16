@@ -80,7 +80,10 @@ twice is refused as `reused_nonce`.
   example 1, 2 then 4 seconds) and a limit of a few attempts.
 - Do not retry a `400` or a `404`: the same request gets the same answer.
 - On `expired_timestamp`, correct your clock, then sign a new request.
-- Keep your call rate sensible. There is no rate limit today, but we may add a per-client one, so avoid tight polling loops.
+- On a `429` (`rate_limited`), wait for the number of seconds in `Retry-After`, then sign a new
+  request. On a `503` (`query_timeout`), retry after a short delay, with a narrower search if you can.
+- Keep your call rate sensible, and avoid tight polling loops: each client has a request limit (see
+  Endpoints).
 
 ## Endpoints
 
@@ -89,7 +92,7 @@ Accreditations for 2027 onwards are served.
 
 | Route | Returns |
 | --- | --- |
-| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100). `year`, `organisationNumber` and `registrationNumber` are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404 |
+| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100). `year`, `organisationNumber`, `registrationNumber` and `status` (`approved`, `suspended` or `cancelled`) are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404. Results are ordered by accreditation number |
 | `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}?includeWithdrawn=false` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20&includeWithdrawn=false` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}?includeWithdrawn=false` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
@@ -307,6 +310,16 @@ that organisation, registration and year. That covers an accreditation that is s
 application, one approved before 2027, and one that does not exist. The test data has an example of
 each.
 
+Only accreditation years from 2027 are served. A search for an earlier year (`year=2026`) is an
+empty page, even if one was granted, and getting one for an earlier year is a `404`
+(`accreditation_not_found`). Only `approved` accreditations are served today, so a search with
+`status=suspended` or `status=cancelled` is valid and finds none.
+
+**Limits.** Each client may make 600 requests a minute; past that, a request is answered `429`
+(`rate_limited`) with a `Retry-After` in seconds. A query the database stops for taking too long is
+answered `503` (`query_timeout`). Searching by `organisationNumber` is fast; a search across all
+organisations takes longer as the data grows, so narrow it when you can.
+
 ## Errors
 
 Errors are `application/problem+json` with `status`, `detail`, a stable `code` and a `traceId`
@@ -320,10 +333,14 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 | 401 | `expired_timestamp` | timestamp more than 5 minutes from our clock |
 | 401 | `invalid_signature` | wrong secret, or payload signed differently |
 | 401 | `reused_nonce` | this nonce was already used |
+| 403 | `forbidden` | the client is known but not allowed to make this request |
 | 404 | `accreditation_not_found` | no granted accreditation for that organisation, registration and year |
 | 404 | `overseas_site_not_found` | no such overseas site on the accreditation |
-| 400 | `invalid_organisation_number`, `invalid_registration_number`, `invalid_year`, `invalid_ors_id`, `invalid_paging`, `invalid_include_withdrawn` | bad input |
-| 405 | | any method other than GET |
+| 404 | `not_found` | no such route |
+| 400 | `invalid_organisation_number`, `invalid_registration_number`, `invalid_year`, `invalid_ors_id`, `invalid_paging`, `invalid_include_withdrawn`, `invalid_status` | bad input |
+| 405 | `method_not_allowed` | any method other than GET |
+| 429 | `rate_limited` | too many requests: wait for the `Retry-After` seconds |
+| 503 | `query_timeout` | the database stopped a query for taking too long: retry, with a narrower search if you can |
 
 401 troubleshooting: check clock skew first, then that the payload has exactly two empty lines
 and no trailing newline, then that you use the secret for this client and environment.
@@ -357,6 +374,16 @@ first, and the notice period is agreed with each consumer.
 Contact. Contact the Reg-Acc team if a change would be a problem for you.
 
 ## What's new
+
+- `GET /v1/accreditations` can be filtered by `status`. Only `approved` is served today, so
+  `suspended` and `cancelled` return an empty page until they can be sent. Results are in a stable
+  order (accreditation number), and the search is indexed.
+- A request limit for each client (`429`, `rate_limited`, with `Retry-After`) and a time limit on
+  queries (`503`, `query_timeout`).
+- Every error from `/v1`, including an unknown route (`404`, `not_found`) and a method other than
+  GET (`405`, `method_not_allowed`), is `application/problem+json` with a `code` and a `traceId`.
+- A search for a year before 2027 is an empty page, and getting one is a `404`. This is now
+  documented.
 
 - `GET /v1/accreditations` can be filtered by `organisationNumber` and `registrationNumber` as well
   as `year`. The filters combine with AND.

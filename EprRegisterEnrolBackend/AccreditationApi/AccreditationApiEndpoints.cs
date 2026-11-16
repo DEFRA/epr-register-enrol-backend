@@ -22,11 +22,17 @@ public static partial class AccreditationApiEndpoints
     private const int MaxLimit = 100;
     private const int MinSearchYear = 2000;
 
+    // The statuses an accreditation can have. Only approved is served until case management can send
+    // the others, but asking for them is valid, and finds none.
+    private static readonly string[] SearchStatuses = ["approved", "suspended", "cancelled"];
+
     public static void UseAccreditationApiEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup(string.Empty)
             .RequireAuthorization(ServiceClientPolicies.Read)
             .AddEndpointFilter<ServiceClientAccessLogFilter>()
+            .AddEndpointFilter<ServiceClientRateLimitFilter>()
+            .AddEndpointFilter<ServiceClientQueryTimeoutFilter>()
             .WithTags("Service clients");
 
         group.MapGet("/v1/accreditations", SearchAccreditations).WithName("SearchAccreditations");
@@ -111,12 +117,27 @@ public static partial class AccreditationApiEndpoints
             }
         }
 
+        string? status = null;
+        if (query.TryGetValue("status", out var statusValue))
+        {
+            status = statusValue.ToString();
+            if (!SearchStatuses.Contains(status, StringComparer.Ordinal))
+            {
+                return new ServiceProblemResult(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_status",
+                    $"status must be one of {string.Join(", ", SearchStatuses)}."
+                );
+            }
+        }
+
         var now = DateTimeOffset.UtcNow;
         var (items, total) = await persistence.SearchGrantedAccreditationsAsync(
-            new GrantedAccreditationFilter(year, organisationNumber, registrationNumber),
+            new GrantedAccreditationFilter(year, organisationNumber, registrationNumber, status),
             config.Value.FirstAccreditationYear,
             (paging.PageNumber - 1) * paging.Limit,
-            paging.Limit
+            paging.Limit,
+            QueryTimeout(config.Value)
         );
 
         return Results.Ok(
@@ -276,6 +297,9 @@ public static partial class AccreditationApiEndpoints
             );
     }
 
+    private static TimeSpan? QueryTimeout(ServiceClientsConfig config) =>
+        config.QueryTimeoutSeconds > 0 ? TimeSpan.FromSeconds(config.QueryTimeoutSeconds) : null;
+
     private sealed record Withdrawn(bool Include, IResult? Problem);
 
     private static Withdrawn ParseIncludeWithdrawn(string? value)
@@ -348,7 +372,8 @@ public static partial class AccreditationApiEndpoints
             orgId,
             registrationNumber,
             accreditationYear,
-            config.Value.FirstAccreditationYear
+            config.Value.FirstAccreditationYear,
+            QueryTimeout(config.Value)
         );
 
         return application is null
