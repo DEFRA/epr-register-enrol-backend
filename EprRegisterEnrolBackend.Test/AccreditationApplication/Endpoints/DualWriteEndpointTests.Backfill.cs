@@ -142,8 +142,8 @@ public sealed partial class DualWriteEndpointTests
         var response = await GetByIdAsync(application);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await _reEx.DidNotReceiveWithAnyArgs().GetNationAsync(default!, default!, default);
-        await _reEx.DidNotReceiveWithAnyArgs().GetOrganisationNumberAsync(default!, default);
+        await _reEx.DidNotReceiveWithAnyArgs().GetNationAsync(default!, default!, Ct);
+        await _reEx.DidNotReceiveWithAnyArgs().GetOrganisationNumberAsync(default!, Ct);
         Assert.Equal(legacy.Version, (await LegacyAsync(application))!.Version);
         Assert.Equal(registration.Version, (await RegistrationOfAsync(application)).Version);
         Assert.Equal(entity.Version, (await CurrentApplicationAsync(application))!.Version);

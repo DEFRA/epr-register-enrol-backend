@@ -517,7 +517,10 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal("reex-accreditation", details.SourceReExAccreditationId);
         Assert.Equal(2026, details.SeedDataSourceYear);
         Assert.Equal(2026, details.LastYearsAccreditationNumber?.Year);
-        Assert.Equal("A26ER5000270063WO", details.LastYearsAccreditationNumber?.AccreditationNumber);
+        Assert.Equal(
+            "A26ER5000270063WO",
+            details.LastYearsAccreditationNumber?.AccreditationNumber
+        );
         Assert.Equal(["A26OLD"], details.PreviousReservedAccreditationNumbers);
     }
 
@@ -881,6 +884,36 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         var next = LegacySiteMapper.WithDetailsOf(current, ApprovedSite("2025-01-01T00:00:00Z"));
 
         Assert.Equal(earliest, next.FirstApprovedAt);
+    }
+
+    // The sync rebuilds the ORS from the application's copy of the site; ReEx's validFrom string goes with its date.
+    [Fact]
+    public void WithDetailsOf_KeepsReExsValidFromAsReceived()
+    {
+        var current = new OverseasSiteEntity();
+        current.RecordFirstApproval(
+            new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            FirstApprovalSource.ReEx,
+            "2026-01-01"
+        );
+
+        var next = LegacySiteMapper.WithDetailsOf(current, ApprovedSite("2025-01-01T00:00:00Z"));
+
+        Assert.Equal("2026-01-01", next.ReExValidFrom);
+    }
+
+    // A date approved here has no ReEx string.
+    [Fact]
+    public void RecordFirstApproval_ApprovedHere_HasNoReExValidFrom()
+    {
+        var site = new OverseasSiteEntity();
+
+        site.RecordFirstApproval(
+            new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            FirstApprovalSource.ThisService
+        );
+
+        Assert.Null(site.ReExValidFrom);
     }
 
     [Fact]
