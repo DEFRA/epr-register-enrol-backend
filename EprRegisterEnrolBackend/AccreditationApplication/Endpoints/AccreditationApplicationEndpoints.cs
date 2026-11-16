@@ -1093,25 +1093,99 @@ public static class AccreditationApplicationEndpoints
         return Results.Ok(applications);
     }
 
+    // Bundles GetById's DI services under one [AsParameters] argument so the handler stays under Sonar's
+    // 7-parameter limit (S107) - same reasoning, and the same positional-record shape, as SeedServices above.
+    private sealed record GetByIdServices(
+        IAccreditationApplicationPersistence Persistence,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IReExApiAdapter ReExAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        IApplicationReader Reader,
+        ILoggerFactory LoggerFactory
+    );
+
     private static async Task<IResult> GetById(
         string organisationId,
         string applicationId,
-        IAccreditationApplicationPersistence persistence,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        IReExApiAdapter reExAdapter,
-        IDualWriteUnitOfWork unitOfWork,
-        IApplicationReader reader,
-        ILoggerFactory loggerFactory,
+        [AsParameters] GetByIdServices services,
         CancellationToken cancellationToken
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
 
+        application = await BackfillFromReExAsync(
+            application,
+            organisationId,
+            applicationId,
+            services,
+            cancellationToken
+        );
+
+        // The backfills work on the legacy document (the one that is saved); the response comes from
+        // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
+        // and UpdatedAt from legacy.
+        var served = await services.Reader.ServeFromSourceAsync(application, cancellationToken);
+        if (served is null)
+        {
+            return Results.NotFound();
+        }
+
+        await AddNotificationStatusAsync(served, applicationId, services, cancellationToken);
+
+        return Results.Ok(served);
+    }
+
+    // RA-503 (OrgId) and RA-526 (Nation) backfills for GetById. Write goes through the dual-write unit of work so the
+    // model's Organisation and Registration get the values too (RA-705); a failed or lost write still answers the
+    // read, with what is stored.
+    private static async Task<AccreditationApplicationModel> BackfillFromReExAsync(
+        AccreditationApplicationModel application,
+        string organisationId,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
         var originalOrgId = application.OrgId;
         var originalNation = application.Nation;
-        var needsUpdate = false;
+
+        var resolved = await ResolveMissingFromReExAsync(
+            application,
+            organisationId,
+            services.ReExAdapter,
+            cancellationToken
+        );
+        if (!resolved)
+        {
+            return application;
+        }
+
+        var saved = await TrySaveBackfillAsync(application, applicationId, services, cancellationToken);
+        if (saved is not null)
+        {
+            return saved;
+        }
+
+        services
+            .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+            .LogWarning("Failed to persist backfilled data for applicationId={ApplicationId}", applicationId);
+
+        application.OrgId = originalOrgId;
+        application.Nation = originalNation;
+        return application;
+    }
+
+    // True when something was resolved and set on the application.
+    private static async Task<bool> ResolveMissingFromReExAsync(
+        AccreditationApplicationModel application,
+        string organisationId,
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
+    )
+    {
+        var resolved = false;
 
         // RA-503: backfill OrgId (ReEx's numeric organisation number) for any application read
         // before Submit's own resolution ran - older applications, or ones that never reached
@@ -1121,15 +1195,11 @@ public static class AccreditationApplicationEndpoints
         // permanently caching a miss.
         if (application.OrgId is null)
         {
-            var orgNumber = await ResolveOrgNumberFromReExAsync(
-                organisationId,
-                reExAdapter,
-                cancellationToken
-            );
+            var orgNumber = await ResolveOrgNumberFromReExAsync(organisationId, reExAdapter, cancellationToken);
             if (orgNumber is not null)
             {
                 application.OrgId = orgNumber;
-                needsUpdate = true;
+                resolved = true;
             }
         }
 
@@ -1150,83 +1220,72 @@ public static class AccreditationApplicationEndpoints
             if (nationResult.IsSuccess)
             {
                 application.Nation = nationResult.Value;
-                needsUpdate = true;
+                resolved = true;
             }
         }
 
-        // Write goes through the dual-write unit of work so the model's Organisation and Registration get the values
-        // too (RA-705); a failed or lost write still answers the read, with what is stored.
-        if (needsUpdate)
+        return resolved;
+    }
+
+    // The saved document, or null when the save failed or was lost. The box carries the saved document out of the
+    // unit of work's callback.
+    private static async Task<AccreditationApplicationModel?> TrySaveBackfillAsync(
+        AccreditationApplicationModel application,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        var savedBox = new StrongBox<AccreditationApplicationModel?>();
+        var result = await services.UnitOfWork.InTransactionAsync(
+            applicationId,
+            async session =>
+            {
+                savedBox.Value = await services.Persistence.UpdateAsync(application, session);
+                return Results.Ok();
+            },
+            cancellationToken
+        );
+
+        return result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 } ? savedBox.Value : null;
+    }
+
+    // Skip the round-trip entirely when there is nothing to look up (e.g. older
+    // applications submitted before the work-item id was persisted, or applications
+    // never submitted at all). Defence in depth otherwise: GetNotificationStatusAsync
+    // already guarantees it never throws, but this lookup must never be able to fail
+    // the response regardless of adapter implementation (RA102-j7s).
+    private static async Task AddNotificationStatusAsync(
+        AccreditationApplicationModel application,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        if (application.CaseManagementWorkItemId is null)
         {
-            AccreditationApplicationModel? saved = null;
-            var result = await unitOfWork.InTransactionAsync(
-                applicationId,
-                async session =>
-                {
-                    saved = await persistence.UpdateAsync(application, session);
-                    return Results.Ok();
-                },
+            return;
+        }
+
+        try
+        {
+            var notificationStatus = await services.CaseWorkingAdapter.GetNotificationStatusAsync(
+                application,
                 cancellationToken
             );
-
-            if (saved is not null && result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 })
-            {
-                application = saved;
-            }
-            else
-            {
-                loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
-                    .LogWarning(
-                        "Failed to persist backfilled data for applicationId={ApplicationId}",
-                        applicationId
-                    );
-
-                application.OrgId = originalOrgId;
-                application.Nation = originalNation;
-            }
+            application.NotificationStatus = notificationStatus.NotificationStatus;
+            application.DueDate = notificationStatus.SlaDueDate;
         }
-
-        // The backfills work on the legacy document (the one that is saved); the response comes from
-        // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
-        // and UpdatedAt from legacy.
-        var served = await reader.ServeFromSourceAsync(application, cancellationToken);
-        if (served is null)
+        catch (Exception ex)
         {
-            return Results.NotFound();
-        }
-
-        application = served;
-
-        // Skip the round-trip entirely when there is nothing to look up (e.g. older
-        // applications submitted before the work-item id was persisted, or applications
-        // never submitted at all). Defence in depth otherwise: GetNotificationStatusAsync
-        // already guarantees it never throws, but this lookup must never be able to fail
-        // the response regardless of adapter implementation (RA102-j7s).
-        if (application.CaseManagementWorkItemId is not null)
-        {
-            try
-            {
-                var notificationStatus = await caseWorkingAdapter.GetNotificationStatusAsync(
-                    application,
-                    cancellationToken
+            services
+                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LogWarning(
+                    ex,
+                    "Failed to resolve notification status for applicationId={ApplicationId}",
+                    applicationId
                 );
-                application.NotificationStatus = notificationStatus.NotificationStatus;
-                application.DueDate = notificationStatus.SlaDueDate;
-            }
-            catch (Exception ex)
-            {
-                loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
-                    .LogWarning(
-                        ex,
-                        "Failed to resolve notification status for applicationId={ApplicationId}",
-                        applicationId
-                    );
-            }
         }
-
-        return Results.Ok(application);
     }
 
     private static Task<IResult> PatchPrns(

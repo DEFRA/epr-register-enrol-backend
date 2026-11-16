@@ -9,6 +9,7 @@
 //   E must be 0 (every legacy application carries the waste processing type the model will serve).
 
 const TAG = "QA-RA705"; // the fixture script's marker; ignored here
+const SAMPLE_SIZE = 5; // example ids listed per status
 // ObjectIds print as hex. mongosh hands back ObjectId objects; the repo's test shim (Jint) hands back {$oid}.
 const hex = (id) => (typeof id.toHexString === "function" ? id.toHexString() : id.$oid);
 const legacy = db.getCollection("accreditationApplications");
@@ -50,7 +51,7 @@ printjson(
           sampleIds: { $push: "$_id" },
         },
       },
-      { $project: { n: 1, sampleIds: { $slice: ["$sampleIds", 5] } } },
+      { $project: { n: 1, sampleIds: { $slice: ["$sampleIds", SAMPLE_SIZE] } } },
     ])
     .toArray(),
 );
