@@ -14,7 +14,7 @@ run, and none exists. This is why the soak comes first.
 
 There is no code check for the soak (decided 2026-11-15). Before the cut, confirm and record:
 
-- reads have come from the model (`ReadFromModel` on) for the agreed soak period;
+- reads have come from the model (`ReadFromModel` on) for a soak of at least 4 weeks (design doc, phase 6 row and B14);
 - reconciliation has stayed at zero diffs for that period;
 - the owners have acknowledged that rollback is lost after the cut.
 

@@ -394,6 +394,33 @@ public sealed class ApplicationVersionsTests : IDisposable
             .Should()
             .Contain("reservedAccreditationNumber_current");
 
+    // The accreditation-number lookup ORs the reserved number with the accreditations holding it; each branch needs
+    // its own index, or the $or scans the collection.
+    [Fact]
+    public async Task FindCurrent_ByAccreditationNumberLookup_UsesAnIndexForEachBranch() =>
+        (
+            await WinningIndexesAsync(
+                new BsonDocument
+                {
+                    {
+                        "$or",
+                        new BsonArray
+                        {
+                            new BsonDocument("details.reservedAccreditationNumber", "A27EX1234567P"),
+                            new BsonDocument(
+                                "details.accreditationId",
+                                new BsonDocument("$in", new BsonArray { ObjectId.GenerateNewId() })
+                            ),
+                        }
+                    },
+                    { "isCurrent", true },
+                }
+            )
+        )
+            .Should()
+            .Contain("reservedAccreditationNumber_current")
+            .And.Contain("accreditationId_current");
+
     private static IEnumerable<string> IndexNames(BsonValue stage) =>
         stage switch
         {

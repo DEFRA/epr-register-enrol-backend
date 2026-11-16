@@ -30,12 +30,48 @@ public static class DomainModelServiceCollectionExtensions
         const string NoCollections = "without it there are no collections to write to.";
         const string GoesStale = "without it a migrated application goes stale.";
         const string ReadsFrozenLegacy = "it reads legacy, which is frozen after the cut.";
-        Require(config.DualWriteSeed, "DualWriteSeed", config.ExpandEnabled, "ExpandEnabled", NoCollections);
-        Require(config.DualWrite, "DualWrite", config.ExpandEnabled, "ExpandEnabled", NoCollections);
-        Require(config.MigrateEnabled, "MigrateEnabled", config.DualWrite, "DualWrite", GoesStale);
-        Require(config.ReconcileEnabled, "ReconcileEnabled", config.DualWrite, "DualWrite", GoesStale);
-        Require(config.MigrateEnabled, "MigrateEnabled", config.LegacyWrites, "LegacyWrites", ReadsFrozenLegacy);
-        Require(config.ReconcileEnabled, "ReconcileEnabled", config.LegacyWrites, "LegacyWrites", ReadsFrozenLegacy);
+        Require(
+            config.DualWriteSeed,
+            nameof(DomainModelConfig.DualWriteSeed),
+            config.ExpandEnabled,
+            nameof(DomainModelConfig.ExpandEnabled),
+            NoCollections
+        );
+        Require(
+            config.DualWrite,
+            nameof(DomainModelConfig.DualWrite),
+            config.ExpandEnabled,
+            nameof(DomainModelConfig.ExpandEnabled),
+            NoCollections
+        );
+        Require(
+            config.MigrateEnabled,
+            nameof(DomainModelConfig.MigrateEnabled),
+            config.DualWrite,
+            nameof(DomainModelConfig.DualWrite),
+            GoesStale
+        );
+        Require(
+            config.ReconcileEnabled,
+            nameof(DomainModelConfig.ReconcileEnabled),
+            config.DualWrite,
+            nameof(DomainModelConfig.DualWrite),
+            GoesStale
+        );
+        Require(
+            config.MigrateEnabled,
+            nameof(DomainModelConfig.MigrateEnabled),
+            config.LegacyWrites,
+            nameof(DomainModelConfig.LegacyWrites),
+            ReadsFrozenLegacy
+        );
+        Require(
+            config.ReconcileEnabled,
+            nameof(DomainModelConfig.ReconcileEnabled),
+            config.LegacyWrites,
+            nameof(DomainModelConfig.LegacyWrites),
+            ReadsFrozenLegacy
+        );
 
         services.Configure<DomainModelConfig>(section);
         services.AddHostedService<DomainModelDiagnosticsService>();
@@ -155,7 +191,7 @@ public static class DomainModelServiceCollectionExtensions
     {
         if (!enabled)
         {
-            services.AddSingleton<IApplicationReader, PersistenceApplicationReader>();
+            services.AddSingleton<IApplicationReader, LegacyApplicationReader>();
             return;
         }
 
@@ -185,9 +221,9 @@ public static class DomainModelServiceCollectionExtensions
                 ModelBackedApplicationPersistence
             >()
         );
-        // The persistence now projects from the model itself, so reads serve it as it is.
+        // The persistence now projects from the model itself; write responses are read back from it after the commit.
         services.Replace(
-            ServiceDescriptor.Singleton<IApplicationReader, PersistenceApplicationReader>()
+            ServiceDescriptor.Singleton<IApplicationReader, CutApplicationReader>()
         );
     }
 

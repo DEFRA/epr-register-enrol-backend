@@ -77,7 +77,16 @@ public class ApplicationVersionPersistence(
         indexes.Add(
             VersionedIndexes.Current(
                 "reservedAccreditationNumber_current",
-                Builders<ApplicationEntity>.IndexKeys.Ascending(ApplicationFields.ReservedAccreditationNumber)
+                Builders<ApplicationEntity>.IndexKeys.Ascending(
+                    ApplicationFields.ReservedAccreditationNumber
+                )
+            )
+        );
+        // RA-706: the other branch of the accreditation-number lookup (the applications holding an accreditation).
+        indexes.Add(
+            VersionedIndexes.Current(
+                "accreditationId_current",
+                Builders<ApplicationEntity>.IndexKeys.Ascending(ApplicationFields.AccreditationId)
             )
         );
         return indexes;

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
@@ -107,6 +108,31 @@ public sealed partial class DualWriteEndpointTests
             .EnumerateArray()
             .Single(s => s.GetProperty("siteId").GetInt32() == 2);
         Assert.Equal("Renamed", site.GetProperty("siteName").GetString());
+    }
+
+    // After the cut the model is the only copy, so a write's response is read back from it once the unit of work has
+    // committed: the same content, version and updatedAt the next read serves, not the handler's working copy.
+    [Theory]
+    [InlineData("patch-sites")]
+    [InlineData("accreditation-number")]
+    public async Task Cut_WriteResponse_IsWhatTheNextReadServes(string route)
+    {
+        var application = await MigratedEveryRouteWritableAsync();
+        var (cutFactory, cutClient) = Alongside(s_cut);
+        using var _ = cutFactory;
+        using var __ = cutClient;
+
+        var written = await WriteAsync(application, route, cutClient);
+        Assert.True(written.IsSuccessStatusCode, $"{route}: {written.StatusCode}");
+        var response = ToMilliseconds(await NodeAsync(written));
+        var next = ToMilliseconds(
+            await NodeAsync(await GetAsync(cutClient, ByIdPath(application)))
+        );
+
+        Assert.True(
+            JsonNode.DeepEquals(next, response),
+            $"{route}: the response {response} is not the next read {next}"
+        );
     }
 
     // The cut finds every live application already in the model; a no-op unit of work on the dual-write host migrates

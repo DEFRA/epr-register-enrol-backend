@@ -24,7 +24,8 @@
   `updatedAt` is the current version's `validFrom`. A current version the backfill missed serves its `validFrom` as
   `createdAt` (the legacy shape needs a time) and logs a warning naming the application, since that moves it in the
   GET list's order; readiness check A lists such applications before the cut. After the cut the reader serves the
-  model-backed persistence as it is, rather than projecting each application a second time.
+  model-backed persistence's reads as they are, and reads a write's response back from the model once the write has
+  committed, so the response carries the model's content, `version` and `updatedAt`, as the next read does.
 - **Startup refuses `LegacyWrites` off** without `ReadFromModel`, `DualWrite`, `DualWriteSeed` and `ExpandEnabled`, in
   every environment including Development; while `FeatureFlags:InYearChangesEnabled` is on (in-year reads still come
   from legacy and move to the model with the in-year work); and while `MigrateEnabled` or `ReconcileEnabled` is on (both
@@ -39,9 +40,11 @@
   back on makes those tests fail. Seed after the cut writes the same model as before it and no legacy document. The cut
   readiness checks (`tools/domain-model/cut-readiness-checks.js`, with their fixture test and acceptance criteria) run
   in CI under Jint against Mongo.
-- **Lookups use the indexes the model already has.** The organisation's list narrows on `reExOrganisationId`
-  (`reExOrganisationId_current`, which also holds `applicationType`) and orders by `createdAt` in memory: an
-  organisation holds a handful of applications, so a `createdAt` index would add a write cost for no read gain.
+- **Lookups are narrowed by current-version indexes on `applicationVersions`:** `reExOrganisationId_current` and
+  `reExRegistrationId_current` (each with `applicationType`), `caseManagementWorkItemId_current`, and, for the
+  accreditation-number lookup, one per branch of its `$or`: `reservedAccreditationNumber_current` and
+  `accreditationId_current`. The organisation's list orders by `createdAt` in memory: an organisation holds a handful
+  of applications, so a `createdAt` index would add a write cost for no read gain.
 - **Follow-up before going live:** model-backed reads project each application separately, and the unfiltered API
   search projects every approved application; both need batching.
 

@@ -69,16 +69,16 @@ public sealed partial class DualWriteEndpointTests
         Assert.IsType<ModelBackedApplicationPersistence>(persistence);
     }
 
-    // After the cut the persistence already projects from the model, so the reader serves what it returns as it is;
-    // projecting it a second time, with "legacy" metadata that is itself the model's, would only cost a read.
+    // After the cut the persistence already projects from the model, so reads serve it as it is (projecting it a
+    // second time would only cost a read), and a write's response is read back from it once the write has committed.
     [Fact]
-    public void LegacyWritesOff_ReadsServeThePersistenceAsItIs()
+    public void LegacyWritesOff_ReadsComeFromTheCutReader()
     {
         var (factory, client) = Start(s_cut);
         using var _ = factory;
         using var __ = client;
 
-        Assert.IsType<PersistenceApplicationReader>(
+        Assert.IsType<CutApplicationReader>(
             factory.Services.GetRequiredService<IApplicationReader>()
         );
     }

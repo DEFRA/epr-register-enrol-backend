@@ -8,7 +8,7 @@ namespace EprRegisterEnrolBackend.DomainModel.ReadModel;
 /// <summary>
 /// RA-705: between the read switch and the cut, serves the domain model's projection in the legacy shape, except
 /// Version, CreatedAt and UpdatedAt, which are copied from the legacy document. After the cut
-/// <see cref="PersistenceApplicationReader"/> replaces it. An application missing from the model is null (404),
+/// <see cref="CutApplicationReader"/> replaces it. An application missing from the model is null (404),
 /// with no fallback to legacy.
 /// </summary>
 public sealed class ModelApplicationReader(

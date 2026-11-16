@@ -8,10 +8,10 @@ using NSubstitute;
 namespace EprRegisterEnrolBackend.Test.DomainModel.ReadModel;
 
 /// <summary>
-/// RA-705: with <c>DomainModel:ReadFromModel</c> off, the routes read through <see cref="PersistenceApplicationReader"/>,
+/// RA-705: with <c>DomainModel:ReadFromModel</c> off, the routes read through <see cref="LegacyApplicationReader"/>,
 /// which must behave exactly as the persistence calls the routes made before the seam.
 /// </summary>
-public sealed class PersistenceApplicationReaderTests
+public sealed class LegacyApplicationReaderTests
 {
     private const string OrganisationId = "6512a0f0c0ffee0000000001";
 
@@ -36,7 +36,7 @@ public sealed class PersistenceApplicationReaderTests
         var id = application.Id!.Value.ToString();
         _persistence.GetByIdAsync(OrganisationId, id).Returns(application);
 
-        var read = await new PersistenceApplicationReader(_persistence).GetByIdAsync(
+        var read = await new LegacyApplicationReader(_persistence).GetByIdAsync(
             OrganisationId,
             id,
             Ct
@@ -48,7 +48,7 @@ public sealed class PersistenceApplicationReaderTests
     [Fact]
     public async Task GetById_Unknown_ReturnsNull()
     {
-        var read = await new PersistenceApplicationReader(_persistence).GetByIdAsync(
+        var read = await new LegacyApplicationReader(_persistence).GetByIdAsync(
             OrganisationId,
             ObjectId.GenerateNewId().ToString(),
             Ct
@@ -64,7 +64,7 @@ public sealed class PersistenceApplicationReaderTests
         var older = Application();
         _persistence.GetByOrganisationAsync(OrganisationId).Returns([newer, older]);
 
-        var list = await new PersistenceApplicationReader(_persistence).GetByOrganisationAsync(
+        var list = await new LegacyApplicationReader(_persistence).GetByOrganisationAsync(
             OrganisationId,
             Ct
         );
@@ -77,7 +77,7 @@ public sealed class PersistenceApplicationReaderTests
     {
         var application = Application();
 
-        var served = await new PersistenceApplicationReader(_persistence).ServeFromSourceAsync(application, Ct);
+        var served = await new LegacyApplicationReader(_persistence).ServeFromSourceAsync(application, Ct);
 
         served.Should().BeSameAs(application);
         await _persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default!, default!);
@@ -89,7 +89,7 @@ public sealed class PersistenceApplicationReaderTests
         var first = Application();
         var second = Application();
 
-        var served = await new PersistenceApplicationReader(_persistence).ServeManyFromSourceAsync(
+        var served = await new LegacyApplicationReader(_persistence).ServeManyFromSourceAsync(
             [first, second],
             Ct
         );
@@ -105,7 +105,7 @@ public sealed class PersistenceApplicationReaderTests
         await cancelled.CancelAsync();
 
         var act = () =>
-            new PersistenceApplicationReader(_persistence).GetByIdAsync(
+            new LegacyApplicationReader(_persistence).GetByIdAsync(
                 OrganisationId,
                 ObjectId.GenerateNewId().ToString(),
                 cancelled.Token
@@ -121,7 +121,7 @@ public sealed class PersistenceApplicationReaderTests
         await cancelled.CancelAsync();
 
         var act = () =>
-            new PersistenceApplicationReader(_persistence).GetByOrganisationAsync(
+            new LegacyApplicationReader(_persistence).GetByOrganisationAsync(
                 OrganisationId,
                 cancelled.Token
             );
