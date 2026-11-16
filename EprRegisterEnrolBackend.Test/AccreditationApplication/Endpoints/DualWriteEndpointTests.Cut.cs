@@ -1,6 +1,9 @@
+using System.Net;
 using System.Net.Http.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
@@ -153,5 +156,57 @@ public sealed partial class DualWriteEndpointTests
         Assert.Equal(legacyBefore.Version, legacy.Version);
         Assert.Equal(legacyBefore.UpdatedAt, legacy.UpdatedAt, TimeSpan.FromMilliseconds(1));
         Assert.Equal(0, await StagedCopiesAsync());
+    }
+
+    // Seed after the cut leaves the model as seed did before it (see
+    // Seed_DualWriteSeedOn_WritesTheEntitiesAndTheInitialApplicationVersionOverHttp), and writes no legacy document.
+    [Fact]
+    public async Task Cut_Seed_WritesTheSameModelAsBeforeTheCutAndNoLegacy()
+    {
+        Restart(s_cut);
+        ReExHoldsTheRegistration();
+
+        var created = await SeededApplicationAsync(await SeedAsync());
+
+        var registration = (await CurrentRegistrationAsync())!;
+        Assert.Equal("R26ER5000270001ST", registration.RegistrationNumber);
+        Assert.Equal(Nation.England, registration.Nation);
+        Assert.Equal("2 Mill Rd, Leeds", registration.Site!.FormattedAddress);
+        Assert.Equal(["EPR/AB1234"], registration.PermitNumbers);
+        var ors = Assert.Single(await SeededSitesAsync());
+        Assert.Equal("001", ors.OrsId);
+        Assert.Equal(registration.EntityId, ors.RegistrationId);
+        var entity = (await CurrentApplicationAsync(created))!;
+        Assert.Equal(1, entity.Version);
+        Assert.Equal(registration.EntityId, entity.RegistrationId);
+        Assert.Equal(
+            ors.EntityId,
+            Assert.Single(entity.AsAccreditation().ApplicationOverseasSites).OverseasSiteId
+        );
+        Assert.Equal(2027, created.Year);
+        Assert.Equal(0, await CountAsync(DomainModelCollections.LegacyApplications));
+        Assert.Equal(0, await StagedCopiesAsync());
+    }
+
+    [Fact]
+    public async Task Cut_FirstWriteAfterTheSeed_VersionsTheSeedsApplicationOnItsRegistration()
+    {
+        Restart(s_cut);
+        ReExHoldsTheRegistration();
+        var created = await SeededApplicationAsync(await SeedAsync());
+        var registration = (await CurrentRegistrationAsync())!;
+
+        var response = await _client.PatchAsJsonAsync(
+            AppUrl(created, "business-plan"),
+            new { newInfrastructurePercent = 10, newInfrastructureDetail = "A new baler" },
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var entity = (await CurrentApplicationAsync(created))!;
+        Assert.Equal(2, entity.Version);
+        Assert.Equal(registration.EntityId, entity.RegistrationId);
+        Assert.Equal(registration.EntityId, (await CurrentRegistrationAsync())!.EntityId);
+        Assert.Equal(0, await CountAsync(DomainModelCollections.LegacyApplications));
     }
 }
