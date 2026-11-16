@@ -24,6 +24,32 @@ public class AccreditationReferenceDerivationTests
     }
 
     [Fact]
+    public void Derive_LastYearsAccreditationNumberSource_ReplacesYearOnly()
+    {
+        var result = AccreditationReferenceDerivation.Derive(
+            "A26ER0001230042PL",
+            AccreditationReferenceSourceKind.LastYearsAccreditationNumber,
+            2027
+        );
+
+        result.IsValid.Should().BeTrue();
+        result.Reference.Should().Be("A27ER0001230042PL");
+    }
+
+    [Fact]
+    public void Derive_LastYearsAccreditationNumberSource_RejectsARegistrationReference()
+    {
+        var result = AccreditationReferenceDerivation.Derive(
+            "R26ER0001230042PL",
+            AccreditationReferenceSourceKind.LastYearsAccreditationNumber,
+            2027
+        );
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("last year's accreditation number");
+    }
+
+    [Fact]
     public void Derive_RegistrationSource_ChangesLeadingRToAAndReplacesYear()
     {
         var result = AccreditationReferenceDerivation.Derive(

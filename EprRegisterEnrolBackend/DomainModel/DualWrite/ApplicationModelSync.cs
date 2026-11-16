@@ -110,6 +110,89 @@ public sealed class ApplicationModelSync(
             session,
             cancellationToken
         );
+        await AddLastYearsAccreditationNumberAsync(
+            current.RegistrationId,
+            legacy.LastYearsAccreditationNumber,
+            applicationId,
+            session,
+            cancellationToken
+        );
+    }
+
+    // RA-763: the seed and the migrator put last year's accreditation number on the Registration, but a number that
+    // reaches the legacy application after it was migrated (such as the RA-763 backfill, if it were applied while
+    // DualWrite was off after migration) would otherwise stop at the Application. A year the Registration has no
+    // number for takes the application's; a year it holds keeps its own, as in the migrator, and a different number
+    // is recorded once as an AccreditationNumberDiffers conflict.
+    private async Task AddLastYearsAccreditationNumberAsync(
+        ObjectId? registrationId,
+        AccreditationNumberForYearModel? lastYears,
+        ObjectId applicationId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
+    )
+    {
+        if (registrationId is not { } id || lastYears is null)
+        {
+            return;
+        }
+
+        var registration = await stores.Registrations.Versions.FindCurrentAsync(
+            Builders<RegistrationEntity>.Filter.Eq(r => r.EntityId, id),
+            session,
+            cancellationToken
+        );
+        if (registration is null)
+        {
+            return;
+        }
+
+        var held = registration.AccreditationNumbers.Count;
+        var differs = registration.SetAccreditationNumber(
+            lastYears.Year,
+            lastYears.AccreditationNumber,
+            HeldAccreditationNumber.Keep
+        );
+        if (registration.AccreditationNumbers.Count > held)
+        {
+            await stores.Registrations.Versions.UpdateAsync(
+                registration,
+                registration.Version,
+                new ChangeInfo
+                {
+                    Reason = ChangeReason.AccreditationNumberAdded,
+                    ApplicationId = applicationId,
+                },
+                session,
+                cancellationToken
+            );
+            return;
+        }
+
+        if (
+            !differs
+            || await stores.Conflicts.ExistsAsync(
+                MigrationConflictKind.AccreditationNumberDiffers,
+                applicationId,
+                session,
+                cancellationToken
+            )
+        )
+        {
+            return;
+        }
+
+        MigrationConflict conflict = new()
+        {
+            Id = ObjectId.GenerateNewId(),
+            Kind = MigrationConflictKind.AccreditationNumberDiffers,
+            ReExRegistrationId = registration.ReExRegistrationId ?? "",
+            RegistrationId = id,
+            ApplicationIds = [applicationId],
+            RecordedAt = clock.GetUtcNow().UtcDateTime,
+        };
+        await stores.Conflicts.InsertManyAsync([conflict], session, cancellationToken);
+        logger.LogRecorded([conflict]);
     }
 
     // B8e: a Registration takes the application's number only while it has none. An issued number is never

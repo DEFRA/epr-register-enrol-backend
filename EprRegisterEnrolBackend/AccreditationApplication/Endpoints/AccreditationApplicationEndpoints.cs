@@ -544,9 +544,13 @@ public static class AccreditationApplicationEndpoints
         if (application.AccreditationReference is not null)
             return (Results.Ok(application), null);
 
-        // A renewal keeps the latest previous accreditation reference held in this backend, so a
-        // lapsed year doesn't change it either. Without a registration id there is nothing to
-        // match previous years on, so it falls back to the registration reference.
+        // The source, in order:
+        // 1. The latest previous accreditation reference held in this backend, so a renewal of an
+        //    accreditation this service issued (2028 onwards) keeps it, even across a lapsed year.
+        //    Without a registration id there is nothing to match previous years on.
+        // 2. RA-763: last year's accreditation number, which Seed keeps from ReEx. 2026
+        //    accreditations were granted in ReEx, so this is the source for 2027 renewals.
+        // 3. The registration reference, when neither is held.
         var previous = string.IsNullOrEmpty(application.RegistrationId)
             ? null
             : await persistence.GetLatestPreviousAccreditationAsync(
@@ -556,12 +560,32 @@ public static class AccreditationApplicationEndpoints
                 application.GlassRecyclingProcess,
                 application.Year
             );
-        var (sourceKind, sourceReference) = previous is null
-            ? (AccreditationReferenceSourceKind.Registration, registrationReference)
-            : (
-                AccreditationReferenceSourceKind.PreviousAccreditation,
-                previous.AccreditationReference!
+        var lastYears = application.LastYearsAccreditationNumber;
+        // Last year's number must be for the year before. Seed always stores that, so another
+        // year means the data was changed; it fails visibly rather than falling back to the
+        // registration reference, which is how RA-763's wrong numbers were issued.
+        if (previous is null && lastYears is not null && lastYears.Year != application.Year - 1)
+            return (
+                Results.UnprocessableEntity(
+                    $"Last year's accreditation number '{lastYears.AccreditationNumber}' is for "
+                        + $"{lastYears.Year}, not {application.Year - 1}, so no accreditation "
+                        + "reference can be derived from it."
+                ),
+                null
             );
+
+        var (sourceKind, sourceReference) = (previous, lastYears) switch
+        {
+            ({ } held, _) => (
+                AccreditationReferenceSourceKind.PreviousAccreditation,
+                held.AccreditationReference!
+            ),
+            (null, { } number) => (
+                AccreditationReferenceSourceKind.LastYearsAccreditationNumber,
+                number.AccreditationNumber
+            ),
+            _ => (AccreditationReferenceSourceKind.Registration, registrationReference),
+        };
 
         var derivation = AccreditationReferenceDerivation.Derive(
             sourceReference,
@@ -569,7 +593,7 @@ public static class AccreditationApplicationEndpoints
             application.Year
         );
         // A malformed source must fail visibly rather than issue a wrong reference. A malformed
-        // previous reference deliberately does not fall back to the registration reference.
+        // accreditation number deliberately does not fall back to the registration reference.
         if (!derivation.IsValid)
             return (Results.UnprocessableEntity(derivation.Error), null);
 
@@ -1013,6 +1037,13 @@ public static class AccreditationApplicationEndpoints
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData.AccreditationId,
             SourceYear = request.Year - 1,
+            LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(priorYearData.AccreditationNumber)
+                ? null
+                : new AccreditationNumberForYearModel
+                {
+                    Year = request.Year - 1,
+                    AccreditationNumber = priorYearData.AccreditationNumber,
+                },
             OverseasSites = priorYearData.IsExporter
                 ? new AccreditationApplicationOverseasSites { Sites = priorYearData.OverseasSites }
                 : null,
