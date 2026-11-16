@@ -41,6 +41,32 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         Assert.Equal(0, await StagedCountAsync());
     }
 
+    // RA-705 decision M: the model keeps ReEx's validFrom as received. After the cut the model is the only copy, so a
+    // write must carry the string through the staged copy and the sync, not re-format it from the date.
+    [Fact]
+    public async Task Approve_ReExApprovedSite_KeepsItsValidFromAsReceived()
+    {
+        var application = NewApplication();
+        application.OverseasSites!.Sites[0].ValidFrom = "2026-01-01";
+        var migrated = await MigratedAsync(application);
+        var read = await ReadAsync(migrated);
+        // Approval rebuilds each selected site's ORS from the application's copy (B9).
+        read.ApplicationStatus = ApplicationStatus.Approved;
+        read.CaseManagementStatusUpdatedAt = Created.AddDays(1);
+        read.AccreditationReference = "A27EX1234567P";
+        foreach (var site in read.OverseasSites!.Sites)
+        {
+            site.Selected = true;
+        }
+
+        Assert.NotNull(await _model.UpdateAsync(read));
+
+        Assert.Equal(
+            "2026-01-01",
+            (await ReadAsync(migrated)).OverseasSites!.Sites.Single(s => s.SiteId == 1).ValidFrom
+        );
+    }
+
     [Fact]
     public async Task Update_WithoutASession_StaleCopy_IsRefusedAndChangesNothing()
     {

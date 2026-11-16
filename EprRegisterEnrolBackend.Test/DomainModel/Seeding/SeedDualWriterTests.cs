@@ -1,4 +1,3 @@
-using EprRegisterEnrolBackend.Utils.Mongo;
 using System.Diagnostics.Metrics;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -10,6 +9,7 @@ using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
+using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -799,6 +799,22 @@ public sealed class SeedDualWriterTests : IDisposable
         }
     }
 
+    // RA-705 (decided 2026-11-16): the ORS keeps ReEx's validFrom string as received, so the read model serves exactly
+    // what legacy holds, whichever shape ReEx sent.
+    [Fact]
+    public async Task WriteAsync_SiteWithAValidFrom_KeepsReExsStringAsReceived()
+    {
+        var reEx = ReEx();
+        reEx.OverseasSites[0].ValidFrom = "2026-01-01";
+
+        await SeedAsync(reEx);
+
+        var site = await CurrentSiteAsync("001");
+        Assert.Equal(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), site.FirstApprovedAt);
+        Assert.Equal(FirstApprovalSource.ReEx, site.FirstApprovalSource);
+        Assert.Equal("2026-01-01", site.ReExValidFrom);
+    }
+
     // RA-705: the seed writes the initial Application version through the migrator, inside the seed's own transaction.
 
     private SeedDualWriter WriterWith(IApplicationGroupMigrator migrator) =>
@@ -824,7 +840,8 @@ public sealed class SeedDualWriterTests : IDisposable
             .ToListAsync(Ct);
 
     // Runs the real migration, then fails, so anything it wrote has to be rolled back with the rest of the seed.
-    private sealed class FailsAfterMigrating(IApplicationGroupMigrator inner) : IApplicationGroupMigrator
+    private sealed class FailsAfterMigrating(IApplicationGroupMigrator inner)
+        : IApplicationGroupMigrator
     {
         public async Task<GroupMigrationResult> EnsureMigratedAsync(
             ObjectId applicationId,
@@ -843,7 +860,8 @@ public sealed class SeedDualWriterTests : IDisposable
         var reEx = ReEx();
         var seeded = await LegacyApplicationAsync(reEx);
 
-        await WriterWith(new FailsAfterMigrating(Migrator(_factory))).WriteAsync(Seed(reEx, seeded), Ct);
+        await WriterWith(new FailsAfterMigrating(Migrator(_factory)))
+            .WriteAsync(Seed(reEx, seeded), Ct);
 
         Assert.Empty(await RegistrationVersionsAsync());
         Assert.Empty(await SiteVersionsAsync());
@@ -865,7 +883,10 @@ public sealed class SeedDualWriterTests : IDisposable
 
         var version = Assert.Single(await ApplicationVersionsAsync());
         Assert.Equal(seeded.Id, version.EntityId);
-        Assert.Equal(Assert.Single(await RegistrationVersionsAsync()).EntityId, version.RegistrationId);
+        Assert.Equal(
+            Assert.Single(await RegistrationVersionsAsync()).EntityId,
+            version.RegistrationId
+        );
     }
 
     // A conflict the migration records (here a second live application for the same material and year) is stored and

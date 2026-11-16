@@ -416,10 +416,8 @@ public sealed class ModelApplicationReaderTests : IDisposable
     }
 
     // The status cases carry no sites; this one carries overseas sites, one with interim sites, so the site and
-    // interim-site shapes are in the golden set too. The sites carry no validFrom: legacy keeps ReEx's raw string
-    // ("2026-01-01", "...T00:00:00.000Z" and others), while the model holds a date and serves one form
-    // (SiteApprovalDate.Format), so with ReadFromModel on a site's validFrom string can differ from legacy's. That is a
-    // known gap, not covered here.
+    // interim-site shapes are in the golden set too. Their validFrom strings are in two of the shapes ReEx sends: the
+    // model keeps ReEx's string as received (decided 2026-11-16), so it serves exactly what legacy holds.
     [Fact]
     public async Task Golden_WithOverseasAndInterimSites_LegacyAndTheModelBothMatchTheCapturedResponse()
     {
@@ -434,6 +432,8 @@ public sealed class ModelApplicationReaderTests : IDisposable
                 GoldenSite(2, "002"),
             ],
         };
+        application.OverseasSites.Sites[0].ValidFrom = "2026-03-14T00:00:00.000Z";
+        application.OverseasSites.Sites[1].ValidFrom = "2026-01-01";
         // Every write path keeps the singular interimSite mirror in step with the list, so a real document has it.
         foreach (var site in application.OverseasSites.Sites)
         {
