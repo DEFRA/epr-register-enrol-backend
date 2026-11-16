@@ -185,6 +185,11 @@ public sealed class ApplicationReconcilerTests : IDisposable
             SourceReExAccreditationId = "6512a0f0c0ffee0000000009",
             SourceYear = year - 1,
             PreviousAccreditationNumbers = ["A26EX5005000001PL"],
+            LastYearsAccreditationNumber = new AccreditationNumberForYearModel
+            {
+                Year = year - 1,
+                AccreditationNumber = $"A{(year - 1) % 100:D2}EX5005000002PL",
+            },
             RegistrationId = ReExRegistrationId,
             RegistrationReference = "R27EX1234567P",
             WasteProcessingType = "exporter",

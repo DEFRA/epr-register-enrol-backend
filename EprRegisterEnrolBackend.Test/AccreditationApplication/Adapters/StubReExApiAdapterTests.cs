@@ -478,6 +478,64 @@ public class StubReExApiAdapterTests
         accreditation.Value!.OrganisationNumber.Should().Be(number.Value);
     }
 
+    // RA-763: like real ReEx, the accreditation's sequence differs from the registration's.
+    [Fact]
+    public async Task GetAccreditationAsync_AccreditationNumber_MatchesTheRegistrationExceptItsSequence()
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync("6a2fcd74e16883c137d01188", "reg-1", MaterialType.Plastic, 2025);
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        var registration = result.Value!.RegistrationReference!;
+        var accreditation = result.Value.AccreditationNumber!;
+        accreditation.Should().StartWith("A").And.HaveLength(registration.Length);
+        accreditation[1..11].Should().Be(registration[1..11]);
+        accreditation[15..].Should().Be(registration[15..]);
+        accreditation[11..15].Should().NotBe(registration[11..15]);
+    }
+
+    // This registration id's accreditation hash lands on its registration sequence (3312) in 2026,
+    // so the stub moves the accreditation's on by one.
+    [Fact]
+    public async Task GetAccreditationAsync_AccreditationHashMatchingTheRegistrationSequence_MovesOnByOne()
+    {
+        var result = await NewSut()
+            .GetAccreditationAsync(
+                "6a2fcd74e16883c137d01188",
+                "c52e98e23bfaeb5081bc84ff",
+                MaterialType.Plastic,
+                2026
+            );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.RegistrationReference![11..15].Should().Be("3312");
+        result.Value.AccreditationNumber![11..15].Should().Be("3313");
+    }
+
+    // The year is in the hash, so last year's number from ReEx is never one this backend issued.
+    [Fact]
+    public async Task GetAccreditationAsync_AccreditationNumber_SequenceDiffersByYear()
+    {
+        var sut = NewSut();
+
+        var earlier = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-1",
+            MaterialType.Plastic,
+            2025
+        );
+        var later = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-1",
+            MaterialType.Plastic,
+            2026
+        );
+
+        earlier.Value!.AccreditationNumber![11..15]
+            .Should()
+            .NotBe(later.Value!.AccreditationNumber![11..15]);
+    }
+
     [Fact]
     public async Task GetAccreditationAsync_TestOrganisation_UsesOnlyNotifySimulatedEmails()
     {

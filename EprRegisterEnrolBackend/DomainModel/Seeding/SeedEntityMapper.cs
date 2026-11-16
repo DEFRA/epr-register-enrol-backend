@@ -70,6 +70,8 @@ public static class SeedEntityMapper
             ? WasteProcessingKind.Exporter
             : WasteProcessingKind.Reprocessor;
         ApplyNumber(target, dto.RegistrationReference);
+        ApplyAccreditationNumber(target, dto.Year, dto.AccreditationNumber);
+
         if (dto.PermitNumbers.Count > 0)
         {
             target.PermitNumbers = [.. dto.PermitNumbers];
@@ -131,6 +133,20 @@ public static class SeedEntityMapper
         };
         ApplyTo(entity, site);
         return entity;
+    }
+
+    // RA-763: a seed that finds no number keeps the one already held for the year. One it does find replaces a
+    // different one, because ReEx masters it; SeedDualWriter records that as a conflict.
+    private static void ApplyAccreditationNumber(
+        RegistrationEntity target,
+        int year,
+        string? accreditationNumber
+    )
+    {
+        if (!string.IsNullOrWhiteSpace(accreditationNumber))
+        {
+            target.SetAccreditationNumber(year, accreditationNumber, HeldAccreditationNumber.Replace);
+        }
     }
 
     // ReEx masters the number until this service does registrations, so it can change one already issued. The old

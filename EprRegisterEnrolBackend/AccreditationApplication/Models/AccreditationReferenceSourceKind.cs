@@ -7,4 +7,8 @@ public enum AccreditationReferenceSourceKind
 {
     PreviousAccreditation,
     Registration,
+
+    // RA-763: last year's accreditation number, kept from ReEx at Seed. An 'A' reference like
+    // PreviousAccreditation, but a kind of its own so the issued log says which source was used.
+    LastYearsAccreditationNumber,
 }
