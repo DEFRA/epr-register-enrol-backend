@@ -1,5 +1,6 @@
 using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using Microsoft.AspNetCore.Http.HttpResults;
 
@@ -11,7 +12,10 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 /// built from the legacy document before the sync has copied the change to the model, so the response is
 /// served again via the reader.
 /// </summary>
-public sealed class ApplicationResponseReaderFilter(IApplicationReader reader) : IEndpointFilter
+public sealed class ApplicationResponseReaderFilter(
+    IApplicationReader reader,
+    IDualWriteUnitOfWork unitOfWork
+) : IEndpointFilter
 {
     public async ValueTask<object?> InvokeAsync(
         EndpointFilterInvocationContext context,
@@ -37,9 +41,11 @@ public sealed class ApplicationResponseReaderFilter(IApplicationReader reader) :
 
     private Task<object?> RewrapApplicationAsync(object? result, CancellationToken ct)
     {
+        // An application the model doesn't hold yet (a seed whose model write failed, or a repeat seed of one) is
+        // migrated first, rather than answering 404 for good (self-heal, decided 2026-11-16).
         return Rewrap<AccreditationApplicationModel>(
             result,
-            v => reader.ServeFromSourceAsync(v, ct)
+            v => reader.ServeOrMigrateAsync(v, unitOfWork, ct)
         );
     }
 

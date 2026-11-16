@@ -1,6 +1,31 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.12, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06, v6.9 2026-11-06, v6.10 2026-11-09, v6.12 2026-11-14
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.13, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06, v6.9 2026-11-06, v6.10 2026-11-09, v6.12 2026-11-14, v6.13 2026-11-16
+
+**Changes in v6.13 (2026-11-16): phase 5 review of PR #263 (RA-705)**
+
+- **An application legacy holds but the model doesn't is migrated before it is served, not answered 404 for good**
+  (decided 2026-11-16; refines the v6.12 404 rule). GET by id and a write's whole-application response (the seed's
+  `201 Created`, and a repeat seed's `200` for the application it already holds) run the dual-write unit of work for
+  it, which ensures it is migrated and syncs it, then serve it from the model. Before this, a seed whose model write
+  failed left an application nothing could reach: only a write migrates it, and the operator can't reach a write
+  without a successful read. One no write can migrate either (a registration group over the size limit) still answers
+  404. GET list still leaves out an application the model doesn't hold.
+- **Write bodies the filter doesn't re-serve are named** (decided 2026-11-16). The filter re-serves application, site
+  and interim-site bodies. Two other bodies stay on legacy until phase 6, which dual-write keeps current: the BES
+  evidence object answered by a site's BES evidence file add, and the file record answered by a file add. Submit's
+  receipt and the upload-initiate responses aren't built from the application. A test lists every non-GET route in the
+  group with how its response is served, so a new route fails until someone decides.
+- **The ORS keeps ReEx's `validFrom` string as received** (decided 2026-11-16). ReEx sends it in several shapes
+  (`"2026-01-01"`, `"2026-03-14T00:00:00.000Z"`, `"...T00:00:00Z"`); the model held only `firstApprovedAt` and served one
+  form, so with the flag on a site's `validFrom` string could differ from legacy's. `reExValidFrom` is written with a
+  ReEx `firstApprovedAt` (seed, migration, and the sync's rebuild of the ORS) and served as `validFrom`; an ORS recorded
+  before it existed serves `firstApprovedAt` in the one form. Reconciliation compares the date on both sides. Phase 6
+  must keep it, because the raw string is lost once legacy writes stop.
+- **A failed or lost GetById backfill save answers with what ReEx resolved and persists nothing** (decided 2026-11-16;
+  supersedes the 2026-11-14 decision to answer with the stored values). That is what `main` did; answering with the
+  stored values changed the flag-off response and, with a dual-write sync failure, served no nation on every GET, so
+  the frontend would show the wrong nation's bank details (RA-526). The next read retries the save.
 
 **Changes in v6.12 (2026-11-14): phase 5, reads switch to the model behind one flag (RA-705)**
 

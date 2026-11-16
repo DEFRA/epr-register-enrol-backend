@@ -1163,7 +1163,13 @@ public static class AccreditationApplicationEndpoints
         // The backfills work on the legacy document (the one that is saved); the response comes from
         // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
         // and UpdatedAt from legacy.
-        var served = await services.Reader.ServeFromSourceAsync(application, cancellationToken);
+        // An application the model doesn't hold yet is migrated first, rather than answering 404 for good (self-heal,
+        // decided 2026-11-16).
+        var served = await services.Reader.ServeOrMigrateAsync(
+            application,
+            services.UnitOfWork,
+            cancellationToken
+        );
         if (served is null)
         {
             return Results.NotFound();
