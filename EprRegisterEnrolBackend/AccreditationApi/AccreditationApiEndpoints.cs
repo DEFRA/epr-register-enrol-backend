@@ -4,7 +4,6 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
-using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolBackend.AccreditationApi;
 

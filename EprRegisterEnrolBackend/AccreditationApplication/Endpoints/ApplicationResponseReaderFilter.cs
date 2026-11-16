@@ -82,7 +82,9 @@ public sealed class ApplicationResponseReaderFilter(IApplicationReader reader) :
         );
     }
 
-    // Looks under the site the route names; when the route names none that holds it, anywhere in the application.
+    // Looks under the site the route names, and only there: interim site ids repeat across sites, so a site that
+    // doesn't hold it answers null (404, as for a read) rather than another site's interim with the same id. Only a
+    // route that names no site, or one that doesn't parse, searches the whole application.
     private static InterimSiteModel? FindInterimSite(
         AccreditationApplicationModel app,
         string? routeSiteIdStr,

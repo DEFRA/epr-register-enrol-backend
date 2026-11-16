@@ -42,7 +42,11 @@ public static class AccreditationApplicationEndpoints
         // RA-705: with DomainModel:ReadFromModel on, write responses are served again from the model once the
         // write has committed (each handler builds its body from legacy inside the dual-write transaction).
         // Registered only with the flag on.
-        if (app.ServiceProvider.GetRequiredService<IOptions<DomainModelConfig>>().Value.ReadFromModel)
+        if (
+            app
+                .ServiceProvider.GetRequiredService<IOptions<DomainModelConfig>>()
+                .Value.ReadFromModel
+        )
         {
             group.AddEndpointFilter<ApplicationResponseReaderFilter>();
         }
@@ -1037,7 +1041,9 @@ public static class AccreditationApplicationEndpoints
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData.AccreditationId,
             SourceYear = request.Year - 1,
-            LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(priorYearData.AccreditationNumber)
+            LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(
+                priorYearData.AccreditationNumber
+            )
                 ? null
                 : new AccreditationNumberForYearModel
                 {
@@ -1169,8 +1175,10 @@ public static class AccreditationApplicationEndpoints
     }
 
     // RA-503 (OrgId) and RA-526 (Nation) backfills for GetById. Write goes through the dual-write unit of work so the
-    // model's Organisation and Registration get the values too (RA-705); a failed or lost write still answers the
-    // read, with what is stored.
+    // model's Organisation and Registration get the values too (RA-705). A failed or lost write still answers the
+    // read with the values ReEx resolved, as before RA-705: nothing is persisted, so the next read retries, but the
+    // frontend (which no longer falls back to postcode) still shows the right nation. With ReadFromModel on the
+    // response is served from the model, which the failed write left untouched.
     private static async Task<AccreditationApplicationModel> BackfillFromReExAsync(
         AccreditationApplicationModel application,
         string organisationId,
@@ -1179,9 +1187,6 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var originalOrgId = application.OrgId;
-        var originalNation = application.Nation;
-
         var resolved = await ResolveMissingFromReExAsync(
             application,
             organisationId,
@@ -1193,7 +1198,12 @@ public static class AccreditationApplicationEndpoints
             return application;
         }
 
-        var saved = await TrySaveBackfillAsync(application, applicationId, services, cancellationToken);
+        var saved = await TrySaveBackfillAsync(
+            application,
+            applicationId,
+            services,
+            cancellationToken
+        );
         if (saved is not null)
         {
             return saved;
@@ -1201,10 +1211,11 @@ public static class AccreditationApplicationEndpoints
 
         services
             .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
-            .LogWarning("Failed to persist backfilled data for applicationId={ApplicationId}", applicationId);
+            .LogWarning(
+                "Failed to persist backfilled data for applicationId={ApplicationId}",
+                applicationId
+            );
 
-        application.OrgId = originalOrgId;
-        application.Nation = originalNation;
         return application;
     }
 
@@ -1226,7 +1237,11 @@ public static class AccreditationApplicationEndpoints
         // permanently caching a miss.
         if (application.OrgId is null)
         {
-            var orgNumber = await ResolveOrgNumberFromReExAsync(organisationId, reExAdapter, cancellationToken);
+            var orgNumber = await ResolveOrgNumberFromReExAsync(
+                organisationId,
+                reExAdapter,
+                cancellationToken
+            );
             if (orgNumber is not null)
             {
                 application.OrgId = orgNumber;
@@ -1278,7 +1293,9 @@ public static class AccreditationApplicationEndpoints
             cancellationToken
         );
 
-        return result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 } ? savedBox.Value : null;
+        return result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 }
+            ? savedBox.Value
+            : null;
     }
 
     // Skip the round-trip entirely when there is nothing to look up (e.g. older
@@ -5162,10 +5179,7 @@ public static class AccreditationApplicationEndpoints
         // still trims surrounding whitespace, hence the length check. Only the re-formatted
         // canonical value is looked up and logged, so a caller on this unauthenticated route
         // cannot put text of its choosing into the Error log.
-        if (
-            fileUploadId.Length != 36
-            || !Guid.TryParseExact(fileUploadId, "D", out var uploadId)
-        )
+        if (fileUploadId.Length != 36 || !Guid.TryParseExact(fileUploadId, "D", out var uploadId))
             return Results.BadRequest("Invalid fileUploadId in callback metadata.");
 
         var file = payload.Form?.File;

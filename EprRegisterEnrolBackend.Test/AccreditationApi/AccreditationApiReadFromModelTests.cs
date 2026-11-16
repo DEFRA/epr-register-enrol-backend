@@ -28,6 +28,8 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
     private const string OtherRegistration = "R27EX5000270099AL";
     private const string LegacyCollection = "accreditationApplications";
     private const string LegacyOnlySiteName = "Renamed In Legacy Only";
+    private const string Signatory = "Signatory In Both";
+    private const string LegacyOnlySignatory = "Signatory Renamed In Legacy Only";
 
     private static string AccreditationPath(string registration = Registration) =>
         $"/v1/organisations/{Org}/registrations/{registration}/accreditations/2027";
@@ -60,18 +62,18 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
 
     private static Dictionary<string, string?> Settings(bool readFromModel) =>
         new Dictionary<string, string?>
-            {
-                ["ServiceClients:Clients:0:Name"] = "reex",
-                ["ServiceClients:Clients:0:ClientId"] = ReExClientId,
-                ["AUTH_SHARED_SECRET:REEX"] = ReExSecret,
-                ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-management-be-secret",
-                ["AUTH_SHARED_SECRET:FRONTEND"] = "integration-frontend-secret",
-                ["CaseWorking:UseStub"] = "true",
-                ["DomainModel:ExpandEnabled"] = "true",
-                ["DomainModel:DualWrite"] = "true",
-                ["DomainModel:DualWriteSeed"] = "true",
-                ["DomainModel:ReadFromModel"] = readFromModel ? "true" : "false",
-            };
+        {
+            ["ServiceClients:Clients:0:Name"] = "reex",
+            ["ServiceClients:Clients:0:ClientId"] = ReExClientId,
+            ["AUTH_SHARED_SECRET:REEX"] = ReExSecret,
+            ["AUTH_SHARED_SECRET:MANAGEMENT_BE"] = "integration-management-be-secret",
+            ["AUTH_SHARED_SECRET:FRONTEND"] = "integration-frontend-secret",
+            ["CaseWorking:UseStub"] = "true",
+            ["DomainModel:ExpandEnabled"] = "true",
+            ["DomainModel:DualWrite"] = "true",
+            ["DomainModel:DualWriteSeed"] = "true",
+            ["DomainModel:ReadFromModel"] = readFromModel ? "true" : "false",
+        };
 
     public void Dispose()
     {
@@ -117,6 +119,13 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
                     IsExporter = true,
                     WasteProcessingType = "exporter",
                     Nation = Nation.England,
+                    Prns = new AccreditationApplicationPrns
+                    {
+                        Authorisers =
+                        [
+                            new PrnsAuthoriser { FullName = Signatory, Email = "s@example.com" },
+                        ],
+                    },
                     OverseasSites = new AccreditationApplicationOverseasSites
                     {
                         Sites = [Site(1, "001"), Site(2, "002")],
@@ -193,15 +202,37 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
         Assert.Equal(["Site 001", "Site 002"], names);
     }
 
+    // The accreditation itself carries no site names, so the signatory (a field it does carry) is renamed in legacy
+    // alone: the model's name is served, and the legacy app serves the rename, so the test can tell the two apart.
     [Fact]
     public async Task GetAccreditation_ServesTheModel()
     {
-        await MigratedThenSiteRenamedInLegacyAsync();
+        var application = await GrantedAsync();
+        await MigrateAsync(application);
+        await _factory
+            .Services.GetRequiredService<IMongoDbClientFactory>()
+            .GetCollection<BsonDocument>(LegacyCollection)
+            .UpdateOneAsync(
+                Builders<BsonDocument>.Filter.Eq("_id", application.Id!.Value),
+                Builders<BsonDocument>.Update.Set(
+                    "prns.authorisers.0.fullName",
+                    LegacyOnlySignatory
+                ),
+                cancellationToken: Ct
+            );
 
-        var accreditation = await JsonAsync(await GetAsync(AccreditationPath()));
+        var fromModel = await JsonAsync(await GetAsync(AccreditationPath()));
+        var fromLegacy = await JsonAsync(await GetLegacyAsync(AccreditationPath()));
 
-        Assert.DoesNotContain(LegacyOnlySiteName, accreditation.GetRawText());
+        Assert.Equal(Signatory, SignatoryName(fromModel));
+        Assert.Equal(LegacyOnlySignatory, SignatoryName(fromLegacy));
     }
+
+    private static string? SignatoryName(JsonElement accreditation) =>
+        Assert
+            .Single(accreditation.GetProperty("signatories").EnumerateArray())
+            .GetProperty("fullName")
+            .GetString();
 
     // Decided 2026-11-13: after the migration an accreditation missing from the model exists nowhere; no legacy fallback.
     [Fact]
@@ -245,9 +276,10 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
     {
         var application = await GrantedAsync();
         await MigrateAsync(application);
-        var path = route == "search"
-            ? $"/v1/accreditations?organisationNumber={Org}"
-            : AccreditationPath() + route;
+        var path =
+            route == "search"
+                ? $"/v1/accreditations?organisationNumber={Org}"
+                : AccreditationPath() + route;
 
         var fromLegacy = (await JsonAsync(await GetLegacyAsync(path))).GetRawText();
         var fromModel = (await JsonAsync(await GetAsync(path))).GetRawText();
