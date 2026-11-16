@@ -1422,6 +1422,24 @@ public class HttpReExApiAdapterTests
         result.Value!.OrganisationNumber.Should().Be(509193);
     }
 
+    // RA-763: the accreditation's own number was dropped here, so renewals were derived
+    // from the registration number instead.
+    [Fact]
+    public async Task GetAccreditationAsync_CarriesTheAccreditationNumber()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetAccreditationAsync(
+            "6a2fcd74e16883c137d01188",
+            "reg-reprocessor-1",
+            MaterialType.Aluminium,
+            2026
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value!.AccreditationNumber.Should().Be("A26ER5000000912AL");
+    }
+
     // ---------------- RA-475: GetOrganisationNumberAsync ----------------
 
     [Fact]
