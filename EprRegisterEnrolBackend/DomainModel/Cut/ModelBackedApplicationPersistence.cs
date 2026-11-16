@@ -154,7 +154,8 @@ public sealed class ModelBackedApplicationPersistence(
         var legacy = ApplicationProjection.ToLegacy(sources);
 
         legacy.Version = sources.Application.Version;
-        legacy.CreatedAt = sources.Application.CreatedAt ?? sources.Application.ValidFrom;
+        legacy.CreatedAt =
+            sources.Application.CreatedAt ?? MissedByTheBackfill(sources.Application);
         legacy.UpdatedAt = sources.Application.ValidFrom;
 
         legacy.RegistrationEntityId = sources.Application.RegistrationId;
@@ -163,6 +164,19 @@ public sealed class ModelBackedApplicationPersistence(
         ).AccreditationId;
 
         return legacy;
+    }
+
+    // Decision 5: the backfill fills createdAt on every version written before the model held it, and readiness
+    // check A lists any it missed. The legacy shape needs a time, so a missed one gets when the current version was
+    // written: loudly, since it moves the application in the GET list's order.
+    private DateTime MissedByTheBackfill(ApplicationEntity application)
+    {
+        logger.LogWarning(
+            "Application {ApplicationId} has no createdAt in the model (missed by the backfill); serving its current version's validFrom {ValidFrom} instead",
+            application.EntityId,
+            application.ValidFrom
+        );
+        return application.ValidFrom;
     }
 
     public Task<AccreditationApplicationModel?> GetByObjectIdAsync(

@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Cut;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Migration;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
@@ -66,6 +67,20 @@ public sealed partial class DualWriteEndpointTests
             factory.Services.GetRequiredService<IAccreditationApplicationPersistence>();
 
         Assert.IsType<ModelBackedApplicationPersistence>(persistence);
+    }
+
+    // After the cut the persistence already projects from the model, so the reader serves what it returns as it is;
+    // projecting it a second time, with "legacy" metadata that is itself the model's, would only cost a read.
+    [Fact]
+    public void LegacyWritesOff_ReadsServeThePersistenceAsItIs()
+    {
+        var (factory, client) = Start(s_cut);
+        using var _ = factory;
+        using var __ = client;
+
+        Assert.IsType<PersistenceApplicationReader>(
+            factory.Services.GetRequiredService<IApplicationReader>()
+        );
     }
 
     // The migrator and sync the flush runs read and write applications through the same persistence the handlers use,

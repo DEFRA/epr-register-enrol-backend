@@ -67,7 +67,7 @@ public sealed partial class DualWriteEndpointTests
 
     [Fact]
     public void ReadFromModel_Off_ResolvesTheLegacyReader() =>
-        Assert.IsType<LegacyApplicationReader>(
+        Assert.IsType<PersistenceApplicationReader>(
             _factory.Services.GetRequiredService<IApplicationReader>()
         );
 

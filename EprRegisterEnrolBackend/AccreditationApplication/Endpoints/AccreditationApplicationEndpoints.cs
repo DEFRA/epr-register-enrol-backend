@@ -42,7 +42,11 @@ public static class AccreditationApplicationEndpoints
         // RA-705: with DomainModel:ReadFromModel on, write responses are served again from the model once the
         // write has committed (each handler builds its body from legacy inside the dual-write transaction).
         // Registered only with the flag on.
-        if (app.ServiceProvider.GetRequiredService<IOptions<DomainModelConfig>>().Value.ReadFromModel)
+        if (
+            app
+                .ServiceProvider.GetRequiredService<IOptions<DomainModelConfig>>()
+                .Value.ReadFromModel
+        )
         {
             group.AddEndpointFilter<ApplicationResponseReaderFilter>();
         }
@@ -1169,7 +1173,10 @@ public static class AccreditationApplicationEndpoints
                 cancellationToken
             );
 
-            if (saved is not null && result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 })
+            if (
+                saved is not null
+                && result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 }
+            )
             {
                 application = saved;
             }
@@ -1189,7 +1196,7 @@ public static class AccreditationApplicationEndpoints
 
         // The backfills work on the legacy document (the one that is saved); the response comes from
         // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
-        // and UpdatedAt from legacy.
+        // and UpdatedAt from legacy, and after the cut (LegacyWrites off) the model's throughout.
         var served = await reader.ServeFromSourceAsync(application, cancellationToken);
         if (served is null)
         {
@@ -5072,10 +5079,7 @@ public static class AccreditationApplicationEndpoints
         // still trims surrounding whitespace, hence the length check. Only the re-formatted
         // canonical value is looked up and logged, so a caller on this unauthenticated route
         // cannot put text of its choosing into the Error log.
-        if (
-            fileUploadId.Length != 36
-            || !Guid.TryParseExact(fileUploadId, "D", out var uploadId)
-        )
+        if (fileUploadId.Length != 36 || !Guid.TryParseExact(fileUploadId, "D", out var uploadId))
             return Results.BadRequest("Invalid fileUploadId in callback metadata.");
 
         var file = payload.Form?.File;

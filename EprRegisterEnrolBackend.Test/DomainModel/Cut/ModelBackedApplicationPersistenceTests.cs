@@ -7,6 +7,7 @@ using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -35,6 +36,7 @@ public sealed partial class ModelBackedApplicationPersistenceTests : IDisposable
     private readonly ApplicationGroupMigrator _migrator;
     private readonly CutStagingPersistence _staging;
     private readonly ModelBackedApplicationPersistence _model;
+    private readonly CapturingLogger<ModelBackedApplicationPersistence> _logger = new();
 
     public ModelBackedApplicationPersistenceTests(MongoIntegrationFixture fixture)
     {
@@ -60,7 +62,7 @@ public sealed partial class ModelBackedApplicationPersistenceTests : IDisposable
             new ApplicationReadModel(_stores),
             _staging,
             () => Flush(),
-            NullLogger<ModelBackedApplicationPersistence>.Instance
+            _logger
         );
     }
 

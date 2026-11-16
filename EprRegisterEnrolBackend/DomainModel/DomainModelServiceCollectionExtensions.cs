@@ -152,7 +152,7 @@ public static class DomainModelServiceCollectionExtensions
     {
         if (!enabled)
         {
-            services.AddSingleton<IApplicationReader, LegacyApplicationReader>();
+            services.AddSingleton<IApplicationReader, PersistenceApplicationReader>();
             return;
         }
 
@@ -181,6 +181,10 @@ public static class DomainModelServiceCollectionExtensions
                 IAccreditationApplicationPersistence,
                 ModelBackedApplicationPersistence
             >()
+        );
+        // The persistence now projects from the model itself, so reads serve it as it is.
+        services.Replace(
+            ServiceDescriptor.Singleton<IApplicationReader, PersistenceApplicationReader>()
         );
     }
 
