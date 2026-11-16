@@ -31,6 +31,8 @@ public static class DomainModelServiceCollectionExtensions
         RequireExpand(config.DualWrite, "DualWrite", config);
         RequireDualWrite(config.MigrateEnabled, "MigrateEnabled", config);
         RequireDualWrite(config.ReconcileEnabled, "ReconcileEnabled", config);
+        RequireLegacyWrites(config.MigrateEnabled, "MigrateEnabled", config);
+        RequireLegacyWrites(config.ReconcileEnabled, "ReconcileEnabled", config);
 
         services.Configure<DomainModelConfig>(section);
         services.AddHostedService<DomainModelDiagnosticsService>();
@@ -188,6 +190,16 @@ public static class DomainModelServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 $"DomainModel:{name} needs DomainModel:DualWrite: without it a migrated application goes stale."
+            );
+        }
+    }
+
+    private static void RequireLegacyWrites(bool flag, string name, DomainModelConfig config)
+    {
+        if (flag && !config.LegacyWrites)
+        {
+            throw new InvalidOperationException(
+                $"DomainModel:{name} needs DomainModel:LegacyWrites: it reads legacy, which is frozen after the cut."
             );
         }
     }

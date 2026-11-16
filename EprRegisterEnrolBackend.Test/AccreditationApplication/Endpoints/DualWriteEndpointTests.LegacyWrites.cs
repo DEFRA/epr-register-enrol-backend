@@ -98,4 +98,18 @@ public sealed partial class DualWriteEndpointTests
         Assert.Null(factory.Services.GetService<CutFlush>());
         Assert.Null(factory.Services.GetService<CutStagingPersistence>());
     }
+
+    // Both read legacy as the source: after the cut legacy is frozen, so the migration would find nothing true to
+    // migrate and reconciliation would report every write since the cut as drift.
+    [Theory]
+    [InlineData("MigrateEnabled")]
+    [InlineData("ReconcileEnabled")]
+    public void LegacyWritesOff_WithALegacyReadingService_RefusesToStart(string flag)
+    {
+        var settings = new Dictionary<string, string?>(s_cut) { [$"DomainModel:{flag}"] = "true" };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Start(settings));
+
+        Assert.StartsWith($"DomainModel:{flag} needs DomainModel:LegacyWrites", ex.Message);
+    }
 }
