@@ -378,9 +378,7 @@ public sealed class ApplicationGroupMigrator(
                     current.RegistrationNumber,
                     current.PreviousRegistrationNumbers
                 );
-                current.AccreditationNumbers = WithLastYearsAccreditations(
-                    current.AccreditationNumbers
-                );
+                AddLastYearsAccreditationNumbers(current);
                 registration = (
                     await versions.UpdateAsync(
                         current,
@@ -410,45 +408,51 @@ public sealed class ApplicationGroupMigrator(
 
         // RA-763: the seed keeps last year's accreditation number on the Registration, but an application seeded or
         // backfilled before the domain model existed holds it only itself. A year the Registration already holds keeps
-        // its number; otherwise the newest application holding one for that year gives it.
-        private List<AccreditationNumberForYear> WithLastYearsAccreditations(
-            IEnumerable<AccreditationNumberForYear> held
-        )
+        // its number; otherwise the newest application holding one for that year gives it. An application being
+        // migrated now that holds a different number is recorded as a conflict.
+        private void AddLastYearsAccreditationNumbers(RegistrationEntity registration)
         {
-            var numbers = held.ToList();
-            foreach (var lastYears in ranked.Select(a => a.LastYearsAccreditation))
+            var differing = ranked
+                .Where(a =>
+                    a.LastYearsAccreditationNumber is { } lastYears
+                    && registration.SetAccreditationNumber(
+                        lastYears.Year,
+                        lastYears.AccreditationNumber,
+                        HeldAccreditationNumber.Keep
+                    )
+                    && _pendingIds.Contains(a.Id!.Value)
+                )
+                .Select(a => a.Id!.Value)
+                .ToList();
+            if (differing.Count == 0)
             {
-                if (lastYears is null || numbers.Exists(n => n.Year == lastYears.Year))
-                {
-                    continue;
-                }
-
-                numbers.Add(
-                    new AccreditationNumberForYear
-                    {
-                        Year = lastYears.Year,
-                        AccreditationNumber = lastYears.AccreditationNumber,
-                    }
-                );
+                return;
             }
 
-            numbers.Sort((a, b) => a.Year.CompareTo(b.Year));
-            return numbers;
+            var winner = ranked.Find(a =>
+                a.LastYearsAccreditationNumber is { } lastYears
+                && registration.AccreditationNumbers.Exists(n =>
+                    n.Year == lastYears.Year && n.AccreditationNumber == lastYears.AccreditationNumber
+                )
+            );
+            Conflicts.Add(
+                Conflict(MigrationConflictKind.AccreditationNumberDiffers, differing, winner?.Id)
+            );
         }
 
         private RegistrationEntity NewRegistration(
             ObjectId organisationId,
             string reExRegistrationId,
             AccreditationApplicationModel? numberWinner
-        ) =>
-            new()
+        )
+        {
+            var registration = new RegistrationEntity
             {
                 OrganisationId = organisationId,
                 ReExRegistrationId = reExRegistrationId,
                 RegistrationNumber = numberWinner?.RegistrationReference,
                 PreviousRegistrationNumbers = OlderNumbers(numberWinner?.RegistrationReference, []),
                 PermitNumbers = [.. Newest.PermitNumbers],
-                AccreditationNumbers = WithLastYearsAccreditations([]),
                 Site = WithSiteAddress(null),
                 Material = Newest.MaterialType,
                 Nation = Newest.Nation,
@@ -463,6 +467,9 @@ public sealed class ApplicationGroupMigrator(
                     ImportedAt = now,
                 },
             };
+            AddLastYearsAccreditationNumbers(registration);
+            return registration;
+        }
 
         // A number the Registration had already replaced is its history, not a disagreement. Only an application holding
         // the number that survived is the winner: an existing Registration keeps its own, whatever the applications hold.

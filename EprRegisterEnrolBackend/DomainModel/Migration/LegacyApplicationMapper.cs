@@ -56,13 +56,9 @@ public static class LegacyApplicationMapper
             Year = legacy.Year,
             ReservedAccreditationNumber = legacy.AccreditationReference,
             PreviousReservedAccreditationNumbers = [.. legacy.PreviousAccreditationNumbers],
-            LastYearsAccreditation = legacy.LastYearsAccreditation is { } lastYears
-                ? new AccreditationNumberForYear
-                {
-                    Year = lastYears.Year,
-                    AccreditationNumber = lastYears.AccreditationNumber,
-                }
-                : null,
+            LastYearsAccreditationNumber = AccreditationNumberForYear.FromLegacy(
+                legacy.LastYearsAccreditationNumber
+            ),
             SourceReExAccreditationId = legacy.SourceReExAccreditationId,
             SeedDataSourceYear = legacy.SourceYear,
             ApplicationOverseasSites = overseasSites,

@@ -135,34 +135,18 @@ public static class SeedEntityMapper
         return entity;
     }
 
-    // RA-763: sets the year's accreditation number, keeping every other year's. A seed that finds no number keeps
-    // the one already held for the year.
+    // RA-763: a seed that finds no number keeps the one already held for the year. One it does find replaces a
+    // different one, because ReEx masters it; SeedDualWriter records that as a conflict.
     private static void ApplyAccreditationNumber(
         RegistrationEntity target,
         int year,
         string? accreditationNumber
     )
     {
-        if (string.IsNullOrWhiteSpace(accreditationNumber))
+        if (!string.IsNullOrWhiteSpace(accreditationNumber))
         {
-            return;
+            target.SetAccreditationNumber(year, accreditationNumber, HeldAccreditationNumber.Replace);
         }
-
-        var held = target.AccreditationNumbers.Find(a => a.Year == year);
-        if (held is not null)
-        {
-            held.AccreditationNumber = accreditationNumber;
-            return;
-        }
-
-        target.AccreditationNumbers.Add(
-            new AccreditationNumberForYear
-            {
-                Year = year,
-                AccreditationNumber = accreditationNumber,
-            }
-        );
-        target.AccreditationNumbers.Sort((a, b) => a.Year.CompareTo(b.Year));
     }
 
     // ReEx masters the number until this service does registrations, so it can change one already issued. The old

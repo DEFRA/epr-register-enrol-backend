@@ -18,7 +18,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// Source validation is shape only: the source must be a 17-character reference
 /// (<c>{R|A}</c> + <c>YY</c> + agency <c>{E|S|W|N}</c> + process type <c>{R|X}</c> + 6-digit
 /// OrgId + 4-digit sequence + material <c>{ST|WO|AL|FB|PA|PL|GR|GO}</c>) whose leading letter
-/// suits its kind - 'A' for a previous accreditation, 'R' for a registration. Nation, exporter
+/// suits its kind - 'A' for an accreditation number, 'R' for a registration. Nation, exporter
 /// flag, OrgId and material are NOT cross-checked against the application: the existing
 /// reference is the authority. The same format is produced by RegulatoryNumberGenerator, so a
 /// new agency or material code must be added in both places.
@@ -40,6 +40,10 @@ public static partial class AccreditationReferenceDerivation
                 "previous accreditation reference"
             ),
             AccreditationReferenceSourceKind.Registration => ('R', "registration reference"),
+            AccreditationReferenceSourceKind.LastYearsAccreditationNumber => (
+                'A',
+                "last year's accreditation number"
+            ),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(sourceKind),
                 sourceKind,

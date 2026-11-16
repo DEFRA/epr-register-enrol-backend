@@ -114,7 +114,7 @@ public class AccreditationApplicationModel
     // RA-448: no ReEx-sourced equivalent exists for accreditation (unlike
     // RegistrationReference) - always issued by this backend's own endpoint.
     // RA-690: never from a counter, and never regenerated once issued. RA-763: derived
-    // from LastYearsAccreditation, or from the registration reference when there is none.
+    // from LastYearsAccreditationNumber, or from the registration reference when there is none.
     public string? AccreditationReference { get; set; }
 
     // RA-763: the operator's accreditation number for last year, with its year (e.g. 2026 and
@@ -122,7 +122,7 @@ public class AccreditationApplicationModel
     // Null when ReEx gave no number, which includes every application seeded before RA-763. Not to
     // be confused with PreviousAccreditationNumbers, which holds this year's numbers that were
     // replaced.
-    public AccreditationNumberForYearModel? LastYearsAccreditation { get; set; }
+    public AccreditationNumberForYearModel? LastYearsAccreditationNumber { get; set; }
 
     // RA-448's "reapply for accreditation" regenerate history. RA-690 removed that
     // path, so nothing writes this any more; it stays so existing documents still

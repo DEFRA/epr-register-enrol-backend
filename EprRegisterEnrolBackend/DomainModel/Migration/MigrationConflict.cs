@@ -68,4 +68,11 @@ public enum MigrationConflictKind
 
     /// <summary>Applications' copies of a site held different ReEx approval dates; the ORS keeps the earliest.</summary>
     SiteApprovalDatesDiffer,
+
+    /// <summary>
+    /// RA-763: an accreditation number for a year differs from the one the Registration held. From a seed, ReEx's
+    /// replaced it and the seeded application is listed. From the migrator, the Registration kept its own and the
+    /// applications holding another are listed, with the newest holding the kept one as the winner.
+    /// </summary>
+    AccreditationNumberDiffers,
 }

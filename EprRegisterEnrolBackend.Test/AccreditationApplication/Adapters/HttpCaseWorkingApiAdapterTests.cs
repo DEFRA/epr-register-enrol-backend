@@ -444,11 +444,11 @@ public class HttpCaseWorkingApiAdapterTests
     // RA-763: the case carries last year's accreditation number, in the shape management-be's RA-763
     // migration backfills onto older cases.
     [Fact]
-    public async Task SubmitApplicationAsync_SendsLastYearsAccreditation()
+    public async Task SubmitApplicationAsync_SendsLastYearsAccreditationNumber()
     {
         var (adapter, handler) = CreateAdapter();
         var application = CreateTestApplication();
-        application.LastYearsAccreditation = new AccreditationNumberForYearModel
+        application.LastYearsAccreditationNumber = new AccreditationNumberForYearModel
         {
             Year = 2026,
             AccreditationNumber = "A26ER5000270063WO",
@@ -459,24 +459,24 @@ public class HttpCaseWorkingApiAdapterTests
         var lastYears = JsonDocument
             .Parse(handler.CapturedRequestBody!)
             .RootElement.GetProperty("payload")
-            .GetProperty("lastYearsAccreditation");
+            .GetProperty("lastYearsAccreditationNumber");
         lastYears.GetProperty("year").GetInt32().Should().Be(2026);
         lastYears.GetProperty("accreditationNumber").GetString().Should().Be("A26ER5000270063WO");
     }
 
     [Fact]
-    public async Task SubmitApplicationAsync_NoLastYearsAccreditation_OmitsIt()
+    public async Task SubmitApplicationAsync_NoLastYearsAccreditationNumber_OmitsIt()
     {
         var (adapter, handler) = CreateAdapter();
         var application = CreateTestApplication();
-        application.LastYearsAccreditation = null;
+        application.LastYearsAccreditationNumber = null;
 
         await adapter.SubmitApplicationAsync(application, TestContext.Current.CancellationToken);
 
         JsonDocument
             .Parse(handler.CapturedRequestBody!)
             .RootElement.GetProperty("payload")
-            .TryGetProperty("lastYearsAccreditation", out _)
+            .TryGetProperty("lastYearsAccreditationNumber", out _)
             .Should()
             .BeFalse();
     }

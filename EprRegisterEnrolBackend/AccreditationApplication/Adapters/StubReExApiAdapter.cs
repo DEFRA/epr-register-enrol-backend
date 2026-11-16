@@ -192,7 +192,11 @@ public class StubReExApiAdapter(
             OrganisationName = organisationName ?? "Stub Reprocessing Ltd",
             OrganisationNumber = StubOrganisationNumber(organisationId),
             RegistrationReference = registrationReference,
-            AccreditationNumber = DerivedAccreditationNumber(registrationReference, registrationId),
+            AccreditationNumber = DerivedAccreditationNumber(
+                registrationReference,
+                registrationId,
+                year
+            ),
             SiteAddress = siteAddress,
             IsExporter = isExporter,
             Nation = nation,
@@ -368,11 +372,29 @@ public class StubReExApiAdapter(
         return ReExResult<Nation>.Success(nation, 200);
     }
 
-    // RA-763: like real ReEx, the accreditation's sequence differs from the registration's, so a
-    // renewal derived from the registration number instead is caught. Positions 11-14 are the sequence.
-    private static string DerivedAccreditationNumber(string registrationReference, string registrationId)
+    // RA-763: like real ReEx, the accreditation's sequence always differs from the registration's,
+    // so a renewal derived from the registration number instead is caught; a hash that lands on the
+    // registration's sequence moves on by one. The year is in the hash, so each year's number differs
+    // and a test can tell last year's number from ReEx apart from one this backend issued and holds.
+    // Positions 11-14 are the sequence.
+    private static string DerivedAccreditationNumber(
+        string registrationReference,
+        string registrationId,
+        int year
+    )
     {
-        var sequence = (int)(Fnv1a($"accreditation:{registrationId}") % RegistrationSequenceRange);
+        var registrationSequence = int.Parse(
+            registrationReference[11..15],
+            System.Globalization.CultureInfo.InvariantCulture
+        );
+        var sequence = (int)(
+            Fnv1a($"accreditation:{registrationId}:{year}") % RegistrationSequenceRange
+        );
+        if (sequence == registrationSequence)
+        {
+            sequence = (int)((sequence + 1) % RegistrationSequenceRange);
+        }
+
         return $"A{registrationReference[1..11]}{sequence:D4}{registrationReference[15..]}";
     }
 

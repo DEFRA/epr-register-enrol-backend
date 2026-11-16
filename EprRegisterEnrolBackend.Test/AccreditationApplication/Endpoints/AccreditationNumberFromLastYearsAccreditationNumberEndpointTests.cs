@@ -15,7 +15,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 // with YY swapped. A previous accreditation held in this backend comes first (see
 // AccreditationNumberFromPreviousAccreditationEndpointTests); an application holding neither
 // derives from the registration reference.
-public class AccreditationNumberFromLastYearsAccreditationEndpointTests
+public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
     : IClassFixture<AccreditationApplicationTestFactory>
 {
     private const string OrganisationId = "org-123";
@@ -35,7 +35,7 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
     private readonly AccreditationApplicationTestFactory _factory;
     private readonly HttpClient _client;
 
-    public AccreditationNumberFromLastYearsAccreditationEndpointTests(
+    public AccreditationNumberFromLastYearsAccreditationNumberEndpointTests(
         AccreditationApplicationTestFactory factory
     )
     {
@@ -95,7 +95,7 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
     [Fact]
     public async Task A_renewal_keeps_last_years_accreditation_number_with_the_new_year()
     {
-        var app = SeedApplication(2027, a => a.LastYearsAccreditation = LastYears(LastYearsNumber));
+        var app = SeedApplication(2027, a => a.LastYearsAccreditationNumber = LastYears(LastYearsNumber));
 
         (await IssuedReference(app)).Should().Be("A27ER0001230042PL");
         (await Stored(app)).AccreditationReference.Should().Be("A27ER0001230042PL");
@@ -124,7 +124,7 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
         );
         var withLastYears = SeedApplication(
             2027,
-            a => a.LastYearsAccreditation = LastYears(LastYearsNumber)
+            a => a.LastYearsAccreditationNumber = LastYears(LastYearsNumber)
         );
 
         (await IssuedReference(withLastYears)).Should().Be("A27ER0001230055PL");
@@ -140,7 +140,7 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
                 a.MaterialType = MaterialType.Glass;
                 a.GlassRecyclingProcess = GlassRecyclingProcess.Remelt;
                 a.RegistrationReference = "R26ER0001239999GR";
-                a.LastYearsAccreditation = LastYears("A26ER0001230042GR");
+                a.LastYearsAccreditationNumber = LastYears("A26ER0001230042GR");
             }
         );
 
@@ -152,7 +152,7 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
     {
         var app = SeedApplication(
             2027,
-            a => a.LastYearsAccreditation = LastYears("A26ER000123004PL")
+            a => a.LastYearsAccreditationNumber = LastYears("A26ER000123004PL")
         );
 
         var response = await Post(app);
@@ -161,14 +161,52 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
         var message = await response.Content.ReadAsStringAsync(
             TestContext.Current.CancellationToken
         );
-        message.Should().Contain("A26ER000123004PL").And.Contain("previous accreditation");
+        message.Should().Contain("A26ER000123004PL").And.Contain("last year's accreditation number");
         (await Stored(app)).AccreditationReference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_last_years_number_for_another_year_returns_422_without_falling_back()
+    {
+        var app = SeedApplication(
+            2027,
+            a => a.LastYearsAccreditationNumber = LastYears("A25ER0001230042PL", year: 2025)
+        );
+
+        var response = await Post(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var message = await response.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken
+        );
+        message.Should().Contain("A25ER0001230042PL").And.Contain("2025, not 2026");
+        (await Stored(app)).AccreditationReference.Should().BeNull();
+    }
+
+    // The year is only checked when last year's number is the source.
+    [Fact]
+    public async Task A_last_years_number_for_another_year_is_not_checked_when_an_earlier_approval_is_held()
+    {
+        SeedApplication(
+            2026,
+            a =>
+            {
+                a.ApplicationStatus = ApplicationStatus.Approved;
+                a.AccreditationReference = "A26ER0001230055PL";
+            }
+        );
+        var app = SeedApplication(
+            2027,
+            a => a.LastYearsAccreditationNumber = LastYears("A25ER0001230042PL", year: 2025)
+        );
+
+        (await IssuedReference(app)).Should().Be("A27ER0001230055PL");
     }
 
     [Fact]
     public async Task Deriving_from_last_years_number_never_draws_from_a_sequence_counter()
     {
-        var app = SeedApplication(2027, a => a.LastYearsAccreditation = LastYears(LastYearsNumber));
+        var app = SeedApplication(2027, a => a.LastYearsAccreditationNumber = LastYears(LastYearsNumber));
 
         await IssuedReference(app);
 
@@ -177,13 +215,13 @@ public class AccreditationNumberFromLastYearsAccreditationEndpointTests
 }
 
 // RA-690: each issued reference's source is logged, so support can trace it back.
-public class AccreditationNumberFromLastYearsAccreditationLoggingTests
+public class AccreditationNumberFromLastYearsAccreditationNumberLoggingTests
     : IClassFixture<AccreditationApplicationEndpointsValidationLoggingTests.LoggingTestFactory>
 {
     private readonly AccreditationApplicationEndpointsValidationLoggingTests.LoggingTestFactory _factory;
     private readonly HttpClient _client;
 
-    public AccreditationNumberFromLastYearsAccreditationLoggingTests(
+    public AccreditationNumberFromLastYearsAccreditationNumberLoggingTests(
         AccreditationApplicationEndpointsValidationLoggingTests.LoggingTestFactory factory
     )
     {
@@ -203,7 +241,7 @@ public class AccreditationNumberFromLastYearsAccreditationLoggingTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var entry = IssuedLogEntry();
         entry.Should().Contain("accreditationReference=A27ER0001230042PL");
-        entry.Should().Contain("sourceKind=PreviousAccreditation");
+        entry.Should().Contain("sourceKind=LastYearsAccreditationNumber");
         entry.Should().Contain("sourceReference=A26ER0001230042PL");
         entry.Should().NotContain("withdrawnHolderIds");
     }
@@ -223,7 +261,7 @@ public class AccreditationNumberFromLastYearsAccreditationLoggingTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var entry = IssuedLogEntry();
         entry.Should().Contain("accreditationReference=A27ER0001230042PL");
-        entry.Should().Contain("sourceKind=PreviousAccreditation");
+        entry.Should().Contain("sourceKind=LastYearsAccreditationNumber");
         entry.Should().Contain($"withdrawnHolderIds={withdrawn.Id}");
     }
 
@@ -261,7 +299,7 @@ public class AccreditationNumberFromLastYearsAccreditationLoggingTests
             ApplicationStatus = status,
             RegistrationReference = "R26ER0001239999PL",
             AccreditationReference = accreditationReference,
-            LastYearsAccreditation = new AccreditationNumberForYearModel
+            LastYearsAccreditationNumber = new AccreditationNumberForYearModel
             {
                 Year = 2026,
                 AccreditationNumber = "A26ER0001230042PL",
