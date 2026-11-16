@@ -56,6 +56,26 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
+    // RA-766 (temporary; removed with ChargeCorrectionMigration): reads only the state, charge and
+    // duly-made marker of a work item (ManagementBe's GET /work-items/{id}), acting as the charge
+    // correction. Not a general work item read. Allowed to throw (an HttpRequestException
+    // carrying the status code for a non-success response): the migration counts a failure and
+    // carries on.
+    Task<CaseWorkingWorkItem> GetChargeStateAsync(
+        Guid workItemId,
+        CancellationToken cancellationToken = default
+    );
+
+    // RA-766 (temporary; removed with ChargeCorrectionMigration): sets the charge held on a work
+    // item (ManagementBe's PUT /work-items/re-accreditation/{id}/charge). A 409 with errorCode
+    // work-item-closed is Closed; any other non-success response throws, including a 409 for a
+    // work item that stayed busy (errorCode concurrency-conflict).
+    Task<SetChargeOutcome> SetChargeAsync(
+        Guid workItemId,
+        int chargeAmountPence,
+        CancellationToken cancellationToken = default
+    );
+
     // Calls ManagementBe's withdraw action (RA-252) so the linked work item — and its
     // automatic audit trail — reflect the withdrawal. Like ResumeFromQueryAsync this is
     // allowed to throw: the caller (Withdraw) must know whether the call succeeded before
@@ -88,6 +108,20 @@ public sealed record SiteWorkItemResult(int SiteId, string CaseReference, Guid? 
 public sealed record NotificationStatusResult(string? NotificationStatus, DateTime? SlaDueDate);
 
 public sealed record ResumeFromQueryResult(bool IsSuccess);
+
+// RA-766 (temporary): the parts of a ManagementBe work item the charge correction needs.
+// ChargeAmountPence is null when none is stored; DulyMade is whether a payment date has been
+// recorded (what ManagementBe's own charge-corrected audit entry reports).
+public sealed record CaseWorkingWorkItem(string? StateId, int? ChargeAmountPence, bool DulyMade);
+
+// RA-766 (temporary): Closed means ManagementBe answered 409: the work item is approved,
+// refused, withdrawn or awaiting applicant contact, and its charge is never changed.
+public enum SetChargeOutcome
+{
+    Updated,
+    Unchanged,
+    Closed,
+}
 
 // Refused means ManagementBe answered 409: the application has already been decided.
 // Failed is every other problem, which the caller still reports as a service fault.

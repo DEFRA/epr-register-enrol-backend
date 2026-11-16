@@ -356,6 +356,61 @@ public sealed class SeedDualWriterTests : IDisposable
             .Find(FilterDefinition<MigrationConflict>.Empty)
             .ToListAsync(Ct);
 
+    // RA-763: the Registration keeps ReEx's accreditation number, because no Accreditation is held here for that year.
+    [Fact]
+    public async Task WriteAsync_ReExGivesAnAccreditationNumber_KeepsItOnTheRegistrationWithItsYear()
+    {
+        var reEx = ReEx();
+        reEx.Year = 2026;
+        reEx.AccreditationNumber = "A26EX1234567012P";
+
+        await SeedAsync(reEx);
+
+        var held = Assert.Single(
+            Assert.Single(await RegistrationVersionsAsync()).AccreditationNumbers
+        );
+        Assert.Equal(2026, held.Year);
+        Assert.Equal("A26EX1234567012P", held.AccreditationNumber);
+    }
+
+    [Fact]
+    public async Task WriteAsync_AccreditationNumberChangedInReEx_TakesReExsAndRecordsTheDifference()
+    {
+        var first = ReEx();
+        first.Year = 2026;
+        first.AccreditationNumber = "A26EX1234567012P";
+        await Writer().WriteAsync(Seed(first, await LegacyApplicationAsync(first)), Ct);
+
+        var changed = ReEx();
+        changed.Year = 2026;
+        changed.AccreditationNumber = "A26EX1234567099P";
+        var seeded = await LegacyApplicationAsync(changed);
+        await Writer().WriteAsync(Seed(changed, seeded), Ct);
+
+        var current = (await RegistrationVersionsAsync()).Single(r => r.IsCurrent);
+        Assert.Equal(
+            "A26EX1234567099P",
+            Assert.Single(current.AccreditationNumbers).AccreditationNumber
+        );
+        var conflict = Assert.Single(await ConflictsAsync());
+        Assert.Equal(MigrationConflictKind.AccreditationNumberDiffers, conflict.Kind);
+        Assert.Equal(ReExRegistrationId, conflict.ReExRegistrationId);
+        Assert.Equal(current.EntityId, conflict.RegistrationId);
+        Assert.Equal(seeded.Id, Assert.Single(conflict.ApplicationIds));
+    }
+
+    [Fact]
+    public async Task WriteAsync_SameAccreditationNumberAgain_RecordsNoDifference()
+    {
+        var reEx = ReEx();
+        reEx.Year = 2026;
+        reEx.AccreditationNumber = "A26EX1234567012P";
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+        await Writer().WriteAsync(Seed(reEx, await LegacyApplicationAsync(reEx)), Ct);
+
+        Assert.Empty(await ConflictsAsync());
+    }
+
     [Fact]
     public async Task WriteAsync_NumberChangedInReEx_WritesANewVersionKeepingTheOldNumber()
     {

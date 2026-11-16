@@ -47,4 +47,10 @@ public enum ChangeReason
 
     /// <summary>A write path changed the legacy application; its Application version follows it.</summary>
     ApplicationEdited,
+
+    /// <summary>
+    /// RA-763: a Registration with no accreditation number for a year was given the one an application holds as last
+    /// year's. A number already held for the year is never changed by a write path.
+    /// </summary>
+    AccreditationNumberAdded,
 }
