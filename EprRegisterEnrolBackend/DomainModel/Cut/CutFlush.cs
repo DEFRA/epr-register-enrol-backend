@@ -14,6 +14,11 @@ public sealed class CutFlush(
     CutStagingPersistence staging
 )
 {
+    /// <summary>
+    /// called at the start of each transaction attempt; a retried attempt reuses the session and must not inherit what the rolled-back attempt staged.
+    /// </summary>
+    public void Begin(IClientSessionHandle session) => staging.Forget(session);
+
     public async Task<IReadOnlyList<MigrationConflict>> FlushAsync(
         IClientSessionHandle session,
         CancellationToken cancellationToken
