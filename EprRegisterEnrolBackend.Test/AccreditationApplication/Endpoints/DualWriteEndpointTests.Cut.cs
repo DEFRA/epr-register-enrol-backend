@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
@@ -102,5 +103,55 @@ public sealed partial class DualWriteEndpointTests
             .EnumerateArray()
             .Single(s => s.GetProperty("siteId").GetInt32() == 2);
         Assert.Equal("Renamed", site.GetProperty("siteName").GetString());
+    }
+
+    // The cut finds every live application already in the model; a no-op unit of work on the dual-write host migrates
+    // one built in legacy.
+    private async Task MigrateAsync(AccreditationApplicationModel application)
+    {
+        var migrated = await _factory
+            .Services.GetRequiredService<IDualWriteUnitOfWork>()
+            .RunAsync(
+                "Test",
+                application.Id!.Value.ToString(),
+                (_, _) => Task.FromResult(Microsoft.AspNetCore.Http.Results.Ok()),
+                Ct
+            );
+        Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.Ok>(migrated);
+    }
+
+    [Theory]
+    [InlineData("submit")]
+    [InlineData("resubmit")]
+    [InlineData("withdraw")]
+    [InlineData("status-duly-made")]
+    [InlineData("status-rejected")]
+    [InlineData("status-approved")]
+    [InlineData("query")]
+    [InlineData("registration-number")]
+    [InlineData("recycling-operations")]
+    [InlineData("add-interim")]
+    public async Task Cut_StatusNumberOrAddRoute_WritesTheModelAndLeavesLegacyAlone(string route)
+    {
+        ReExKnowsNothing();
+        var application = await WithWasteProcessingTypeAsync(route);
+        await MigrateAsync(application);
+        var modelBefore = (await CurrentApplicationAsync(application))!.Version;
+        var legacyBefore = (await LegacyAsync(application))!;
+        var (cutFactory, cutClient) = Alongside(s_cut);
+        using var _ = cutFactory;
+        using var __ = cutClient;
+
+        var response = await StatusNumberOrAddWriteAsync(route, application, cutClient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            $"{route}: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync(Ct)}"
+        );
+        Assert.True((await CurrentApplicationAsync(application))!.Version > modelBefore);
+        var legacy = (await LegacyAsync(application))!;
+        Assert.Equal(legacyBefore.Version, legacy.Version);
+        Assert.Equal(legacyBefore.UpdatedAt, legacy.UpdatedAt, TimeSpan.FromMilliseconds(1));
+        Assert.Equal(0, await StagedCopiesAsync());
     }
 }
