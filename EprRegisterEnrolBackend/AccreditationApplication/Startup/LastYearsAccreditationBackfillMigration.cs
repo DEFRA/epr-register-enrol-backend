@@ -26,7 +26,7 @@ public sealed class LastYearsAccreditationBackfillOptions
 }
 
 // RA-763: 2027 accreditation numbers are derived from last year's accreditation number, which the
-// seed now keeps on the application (LastYearsAccreditation). Applications seeded before that hold
+// seed now keeps on the application (LastYearsAccreditationNumber). Applications seeded before that hold
 // none, so their numbers would be derived from the registration number instead. This one-off gives
 // every existing 2027 application its 2026 accreditation number from the 5 November 2026 public
 // register (PublicRegister2026), and corrects the one 2027 number already issued from the wrong
@@ -249,7 +249,7 @@ public class LastYearsAccreditationBackfillMigration(
             return NotPlanned(application, id, Outcome.IdentityMismatch, mismatch);
 
         var row = PublicRegister2026.ByRegistrationNumber[registrationNumber];
-        var held = application.LastYearsAccreditation;
+        var held = application.LastYearsAccreditationNumber;
         var (outcome, detail) = row.AccreditationNumber switch
         {
             null => (
@@ -360,7 +360,7 @@ public class LastYearsAccreditationBackfillMigration(
         IAccreditationApplicationPersistence persistence,
         AccreditationApplicationModel application,
         string registrationNumber,
-        string? lastYearsAccreditation,
+        string? lastYearsAccreditationNumber,
         CancellationToken cancellationToken
     )
     {
@@ -369,14 +369,14 @@ public class LastYearsAccreditationBackfillMigration(
             return (IssuedNumber.NotIssued, null, null);
 
         var expected = (
-            lastYearsAccreditation is null
+            lastYearsAccreditationNumber is null
                 ? AccreditationReferenceDerivation.Derive(
                     registrationNumber,
                     AccreditationReferenceSourceKind.Registration,
                     AccreditationYear
                 )
                 : AccreditationReferenceDerivation.Derive(
-                    lastYearsAccreditation,
+                    lastYearsAccreditationNumber,
                     AccreditationReferenceSourceKind.PreviousAccreditation,
                     AccreditationYear
                 )
@@ -456,7 +456,7 @@ public class LastYearsAccreditationBackfillMigration(
             return;
 
         if (plan.Outcome == Outcome.Added)
-            await AddLastYearsAccreditationAsync(persistence, plan, confirmedBy, cancellationToken);
+            await AddLastYearsAccreditationNumberAsync(persistence, plan, confirmedBy, cancellationToken);
 
         if (plan.Issued == IssuedNumber.Corrected)
             await CorrectIssuedNumberAsync(persistence, plan, confirmedBy, cancellationToken);
@@ -470,7 +470,7 @@ public class LastYearsAccreditationBackfillMigration(
                 or Outcome.NotOnTheRegister
         || plan.Issued is IssuedNumber.WrongReportedOnly or IssuedNumber.CorrectionBlocked;
 
-    private async Task AddLastYearsAccreditationAsync(
+    private async Task AddLastYearsAccreditationNumberAsync(
         IAccreditationApplicationPersistence persistence,
         Plan plan,
         string confirmedBy,
@@ -479,9 +479,9 @@ public class LastYearsAccreditationBackfillMigration(
     {
         var updated = await persistence.UpdateFieldsAsync(
             plan.Id,
-            Builders<AccreditationApplicationModel>.Filter.Eq(a => a.LastYearsAccreditation, null),
+            Builders<AccreditationApplicationModel>.Filter.Eq(a => a.LastYearsAccreditationNumber, null),
             Builders<AccreditationApplicationModel>.Update.Set(
-                a => a.LastYearsAccreditation,
+                a => a.LastYearsAccreditationNumber,
                 new AccreditationNumberForYearModel
                 {
                     Year = LastYear,

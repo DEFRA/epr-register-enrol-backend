@@ -220,8 +220,8 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         result.Should().Be(Migration.RunResult.Applied);
         var application = await ReadAsync(id);
-        application.LastYearsAccreditation!.Year.Should().Be(2026);
-        application.LastYearsAccreditation.AccreditationNumber.Should().Be(EggerAccreditation);
+        application.LastYearsAccreditationNumber!.Year.Should().Be(2026);
+        application.LastYearsAccreditationNumber.AccreditationNumber.Should().Be(EggerAccreditation);
         Logged(LogLevel.Information)
             .Should()
             .ContainSingle(m =>
@@ -240,7 +240,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         await ApplyAsync();
 
-        (await ReadAsync(id)).LastYearsAccreditation!.AccreditationNumber.Should().Be(GapAccreditation);
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(GapAccreditation);
     }
 
     [Fact]
@@ -253,7 +253,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         await ApplyAsync();
 
-        (await ReadAsync(id)).LastYearsAccreditation!.AccreditationNumber.Should().Be(EggerAccreditation);
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(EggerAccreditation);
     }
 
     [Fact]
@@ -263,7 +263,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         await ApplyAsync();
 
-        (await ReadAsync(id)).LastYearsAccreditation!.AccreditationNumber.Should().Be(EggerAccreditation);
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(EggerAccreditation);
     }
 
     [Fact]
@@ -275,7 +275,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         await ApplyAsync();
 
-        (await ReadAsync(id)).LastYearsAccreditation.Should().BeNull();
+        (await ReadAsync(id)).LastYearsAccreditationNumber.Should().BeNull();
     }
 
     [Fact]
@@ -294,7 +294,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     public async Task The_same_number_already_held_is_left_alone()
     {
         var application = Egger();
-        application.LastYearsAccreditation = new() { Year = 2026, AccreditationNumber = EggerAccreditation };
+        application.LastYearsAccreditationNumber = new() { Year = 2026, AccreditationNumber = EggerAccreditation };
         var id = await SeedAsync(application);
         var before = await SnapshotAsync();
 
@@ -308,7 +308,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     public async Task A_different_number_already_held_is_reported_and_never_overwritten()
     {
         var application = Egger();
-        application.LastYearsAccreditation = new() { Year = 2026, AccreditationNumber = "A26ER5000270001WO" };
+        application.LastYearsAccreditationNumber = new() { Year = 2026, AccreditationNumber = "A26ER5000270001WO" };
         var id = await SeedAsync(application);
         var before = await SnapshotAsync();
 
@@ -340,8 +340,8 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         var result = await ApplyAsync();
 
         result.Should().Be(Migration.RunResult.Applied);
-        (await ReadAsync(id)).LastYearsAccreditation.Should().BeNull();
-        (await ReadAsync(other)).LastYearsAccreditation.Should().NotBeNull();
+        (await ReadAsync(id)).LastYearsAccreditationNumber.Should().BeNull();
+        (await ReadAsync(other)).LastYearsAccreditationNumber.Should().NotBeNull();
         _logger
             .Entries.Should()
             .ContainSingle(e =>
@@ -358,7 +358,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         await ApplyAsync();
 
-        (await ReadAsync(id)).LastYearsAccreditation.Should().BeNull();
+        (await ReadAsync(id)).LastYearsAccreditationNumber.Should().BeNull();
         LoggedFor(id).Should().Contain(nameof(Migration.Outcome.HeldBack));
     }
 
@@ -369,7 +369,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         await ApplyAsync();
 
-        (await ReadAsync(id)).LastYearsAccreditation.Should().BeNull();
+        (await ReadAsync(id)).LastYearsAccreditationNumber.Should().BeNull();
         _logger
             .Entries.Should()
             .ContainSingle(e =>
@@ -406,7 +406,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         var application = await ReadAsync(id);
         application.AccreditationReference.Should().Be(ClearfieldCorrected);
         application.PreviousAccreditationNumbers.Should().Equal(ClearfieldIncorrect);
-        application.LastYearsAccreditation!.AccreditationNumber.Should().Be(ClearfieldAccreditation);
+        application.LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(ClearfieldAccreditation);
         application.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
         Logged(LogLevel.Information)
             .Should()
