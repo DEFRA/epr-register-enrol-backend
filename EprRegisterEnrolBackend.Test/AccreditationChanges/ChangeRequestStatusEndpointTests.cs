@@ -419,6 +419,132 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         Legacy().Version.Should().Be(versionBefore + 1);
     }
 
+    // ---------------------------------------------------------------- supplied answers and BES (RA-495 3bb.29)
+
+    private const int DelhiSiteId = 901911;
+
+    private static BesEvidenceFileModel BesFile(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            Filename = $"{fileId}.pdf",
+            ContentType = "application/pdf",
+            ScanStatus = "Clean",
+            BesEvidenceValidFromDate = "2026-01-01",
+            BesEvidenceExpiryDate = "2027-01-01",
+            S3Key = $"bes/{fileId}",
+            S3Bucket = "bes-bucket",
+        };
+
+    // Delhi (ORS 006) is registered with no country (cleared here), coordinates, R code or conditions of export
+    // answer, outside the EU and OECD: the operator supplied them all on the request, with BES evidence.
+    private void SeedSuppliedRequest()
+    {
+        var application = Legacy();
+        application.OverseasSites!.Sites.Single(s => s.SiteId == DelhiSiteId).Country = null;
+        _factory.FakePersistence.UpdateAsync(application).Wait(Ct);
+        _factory.FakeChangeRequests.Seed(
+            new AccreditationChangeRequest
+            {
+                OrganisationId = Org,
+                ApplicationId = AppId,
+                MaterialType = MaterialType.Plastic,
+                Year = Year,
+                Status = ChangeRequestStatus.Submitted,
+                SubmittedAt = SubmittedAt,
+                Sites =
+                [
+                    new ChangeRequestSite
+                    {
+                        SiteId = DelhiSiteId,
+                        OrsId = "006",
+                        SiteName = "Delhi Polymers Pvt",
+                        Status = ChangeItemStatus.DulyMade,
+                        CaseManagementWorkItemId = _workItemId,
+                        CaseManagementStatusUpdatedAt = Watermark,
+                        Answers = new ChangeRequestSiteAnswers
+                        {
+                            Country = "India",
+                            Coordinates = "28.6139, 77.2090",
+                            OperationCodes = ["R3"],
+                            ConditionsOfExport = false,
+                        },
+                        BesEvidence = new BesEvidenceModel
+                        {
+                            BesEvidenceUploads = [BesFile("bes-1"), BesFile("bes-2")],
+                            DoYouWantToUploadMoreEvidence = false,
+                        },
+                    },
+                ],
+            }
+        );
+    }
+
+    // As the operator's own add-to-accreditation journey (promote, then upload BES) writes them onto the site.
+    [Fact]
+    public async Task Approved_WritesTheSuppliedAnswersOntoTheLegacySite()
+    {
+        SeedSuppliedRequest();
+
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var site = LegacySite(DelhiSiteId);
+        site.Selected.Should().BeTrue();
+        site.Country.Should().Be("India");
+        site.Coordinates.Should().Be("28.6139, 77.2090");
+        site.OperationCodes.Should().Equal("R3");
+        site.ConditionsOfExport.Should().BeFalse();
+        site.IsEu.Should().BeFalse();
+        site.IsOecd.Should().BeFalse();
+        site.SiteName.Should().Be("Delhi Polymers Pvt");
+    }
+
+    [Fact]
+    public async Task Approved_AddsTheItemsBesEvidenceToTheLegacySite()
+    {
+        SeedSuppliedRequest();
+
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var evidence = LegacySite(DelhiSiteId).BesEvidence;
+        evidence.Should().NotBeNull();
+        evidence!.BesEvidenceUploads.Should().BeEquivalentTo([BesFile("bes-1"), BesFile("bes-2")], o =>
+            o.Excluding(f => f.UploadedAt)
+        );
+    }
+
+    // Only what was supplied: the answers the site already held are left as they are.
+    [Fact]
+    public async Task Approved_NothingSupplied_LeavesTheSitesOwnAnswers()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var before = LegacySite(SiteId);
+
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var site = LegacySite(SiteId);
+        site.Country.Should().Be(before.Country);
+        site.Coordinates.Should().Be(before.Coordinates);
+        site.OperationCodes.Should().Equal(before.OperationCodes);
+        site.ConditionsOfExport.Should().Be(before.ConditionsOfExport);
+        site.IsEu.Should().Be(before.IsEu);
+        site.BesEvidence?.BesEvidenceUploads.Should().BeEquivalentTo(before.BesEvidence?.BesEvidenceUploads ?? []);
+    }
+
+    // A grant replayed after its item write was lost adds the evidence once.
+    [Fact]
+    public async Task Approved_LostRaceOnTheItem_AddsTheBesEvidenceOnce()
+    {
+        SeedSuppliedRequest();
+        var lost = 0;
+        _factory.FakeChangeRequests.LoseUpdateWhen = _ => Interlocked.Increment(ref lost) == 1;
+
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Push("approved", Watermark.AddMinutes(10))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        LegacySite(DelhiSiteId).BesEvidence!.BesEvidenceUploads.Select(f => f.FileId).Should().Equal("bes-1", "bes-2");
+    }
+
     // ---------------------------------------------------------------- concurrency
 
     // Sibling items share the request document, so their pushes can race: a lost version check is read again.

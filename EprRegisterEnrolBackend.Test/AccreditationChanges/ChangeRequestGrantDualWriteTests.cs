@@ -8,8 +8,11 @@ using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
+using EprRegisterEnrolBackend.DomainModel.Reconciliation;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -112,7 +115,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
 
     // The operator's granted accreditation: site 001 accredited, site 002 registered and not selected, as ReEx
     // leaves a site that is registered but not on the accreditation.
-    private async Task<AccreditationApplicationModel> AccreditationAsync()
+    private async Task<AccreditationApplicationModel> AccreditationAsync(OverseasSiteModel? registeredSite = null)
     {
         var created = await Applications.CreateAsync(
             new AccreditationApplicationModel
@@ -130,14 +133,22 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
                 AccreditationReference = "A26ER5000270001ST",
                 OverseasSites = new AccreditationApplicationOverseasSites
                 {
-                    Sites = [Site(1, "001", selected: true), Site(2, GrantedOrsId, selected: false)],
+                    Sites =
+                    [
+                        Site(1, "001", selected: true),
+                        registeredSite ?? Site(2, GrantedOrsId, selected: false),
+                    ],
                 },
             }
         );
         return created!;
     }
 
-    private async Task SubmittedRequestAsync(AccreditationApplicationModel accreditation)
+    private async Task SubmittedRequestAsync(
+        AccreditationApplicationModel accreditation,
+        ChangeRequestSiteAnswers? answers = null,
+        BesEvidenceModel? besEvidence = null
+    )
     {
         var inserted = await Requests.InsertAsync(
             new AccreditationChangeRequest
@@ -159,6 +170,8 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
                         Status = ChangeItemStatus.DulyMade,
                         CaseManagementWorkItemId = _workItemId,
                         CaseManagementStatusUpdatedAt = Watermark,
+                        Answers = answers ?? new ChangeRequestSiteAnswers(),
+                        BesEvidence = besEvidence,
                     },
                 ],
             },
@@ -288,6 +301,158 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
             .AsAccreditation()
             .ApplicationOverseasSites.Single(e => e.OverseasSiteId == ors.EntityId);
         Assert.True(modelEntry.Selected);
+    }
+
+    // 3bb.29: a registered site with no country, coordinates, R code or conditions of export answer, which the
+    // operator supplied on the request with BES evidence.
+    private static OverseasSiteModel UnansweredSite() =>
+        new()
+        {
+            SiteId = 2,
+            OrsId = GrantedOrsId,
+            SiteName = $"Site {GrantedOrsId}",
+            AddressLine1 = "1 Road",
+            TownOrCity = "Delhi",
+            ContactName = "Contact",
+            ContactEmail = "contact@example.com",
+            Code1 = "A1181",
+            RepatriatedLoads = "Returned.",
+            Selected = false,
+        };
+
+    private static readonly ChangeRequestSiteAnswers SuppliedAnswers = new()
+    {
+        Country = "India",
+        Coordinates = "28.6139, 77.2090",
+        OperationCodes = ["R3"],
+        ConditionsOfExport = false,
+    };
+
+    private static BesEvidenceModel SuppliedBesEvidence() =>
+        new()
+        {
+            DoYouWantToUploadMoreEvidence = false,
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "bes-1",
+                    Filename = "bes-1.pdf",
+                    ContentType = "application/pdf",
+                    ScanStatus = "Clean",
+                    BesEvidenceValidFromDate = "2026-01-01",
+                    BesEvidenceExpiryDate = "2027-01-01",
+                    S3Key = "bes/bes-1",
+                    S3Bucket = "bes-bucket",
+                },
+            ],
+        };
+
+    private async Task<AccreditationApplicationModel> SubmittedWithSuppliedAnswersAsync()
+    {
+        var accreditation = await AccreditationAsync(UnansweredSite());
+        await SubmittedRequestAsync(accreditation, SuppliedAnswers, SuppliedBesEvidence());
+        return accreditation;
+    }
+
+    // The fields the reconciliation report found differing between legacy and the model, for the one application.
+    private async Task<IReadOnlyDictionary<string, long>> ReconciliationDifferencesAsync()
+    {
+        var report = await new ApplicationReconciler(
+            _factory.Services.GetRequiredService<IMongoDbClientFactory>(),
+            Applications,
+            new ApplicationReadModel(Stores),
+            Stores.Conflicts,
+            TimeProvider.System
+        ).RunAsync(Ct);
+        Assert.Equal(1, report.Applications);
+        Assert.Equal(0, report.NotMigrated + report.Unreadable + report.AcceptedConflicts);
+        return report.DifferencesByField;
+    }
+
+    // As the operator's own add-to-accreditation journey and BES upload write them, then the approval carries them to
+    // the ORS and the Accreditation: legacy and model both, so reconciliation finds nothing new.
+    [Fact]
+    public async Task Approved_WritesTheSuppliedAnswersAndBesEvidenceToLegacyAndTheModel()
+    {
+        var application = await SubmittedWithSuppliedAnswersAsync();
+
+        var response = await PushAsync("approved", Watermark.AddMinutes(5));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var site = await LegacySiteAsync(application, 2);
+        Assert.Equal("India", site.Country);
+        Assert.Equal("28.6139, 77.2090", site.Coordinates);
+        Assert.Equal(["R3"], site.OperationCodes);
+        Assert.False(site.ConditionsOfExport);
+        Assert.Equal(["bes-1"], site.BesEvidence!.BesEvidenceUploads.Select(f => f.FileId));
+
+        var ors = await OrsAsync(GrantedOrsId);
+        Assert.Equal("India", ors.Country);
+        Assert.Equal("India", ors.Address!.Country);
+        Assert.False(ors.IsEu);
+        Assert.False(ors.IsOecd);
+        Assert.Equal("28.6139, 77.2090", ors.Coordinates);
+        Assert.Equal(["R3"], ors.OperationCodes);
+        Assert.False(ors.ConditionsOfExport);
+        Assert.Equal(ChangeReason.ChangeRequestGranted, ors.LastChange.Reason);
+
+        var entry = (await AccreditationEntityAsync(application)).AccreditationOverseasSites.Single(e =>
+            e.OrsId == GrantedOrsId
+        );
+        var file = Assert.Single(entry.BesEvidence);
+        Assert.Equal("bes-1", file.FileId);
+        Assert.Equal("bes/bes-1", file.S3Key);
+        var modelEntry = (await ApplicationEntityAsync(application))
+            .AsAccreditation()
+            .ApplicationOverseasSites.Single(e => e.OverseasSiteId == ors.EntityId);
+        Assert.Equal(["bes-1"], modelEntry.BesEvidence!.BesEvidenceUploads.Select(f => f.FileId));
+
+        // Only the granted site's validFrom, already known to differ (3bb.28).
+        var differences = await ReconciliationDifferencesAsync();
+        Assert.All(differences.Keys, path => Assert.EndsWith("validFrom", path));
+    }
+
+    [Fact]
+    public async Task Approved_WithSuppliedAnswers_ApprovedAgainWritesNothing()
+    {
+        var application = await SubmittedWithSuppliedAnswersAsync();
+        Assert.Equal(HttpStatusCode.OK, (await PushAsync("approved", Watermark.AddMinutes(5))).StatusCode);
+        var ors = await OrsAsync(GrantedOrsId);
+        var accreditation = await AccreditationEntityAsync(application);
+        var legacy = await Applications.GetByIdAsync(OrganisationId, application.Id.ToString()!);
+
+        Assert.Equal(HttpStatusCode.OK, (await PushAsync("approved", Watermark.AddMinutes(10))).StatusCode);
+
+        Assert.Equal(ors.Version, (await OrsAsync(GrantedOrsId)).Version);
+        Assert.Equal(accreditation.Version, (await AccreditationEntityAsync(application)).Version);
+        var after = await Applications.GetByIdAsync(OrganisationId, application.Id.ToString()!);
+        Assert.Equal(legacy!.Version, after!.Version);
+        Assert.Single(after.OverseasSites!.Sites.Single(s => s.SiteId == 2).BesEvidence!.BesEvidenceUploads);
+    }
+
+    // A failure rolls the supplied answers back with the rest of the grant; the retry writes them once.
+    [Fact]
+    public async Task Approved_WithSuppliedAnswers_RolledBackThenRetried_WritesThemOnce()
+    {
+        var application = await SubmittedWithSuppliedAnswersAsync();
+        await MigrateAsync(application);
+        _switches.FailSync = true;
+
+        Assert.Equal(
+            HttpStatusCode.InternalServerError,
+            (await PushAsync("approved", Watermark.AddMinutes(5))).StatusCode
+        );
+        var rolledBack = await LegacySiteAsync(application, 2);
+        Assert.Null(rolledBack.Country);
+        Assert.Null(rolledBack.BesEvidence);
+        Assert.Null((await OrsAsync(GrantedOrsId)).Coordinates);
+
+        _switches.FailSync = false;
+        Assert.Equal(HttpStatusCode.OK, (await PushAsync("approved", Watermark.AddMinutes(6))).StatusCode);
+
+        Assert.Single((await LegacySiteAsync(application, 2)).BesEvidence!.BesEvidenceUploads);
+        Assert.Equal("28.6139, 77.2090", (await OrsAsync(GrantedOrsId)).Coordinates);
     }
 
     [Fact]
