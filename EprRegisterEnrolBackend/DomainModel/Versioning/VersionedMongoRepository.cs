@@ -116,12 +116,14 @@ public class VersionedMongoRepository<T>(
             .FirstOrDefaultAsync(cancellationToken);
 
     /// <summary>Every current version matching <paramref name="filter"/>, for example all of a registration's ORSs.</summary>
+    /// <param name="maxTime">A limit the server enforces on the query (RA-702's load protection); none when null.</param>
     public async Task<List<T>> FindAllCurrentAsync(
         FilterDefinition<T> filter,
         IClientSessionHandle? session = null,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        TimeSpan? maxTime = null
     ) =>
-        await Find(session, filter & Filter.Eq(x => x.IsCurrent, true))
+        await Find(session, filter & Filter.Eq(x => x.IsCurrent, true), maxTime)
             .ToListAsync(cancellationToken);
 
     /// <summary>The version that was current at <paramref name="at"/>: <c>validFrom &lt;= at &lt; validTo</c>.</summary>
@@ -138,6 +140,22 @@ public class VersionedMongoRepository<T>(
                     & Filter.Gt(x => x.ValidTo, at)
             )
             .FirstOrDefaultAsync(cancellationToken);
+
+    /// <summary>
+    /// Deletes every version document matching the filter.
+    /// The versioned collections are otherwise append-only. Its one caller is the cut's
+    /// <c>ModelBackedApplicationPersistence.DeleteManyAsync</c>, whose only caller is the test-data teardown
+    /// (RA-706 decision 7); a production delete path would need its own decision first.
+    /// </summary>
+    public async Task<long> DeleteAllVersionsAsync(
+        FilterDefinition<T> filter,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var result = await collection.DeleteManyAsync(session, filter, null, cancellationToken);
+        return result.DeletedCount;
+    }
 
     /// <summary>Every version, oldest first.</summary>
     public async Task<List<T>> GetVersionsAsync(
@@ -197,8 +215,17 @@ public class VersionedMongoRepository<T>(
         return new VersionedWriteResult<T>(next, true);
     }
 
-    private IFindFluent<T, T> Find(IClientSessionHandle? session, FilterDefinition<T> filter) =>
-        session is null ? collection.Find(filter) : collection.Find(session, filter);
+    private IFindFluent<T, T> Find(
+        IClientSessionHandle? session,
+        FilterDefinition<T> filter,
+        TimeSpan? maxTime = null
+    )
+    {
+        var options = maxTime is null ? null : new FindOptions { MaxTime = maxTime };
+        return session is null
+            ? collection.Find(filter, options)
+            : collection.Find(session, filter, options);
+    }
 
     private static bool SameContent(T old, T proposed) => Content(old) == Content(proposed);
 

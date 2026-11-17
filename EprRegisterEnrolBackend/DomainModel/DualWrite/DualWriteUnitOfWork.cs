@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.DomainModel.Cut;
 using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson;
@@ -10,14 +11,15 @@ namespace EprRegisterEnrolBackend.DomainModel.DualWrite;
 /// logged once and counted, and answers 500. See <see cref="IDualWriteUnitOfWork"/>. Before the work, the
 /// application's registration group is migrated in the same transaction if it is not already (§6.2
 /// ensure-migrated), and after it the model is brought in line with what the work wrote (B8c), so no write path has to
-/// remember either.
+/// remember either. With LegacyWrites off (RA-706) the work's writes are staged and the cut's flush brings every staged application into the model before the commit, instead of the sync of this one application.
 /// </summary>
 public sealed class DualWriteUnitOfWork(
     IMongoDbClientFactory clientFactory,
     IApplicationGroupMigrator migrator,
     IApplicationModelSync sync,
     DualWriteMetrics metrics,
-    ILogger<DualWriteUnitOfWork> logger
+    ILogger<DualWriteUnitOfWork> logger,
+    CutFlush? cutFlush = null
 ) : IDualWriteUnitOfWork
 {
     public async Task<IResult> RunAsync(
@@ -82,16 +84,30 @@ public sealed class DualWriteUnitOfWork(
             clientFactory,
             async (session, token) =>
             {
+                cutFlush?.Begin(session);
+
                 // An id that is not an ObjectId matches no application; the work answers its own 404.
                 if (!ObjectId.TryParse(applicationId, out var id))
                 {
-                    return await work(session, token);
+                    var answered = await work(session, token);
+                    if (cutFlush is not null)
+                    {
+                        conflicts = await cutFlush.FlushAsync(session, token);
+                    }
+                    return answered;
                 }
 
                 var migration = await migrator.EnsureMigratedAsync(id, session, token);
                 conflicts = migration.Conflicts;
                 var result = await work(session, token);
-                await sync.SyncAsync(id, session, token);
+                if (cutFlush is null)
+                {
+                    await sync.SyncAsync(id, session, token);
+                }
+                else
+                {
+                    conflicts = [.. conflicts, .. await cutFlush.FlushAsync(session, token)];
+                }
                 return result;
             },
             attempt =>
@@ -103,7 +119,8 @@ public sealed class DualWriteUnitOfWork(
                 ),
             cancellationToken
         );
-        logger.LogRecorded(conflicts);
+        // An application's conflicts can come from both the ensure-migrated step and the cut's flush.
+        logger.LogRecorded(conflicts.DistinctBy(c => c.Id));
         return committed;
     }
 }

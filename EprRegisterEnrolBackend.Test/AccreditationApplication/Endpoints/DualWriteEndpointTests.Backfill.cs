@@ -185,6 +185,42 @@ public sealed partial class DualWriteEndpointTests
         Assert.Null((await RegistrationOfAsync(application)).Nation);
     }
 
+    // With ReadFromModel on, and after the cut, the response is served from the model, which a failed save never
+    // reached: the values ReEx resolved must still be served (RA-526), with nothing persisted.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ServedFromTheModel_GetById_BackfillSaveFails_StillServesTheResolvedValuesAndPersistsNothing(
+        bool cut
+    )
+    {
+        var application = await MigratedWithoutNationOrOrgIdAsync();
+        ReExKnowsNothing();
+        _reEx
+            .GetNationAsync(OrganisationId, ReExRegistrationId, Arg.Any<CancellationToken>())
+            .Returns(ReExResult<Nation>.Success(Nation.Wales, 200));
+        _reEx
+            .GetOrganisationNumberAsync(OrganisationId, Arg.Any<CancellationToken>())
+            .Returns(ReExResult<int?>.Success(500123, 200));
+        IApplicationModelSync failing = new FailingModelSync();
+        var (fromModelFactory, fromModelClient) = Alongside(
+            cut ? s_cut : s_readFromModelOn,
+            services => services.Replace(ServiceDescriptor.Singleton(failing))
+        );
+        using var _ = fromModelFactory;
+
+        var response = await fromModelClient.GetAsync(
+            $"/api/v1/accreditation-applications/{OrganisationId}/{application.Id}",
+            Ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await JsonAsync(response);
+        Assert.Equal("Wales", body.GetProperty("nation").GetString());
+        Assert.Equal(500123, body.GetProperty("orgId").GetInt32());
+        Assert.Null((await RegistrationOfAsync(application)).Nation);
+    }
+
     [Fact]
     public async Task GetById_OrgIdBackfill_ReachesTheModelOrganisation()
     {

@@ -98,6 +98,53 @@ public sealed class ApplicationVersionsTests : IDisposable
         ((AnnualChargeDetails)read!.Details).ChargeYear.Should().Be(2028);
     }
 
+    // RA-706: legacy stops being written at the cut, so the model holds when the application was created.
+    [Fact]
+    public async Task GetCurrent_StoredWithItsCreationTime_ReturnsIt()
+    {
+        var createdAt = new DateTime(2026, 11, 2, 14, 30, 0, DateTimeKind.Utc);
+        var application = DomainModelBuilders.Application(
+            _registrationId,
+            DomainModelBuilders.AnnualChargeDetails()
+        );
+        application.CreatedAt = createdAt;
+        var created = await _applications.CreateAsync<AnnualChargeDetails>(
+            application,
+            Change(),
+            cancellationToken: Ct
+        );
+
+        var read = await _applications.GetCurrentAsync<AnnualChargeDetails>(
+            created.EntityId,
+            cancellationToken: Ct
+        );
+
+        read!.CreatedAt.Should().Be(createdAt);
+    }
+
+    // Versions written before RA-706 have no createdAt until the backfill reaches them.
+    [Fact]
+    public async Task GetCurrent_StoredBeforeCreationTimesWereKept_ReturnsNoCreationTime()
+    {
+        var created = await CreateAsync(DomainModelBuilders.AnnualChargeDetails());
+        await _factory
+            .GetClient()
+            .GetDatabase(_databaseName)
+            .GetCollection<BsonDocument>(DomainModelCollections.ApplicationVersions)
+            .UpdateManyAsync(
+                FilterDefinition<BsonDocument>.Empty,
+                Builders<BsonDocument>.Update.Unset("createdAt"),
+                cancellationToken: Ct
+            );
+
+        var read = await _applications.GetCurrentAsync<AnnualChargeDetails>(
+            created.EntityId,
+            cancellationToken: Ct
+        );
+
+        read!.CreatedAt.Should().BeNull();
+    }
+
     [Fact]
     public async Task GetCurrent_OfAnotherType_ReturnsNull()
     {
@@ -264,6 +311,115 @@ public sealed class ApplicationVersionsTests : IDisposable
             .Should()
             .Contain("registrationId_applicationType_current");
     }
+
+    // RA-706: after the cut these lookups read applicationVersions, so each has an index on its current versions.
+    private async Task<List<string>> WinningIndexesAsync(BsonDocument filter)
+    {
+        await CreateAsync(DomainModelBuilders.TonnageChangeDetails());
+        var explain = await _factory
+            .GetClient()
+            .GetDatabase(_databaseName)
+            .RunCommandAsync<BsonDocument>(
+                new BsonDocument(
+                    "explain",
+                    new BsonDocument
+                    {
+                        { "find", DomainModelCollections.ApplicationVersions },
+                        { "filter", filter },
+                    }
+                ),
+                cancellationToken: Ct
+            );
+        return [.. IndexNames(explain["queryPlanner"]["winningPlan"])];
+    }
+
+    [Fact]
+    public async Task FindCurrent_ByCaseManagementWorkItem_UsesTheWorkItemIndex() =>
+        (
+            await WinningIndexesAsync(
+                new BsonDocument
+                {
+                    {
+                        "caseManagementWorkItemId",
+                        new BsonBinaryData(Guid.NewGuid(), GuidRepresentation.Standard)
+                    },
+                    { "isCurrent", true },
+                }
+            )
+        )
+            .Should()
+            .Contain("caseManagementWorkItemId_current");
+
+    [Fact]
+    public async Task FindCurrent_ByOrganisation_UsesTheOrganisationIndex() =>
+        (
+            await WinningIndexesAsync(
+                new BsonDocument
+                {
+                    { "reExOrganisationId", "6512a0f0c0ffee0000000001" },
+                    { "applicationType", "Accreditation" },
+                    { "isCurrent", true },
+                }
+            )
+        )
+            .Should()
+            .Contain("reExOrganisationId_current");
+
+    [Fact]
+    public async Task FindCurrent_ByReExRegistration_UsesTheReExRegistrationIndex() =>
+        (
+            await WinningIndexesAsync(
+                new BsonDocument
+                {
+                    { "reExRegistrationId", "6512a0f0c0ffee0000000002" },
+                    { "applicationType", "Accreditation" },
+                    { "isCurrent", true },
+                }
+            )
+        )
+            .Should()
+            .Contain("reExRegistrationId_current");
+
+    [Fact]
+    public async Task FindCurrent_ByReservedAccreditationNumber_UsesTheReservedNumberIndex() =>
+        (
+            await WinningIndexesAsync(
+                new BsonDocument
+                {
+                    { "details.reservedAccreditationNumber", "A27EX1234567P" },
+                    { "isCurrent", true },
+                }
+            )
+        )
+            .Should()
+            .Contain("reservedAccreditationNumber_current");
+
+    // The accreditation-number lookup ORs the reserved number with the accreditations holding it; each branch needs
+    // its own index, or the $or scans the collection.
+    [Fact]
+    public async Task FindCurrent_ByAccreditationNumberLookup_UsesAnIndexForEachBranch() =>
+        (
+            await WinningIndexesAsync(
+                new BsonDocument
+                {
+                    {
+                        "$or",
+                        new BsonArray
+                        {
+                            new BsonDocument("details.reservedAccreditationNumber", "A27EX1234567P"),
+                            new BsonDocument(
+                                "details.accreditationId",
+                                new BsonDocument("$in", new BsonArray { ObjectId.GenerateNewId() })
+                            ),
+                        }
+                    },
+                    { "isCurrent", true },
+                }
+            )
+        )
+            .Should()
+            .Contain("reservedAccreditationNumber_current")
+            .And.Contain("accreditationId_current");
 
     private static IEnumerable<string> IndexNames(BsonValue stage) =>
         stage switch

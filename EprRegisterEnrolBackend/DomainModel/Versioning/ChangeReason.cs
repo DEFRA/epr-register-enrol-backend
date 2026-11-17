@@ -53,4 +53,10 @@ public enum ChangeReason
     /// year's. A number already held for the year is never changed by a write path.
     /// </summary>
     AccreditationNumberAdded,
+
+    /// <summary>
+    /// An Application version written before the model held createdAt
+    /// was given it from the legacy document (RA-706).
+    /// </summary>
+    CreatedAtBackfilled,
 }
