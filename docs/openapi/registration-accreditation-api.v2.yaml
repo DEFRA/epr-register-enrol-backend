@@ -15,9 +15,10 @@ info:
     * **Application-only data is not exposed.** That means application status, section statuses,
       uploaded files, sampling and inspection plans, `formSubmissionTime`, and
       the site flags `isNewSite` and `selected`.
-    * **Status is a history with effective dates.** `statusHistory[]` records each status with the
-      date it takes effect, which may be in the future or backdated (e.g. a suspension).
-      `status` is a projection: the latest entry whose `effectiveDate` is on or before today.
+    * **Status is a history with effective periods.** `statusHistory[]` records each status with
+      the period it applies: `effectiveFromDate` (which may be in the future) and `effectiveToDate`
+      (`null` on the latest entry). `status` is a projection: the latest entry whose
+      `effectiveFromDate` is on or before today.
     * **Accredited overseas sites have their own status history** on the same rules, because an
       individual site can be suspended without suspending the whole accreditation.
     * **Tonnage band** is held on the accreditation, and its history is the accreditation's own
@@ -44,7 +45,7 @@ info:
       signing, to be specified later.
     * ASSUMPTION: `accreditationNumber` is unique across all organisations, so it identifies an
       accreditation on its own.
-    * ASSUMPTION: a status takes effect at the start of its `effectiveDate` (UK time), and
+    * ASSUMPTION: a status takes effect at the start of its `effectiveFromDate` (UK time), and
       "today" is evaluated when the request is served.
     * ASSUMPTION: a tonnage band cannot be forward-dated or backdated; it takes effect when it
       is recorded.
@@ -232,9 +233,9 @@ components:
       in: query
       description: |
         Only accreditations with this current status. Only `approved` accreditations are served
-        today, so `suspended` and `cancelled` are valid and return an empty page until case
-        management can send them.
-      schema: { type: string, enum: [approved, suspended, cancelled] }
+        today, so `suspended`, `cancelled` and `withdrawn` are valid and return an empty page
+        until case management can send them.
+      schema: { type: string, enum: [approved, suspended, cancelled, withdrawn] }
     RegistrationNumberFilter:
       name: registrationNumber
       in: query
@@ -339,12 +340,12 @@ components:
     AccreditationStatus:
       type: string
       description: |
-        Statuses an accreditation, or an overseas site on it, can hold. It starts as `approved`
-        when the application is approved. Allowed transitions (matching ReEx):
+        Statuses an accreditation, an overseas site on it, or an interim site can hold. It starts
+        as `approved` when the application is approved. Allowed transitions (matching ReEx):
         `approved → suspended`, `suspended → approved`, `suspended → cancelled`. Cancellation is
         only reachable from `suspended`. Application statuses (submitted, queried, rejected, ...)
         are not exposed.
-      enum: [approved, suspended, cancelled]
+      enum: [approved, suspended, cancelled, withdrawn]
     TonnageBand:
       type: string
       description: Planned PRN/PERN issuance band. Values match ReEx `TONNAGE_BAND`.
@@ -359,14 +360,21 @@ components:
         phone: { type: string, nullable: true }
     StatusHistoryEntry:
       type: object
-      description: Used by both accreditations and accredited overseas sites.
-      required: [status, effectiveDate, recordedAt]
+      description: Used by accreditations, accredited overseas sites and interim sites. Where two entries share an `effectiveFromDate`, the one with the later `recordedAt` takes precedence, and the earlier one is kept with its `effectiveToDate` equal to that same date.
+      required: [status, effectiveFromDate, effectiveToDate, recordedAt]
       properties:
         status: { $ref: '#/components/schemas/AccreditationStatus' }
-        effectiveDate:
+        effectiveFromDate:
           type: string
           format: date
-          description: When the status takes effect. May be in the future, or backdated (e.g. a suspension), so it is not necessarily the date it was recorded.
+          description: 'The first day the status applies: the later of 1 January of the accreditation year and the UK date the change was recorded. May be in the future.'
+          example: '2027-01-01'
+        effectiveToDate:
+          type: string
+          format: date
+          nullable: true
+          description: 'The last day the status applies: the day before the next entry''s `effectiveFromDate`. `null` on the latest entry.'
+          example: null
         recordedAt:
           type: string
           format: date-time
@@ -385,7 +393,7 @@ components:
       type: object
       description: |
         The accreditation without its history; returned by search. `status` is a projection for
-        today: the latest status history entry whose `effectiveDate` is on or before today, so a
+        today: the latest status history entry whose `effectiveFromDate` is on or before today, so a
         forward-dated change does not show here until its date arrives. `tonnageBand` is the
         latest tonnage band history entry.
       required: [organisationNumber, registrationNumber, accreditationNumber, accreditationYear, material, wasteProcessingType, status]
@@ -489,11 +497,6 @@ components:
         conditionsOfExport: { type: boolean, nullable: true }
         isEu: { type: boolean }
         isOecd: { type: boolean }
-        validFrom:
-          type: string
-          format: date-time
-          nullable: true
-          description: Date the site was approved onto the accreditation (ReEx ORS-A approval date).
         status: { $ref: '#/components/schemas/AccreditationStatus' }
         statusHistory:
           type: array

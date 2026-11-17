@@ -1,4 +1,3 @@
-using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Status;
 using Microsoft.Extensions.Logging;
@@ -19,7 +18,7 @@ public static class AccreditationApiMapper
     public static AccreditationSummaryDto ToSummary(
         AccreditationApplicationModel application,
         DateTimeOffset now
-    ) => Summary(application, now, StatusHistory(application, null));
+    ) => Summary(application, now, StatusHistory(application));
 
     // RA-647: a record that cannot be addressed by its business references (organisation number,
     // registration number, accreditation number) cannot honour the contract, so it is dropped from
@@ -75,7 +74,7 @@ public static class AccreditationApiMapper
         bool includeWithdrawn = false
     )
     {
-        var history = StatusHistory(application, null);
+        var history = StatusHistory(application);
         var summary = Summary(application, now, history);
         var recordedAt = Approval(application);
 
@@ -125,7 +124,7 @@ public static class AccreditationApiMapper
         DateTimeOffset now
     )
     {
-        var history = StatusHistory(application, site);
+        var history = StatusHistory(application);
 
         return new AccreditedOverseasSiteDto
         {
@@ -141,7 +140,6 @@ public static class AccreditationApiMapper
             ConditionsOfExport = site.ConditionsOfExport,
             IsEu = site.IsEu,
             IsOecd = site.IsOecd,
-            ValidFrom = ParseInstant(site.ValidFrom),
             Status = Project(history, now),
             StatusHistory = history,
             InterimSites = site
@@ -185,38 +183,23 @@ public static class AccreditationApiMapper
             },
         };
 
-    // No effective-dated history is held yet, so an accreditation, or one of its sites, has the
-    // single `approved` entry the v2 mapping document prescribes for records that predate it.
-    // It is recorded when the application was approved (the last case management status push,
-    // else the last edit). A site takes effect on its ReEx approval date when it has one.
+    // No status changes are held yet, so an accreditation, or one of its sites, has the single
+    // `approved` entry the v2 mapping document prescribes for records that predate them. It is
+    // recorded when the application was approved (the last case management status push, else the
+    // last edit). The dates follow from that: see StatusHistoryBuilder.
     private static List<StatusHistoryEntryDto> StatusHistory(
-        AccreditationApplicationModel application,
-        OverseasSiteModel? site
-    )
-    {
-        var recordedAt = Approval(application);
-        var effective = site is null ? recordedAt : ParseInstant(site.ValidFrom) ?? recordedAt;
+        AccreditationApplicationModel application
+    ) => StatusHistoryBuilder.Build([(Approved, Approval(application))], application.Year);
 
-        return
-        [
-            new StatusHistoryEntryDto
-            {
-                Status = Approved,
-                EffectiveDate = UkDate(effective),
-                RecordedAt = recordedAt,
-            },
-        ];
-    }
-
-    // The status for today: the latest entry whose effective date is on or before today. A
-    // record always starts out approved, so a first entry that is not yet effective still
-    // projects as approved rather than as nothing.
+    // The status for today: the latest entry whose first day is on or before today. A record
+    // always starts out approved, so a first entry that is not yet in effect still projects as
+    // approved rather than as nothing.
     private static string Project(IReadOnlyList<StatusHistoryEntryDto> history, DateTimeOffset now)
     {
         var today = UkDate(now.UtcDateTime);
         return history
-                .Where(entry => entry.EffectiveDate <= today)
-                .OrderBy(entry => entry.EffectiveDate)
+                .Where(entry => entry.EffectiveFromDate <= today)
+                .OrderBy(entry => entry.EffectiveFromDate)
                 .ThenBy(entry => entry.RecordedAt)
                 .Select(entry => entry.Status)
                 .LastOrDefault()
@@ -232,17 +215,6 @@ public static class AccreditationApiMapper
         value.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
             : value.ToUniversalTime();
-
-    // ValidFrom is held as the raw ISO string ReEx sent; unparseable is treated as absent.
-    private static DateTime? ParseInstant(string? value) =>
-        DateTimeOffset.TryParse(
-            value,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal,
-            out var parsed
-        )
-            ? parsed.UtcDateTime
-            : null;
 
     private static InterimSiteDto ToInterimSite(InterimSiteModel interim) =>
         new()
