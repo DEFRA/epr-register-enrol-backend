@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.CdpUploader.Models;
@@ -471,6 +472,113 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
             uploads.Should().HaveCount(clean + infected + 1);
         }
     }
+
+    // 3bb.38: a grant adds the request's files to the site's own on the accreditation, so the operator is held to the
+    // application's rules across both before submitting: the cap counts the site's existing files too.
+    [Theory]
+    [InlineData(6, 4, HttpStatusCode.UnprocessableEntity)]
+    [InlineData(5, 4, HttpStatusCode.Created)]
+    public async Task BesEvidence_TenFileCapCountsTheSitesExistingFilesOnTheAccreditation(
+        int onSite,
+        int onRequest,
+        HttpStatusCode expected
+    )
+    {
+        SeedAccreditationWith(accreditation =>
+            FindSite(accreditation, 901911).BesEvidence = new BesEvidenceModel
+            {
+                BesEvidenceUploads = BesFiles("held", onSite),
+            }
+        );
+        await AddSite(901911);
+        var draft = _factory.FakeChangeRequests.All.Single();
+        draft.Sites.Single().BesEvidence = new BesEvidenceModel { BesEvidenceUploads = BesFiles("requested", onRequest) };
+        (await _factory.FakeChangeRequests.UpdateAsync(draft, Ct)).Should().BeTrue();
+
+        var response = await _client.PostAsJsonAsync(
+            $"{Sites}/901911/bes-evidence/files",
+            new { fileUploadId = await SeedCleanUpload("file-new", "bes.pdf"), besEvidenceExpiryDate = "2027-12-31" },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(expected);
+        if (expected == HttpStatusCode.UnprocessableEntity)
+            (await ReadJson(response)).GetProperty("detail").GetString()
+                .Should().Be(AccreditationApplicationEndpoints.MaxBesEvidenceFilesMessage);
+    }
+
+    // 3bb.38: RA-571's rule, as on the application: no file on the accreditation application (its sampling plan and
+    // every site's BES evidence) or in the request may share a base name with the upload, whatever the extension or case.
+    [Theory]
+    [InlineData("site", "Evidence.PDF")]
+    [InlineData("other-site", "evidence.docx")]
+    [InlineData("sampling-plan", "EVIDENCE.pdf")]
+    [InlineData("request", "evidence.docx")]
+    public async Task BesEvidence_DuplicateFilenameAnywhereOnTheAccreditationOrRequest_Returns422(
+        string heldOn,
+        string held
+    )
+    {
+        SeedAccreditationWith(accreditation =>
+        {
+            if (heldOn == "site")
+                FindSite(accreditation, 901911).BesEvidence = new BesEvidenceModel { BesEvidenceUploads = [BesFile("held", held)] };
+            if (heldOn == "other-site")
+                FindSite(accreditation, 901901).BesEvidence = new BesEvidenceModel { BesEvidenceUploads = [BesFile("held", held)] };
+            if (heldOn == "sampling-plan")
+                accreditation.SamplingPlan.Files.Add(
+                    new AccreditationApplicationFile
+                    {
+                        FileId = "held",
+                        Filename = held,
+                        ContentType = "application/pdf",
+                        UploadedByUserId = "user",
+                        S3Key = "sampling-plan/held",
+                    }
+                );
+        });
+        await AddSite(901911);
+        if (heldOn == "request")
+        {
+            var draft = _factory.FakeChangeRequests.All.Single();
+            draft.Sites.Single().BesEvidence = new BesEvidenceModel { BesEvidenceUploads = [BesFile("held", held)] };
+            (await _factory.FakeChangeRequests.UpdateAsync(draft, Ct)).Should().BeTrue();
+        }
+
+        var response = await _client.PostAsJsonAsync(
+            $"{Sites}/901911/bes-evidence/files",
+            new { fileUploadId = await SeedCleanUpload("file-new", "evidence.pdf") },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await response.Content.ReadFromJsonAsync<string>(Ct)).Should().Be(DuplicateFilenameGuard.DuplicateFilenameMessage);
+        var uploads = _factory.FakeChangeRequests.All.Single().Sites.Single().BesEvidence?.BesEvidenceUploads ?? [];
+        uploads.Should().NotContain(f => f.FileId == "file-new");
+    }
+
+    private void SeedAccreditationWith(Action<AccreditationApplicationModel> change)
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year);
+        change(accreditation);
+        _factory.FakePersistence.Clear();
+        _factory.FakePersistence.Seed(accreditation);
+    }
+
+    private static OverseasSiteModel FindSite(AccreditationApplicationModel accreditation, int siteId) =>
+        accreditation.OverseasSites!.Sites.Single(s => s.SiteId == siteId);
+
+    private static BesEvidenceFileModel BesFile(string fileId, string filename) =>
+        new()
+        {
+            FileId = fileId,
+            Filename = filename,
+            ScanStatus = "Clean",
+            S3Key = $"bes-evidence/{fileId}",
+        };
+
+    private static List<BesEvidenceFileModel> BesFiles(string prefix, int count) =>
+        Enumerable.Range(1, count).Select(i => BesFile($"{prefix}-{i}", $"{prefix}-{i}.pdf")).ToList();
 
     // France is in the EU and OECD; India stops needing evidence once its conditions of export are
     // met, judged on the effective values (the ORS's own or the operator's answers).
@@ -1635,7 +1743,7 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
         site["isEu"]!.GetValue<bool>().Should().BeFalse();
         site["isOecd"]!.GetValue<bool>().Should().BeFalse();
         site["suppliedFields"]!.AsArray().Select(f => f!.GetValue<string>())
-            .Should().Equal("coordinates", "operationCodes", "conditionsOfExport");
+            .Should().Equal("coordinates", "operationCodes", "conditionsOfExport", "besEvidence");
         site["chargePence"]!.GetValue<int>().Should().Be(32800);
         var file = site["besEvidence"]!["files"]!.AsArray().Should().ContainSingle().Subject!;
         file["fileId"]!.GetValue<string>().Should().Be("file-1");

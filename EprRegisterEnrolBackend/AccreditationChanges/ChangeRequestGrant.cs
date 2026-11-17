@@ -107,6 +107,8 @@ internal static class ChangeRequestGrant
     /// <summary>
     /// 3bb.29: the request's BES evidence files join the site's, as the operator's own BES upload adds each file to
     /// the site (<c>AddBesEvidenceFile</c>). A file the site already holds is not added again.
+    /// 3bb.38: a grant cannot refuse, so the request's own upload held the files to the application's duplicate
+    /// filename rule and per-site cap across these and the site's (<c>ChangeRequestRules.GrantedBesEvidence</c>).
     /// </summary>
     private static void AddBesEvidence(OverseasSiteModel site, BesEvidenceModel? evidence)
     {

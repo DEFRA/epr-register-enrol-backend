@@ -632,17 +632,20 @@ public static class AccreditationChangeEndpoints
         if (uploadError is not null)
             return uploadError;
 
-        // Same cap as RA-605 on the application, at the same point.
-        var overCap = AccreditationApplicationEndpoints.BesEvidenceFileCapRejection(requestSite.BesEvidence);
+        // Same cap as RA-605 on the application, at the same point. 3bb.38: across the files the site already holds
+        // on the accreditation and the request's, as a grant adds the request's to the site's.
+        var overCap = AccreditationApplicationEndpoints.BesEvidenceFileCapRejection(
+            ChangeRequestRules.GrantedBesEvidence(ors, requestSite.BesEvidence)
+        );
         if (overCap is not null)
             return overCap;
 
-        // Same rule as RA-571 on the application: no two files in the request share a name.
-        if (
-            draft
-                .Sites.SelectMany(s => s.BesEvidence?.BesEvidenceUploads ?? [])
-                .Any(f => string.Equals(f.Filename, scannedFile!.Filename, StringComparison.OrdinalIgnoreCase))
-        )
+        // Same rule as RA-571 on the application. 3bb.38: no file on the accreditation application (where a grant
+        // puts the request's files) or in the request may share the upload's name.
+        var existingFilenames = DuplicateFilenameGuard
+            .ExistingFilenames(accreditation!)
+            .Concat(draft.Sites.SelectMany(s => s.BesEvidence?.BesEvidenceUploads ?? []).Select(f => f.Filename));
+        if (DuplicateFilenameGuard.IsDuplicate(scannedFile!.Filename, existingFilenames))
             return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
 
         requestSite.BesEvidence ??= new BesEvidenceModel();
