@@ -84,6 +84,20 @@ public class FakeChangeRequestPersistence : IChangeRequestPersistence
             );
     }
 
+    public Task<AccreditationChangeRequest?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        CancellationToken ct = default
+    )
+    {
+        lock (_lock)
+        {
+            var request = _requests.Find(r =>
+                r.Sites.Exists(s => s.CaseManagementWorkItemId == workItemId)
+            );
+            return Task.FromResult(request is null ? null : Copy(request));
+        }
+    }
+
     public Task<bool> InsertAsync(AccreditationChangeRequest request, CancellationToken ct = default)
     {
         lock (_lock)

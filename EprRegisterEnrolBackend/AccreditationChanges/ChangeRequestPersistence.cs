@@ -33,6 +33,15 @@ public interface IChangeRequestPersistence
         CancellationToken ct = default
     );
 
+    /// <summary>
+    /// RA-495: the request holding the add-ORS item whose Case Management work item this is, if any. Only site
+    /// items are sent to Case Management, so only they are searched.
+    /// </summary>
+    Task<AccreditationChangeRequest?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        CancellationToken ct = default
+    );
+
     /// <summary>False when another InProgress request already exists for the accreditation.</summary>
     Task<bool> InsertAsync(AccreditationChangeRequest request, CancellationToken ct = default);
 
@@ -108,6 +117,14 @@ public class ChangeRequestPersistence
             )
             .SortByDescending(r => r.CreatedAt)
             .ToListAsync(ct);
+
+    public async Task<AccreditationChangeRequest?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        CancellationToken ct = default
+    ) =>
+        await Collection
+            .Find(Filter.ElemMatch(r => r.Sites, s => s.CaseManagementWorkItemId == workItemId))
+            .FirstOrDefaultAsync(ct);
 
     public async Task<bool> InsertAsync(
         AccreditationChangeRequest request,
@@ -207,6 +224,12 @@ public class ChangeRequestPersistence
                     .Ascending(r => r.RegistrationId)
                     .Descending(r => r.CreatedAt),
                 new CreateIndexOptions { Name = "by_registration_newest_first" }
+            ),
+            // RA-495: Case Management's status pushes find an item by its work item id. Not unique: items not yet
+            // submitted, or reopened, hold none, and a multikey unique index would make those collide.
+            new(
+                builder.Ascending("sites.caseManagementWorkItemId"),
+                new CreateIndexOptions { Name = "by_site_case_management_work_item" }
             ),
         ];
 }
