@@ -657,11 +657,14 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
             new { fileUploadId = await SeedCleanUpload("file-1", "same.pdf") },
             Ct
         );
-        (await _client.PostAsJsonAsync(
-            $"{Sites}/901912/bes-evidence/files",
+        // 3bb.38: on a site that takes BES evidence (901912 is in the OECD, so takes none and was refused for that).
+        var duplicate = await _client.PostAsJsonAsync(
+            $"{Sites}/901911/bes-evidence/files",
             new { fileUploadId = await SeedCleanUpload("file-2", "SAME.pdf") },
             Ct
-        )).StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        );
+        duplicate.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await duplicate.Content.ReadFromJsonAsync<string>(Ct)).Should().Be(DuplicateFilenameGuard.DuplicateFilenameMessage);
     }
 
     [Fact]
