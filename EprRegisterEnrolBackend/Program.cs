@@ -185,6 +185,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         RegulatoryNumberSequenceCounterPersistence
     >();
     builder.Services.AddSingleton<IRegulatoryNumberGenerator, RegulatoryNumberGenerator>();
+    // RA-783: random digits for a new accreditation number sequence.
+    builder.Services.AddSingleton<IAccreditationSequenceRandom, AccreditationSequenceRandom>();
     builder.Services.AddSingleton<
         IRegulatoryNumberBackfillStatus,
         RegulatoryNumberBackfillStatus

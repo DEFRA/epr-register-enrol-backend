@@ -40,6 +40,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         _client = factory.CreateClient();
         _factory.FakePersistence.Clear();
         _factory.FakeCounters.Clear();
+        _factory.FakeSequenceRandom.Clear();
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
@@ -112,12 +113,15 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task A_lapsed_renewal_derives_from_the_previous_reference_across_the_gap()
+    // RA-783 AC03: accredited before but not last year, so a new sequence, reusing neither the
+    // registration's (9999) nor the earlier accreditation's (0042).
+    public async Task A_renewal_after_a_break_gets_a_new_sequence()
     {
         SeedPrevious(2026, "A26ER0001230042PL");
         var app = SeedApplication(2028);
+        _factory.FakeSequenceRandom.Enqueue(42, 583);
 
-        (await IssuedReference(app)).Should().Be("A28ER0001230042PL");
+        (await IssuedReference(app)).Should().Be("A28ER0001230583PL");
     }
 
     [Fact]
@@ -162,7 +166,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         SeedPrevious(2026, "A26ER0001230042PL", a => a.ApplicationStatus = status);
         var app = SeedApplication(2027);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL");
     }
 
     [Theory]
@@ -175,7 +179,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         SeedPrevious(2026, accreditationReference);
         var app = SeedApplication(2027);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL");
     }
 
     public static TheoryData<string, Action<AccreditationApplicationModel>> UnrelatedPrevious =>
@@ -198,7 +202,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         SeedPrevious(2026, "A26ER0001230042PL", unrelate);
         var app = SeedApplication(2027);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL", because);
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL", because);
     }
 
     [Fact]
@@ -223,7 +227,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
             }
         );
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999GO");
+        (await IssuedReference(app)).Should().Be("A27ER0001230583GO");
     }
 
     [Fact]
@@ -256,7 +260,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
     {
         var app = SeedApplication(2026);
 
-        (await IssuedReference(app)).Should().Be("A26ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A26ER0001230583PL");
     }
 
     [Fact]
@@ -265,7 +269,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         SeedPrevious(2026, "A26ER0001230042PL", a => a.RegistrationId = null);
         var app = SeedApplication(2027, a => a.RegistrationId = null);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL");
     }
 
     [Fact]
@@ -280,7 +284,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         var message = await response.Content.ReadAsStringAsync(
             TestContext.Current.CancellationToken
         );
-        message.Should().Contain("A26ER000123004PL").And.Contain("previous accreditation");
+        message.Should().Contain("A26ER000123004PL").And.Contain("is not a valid");
         (await Stored(app)).AccreditationReference.Should().BeNull();
     }
 

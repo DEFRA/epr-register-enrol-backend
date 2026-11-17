@@ -475,10 +475,11 @@ public static class AccreditationApplicationEndpoints
         };
     }
 
-    // RA-690 (replaces RA-448's counter draw and "reapply" YY increment): the accreditation
-    // reference is DERIVED from the application's registration reference - leading R becomes A,
-    // YY becomes the application's own Year - and never drawn from a sequence counter. See
-    // AccreditationReferenceDerivation for the rule itself.
+    // RA-783: the accreditation reference is built by AccreditationNumberRules from the
+    // operator's history: a continuous renewal keeps last year's number with the year changed; a
+    // first-time accreditation or a renewal after a break gets the registration's agency, process
+    // type and OrgId with a new random sequence. The material code is always the application's
+    // own, so glass is GR or GO. It is never drawn from a sequence counter.
     //
     // Deliberately takes no request body. The nation, OrgId, year and regenerate an older
     // management-be still sends are ignored: the application's stored Year is authoritative, and
@@ -489,6 +490,7 @@ public static class AccreditationApplicationEndpoints
         string applicationId,
         IAccreditationApplicationPersistence persistence,
         IDualWriteUnitOfWork unitOfWork,
+        IAccreditationSequenceRandom random,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
@@ -503,6 +505,7 @@ public static class AccreditationApplicationEndpoints
                 logIssued = null;
                 var (issueResult, log) = await IssueAccreditationNumberAsync(
                     persistence,
+                    random,
                     loggerFactory,
                     organisationId,
                     applicationId,
@@ -518,8 +521,13 @@ public static class AccreditationApplicationEndpoints
         return result;
     }
 
+    // RA-783 AC04: a random number already held is generated again, up to this many times. With
+    // about 1,000 sequences per org and material, a second attempt is already very unlikely.
+    internal const int MaxAccreditationNumberAttempts = 5;
+
     private static async Task<(IResult Result, Action? LogIssued)> IssueAccreditationNumberAsync(
         IAccreditationApplicationPersistence persistence,
+        IAccreditationSequenceRandom random,
         ILoggerFactory loggerFactory,
         string organisationId,
         string applicationId,
@@ -548,13 +556,13 @@ public static class AccreditationApplicationEndpoints
         if (application.AccreditationReference is not null)
             return (Results.Ok(application), null);
 
-        // The source, in order:
-        // 1. The latest previous accreditation reference held in this backend, so a renewal of an
-        //    accreditation this service issued (2028 onwards) keeps it, even across a lapsed year.
+        // The operator's latest accreditation before this year, if any:
+        // 1. The latest earlier approved accreditation held in this backend (2028 onwards).
         //    Without a registration id there is nothing to match previous years on.
         // 2. RA-763: last year's accreditation number, which Seed keeps from ReEx. 2026
         //    accreditations were granted in ReEx, so this is the source for 2027 renewals.
-        // 3. The registration reference, when neither is held.
+        // AccreditationNumberRules then decides from its year whether this is a continuous
+        // renewal, a renewal after a break, or (with neither) a first-time accreditation.
         var previous = string.IsNullOrEmpty(application.RegistrationId)
             ? null
             : await persistence.GetLatestPreviousAccreditationAsync(
@@ -566,9 +574,9 @@ public static class AccreditationApplicationEndpoints
             );
         var lastYears = application.LastYearsAccreditationNumber;
         // Last year's number must be for the year before. Seed always stores that, so another
-        // year means the data was changed; it fails visibly rather than falling back to the
-        // registration reference, which is how RA-763's wrong numbers were issued.
-        if (previous is null && lastYears is not null && lastYears.Year != application.Year - 1)
+        // year means the data was changed; it fails visibly rather than being treated as a
+        // renewal after a break.
+        if (lastYears is not null && lastYears.Year != application.Year - 1 && previous is null)
             return (
                 Results.UnprocessableEntity(
                     $"Last year's accreditation number '{lastYears.AccreditationNumber}' is for "
@@ -578,47 +586,93 @@ public static class AccreditationApplicationEndpoints
                 null
             );
 
-        var (sourceKind, sourceReference) = (previous, lastYears) switch
+        // The later of the two; on the same year, the one held here.
+        var (latest, latestKind) = (previous, lastYears) switch
         {
+            ({ } held, { } number) when number.Year > held.Year => (
+                new PriorAccreditation(number.Year, number.AccreditationNumber),
+                AccreditationReferenceSourceKind.LastYearsAccreditationNumber
+            ),
             ({ } held, _) => (
-                AccreditationReferenceSourceKind.PreviousAccreditation,
-                held.AccreditationReference!
+                new PriorAccreditation(held.Year, held.AccreditationReference!),
+                AccreditationReferenceSourceKind.PreviousAccreditation
             ),
             (null, { } number) => (
-                AccreditationReferenceSourceKind.LastYearsAccreditationNumber,
-                number.AccreditationNumber
+                new PriorAccreditation(number.Year, number.AccreditationNumber),
+                AccreditationReferenceSourceKind.LastYearsAccreditationNumber
             ),
-            _ => (AccreditationReferenceSourceKind.Registration, registrationReference),
+            _ => ((PriorAccreditation?)null, AccreditationReferenceSourceKind.Registration),
         };
 
-        var derivation = AccreditationReferenceDerivation.Derive(
-            sourceReference,
-            sourceKind,
-            application.Year
-        );
-        // A malformed source must fail visibly rather than issue a wrong reference. A malformed
-        // accreditation number deliberately does not fall back to the registration reference.
-        if (!derivation.IsValid)
-            return (Results.UnprocessableEntity(derivation.Error), null);
+        string materialCode;
+        try
+        {
+            materialCode = RegulatoryReferenceCodes.MaterialCodeFor(
+                application.MaterialType,
+                application.GlassRecyclingProcess
+            );
+        }
+        catch (ArgumentException e)
+        {
+            return (Results.UnprocessableEntity(e.Message), null);
+        }
 
         // Duplicate live applications for the same registration, material and year are possible
-        // (Seed is best-effort, with no unique index) and would derive the same reference. A
-        // reference is never issued twice. Read-then-write: a unique index is a follow-up to RA-691.
-        // A withdrawn holder doesn't block: an operator who withdrew and started again derives
-        // the same reference, and the withdrawn record keeps its value for audit.
-        var holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
-            derivation.Reference!,
-            application.Id!.Value
-        );
-        if (holders.Any(h => h.BlocksIssuing))
+        // (Seed is best-effort, with no unique index). A reference is never issued twice.
+        // Read-then-write: a unique index is a follow-up to RA-691. A withdrawn holder doesn't
+        // block, and the withdrawn record keeps its value for audit.
+        AccreditationNumberResult? built = null;
+        IReadOnlyList<AccreditationReferenceHolder> holders = [];
+        for (var attempt = 1; attempt <= MaxAccreditationNumberAttempts; attempt++)
+        {
+            built = AccreditationNumberRules.Generate(
+                application.Year,
+                registrationReference,
+                latest,
+                materialCode,
+                random.NextBelow1000
+            );
+            // A malformed source must fail visibly rather than issue a wrong reference. A
+            // malformed accreditation number deliberately does not fall back to the registration.
+            if (!built.IsValid)
+                return (Results.UnprocessableEntity(built.Error), null);
+
+            holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
+                built.AccreditationNumber!,
+                application.Id!.Value
+            );
+            if (!holders.Any(h => h.BlocksIssuing))
+                break;
+
+            // A renewal's number is fixed, so a clash is a conflict. A random one is drawn again.
+            if (built.Case == AccreditationNumberCase.ContinuousRenewal)
+                return (
+                    Results.Conflict(
+                        $"Accreditation reference {built.AccreditationNumber} is already held by another application; it cannot be issued again."
+                    ),
+                    null
+                );
+            built = null;
+        }
+
+        if (built is null)
             return (
                 Results.Conflict(
-                    $"Accreditation reference {derivation.Reference} is already held by another application; it cannot be issued again."
+                    $"No accreditation reference that isn't already held was found in {MaxAccreditationNumberAttempts} attempts."
                 ),
                 null
             );
 
-        application.AccreditationReference = derivation.Reference;
+        var (sourceKind, sourceReference) =
+            built.Case == AccreditationNumberCase.ContinuousRenewal
+                ? (latestKind, latest!.AccreditationNumber)
+                : (AccreditationReferenceSourceKind.Registration, registrationReference);
+        var sourceApplicationId =
+            sourceKind == AccreditationReferenceSourceKind.PreviousAccreditation
+                ? previous?.ApplicationId
+                : null;
+
+        application.AccreditationReference = built.AccreditationNumber;
         application.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application, session);
@@ -632,9 +686,10 @@ public static class AccreditationApplicationEndpoints
                 LogAccreditationReferenceIssued(
                     loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
                     updated,
+                    built.Case!.Value,
                     sourceKind,
                     sourceReference,
-                    previous?.ApplicationId,
+                    sourceApplicationId,
                     withdrawnHolderIds
                 )
         );
@@ -645,13 +700,14 @@ public static class AccreditationApplicationEndpoints
     // application it came from, and any withdrawn applications already holding the reference are
     // named so support can see why two records share it.
     private const string IssuedTemplate =
-        "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference}";
+        "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} as case={NumberCase} from sourceKind={SourceKind} sourceReference={SourceReference}";
     private const string SourceApplicationTemplate = " sourceApplicationId={SourceApplicationId}";
     private const string WithdrawnHoldersTemplate = " withdrawnHolderIds={WithdrawnHolderIds}";
 
     private static void LogAccreditationReferenceIssued(
         ILogger logger,
         AccreditationApplicationModel application,
+        AccreditationNumberCase numberCase,
         AccreditationReferenceSourceKind sourceKind,
         string sourceReference,
         string? sourceApplicationId,
@@ -666,13 +722,21 @@ public static class AccreditationApplicationEndpoints
         switch (sourceApplicationId, withdrawnHolderIds.Count)
         {
             case (null, 0):
-                logger.LogInformation(IssuedTemplate, reference, id, sourceKind, sourceReference);
+                logger.LogInformation(
+                    IssuedTemplate,
+                    reference,
+                    id,
+                    numberCase,
+                    sourceKind,
+                    sourceReference
+                );
                 break;
             case (null, _):
                 logger.LogInformation(
                     IssuedTemplate + WithdrawnHoldersTemplate,
                     reference,
                     id,
+                    numberCase,
                     sourceKind,
                     sourceReference,
                     withdrawnIds
@@ -683,6 +747,7 @@ public static class AccreditationApplicationEndpoints
                     IssuedTemplate + SourceApplicationTemplate,
                     reference,
                     id,
+                    numberCase,
                     sourceKind,
                     sourceReference,
                     sourceApplicationId
@@ -693,6 +758,7 @@ public static class AccreditationApplicationEndpoints
                     IssuedTemplate + SourceApplicationTemplate + WithdrawnHoldersTemplate,
                     reference,
                     id,
+                    numberCase,
                     sourceKind,
                     sourceReference,
                     sourceApplicationId,

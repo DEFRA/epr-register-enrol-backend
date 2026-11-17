@@ -43,6 +43,7 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
         _client = factory.CreateClient();
         _factory.FakePersistence.Clear();
         _factory.FakeCounters.Clear();
+        _factory.FakeSequenceRandom.Clear();
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
@@ -106,7 +107,7 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
     {
         var app = SeedApplication(2027);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL");
     }
 
     // An accreditation this service issued (2028 onwards) is held here and ReEx doesn't have it,
@@ -147,6 +148,30 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
         (await IssuedReference(app)).Should().Be("A27ER0001230042GR");
     }
 
+    // RA-783 AC07: 2026 glass numbers from ReEx end in GL; the renewal keeps the sequence and
+    // takes GR or GO from this year's recycling process.
+    [Theory]
+    [InlineData(GlassRecyclingProcess.Remelt, "A27ER0001230042GR")]
+    [InlineData(GlassRecyclingProcess.Other, "A27ER0001230042GO")]
+    public async Task A_glass_renewal_from_a_GL_number_takes_this_years_recycling_process(
+        GlassRecyclingProcess process,
+        string expected
+    )
+    {
+        var app = SeedApplication(
+            2027,
+            a =>
+            {
+                a.MaterialType = MaterialType.Glass;
+                a.GlassRecyclingProcess = process;
+                a.RegistrationReference = "R26ER0001239999GL";
+                a.LastYearsAccreditationNumber = LastYears("A26ER0001230042GL");
+            }
+        );
+
+        (await IssuedReference(app)).Should().Be(expected);
+    }
+
     [Fact]
     public async Task A_malformed_last_years_number_returns_422_naming_it_without_falling_back()
     {
@@ -161,7 +186,7 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
         var message = await response.Content.ReadAsStringAsync(
             TestContext.Current.CancellationToken
         );
-        message.Should().Contain("A26ER000123004PL").And.Contain("last year's accreditation number");
+        message.Should().Contain("A26ER000123004PL").And.Contain("Last year's accreditation number");
         (await Stored(app)).AccreditationReference.Should().BeNull();
     }
 

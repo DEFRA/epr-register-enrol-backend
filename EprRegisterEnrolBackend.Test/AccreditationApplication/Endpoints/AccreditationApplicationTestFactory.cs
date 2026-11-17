@@ -31,6 +31,9 @@ public class AccreditationApplicationTestFactory : WebApplicationFactory<Program
     // whole test host Mongo-free.
     public FakeCaseManagementAuthNonceStore FakeCaseManagementAuthNonceStore { get; } = new();
 
+    // RA-783: predictable random digits for new accreditation number sequences.
+    public FakeAccreditationSequenceRandom FakeSequenceRandom { get; } = new();
+
     public IReExApiAdapter MockReExAdapter { get; } = Substitute.For<IReExApiAdapter>();
     public ICaseWorkingApiAdapter MockCaseWorkingAdapter { get; } =
         Substitute.For<ICaseWorkingApiAdapter>();
@@ -53,6 +56,7 @@ public class AccreditationApplicationTestFactory : WebApplicationFactory<Program
             services.AddSingleton<IRegulatoryNumberSequenceCounterPersistence>(FakeCounters);
             services.AddSingleton<IPendingUploadService>(FakePendingUploadService);
             services.AddSingleton<ICaseManagementAuthNonceStore>(FakeCaseManagementAuthNonceStore);
+            services.AddSingleton<IAccreditationSequenceRandom>(FakeSequenceRandom);
             services.AddSingleton(MockReExAdapter);
             services.AddSingleton(MockCaseWorkingAdapter);
             services.AddSingleton(MockCdpUploaderService);
