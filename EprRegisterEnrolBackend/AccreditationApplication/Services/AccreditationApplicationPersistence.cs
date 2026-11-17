@@ -119,18 +119,14 @@ public class AccreditationApplicationPersistence(
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        GlassRecyclingProcess? glassRecyclingProcess,
         int beforeYear
     )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
-        // Eq on a null glass process also matches a document with no such field, which is how
-        // non-glass applications are stored.
         var filter = filters.And(
             filters.Eq(a => a.OrganisationId, organisationId),
             filters.Eq(a => a.RegistrationId, registrationId),
             filters.Eq(a => a.MaterialType, materialType),
-            filters.Eq(a => a.GlassRecyclingProcess, glassRecyclingProcess),
             filters.Lt(a => a.Year, beforeYear),
             filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
             filters.Ne(a => a.AccreditationReference, null),
@@ -145,8 +141,9 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
-    // RA-690: no index yet, so this scans the collection. It runs once per approval, not per
-    // read, so the scan is acceptable for now. The unique index on AccreditationReference that
+    // RA-690: no index yet, so this scans the collection. It runs once per draw on approval (RA-783:
+    // at most MaxAccreditationNumberAttempts, and almost always once), not per read, so the scan
+    // is acceptable for now. The unique index on AccreditationReference that
     // follows RA-691 (once the counter-era references are migrated) will back it and replace
     // this check.
     public async Task<

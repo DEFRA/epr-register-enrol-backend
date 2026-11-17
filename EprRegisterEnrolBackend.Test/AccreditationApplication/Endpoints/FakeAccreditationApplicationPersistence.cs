@@ -148,7 +148,6 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        GlassRecyclingProcess? glassRecyclingProcess,
         int beforeYear
     )
     {
@@ -157,7 +156,6 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 a.OrganisationId == organisationId
                 && a.RegistrationId == registrationId
                 && a.MaterialType == materialType
-                && a.GlassRecyclingProcess == glassRecyclingProcess
                 && a.Year < beforeYear
                 && a.ApplicationStatus == ApplicationStatus.Approved
                 && !string.IsNullOrEmpty(a.AccreditationReference)

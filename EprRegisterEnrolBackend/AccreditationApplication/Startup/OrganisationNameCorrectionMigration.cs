@@ -385,7 +385,7 @@ public class OrganisationNameCorrectionMigration(
     }
 
     // Every reference carries the organisation number at characters 5-10 (see
-    // AccreditationReferenceDerivation), so a record holding a reference for any other organisation
+    // AccreditationNumberRules), so a record holding a reference for any other organisation
     // is not ours, whatever its OrgId says.
     private static bool IsTargetApplication(AccreditationApplicationModel application) =>
         application.OrgId is null or OrgId

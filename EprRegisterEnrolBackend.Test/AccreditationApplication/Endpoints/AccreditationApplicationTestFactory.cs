@@ -31,7 +31,7 @@ public class AccreditationApplicationTestFactory : WebApplicationFactory<Program
     // whole test host Mongo-free.
     public FakeCaseManagementAuthNonceStore FakeCaseManagementAuthNonceStore { get; } = new();
 
-    // RA-783: predictable random digits for new accreditation number sequences.
+    // Returns queued draws, so a test can predict a new accreditation number's sequence.
     public FakeAccreditationSequenceRandom FakeSequenceRandom { get; } = new();
 
     public IReExApiAdapter MockReExAdapter { get; } = Substitute.For<IReExApiAdapter>();

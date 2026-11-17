@@ -2360,7 +2360,7 @@ public class HttpCaseWorkingApiAdapterTests
         body["typeId"]!.GetValue<string>().Should().Be("add-overseas-site");
         var payload = body["payload"]!;
         payload["operatorRequestId"]!.GetValue<string>().Should().Be(request.RequestId);
-        payload["accreditationReference"]!.GetValue<string>().Should().Be("A26EX0500190001PL");
+        payload["accreditationReference"]!.GetValue<string>().Should().Be("A26EX0500190101PL");
         payload["chargePence"]!.GetValue<int>().Should().Be(32800);
         payload["changeType"]!.GetValue<string>().Should().Be("add-overseas-site");
         payload["accreditationYear"]!.GetValue<int>().Should().Be(2026);

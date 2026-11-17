@@ -159,11 +159,16 @@ internal sealed class DevExporterOrg
             )
             .RegistrationNumber(sequence: 1);
 
-    // Derived from the registration number, as a real accreditation number is, e.g. A26EX0500180001PL.
+    // Built as a real first-time accreditation number is (AccreditationNumberRules), with a fixed
+    // "random" sequence so the seed is the same every time, e.g. A26EX0500180101PL. Every year
+    // keeps the sequence, as a continuous renewal would.
     internal string AccreditationNumberFor(int year) =>
-        AccreditationReferenceDerivation
-            .Derive(RegistrationNumberFor(year), AccreditationReferenceSourceKind.Registration, year)
-            .Reference!;
+        DevAccreditationNumber.For(
+            year,
+            RegistrationNumberFor(year),
+            RegulatoryReferenceCodes.MaterialCodeFor(Material, glassRecyclingProcess: null),
+            sequence: 1
+        );
 }
 
 /// <summary>
@@ -202,9 +207,25 @@ internal sealed class DevReprocessorRegistration
             )
             .RegistrationNumber(Sequence);
 
-    // e.g. A26ER0500180002GR.
+    // e.g. A26ER0500180102GR, built as the exporter registration's is.
     internal string AccreditationNumberFor(int year) =>
-        AccreditationReferenceDerivation
-            .Derive(RegistrationNumberFor(year), AccreditationReferenceSourceKind.Registration, year)
-            .Reference!;
+        DevAccreditationNumber.For(
+            year,
+            RegistrationNumberFor(year),
+            RegulatoryReferenceCodes.MaterialCodeFor(Material, GlassRecyclingProcess),
+            Sequence
+        );
+}
+
+/// <summary>
+/// RA-783: a dev seed's accreditation number, built by <see cref="AccreditationNumberRules"/> as a
+/// first-time number. Its "random" draw is fixed at 100 + the registration's sequence, so it never
+/// equals the registration's own sequence and differs between an org's registrations.
+/// </summary>
+internal static class DevAccreditationNumber
+{
+    internal static string For(int year, string registrationNumber, string materialCode, int sequence) =>
+        AccreditationNumberRules
+            .Generate(year, registrationNumber, latestAccreditation: null, materialCode, () => 100 + sequence)
+            .AccreditationNumber!;
 }

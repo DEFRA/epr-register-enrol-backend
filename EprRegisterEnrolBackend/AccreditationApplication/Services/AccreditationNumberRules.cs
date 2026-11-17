@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
@@ -19,14 +20,18 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 ///   <item>
 ///     <term>First-time (never accredited)</term>
 ///     <description>The registration number's agency, process type and OrgId, with a new
-///     sequence: <c>0</c> + 3 random digits.</description>
+///     sequence: <c>0</c> + 3 random digits, never the registration number's own.</description>
 ///   </item>
 ///   <item>
 ///     <term>Renewal after a break (accredited before, not last year)</term>
-///     <description>As first-time. The new sequence differs from the registration number's and
-///     the earlier accreditation number's.</description>
+///     <description>As first-time. The new sequence also differs from the earlier accreditation
+///     number's.</description>
 ///   </item>
 /// </list>
+///
+/// A new sequence also avoids every sequence the organisation's other accreditation numbers use
+/// under the same agency, process type and OrgId (its other sites, in any year and any material),
+/// so it can never take the number another site's renewal will need.
 ///
 /// In every case the material code is the application's own (<see
 /// cref="RegulatoryReferenceCodes.MaterialCodeFor"/>), so glass becomes GR for remelt or GO for
@@ -38,10 +43,11 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// </remarks>
 public static partial class AccreditationNumberRules
 {
-    // Tries for a random sequence that differs from the registration's and the earlier
-    // accreditation's. Only two of the 1,000 values are excluded, so this is never reached
-    // with a real random source; it only stops a stuck source looping forever.
-    internal const int MaxSequenceAttempts = 20;
+    // Tries for a random sequence that isn't excluded. An organisation excludes a handful of the
+    // 1,000 values (its registration, earlier accreditation and other sites' sequences), so
+    // running out means the random source is broken, not the data: it throws rather than returning
+    // an invalid result.
+    internal const int MaxSequenceAttempts = 50;
 
     /// <summary>Which rule applies, from the year of the operator's latest accreditation.</summary>
     public static AccreditationNumberCase CaseFor(int yearAppliedFor, int? latestAccreditedYear) =>
@@ -59,12 +65,17 @@ public static partial class AccreditationNumberRules
     /// accredited.</param>
     /// <param name="materialCode">The application's material code: ST, WO, AL, FB, PA, PL, GR or GO.</param>
     /// <param name="randomBelow1000">Returns a random number from 0 to 999.</param>
+    /// <param name="organisationAccreditationNumbers">Every accreditation number the
+    /// organisation's applications hold; a new sequence avoids those under this registration's
+    /// agency, process type and OrgId. Malformed ones are skipped: they're other applications'
+    /// data, not this one's source.</param>
     public static AccreditationNumberResult Generate(
         int yearAppliedFor,
         string? registrationNumber,
         PriorAccreditation? latestAccreditation,
         string materialCode,
-        Func<int> randomBelow1000
+        Func<int> randomBelow1000,
+        IEnumerable<string>? organisationAccreditationNumbers = null
     )
     {
         ArgumentOutOfRangeException.ThrowIfNegative(yearAppliedFor);
@@ -75,28 +86,32 @@ public static partial class AccreditationNumberRules
                 $"'{materialCode}' is not an accreditation material code."
             );
 
-        if (latestAccreditation is { } prior && prior.Year >= yearAppliedFor)
-            return AccreditationNumberResult.Invalid(
-                $"The earlier accreditation '{prior.AccreditationNumber}' is for {prior.Year}, "
-                    + $"which isn't before {yearAppliedFor}."
-            );
+        // A malformed earlier number fails visibly in every case, rather than being renewed or
+        // silently left out of the sequences a new number must avoid.
+        if (latestAccreditation is { } prior)
+        {
+            if (prior.Year >= yearAppliedFor)
+                return AccreditationNumberResult.Invalid(
+                    $"{prior.Description} '{prior.AccreditationNumber}' is for {prior.Year}, "
+                        + $"which isn't before {yearAppliedFor}."
+                );
+            if (!IsReference(prior.AccreditationNumber, 'A'))
+                return AccreditationNumberResult.Invalid(
+                    $"{prior.Description} '{prior.AccreditationNumber}' is not a valid "
+                        + "A-prefixed 17-character reference."
+                );
+        }
 
         var numberCase = CaseFor(yearAppliedFor, latestAccreditation?.Year);
         var year = $"{yearAppliedFor % 100:D2}";
 
         if (numberCase == AccreditationNumberCase.ContinuousRenewal)
         {
-            var lastYears = latestAccreditation!.AccreditationNumber;
-            if (!IsReference(lastYears, 'A'))
-                return AccreditationNumberResult.Invalid(
-                    $"Last year's accreditation number '{lastYears}' is not a valid "
-                        + "A-prefixed 17-character reference."
-                );
-
             // Agency, process type, OrgId and sequence kept; year and material replaced.
+            var lastYears = latestAccreditation!.AccreditationNumber;
             return AccreditationNumberResult.Valid(
                 numberCase,
-                $"A{year}{lastYears![AgencyToSequence]}{materialCode}"
+                $"A{year}{lastYears[AgencyToSequence]}{materialCode}"
             );
         }
 
@@ -107,11 +122,12 @@ public static partial class AccreditationNumberRules
             );
 
         var excluded = new HashSet<string> { registrationNumber![Sequence] };
-        if (
-            latestAccreditation?.AccreditationNumber is { } earlier
-            && IsReference(earlier, 'A')
-        )
-            excluded.Add(earlier[Sequence]);
+        if (latestAccreditation is { } earlier)
+            excluded.Add(earlier.AccreditationNumber[Sequence]);
+        var agencyToOrg = registrationNumber[AgencyToOrg];
+        foreach (var held in organisationAccreditationNumbers ?? [])
+            if (IsReference(held, 'A') && held[AgencyToOrg] == agencyToOrg)
+                excluded.Add(held[Sequence]);
 
         for (var attempt = 0; attempt < MaxSequenceAttempts; attempt++)
         {
@@ -131,9 +147,9 @@ public static partial class AccreditationNumberRules
             );
         }
 
-        return AccreditationNumberResult.Invalid(
-            $"No new sequence differing from {string.Join(" and ", excluded)} was found in "
-                + $"{MaxSequenceAttempts} attempts."
+        throw new InvalidOperationException(
+            $"The random source gave only excluded sequences ({string.Join(", ", excluded)}) in "
+                + $"{MaxSequenceAttempts} draws."
         );
     }
 
@@ -145,8 +161,8 @@ public static partial class AccreditationNumberRules
     private static bool IsReference(string? reference, char prefix) =>
         reference is not null && ReferenceFormat().IsMatch(reference) && reference[0] == prefix;
 
-    // As AccreditationReferenceDerivation, but GL is accepted: 2026 glass numbers from ReEx and
-    // the public register end in GL, and the material is replaced anyway. [0-9] rather than \d,
+    // GL is accepted: 2026 glass numbers from ReEx and the public register end in GL, and the
+    // material is replaced anyway. [0-9] rather than \d,
     // which also matches non-ASCII digits. S6444: explicit timeout.
     [GeneratedRegex(
         "^[RA][0-9]{2}[ESWN][RX][0-9]{6}[0-9]{4}(ST|WO|AL|FB|PA|PL|GR|GO|GL)$",
@@ -167,8 +183,21 @@ public enum AccreditationNumberCase
     RenewalAfterBreak,
 }
 
-/// <summary>An earlier accreditation: its year and number, for example 2026, A26ER5003240164PL.</summary>
-public sealed record PriorAccreditation(int Year, string AccreditationNumber);
+/// <summary>
+/// An earlier accreditation: its year and number, for example 2026, A26ER5003240164PL, and where it
+/// came from, so an error can name the right source.
+/// </summary>
+public sealed record PriorAccreditation(
+    int Year,
+    string AccreditationNumber,
+    AccreditationReferenceSourceKind Source = AccreditationReferenceSourceKind.LastYearsAccreditationNumber
+)
+{
+    internal string Description =>
+        Source == AccreditationReferenceSourceKind.PreviousAccreditation
+            ? "The previous accreditation reference"
+            : "Last year's accreditation number";
+}
 
 public sealed record AccreditationNumberResult
 {

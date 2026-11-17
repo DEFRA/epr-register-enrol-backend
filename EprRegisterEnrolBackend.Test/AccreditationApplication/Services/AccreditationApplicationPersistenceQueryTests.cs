@@ -350,8 +350,8 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
 
     // ── RA-690: latest previous approved accreditation ───────────────────────
     //
-    // Against a real mongod so the filter (including the null glass process matching a non-glass
-    // document) and the year-then-edited ordering are proven to run server-side.
+    // Against a real mongod so the filter and the year-then-edited ordering are proven to run
+    // server-side.
 
     private async Task<AccreditationApplicationModel> CreateApproved(
         int year,
@@ -368,16 +368,8 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
 
     private Task<AccreditationApplicationModel?> LatestPreviousBefore(
         int year,
-        MaterialType materialType = MaterialType.Steel,
-        GlassRecyclingProcess? glassRecyclingProcess = null
-    ) =>
-        _sut.GetLatestPreviousAccreditationAsync(
-            "org-1",
-            "reg-1",
-            materialType,
-            glassRecyclingProcess,
-            year
-        );
+        MaterialType materialType = MaterialType.Steel
+    ) => _sut.GetLatestPreviousAccreditationAsync("org-1", "reg-1", materialType, year);
 
     [Fact]
     public async Task GetLatestPreviousAccreditationAsync_NAndNPlus1Approved_ReturnsNPlus1()
@@ -463,32 +455,22 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
         result.Should().BeNull();
     }
 
+    // RA-783: a glass registration has one process, and a renewal keeps its number when the
+    // operator changes it, so the glass process isn't matched.
     [Fact]
-    public async Task GetLatestPreviousAccreditationAsync_GlassApplications_ReturnsOnlyTheSameGlassProcess()
+    public async Task GetLatestPreviousAccreditationAsync_GlassApplication_IsFoundWhateverItsProcess()
     {
-        void Glass(AccreditationApplicationModel a, GlassRecyclingProcess process)
-        {
-            a.MaterialType = MaterialType.Glass;
-            a.GlassRecyclingProcess = process;
-        }
         var remelt = await CreateApproved(
             2026,
             "A26ER0001230042GR",
-            a => Glass(a, GlassRecyclingProcess.Remelt)
-        );
-        var other = await CreateApproved(
-            2026,
-            "A26ER0001230042GO",
-            a => Glass(a, GlassRecyclingProcess.Other)
+            a =>
+            {
+                a.MaterialType = MaterialType.Glass;
+                a.GlassRecyclingProcess = GlassRecyclingProcess.Remelt;
+            }
         );
 
-        (await LatestPreviousBefore(2027, MaterialType.Glass, GlassRecyclingProcess.Remelt))!
-            .Id.Should()
-            .Be(remelt.Id);
-        (await LatestPreviousBefore(2027, MaterialType.Glass, GlassRecyclingProcess.Other))!
-            .Id.Should()
-            .Be(other.Id);
-        (await LatestPreviousBefore(2027, MaterialType.Glass)).Should().BeNull();
+        (await LatestPreviousBefore(2027, MaterialType.Glass))!.Id.Should().Be(remelt.Id);
     }
 
     private async Task<AccreditationApplicationModel> CreateWithReference(

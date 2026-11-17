@@ -13,8 +13,8 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
 // RA-763: a 2027 renewal's reference is last year's accreditation number, kept from ReEx at Seed,
 // with YY swapped. A previous accreditation held in this backend comes first (see
-// AccreditationNumberFromPreviousAccreditationEndpointTests); an application holding neither
-// derives from the registration reference.
+// AccreditationNumberFromPreviousAccreditationEndpointTests); an application holding neither gets
+// a first-time number (RA-783: the registration's agency and OrgId with a random sequence).
 public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
     : IClassFixture<AccreditationApplicationTestFactory>
 {
@@ -103,7 +103,7 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
     }
 
     [Fact]
-    public async Task An_application_holding_no_last_years_number_derives_from_the_registration_reference()
+    public async Task An_application_holding_no_last_years_number_gets_a_first_time_number()
     {
         var app = SeedApplication(2027);
 
@@ -228,6 +228,53 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
         (await IssuedReference(app)).Should().Be("A27ER0001230055PL");
     }
 
+    // RA-783: a renewal's number is fixed, so another live application holding it is a conflict,
+    // not a reason to draw again.
+    [Fact]
+    public async Task A_renewal_whose_number_is_already_held_returns_409_naming_it()
+    {
+        SeedApplication(
+            2027,
+            a =>
+            {
+                a.RegistrationId = "reg-other";
+                a.AccreditationReference = "A27ER0001230042PL";
+            }
+        );
+        var app = SeedApplication(2027, a => a.LastYearsAccreditationNumber = LastYears(LastYearsNumber));
+
+        var response = await Post(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var message = await response.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken
+        );
+        message.Should().Contain("A27ER0001230042PL").And.NotContain("attempts");
+        (await Stored(app)).AccreditationReference.Should().BeNull();
+    }
+
+    // With an earlier approval held here, a last year's number for the wrong year is ignored: the
+    // held approval is the history, so a 2026 approval and a 2029 application is a renewal after a
+    // break, whatever the wrong-year number says.
+    [Fact]
+    public async Task A_wrong_year_last_years_number_is_ignored_when_an_earlier_approval_is_held()
+    {
+        SeedApplication(
+            2026,
+            a =>
+            {
+                a.ApplicationStatus = ApplicationStatus.Approved;
+                a.AccreditationReference = "A26ER0001230055PL";
+            }
+        );
+        var app = SeedApplication(
+            2029,
+            a => a.LastYearsAccreditationNumber = LastYears("A27ER0001230042PL", year: 2027)
+        );
+
+        (await IssuedReference(app)).Should().Be("A29ER0001230583PL");
+    }
+
     [Fact]
     public async Task Deriving_from_last_years_number_never_draws_from_a_sequence_counter()
     {
@@ -266,6 +313,7 @@ public class AccreditationNumberFromLastYearsAccreditationNumberLoggingTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var entry = IssuedLogEntry();
         entry.Should().Contain("accreditationReference=A27ER0001230042PL");
+        entry.Should().Contain("case=ContinuousRenewal");
         entry.Should().Contain("sourceKind=LastYearsAccreditationNumber");
         entry.Should().Contain("sourceReference=A26ER0001230042PL");
         entry.Should().NotContain("withdrawnHolderIds");

@@ -417,7 +417,6 @@ public sealed class ModelBackedApplicationPersistence(
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        GlassRecyclingProcess? glassRecyclingProcess,
         int beforeYear
     )
     {
@@ -427,7 +426,6 @@ public sealed class ModelBackedApplicationPersistence(
         return results
             .Where(a =>
                 a.MaterialType == materialType
-                && a.GlassRecyclingProcess == glassRecyclingProcess
                 && a.Year < beforeYear
                 && a.ApplicationStatus == ApplicationStatus.Approved
                 // As legacy's query: null or empty, not blank, unlike the accreditation API's lookups.

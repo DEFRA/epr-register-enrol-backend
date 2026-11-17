@@ -260,12 +260,11 @@ public sealed partial class ModelBackedApplicationPersistenceTests
     }
 
     [Theory]
-    [InlineData(MaterialType.Plastic, null, 2027)]
-    [InlineData(MaterialType.Plastic, null, 2026)]
-    [InlineData(MaterialType.Glass, GlassRecyclingProcess.Remelt, 2028)]
+    [InlineData(MaterialType.Plastic, 2027)]
+    [InlineData(MaterialType.Plastic, 2026)]
+    [InlineData(MaterialType.Glass, 2028)]
     public async Task GetLatestPreviousAccreditation_FindsTheSameApplication(
         MaterialType material,
-        GlassRecyclingProcess? process,
         int beforeYear
     )
     {
@@ -275,14 +274,12 @@ public sealed partial class ModelBackedApplicationPersistenceTests
             ReExOrganisationId,
             ReExRegistrationId,
             material,
-            process,
             beforeYear
         );
         var model = await _model.GetLatestPreviousAccreditationAsync(
             ReExOrganisationId,
             ReExRegistrationId,
             material,
-            process,
             beforeYear
         );
 

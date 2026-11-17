@@ -521,8 +521,8 @@ public static class AccreditationApplicationEndpoints
         return result;
     }
 
-    // RA-783 AC04: a random number already held is generated again, up to this many times. With
-    // about 1,000 sequences per org and material, a second attempt is already very unlikely.
+    // RA-783 AC04: a random number already held is drawn again, up to this many times. With
+    // about 1,000 sequences per org and material, a second draw is already very unlikely.
     internal const int MaxAccreditationNumberAttempts = 5;
 
     private static async Task<(IResult Result, Action? LogIssued)> IssueAccreditationNumberAsync(
@@ -569,14 +569,15 @@ public static class AccreditationApplicationEndpoints
                 application.OrganisationId,
                 application.RegistrationId,
                 application.MaterialType,
-                application.GlassRecyclingProcess,
                 application.Year
             );
         var lastYears = application.LastYearsAccreditationNumber;
         // Last year's number must be for the year before. Seed always stores that, so another
-        // year means the data was changed; it fails visibly rather than being treated as a
-        // renewal after a break.
-        if (lastYears is not null && lastYears.Year != application.Year - 1 && previous is null)
+        // year means the data was changed. With nothing held here that fails visibly rather than
+        // being treated as a renewal after a break; with an earlier approval held here, that
+        // approval is the history and last year's number is ignored.
+        var lastYearsIsForLastYear = lastYears?.Year == application.Year - 1;
+        if (lastYears is not null && !lastYearsIsForLastYear && previous is null)
             return (
                 Results.UnprocessableEntity(
                     $"Last year's accreditation number '{lastYears.AccreditationNumber}' is for "
@@ -587,85 +588,57 @@ public static class AccreditationApplicationEndpoints
             );
 
         // The later of the two; on the same year, the one held here.
-        var (latest, latestKind) = (previous, lastYears) switch
-        {
-            ({ } held, { } number) when number.Year > held.Year => (
-                new PriorAccreditation(number.Year, number.AccreditationNumber),
-                AccreditationReferenceSourceKind.LastYearsAccreditationNumber
-            ),
-            ({ } held, _) => (
-                new PriorAccreditation(held.Year, held.AccreditationReference!),
-                AccreditationReferenceSourceKind.PreviousAccreditation
-            ),
-            (null, { } number) => (
-                new PriorAccreditation(number.Year, number.AccreditationNumber),
-                AccreditationReferenceSourceKind.LastYearsAccreditationNumber
-            ),
-            _ => ((PriorAccreditation?)null, AccreditationReferenceSourceKind.Registration),
-        };
+        PriorAccreditation? latest =
+            lastYearsIsForLastYear && (previous is null || lastYears!.Year > previous.Year)
+                ? new PriorAccreditation(lastYears!.Year, lastYears.AccreditationNumber)
+            : previous is not null
+                ? new PriorAccreditation(
+                    previous.Year,
+                    previous.AccreditationReference!,
+                    AccreditationReferenceSourceKind.PreviousAccreditation
+                )
+            : null;
 
-        string materialCode;
-        try
-        {
-            materialCode = RegulatoryReferenceCodes.MaterialCodeFor(
-                application.MaterialType,
-                application.GlassRecyclingProcess
-            );
-        }
-        catch (ArgumentException e)
-        {
-            return (Results.UnprocessableEntity(e.Message), null);
-        }
+        // RA-783: ReEx should always say whether a glass registration is remelt or other. When it
+        // didn't, the number is issued as other (GO), the only glass codes case management accepts
+        // being GR and GO, and an error is logged so someone can confirm the process.
+        var glassProcessMissing =
+            application.MaterialType == MaterialType.Glass
+            && application.GlassRecyclingProcess is null;
+        var materialCode = RegulatoryReferenceCodes.MaterialCodeFor(
+            application.MaterialType,
+            glassProcessMissing ? GlassRecyclingProcess.Other : application.GlassRecyclingProcess
+        );
 
-        // Duplicate live applications for the same registration, material and year are possible
-        // (Seed is best-effort, with no unique index). A reference is never issued twice.
-        // Read-then-write: a unique index is a follow-up to RA-691. A withdrawn holder doesn't
-        // block, and the withdrawn record keeps its value for audit.
-        AccreditationNumberResult? built = null;
-        IReadOnlyList<AccreditationReferenceHolder> holders = [];
-        for (var attempt = 1; attempt <= MaxAccreditationNumberAttempts; attempt++)
-        {
-            built = AccreditationNumberRules.Generate(
-                application.Year,
-                registrationReference,
-                latest,
-                materialCode,
-                random.NextBelow1000
-            );
-            // A malformed source must fail visibly rather than issue a wrong reference. A
-            // malformed accreditation number deliberately does not fall back to the registration.
-            if (!built.IsValid)
-                return (Results.UnprocessableEntity(built.Error), null);
+        // RA-783 AC04: a new number's sequence avoids every accreditation number the organisation's
+        // applications hold - issued, replaced, or last year's from ReEx - so a site can't take the
+        // number another site's renewal will need. Two sites approved at the same moment can still
+        // race to one sequence; that is rare enough to put right by hand. A continuous renewal's
+        // number is fixed, so it needs none of this.
+        var organisationAccreditationNumbers =
+            AccreditationNumberRules.CaseFor(application.Year, latest?.Year)
+            == AccreditationNumberCase.ContinuousRenewal
+                ? []
+                : (await persistence.GetByOrganisationAsync(application.OrganisationId))
+                    .SelectMany(HeldAccreditationNumbers)
+                    .ToList();
 
-            holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
-                built.AccreditationNumber!,
-                application.Id!.Value
-            );
-            if (!holders.Any(h => h.BlocksIssuing))
-                break;
+        var (built, holders, failure) = await BuildUnheldAccreditationNumberAsync(
+            persistence,
+            random,
+            application,
+            registrationReference,
+            latest,
+            materialCode,
+            organisationAccreditationNumbers
+        );
+        if (failure is not null)
+            return (failure, null);
 
-            // A renewal's number is fixed, so a clash is a conflict. A random one is drawn again.
-            if (built.Case == AccreditationNumberCase.ContinuousRenewal)
-                return (
-                    Results.Conflict(
-                        $"Accreditation reference {built.AccreditationNumber} is already held by another application; it cannot be issued again."
-                    ),
-                    null
-                );
-            built = null;
-        }
-
-        if (built is null)
-            return (
-                Results.Conflict(
-                    $"No accreditation reference that isn't already held was found in {MaxAccreditationNumberAttempts} attempts."
-                ),
-                null
-            );
-
+        // A renewal names the number it renews; a new number names the registration it's built on.
         var (sourceKind, sourceReference) =
-            built.Case == AccreditationNumberCase.ContinuousRenewal
-                ? (latestKind, latest!.AccreditationNumber)
+            built!.Case == AccreditationNumberCase.ContinuousRenewal
+                ? (latest!.Source, latest.AccreditationNumber)
                 : (AccreditationReferenceSourceKind.Registration, registrationReference);
         var sourceApplicationId =
             sourceKind == AccreditationReferenceSourceKind.PreviousAccreditation
@@ -683,16 +656,112 @@ public static class AccreditationApplicationEndpoints
         return (
             Results.Ok(updated),
             () =>
+            {
+                var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
                 LogAccreditationReferenceIssued(
-                    loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                    logger,
                     updated,
                     built.Case!.Value,
                     sourceKind,
                     sourceReference,
                     sourceApplicationId,
                     withdrawnHolderIds
-                )
+                );
+                if (glassProcessMissing)
+                    logger.LogError(
+                        GlassProcessMissingTemplate,
+                        updated.ApplicationReference,
+                        updated.Id,
+                        updated.OrganisationId,
+                        updated.OrgId,
+                        updated.RegistrationReference,
+                        updated.AccreditationReference
+                    );
+            }
         );
+    }
+
+    private const string GlassProcessMissingTemplate =
+        "GenerateOrUpdateAccreditationNumber: no glass recycling process held, so the accreditation number was issued as other (GO); confirm the process. applicationReference={ApplicationReference} applicationId={ApplicationId} organisationId={OrganisationId} orgId={OrgId} registrationReference={RegistrationReference} accreditationReference={AccreditationReference}";
+
+    // RA-783 AC04: builds a number no other application holds. Duplicate live applications for
+    // the same registration, material and year are possible (Seed is best-effort, with no unique
+    // index), and two sites of one org can draw the same sequence. Read-then-write: a unique index
+    // is a follow-up to RA-691.
+    // - A continuous renewal's number is fixed, so a live holder is a conflict. A withdrawn holder
+    //   doesn't block: an operator who withdrew and started again renews to the same number, and
+    //   the withdrawn record keeps it for audit.
+    // - A new random number is drawn again on any holder, withdrawn included, so no two records
+    //   ever share one.
+    private static async Task<(
+        AccreditationNumberResult? Built,
+        IReadOnlyList<AccreditationReferenceHolder> Holders,
+        IResult? Failure
+    )> BuildUnheldAccreditationNumberAsync(
+        IAccreditationApplicationPersistence persistence,
+        IAccreditationSequenceRandom random,
+        AccreditationApplicationModel application,
+        string registrationReference,
+        PriorAccreditation? latest,
+        string materialCode,
+        IReadOnlyList<string> organisationAccreditationNumbers
+    )
+    {
+        for (var attempt = 1; attempt <= MaxAccreditationNumberAttempts; attempt++)
+        {
+            var built = AccreditationNumberRules.Generate(
+                application.Year,
+                registrationReference,
+                latest,
+                materialCode,
+                random.NextBelow1000,
+                organisationAccreditationNumbers
+            );
+            // A malformed source fails visibly rather than issuing a wrong number.
+            if (!built.IsValid)
+                return (null, [], Results.UnprocessableEntity(built.Error));
+
+            var holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
+                built.AccreditationNumber!,
+                application.Id!.Value
+            );
+
+            if (built.Case == AccreditationNumberCase.ContinuousRenewal)
+                return holders.Any(h => h.BlocksIssuing)
+                    ? (
+                        null,
+                        [],
+                        Results.Conflict(
+                            $"Accreditation reference {built.AccreditationNumber} is already held by another application; it cannot be issued again."
+                        )
+                    )
+                    : (built, holders, null);
+
+            if (holders.Count == 0)
+                return (built, holders, null);
+        }
+
+        return (
+            null,
+            [],
+            Results.Conflict(
+                $"No accreditation reference that isn't already held was found in {MaxAccreditationNumberAttempts} attempts."
+            )
+        );
+    }
+
+    // Every accreditation number an application holds: its issued one, the ones it replaced, and
+    // last year's from ReEx.
+    private static IEnumerable<string> HeldAccreditationNumbers(
+        AccreditationApplicationModel application
+    )
+    {
+        if (application.AccreditationReference is { } issued)
+            yield return issued;
+        foreach (var replaced in application.PreviousAccreditationNumbers ?? [])
+            yield return replaced;
+        if (application.LastYearsAccreditationNumber?.AccreditationNumber is { } lastYears)
+            yield return lastYears;
     }
 
     // RA-690: the source of each issued reference is logged, not stored, so support can explain

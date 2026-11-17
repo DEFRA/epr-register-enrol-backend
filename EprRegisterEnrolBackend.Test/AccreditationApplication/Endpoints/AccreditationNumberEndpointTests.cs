@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -94,7 +95,7 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
     }
 
     [Fact]
-    public async Task Persists_the_derived_reference_on_the_application()
+    public async Task Persists_the_issued_reference_on_the_application()
     {
         Reset();
         var app = SeedApplication();
@@ -250,7 +251,12 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
     public async Task Gives_up_with_409_when_every_random_number_drawn_is_already_held()
     {
         Reset();
-        SeedApplication(configure: a => a.AccreditationReference = "A26ER0001230583PL");
+        // In another organisation, so the draw doesn't already avoid it as one of this org's.
+        SeedApplication(configure: a =>
+        {
+            a.OrganisationId = "org-other";
+            a.AccreditationReference = "A26ER0001230583PL";
+        });
         var app = SeedApplication();
 
         var response = await PostWithoutBody(app);
@@ -259,8 +265,55 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         var message = await response.Content.ReadAsStringAsync(
             TestContext.Current.CancellationToken
         );
-        message.Should().Contain("5 attempts");
+        message.Should()
+            .Contain($"{AccreditationApplicationEndpoints.MaxAccreditationNumberAttempts} attempts");
         (await StoredApplication(app)).AccreditationReference.Should().BeNull();
+    }
+
+    // RA-783 AC04: another site of the same organisation holds last year's number 0164 for its
+    // renewal, not yet issued. A first-time number here must not take 0164, or that renewal could
+    // never be issued.
+    [Fact]
+    public async Task A_new_number_never_takes_another_sites_renewal_sequence()
+    {
+        Reset();
+        SeedApplication(configure: a =>
+        {
+            a.RegistrationId = "reg-other-site";
+            a.RegistrationReference = "R25ER0001230077PL";
+            a.LastYearsAccreditationNumber = new AccreditationNumberForYearModel
+            {
+                Year = 2025,
+                AccreditationNumber = "A25ER0001230164PL",
+            };
+        });
+        var app = SeedApplication(configure: a => a.RegistrationId = "reg-this-site");
+        _factory.FakeSequenceRandom.Enqueue(164, 583);
+
+        var response = await PostWithoutBody(app);
+
+        (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230583PL");
+    }
+
+    [Fact]
+    public async Task A_new_number_never_takes_a_sequence_another_site_was_issued_in_an_earlier_year()
+    {
+        Reset();
+        SeedApplication(
+            status: ApplicationStatus.Approved,
+            configure: a =>
+            {
+                a.Year = 2025;
+                a.RegistrationId = "reg-other-site";
+                a.AccreditationReference = "A25ER0001230583PL";
+            }
+        );
+        var app = SeedApplication(configure: a => a.RegistrationId = "reg-this-site");
+        _factory.FakeSequenceRandom.Enqueue(583, 584);
+
+        var response = await PostWithoutBody(app);
+
+        (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230584PL");
     }
 
     [Fact]
@@ -299,8 +352,10 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         (await ReadApplication(response)).AccreditationReference.Should().Be(expected);
     }
 
+    // RA-783: ReEx gave no glass process, so the number is issued as other (GO), which case
+    // management accepts, rather than refusing approval. The error log is in the logging tests.
     [Fact]
-    public async Task Glass_without_a_recycling_process_returns_422_and_persists_nothing()
+    public async Task Glass_without_a_recycling_process_is_issued_as_other()
     {
         Reset();
         var app = SeedApplication(configure: a =>
@@ -312,82 +367,12 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         var response = await PostWithoutBody(app);
 
-        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
-    }
-
-    [Theory]
-    [InlineData(ApplicationStatus.Saved)]
-    [InlineData(ApplicationStatus.Submitted)]
-    [InlineData(ApplicationStatus.AwaitingDecision)]
-    [InlineData(ApplicationStatus.Approved)]
-    [InlineData(ApplicationStatus.Rejected)]
-    public async Task The_derived_reference_held_by_another_application_in_any_status_but_withdrawn_returns_409(
-        ApplicationStatus holderStatus
-    )
-    {
-        Reset();
-        SeedApplication(
-            status: holderStatus,
-            configure: a => a.AccreditationReference = "A26ER0001230583PL"
-        );
-        var app = SeedApplication();
-
-        var response = await PostWithoutBody(app);
-
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
-    }
-
-    // RA-690: an operator who withdrew and started again derives the same reference. The withdrawn
-    // record may already hold it (a withdraw racing step 1, a failed step 1 write, or the stub
-    // adapter), and must not block the restart. The withdrawn record keeps its value for audit.
-    [Fact]
-    public async Task The_derived_reference_held_only_by_a_withdrawn_application_is_issued_and_the_withdrawn_record_keeps_it()
-    {
-        Reset();
-        var withdrawn = SeedApplication(
-            status: ApplicationStatus.Withdrawn,
-            configure: a => a.AccreditationReference = "A26ER0001230583PL"
-        );
-        var restart = SeedApplication();
-
-        var response = await PostWithoutBody(restart);
-
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230583PL");
-        (await StoredApplication(restart)).AccreditationReference.Should().Be("A26ER0001230583PL");
-        var withdrawnRecord = await StoredApplication(withdrawn);
-        withdrawnRecord.AccreditationReference.Should().Be("A26ER0001230583PL");
-        withdrawnRecord.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
-    }
-
-    [Theory]
-    [InlineData(ApplicationStatus.Submitted)]
-    [InlineData(ApplicationStatus.Approved)]
-    public async Task A_live_or_approved_holder_alongside_a_withdrawn_one_still_returns_409(
-        ApplicationStatus liveStatus
-    )
-    {
-        Reset();
-        SeedApplication(
-            status: ApplicationStatus.Withdrawn,
-            configure: a => a.AccreditationReference = "A26ER0001230583PL"
-        );
-        SeedApplication(
-            status: liveStatus,
-            configure: a => a.AccreditationReference = "A26ER0001230583PL"
-        );
-        var app = SeedApplication();
-
-        var response = await PostWithoutBody(app);
-
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
+        (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230583GO");
     }
 
     [Fact]
-    public async Task The_derived_reference_held_in_another_organisation_returns_409()
+    public async Task A_random_number_held_in_another_organisation_is_drawn_again()
     {
         Reset();
         SeedApplication(configure: a =>
@@ -396,11 +381,12 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
             a.AccreditationReference = "A26ER0001230583PL";
         });
         var app = SeedApplication();
+        _factory.FakeSequenceRandom.Enqueue(583, 584);
 
         var response = await PostWithoutBody(app);
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230584PL");
     }
 
     [Fact]
@@ -528,9 +514,10 @@ public class AccreditationNumberEndpointLoggingTests
         entry.Message.Should().NotContain("withdrawnHolderIds");
     }
 
-    // RA-690: support can see why two records share a reference from the issue log line.
+    // RA-783: a new number held by a withdrawn application is drawn again, so the log never names
+    // a withdrawn holder for one (a restarted renewal still does).
     [Fact]
-    public async Task Names_the_withdrawn_applications_that_already_hold_the_issued_reference()
+    public async Task A_new_number_held_by_a_withdrawn_application_is_drawn_again_and_logs_no_withdrawn_holder()
     {
         _factory.FakePersistence.Clear();
         _factory.FakeSequenceRandom.Clear();
@@ -540,6 +527,7 @@ public class AccreditationNumberEndpointLoggingTests
         var app = BuildApplication(ApplicationStatus.Submitted);
         _factory.FakePersistence.Seed(withdrawn);
         _factory.FakePersistence.Seed(app);
+        _factory.FakeSequenceRandom.Enqueue(583, 584);
 
         var response = await _client.PostAsync(
             $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
@@ -558,10 +546,67 @@ public class AccreditationNumberEndpointLoggingTests
                 )
             )
             .Subject;
-        entry.Message.Should().Contain("accreditationReference=A26ER0001230583PL");
+        entry.Message.Should().Contain("accreditationReference=A26ER0001230584PL");
+        entry.Message.Should().Contain("case=FirstTime");
+        entry.Message.Should().NotContain("withdrawnHolderIds");
+    }
+
+    // RA-783: a glass number issued as other because no process was held is logged as an error
+    // naming the application, organisation, registration and the number issued.
+    [Fact]
+    public async Task Logs_an_error_when_glass_is_issued_as_other_for_want_of_a_process()
+    {
+        _factory.FakePersistence.Clear();
+        _factory.FakeSequenceRandom.Clear();
+        _factory.LogCapture.Clear();
+        var app = BuildApplication(ApplicationStatus.Submitted);
+        app.MaterialType = MaterialType.Glass;
+        app.GlassRecyclingProcess = null;
+        app.RegistrationReference = "R25ER0001230042GL";
+        app.ApplicationReference = "AP26EA000123GL";
+        app.OrgId = 123;
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var entry = _factory
+            .LogCapture.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error)
+            .Subject;
+        entry.Message.Should().Contain("no glass recycling process");
+        entry.Message.Should().Contain("applicationReference=AP26EA000123GL");
         entry.Message.Should().Contain($"applicationId={app.Id}");
-        entry.Message.Should().Contain("sourceKind=Registration");
-        entry.Message.Should().Contain($"withdrawnHolderIds={withdrawn.Id}");
+        entry.Message.Should().Contain("organisationId=org-123");
+        entry.Message.Should().Contain("orgId=123");
+        entry.Message.Should().Contain("registrationReference=R25ER0001230042GL");
+        entry.Message.Should().Contain("accreditationReference=A26ER0001230583GO");
+    }
+
+    [Fact]
+    public async Task Logs_no_error_for_glass_with_a_recycling_process()
+    {
+        _factory.FakePersistence.Clear();
+        _factory.FakeSequenceRandom.Clear();
+        _factory.LogCapture.Clear();
+        var app = BuildApplication(ApplicationStatus.Submitted);
+        app.MaterialType = MaterialType.Glass;
+        app.GlassRecyclingProcess = GlassRecyclingProcess.Remelt;
+        app.RegistrationReference = "R25ER0001230042GR";
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        _factory.LogCapture.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 
     private static AccreditationApplicationModel BuildApplication(ApplicationStatus status) =>
