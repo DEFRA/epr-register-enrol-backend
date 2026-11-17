@@ -162,7 +162,9 @@ public class AccreditationApiEndpointTests : IDisposable
         body.GetProperty("signatories").GetArrayLength().Should().Be(0);
         var history = body.GetProperty("statusHistory").EnumerateArray().Single();
         history.GetProperty("status").GetString().Should().Be("approved");
-        history.GetProperty("effectiveDate").GetString().Should().MatchRegex(@"^\d{4}-\d{2}-\d{2}$");
+        history.GetProperty("effectiveFromDate").GetString().Should().MatchRegex(@"^\d{4}-\d{2}-\d{2}$");
+        history.GetProperty("effectiveToDate").ValueKind.Should().Be(JsonValueKind.Null);
+        history.TryGetProperty("effectiveDate", out _).Should().BeFalse();
         history.GetProperty("recordedAt").GetDateTime().Should().BeAfter(DateTime.MinValue);
         body.GetProperty("tonnageBandHistory").GetArrayLength().Should().Be(0);
         body.GetProperty("overseasSites").GetArrayLength().Should().Be(2);
@@ -381,14 +383,13 @@ public class AccreditationApiEndpointTests : IDisposable
         body.GetProperty("totalItems").GetInt32().Should().Be(2);
         var items = body.GetProperty("items").EnumerateArray().ToList();
         items.Select(i => i.GetProperty("orsId").GetString()).Should().Equal("001", "002");
-        items[0].GetProperty("validFrom").GetDateTime().Should().Be(
-            new DateTime(2026, 3, 14, 0, 0, 0, DateTimeKind.Utc)
-        );
         items[0].GetProperty("status").GetString().Should().Be("approved");
+        // Approved in March 2026, before the 2027 accreditation year: it applies from 1 January 2027.
         items[0].GetProperty("statusHistory").EnumerateArray().Single()
-            .GetProperty("effectiveDate").GetString().Should().Be("2026-03-14");
+            .GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-01");
         items[0].GetProperty("interimSites").GetArrayLength().Should().Be(0);
-        items[1].TryGetProperty("validFrom", out _).Should().BeFalse();
+        foreach (var item in items)
+            item.TryGetProperty("validFrom", out _).Should().BeFalse();
         foreach (var item in items)
         {
             item.TryGetProperty("selected", out _).Should().BeFalse();
@@ -815,6 +816,7 @@ public class AccreditationApiEndpointTests : IDisposable
 
     [Theory]
     [InlineData("suspended")]
+    [InlineData("withdrawn")]
     [InlineData("cancelled")]
     public async Task Search_FiltersByStatus_NoneAreSuspendedOrCancelledYet(string status)
     {

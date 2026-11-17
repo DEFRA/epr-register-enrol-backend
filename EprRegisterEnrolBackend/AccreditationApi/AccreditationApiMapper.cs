@@ -141,7 +141,6 @@ public static class AccreditationApiMapper
             ConditionsOfExport = site.ConditionsOfExport,
             IsEu = site.IsEu,
             IsOecd = site.IsOecd,
-            ValidFrom = ParseInstant(site.ValidFrom),
             Status = Project(history, now),
             StatusHistory = history,
             InterimSites = site
@@ -185,38 +184,65 @@ public static class AccreditationApiMapper
             },
         };
 
-    // No effective-dated history is held yet, so an accreditation, or one of its sites, has the
-    // single `approved` entry the v2 mapping document prescribes for records that predate it.
-    // It is recorded when the application was approved (the last case management status push,
-    // else the last edit). A site takes effect on its ReEx approval date when it has one.
+    // No status changes are held yet, so an accreditation, or one of its sites, has the single
+    // `approved` entry the v2 mapping document prescribes for records that predate them. It is
+    // recorded when the application was approved (the last case management status push, else the
+    // last edit). A site is recorded on its ReEx approval date when it has one.
     private static List<StatusHistoryEntryDto> StatusHistory(
         AccreditationApplicationModel application,
         OverseasSiteModel? site
     )
     {
-        var recordedAt = Approval(application);
-        var effective = site is null ? recordedAt : ParseInstant(site.ValidFrom) ?? recordedAt;
+        var recordedAt =
+            site is null ? Approval(application) : ParseInstant(site.ValidFrom) ?? Approval(application);
 
-        return
-        [
-            new StatusHistoryEntryDto
-            {
-                Status = Approved,
-                EffectiveDate = UkDate(effective),
-                RecordedAt = recordedAt,
-            },
-        ];
+        return BuildHistory([(Approved, recordedAt)], application.Year);
     }
 
-    // The status for today: the latest entry whose effective date is on or before today. A
-    // record always starts out approved, so a first entry that is not yet effective still
-    // projects as approved rather than as nothing.
+    // The history from the status changes recorded for an accreditation, an overseas site or an
+    // interim site. A change applies from the later of 1 January of the accreditation year and the
+    // UK date it was recorded (a status recorded before the year starts with the year), and to the
+    // day before the next change applies from, so the latest has no end. Entries are ordered by when
+    // they apply from, and where two apply from the same date the one recorded later comes last, so
+    // it takes precedence.
+    internal static List<StatusHistoryEntryDto> BuildHistory(
+        IEnumerable<(string Status, DateTime RecordedAt)> changes,
+        int accreditationYear
+    )
+    {
+        var startOfYear = new DateOnly(accreditationYear, 1, 1);
+        var ordered = changes
+            .Select(change => (change.Status, change.RecordedAt, From: Later(startOfYear, UkDate(change.RecordedAt))))
+            .OrderBy(change => change.From)
+            .ThenBy(change => change.RecordedAt)
+            .ToList();
+
+        return ordered
+            .Select(
+                (change, index) =>
+                    new StatusHistoryEntryDto
+                    {
+                        Status = change.Status,
+                        EffectiveFromDate = change.From,
+                        EffectiveToDate =
+                            index + 1 < ordered.Count ? ordered[index + 1].From.AddDays(-1) : null,
+                        RecordedAt = change.RecordedAt,
+                    }
+            )
+            .ToList();
+    }
+
+    private static DateOnly Later(DateOnly a, DateOnly b) => a >= b ? a : b;
+
+    // The status for today: the latest entry whose first day is on or before today. A record
+    // always starts out approved, so a first entry that is not yet in effect still projects as
+    // approved rather than as nothing.
     private static string Project(IReadOnlyList<StatusHistoryEntryDto> history, DateTimeOffset now)
     {
         var today = UkDate(now.UtcDateTime);
         return history
-                .Where(entry => entry.EffectiveDate <= today)
-                .OrderBy(entry => entry.EffectiveDate)
+                .Where(entry => entry.EffectiveFromDate <= today)
+                .OrderBy(entry => entry.EffectiveFromDate)
                 .ThenBy(entry => entry.RecordedAt)
                 .Select(entry => entry.Status)
                 .LastOrDefault()
