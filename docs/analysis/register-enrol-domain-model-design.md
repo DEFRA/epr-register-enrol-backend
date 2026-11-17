@@ -23,7 +23,9 @@
   writes one new version (reason `CreatedAtBackfilled`) for each current version without it, copying legacy's.
   `updatedAt` is the current version's `validFrom`. A current version the backfill missed serves its `validFrom` as
   `createdAt` (the legacy shape needs a time) and logs a warning naming the application, since that moves it in the
-  GET list's order; readiness check A lists such applications before the cut. After the cut the reader serves the
+  GET list's order, but a write to it is refused, so a made-up time is never stored (the sync would keep it for good).
+  Readiness check A lists such applications before the cut and is a hard stop, because nothing in the service fills
+  `createdAt` after it. After the cut the reader serves the
   model-backed persistence's reads as they are, and reads a write's response back from the model once the write has
   committed, so the response carries the model's content, `version` and `updatedAt`, as the next read does.
 - **Startup refuses `LegacyWrites` off** without `ReadFromModel`, `DualWrite`, `DualWriteSeed` and `ExpandEnabled`, in

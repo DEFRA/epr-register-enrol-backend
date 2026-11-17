@@ -70,7 +70,8 @@ and the credentials exposed as enviromment variables.
 #### Domain model flags
 
 The domain model (`docs/analysis/register-enrol-domain-model-design.md`) ships in phases, each behind a
-`DomainModel:*` flag that is off by default. Phases 0 and 1 are released together, and so are phases 2 and 3:
+`DomainModel:*` flag that is off by default, except `LegacyWrites`, which is on by default and is turned off to make
+the cut (phase 6). Phases 0 and 1 are released together, and so are phases 2 and 3:
 `DualWriteSeed` and `DualWrite` are switched on at the same time in each environment, though either can be turned off
 alone in a rollback. See §6 of the design doc for the release plan.
 
@@ -94,6 +95,16 @@ alone in a rollback. See §6 of the design doc for the release plan.
   application with its legacy document through the read model, at startup and every 6 hours, and logs lines starting
   `DomainModelReconciliation`: counts, field names and application ids, never values. It never runs when the CDP
   environment is `prod`, whatever the flag says.
+- `DomainModel__ReadFromModel=true` (phase 5, needs `DualWrite`, `DualWriteSeed` and `ExpandEnabled` outside Development;
+  the service refuses to start without them) serves every application read from the domain model instead of the legacy
+  document. Turning it off is the rollback.
+- `DomainModel__LegacyWrites=false` (phase 6, **the cut**; on by default) stops writing the legacy
+  `accreditationApplications` collection: every application write changes the domain model only, and legacy is frozen
+  as it stood at the cut. It needs `ReadFromModel`, `DualWrite`, `DualWriteSeed` and `ExpandEnabled` in every
+  environment, Development included, and `FeatureFlags__InYearChangesEnabled`, `MigrateEnabled` and `ReconcileEnabled`
+  off; the service refuses to start otherwise. **There is no rollback**: writes made after the cut exist only in the
+  model, and nothing writes them back to legacy. Turn it off only after the soak and sign-off in
+  `tools/domain-model/cut-readiness.md`, and run that runbook's checks first.
 - `DomainModel__DiagnosticsEnabled=true` (test environments only) runs the diagnostics below.
 
 #### Domain model diagnostics (test environments only)
