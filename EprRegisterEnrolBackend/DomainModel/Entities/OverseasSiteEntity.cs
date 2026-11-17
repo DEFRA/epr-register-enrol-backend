@@ -47,7 +47,10 @@ public class OverseasSiteEntity : VersionedEntityBase
     /// </summary>
     public DateTime? FirstApprovedAt { get; set; }
 
-    /// <summary>Where <see cref="FirstApprovedAt"/> came from. Only ReEx's date was ever on the legacy application.</summary>
+    /// <summary>
+    /// Where <see cref="FirstApprovedAt"/> came from. Only ReEx's date and a granted change request's are on the legacy
+    /// application (see <see cref="LegacyValidFrom"/>).
+    /// </summary>
     [BsonRepresentation(BsonType.String)]
     public FirstApprovalSource? FirstApprovalSource { get; set; }
 
@@ -92,6 +95,19 @@ public class OverseasSiteEntity : VersionedEntityBase
             ReExValidFrom = source is { } known ? ReExStringFor(known, reExValidFrom) : null;
         }
     }
+
+    /// <summary>
+    /// The site's <c>validFrom</c> as the legacy application holds it: ReEx's string as received (an ORS recorded
+    /// before the string was kept gives its date in the one form the model has), or a granted change request's date
+    /// as the grant writes it (3bb.28). Null for an application's approval here, which legacy never writes.
+    /// </summary>
+    public string? LegacyValidFrom() =>
+        FirstApprovalSource switch
+        {
+            Entities.FirstApprovalSource.ReEx => ReExValidFrom ?? SiteApprovalDate.Format(FirstApprovedAt),
+            Entities.FirstApprovalSource.ChangeRequest => SiteApprovalDate.Format(FirstApprovedAt),
+            _ => null,
+        };
 
     private static string? ReExStringFor(FirstApprovalSource source, string? reExValidFrom) =>
         source == Entities.FirstApprovalSource.ReEx ? reExValidFrom : null;

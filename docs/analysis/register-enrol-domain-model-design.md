@@ -139,8 +139,10 @@
   ORS, and the read model serves it back as `validFrom`.
 - **`firstApprovedAt` on the ORS**, written once and never overwritten, so it shows a site was first approved for this
   customer many years ago. It comes from ReEx's site `validFrom` at seed, the earliest date across the group at migration,
-  or the approval here for a site with no ReEx date. It is not the versioning `validFrom`, which is when a version was
-  recorded. `firstApprovalSource` says which of those it was, because only ReEx's date was ever on the legacy application.
+  the approval here for a site with no ReEx date, or a granted in-year change request's submission date (RA-495). It is
+  not the versioning `validFrom`, which is when a version was recorded. `firstApprovalSource` (`ReEx`, `ThisService`,
+  `ChangeRequest`) says which of those it was, because only ReEx's date and a granted change request's are on the legacy
+  application: an application's approval here never writes one onto its sites (3bb.28).
   An application whose copy of the site held a different ReEx date is listed as `SiteApprovalDatesDiffer`, which
   explains its `validFrom` difference. So is any copy holding a ReEx date for a site whose date came from an approval
   here, such as one a later seed brought back from ReEx, because the read model serves no `validFrom` for it.
@@ -1189,7 +1191,7 @@ in `AccreditationDetails`. Envelope fields such as `status` and `applicationRefe
 | `sites[].siteName`, `siteAddress`, `addressLine1`, `addressLine2`, `townOrCity`, `country`, `coordinates`, `contactName`, `contactEmail`, `contactPhone`, `isEu`, `isOecd`, `repatriatedLoads`, `conditionsOfExport` | ORS (structured `address`, `contact`), overlaid with `applicationOverseasSites[].proposedChanges` | derived (flattened again) | |
 | `sites[].operationCodes[]` | ORS.`operationCodes`, plus overlay | derived | Regulator correction writes to the overlay ([A7](#assumptions)) |
 | `sites[].code1`, `code2`, `code3` | ORS.`baselOecdCodes[]` (list) | derived: list split back into `code1`–`code3` | ⚠ **Not** a legacy duplicate of `operationCodes`, as PR #210's mapping suggests (`:267`, `:309`). They are Basel/OECD waste codes: `code1` is mandatory and validated against a BA-signed-off list (`Validators/OverseasSiteRequestValidatorBase.cs:55-73`) and sent to CM (`HttpCaseWorkingApiAdapter.cs:733`). The frontend already holds them as a list (`baselAndOecdCodes`, `MAX_CODES = 3`) and only splits them into three fields for the backend. **Store as a list.** The cap stays at 3 until the legacy consumers of `code1`–`code3` (existing endpoints, the CM payload, management-be's copy) move to the list |
-| `sites[].validFrom` (ReEx ORS-A approval date) | ORS.`firstApprovedAt`, written once, with `firstApprovalSource` (v6.10). It sets `selected` at seed time, and the ReEx API serves it, so the read model returns it for a ReEx-sourced date. An accredited site starts at the approval time of the version that added it | omitted | Not system time |
+| `sites[].validFrom` (ReEx ORS-A approval date) | ORS.`firstApprovedAt`, written once, with `firstApprovalSource` (v6.10). It sets `selected` at seed time, and the ReEx API serves it, so the read model returns it for a ReEx-sourced date, and for a `ChangeRequest` one (a grant writes the submission date onto the legacy site). An accredited site starts at the approval time of the version that added it | omitted | Not system time |
 | `sites[].selected` | Application.`applicationOverseasSites[].selected` | stored | |
 | `sites[].besEvidence` {besEvidenceUploads[], doYouWantToUploadMoreEvidence} | Application.`applicationOverseasSites[].besEvidence` → Accreditation.`accreditationOverseasSites[].besEvidence[]` at approval | stored | Evidence validity dates are business dates for the accredited site |
 | `sites[].isNewSite` | Application.`applicationOverseasSites[].isNewSite` | stored | Regulator badge (RA-292) |

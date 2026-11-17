@@ -293,7 +293,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         Assert.True(accreditation.Version > 1, "the grant is a new version of the existing Accreditation");
 
         Assert.Equal(SubmittedAt, ors.FirstApprovedAt);
-        Assert.Equal(FirstApprovalSource.ThisService, ors.FirstApprovalSource);
+        Assert.Equal(FirstApprovalSource.ChangeRequest, ors.FirstApprovalSource);
         Assert.Equal(OverseasSiteStatus.Active, ors.Status);
 
         // The unit of work's sync brings the Application version in line with the legacy selection.
@@ -408,9 +408,8 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
             .ApplicationOverseasSites.Single(e => e.OverseasSiteId == ors.EntityId);
         Assert.Equal(["bes-1"], modelEntry.BesEvidence!.BesEvidenceUploads.Select(f => f.FileId));
 
-        // Only the granted site's validFrom, already known to differ (3bb.28).
-        var differences = await ReconciliationDifferencesAsync();
-        Assert.All(differences.Keys, path => Assert.EndsWith("validFrom", path));
+        // 3bb.28: the model serves the granted site's validFrom as legacy holds it, so nothing differs.
+        Assert.Empty(await ReconciliationDifferencesAsync());
     }
 
     [Fact]

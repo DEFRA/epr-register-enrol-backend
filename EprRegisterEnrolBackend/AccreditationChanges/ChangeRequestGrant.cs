@@ -190,7 +190,7 @@ internal static class ChangeRequestGrant
         // no-op.
         ApplySuppliedAnswers(ors, answers, site);
         if (ors.FirstApprovedAt is null)
-            ors.RecordFirstApproval(submittedAt, FirstApprovalSource.ThisService);
+            ors.RecordFirstApproval(submittedAt, FirstApprovalSource.ChangeRequest);
         await stores.OverseasSites.Versions.UpdateAsync(ors, ors.Version, change, session, cancellationToken);
 
         if (!accreditation.AccreditationOverseasSites.Exists(e => e.OverseasSiteId == ors.EntityId))

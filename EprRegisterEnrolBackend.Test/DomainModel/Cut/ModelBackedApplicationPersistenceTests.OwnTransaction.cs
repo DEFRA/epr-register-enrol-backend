@@ -67,6 +67,26 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         );
     }
 
+    // 3bb.28: an application's approval (re-accreditation included) gives a site with no date its first approved date
+    // here, but legacy never writes it onto the site, so the model serves no validFrom either.
+    [Fact]
+    public async Task Approve_ASiteWithNoDate_ServesNoValidFromAsLegacyHoldsNone()
+    {
+        var migrated = await MigratedAsync(NewApplication());
+        var read = await ReadAsync(migrated);
+        read.ApplicationStatus = ApplicationStatus.Approved;
+        read.CaseManagementStatusUpdatedAt = Created.AddDays(1);
+        read.AccreditationReference = "A27EX1234567P";
+        foreach (var site in read.OverseasSites!.Sites)
+        {
+            site.Selected = true;
+        }
+
+        Assert.NotNull(await _model.UpdateAsync(read));
+
+        Assert.All((await ReadAsync(migrated)).OverseasSites!.Sites, site => Assert.Null(site.ValidFrom));
+    }
+
     [Fact]
     public async Task Update_WithoutASession_StaleCopy_IsRefusedAndChangesNothing()
     {

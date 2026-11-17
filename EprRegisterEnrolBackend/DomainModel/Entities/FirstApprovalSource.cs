@@ -9,6 +9,15 @@ public enum FirstApprovalSource
     /// <summary>ReEx's approval date for the site.</summary>
     ReEx,
 
-    /// <summary>An approval in this service, for a site ReEx gave no date for.</summary>
+    /// <summary>
+    /// An application's approval in this service, for a site ReEx gave no date for. Legacy never writes it onto the
+    /// application's site, so it is not served as validFrom.
+    /// </summary>
     ThisService,
+
+    /// <summary>
+    /// An in-year change request granted in this service (RA-495), from the request's submission date. Legacy writes
+    /// it onto the granted site as its validFrom, so it is served as one (3bb.28).
+    /// </summary>
+    ChangeRequest,
 }
