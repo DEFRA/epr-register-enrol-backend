@@ -55,7 +55,7 @@ public static class StatusHistoryProjection
         string status
     ) => (status.ToLowerInvariant(), version.ValidFrom);
 
-    private static IReadOnlyList<StatusHistoryEntryDto> Build(
+    private static List<StatusHistoryEntryDto> Build(
         List<AccreditationEntity> versions,
         List<(string Status, DateTime RecordedAt)> changes
     ) =>

@@ -18,7 +18,7 @@ public static class AccreditationApiMapper
     public static AccreditationSummaryDto ToSummary(
         AccreditationApplicationModel application,
         DateTimeOffset now
-    ) => Summary(application, now, StatusHistory(application, null));
+    ) => Summary(application, now, StatusHistory(application));
 
     // RA-647: a record that cannot be addressed by its business references (organisation number,
     // registration number, accreditation number) cannot honour the contract, so it is dropped from
@@ -74,7 +74,7 @@ public static class AccreditationApiMapper
         bool includeWithdrawn = false
     )
     {
-        var history = StatusHistory(application, null);
+        var history = StatusHistory(application);
         var summary = Summary(application, now, history);
         var recordedAt = Approval(application);
 
@@ -124,7 +124,7 @@ public static class AccreditationApiMapper
         DateTimeOffset now
     )
     {
-        var history = StatusHistory(application, site);
+        var history = StatusHistory(application);
 
         return new AccreditedOverseasSiteDto
         {
@@ -188,8 +188,7 @@ public static class AccreditationApiMapper
     // recorded when the application was approved (the last case management status push, else the
     // last edit). The dates follow from that: see StatusHistoryBuilder.
     private static List<StatusHistoryEntryDto> StatusHistory(
-        AccreditationApplicationModel application,
-        OverseasSiteModel? site
+        AccreditationApplicationModel application
     ) => StatusHistoryBuilder.Build([(Approved, Approval(application))], application.Year);
 
     // The status for today: the latest entry whose first day is on or before today. A record
