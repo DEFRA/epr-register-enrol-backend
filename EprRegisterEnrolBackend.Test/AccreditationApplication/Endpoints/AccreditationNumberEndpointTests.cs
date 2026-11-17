@@ -220,10 +220,10 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         _factory.FakeCounters.IsEmpty.Should().BeTrue();
     }
 
-    // RA-783 AC04: a random number already held is drawn again, so a duplicate live application
-    // for the same registration and year gets a different number.
+    // RA-783 AC04: a duplicate live application for the same registration and year gets a
+    // different number. The first's number is one of the organisation's, so the draw avoids it.
     [Fact]
-    public async Task A_random_number_already_held_is_drawn_again()
+    public async Task A_duplicate_application_for_the_same_registration_gets_a_different_number()
     {
         Reset();
         var first = SeedApplication();
@@ -293,6 +293,25 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         var response = await PostWithoutBody(app);
 
         (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230583PL");
+    }
+
+    // RA-783 AC04: a site accredited in 2026 that hasn't started an application here is only on the
+    // 2026 public register. J. and A. Young (500095) has four plastic sites there, one A26ER5000950064PL;
+    // a new number for another of its sites must not take 0064, or that renewal could never be issued.
+    [Fact]
+    public async Task A_new_number_never_takes_a_sequence_on_the_2026_public_register()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.Year = 2027;
+            a.RegistrationReference = "R26ER5000950099PL";
+        });
+        _factory.FakeSequenceRandom.Enqueue(64, 583);
+
+        var response = await PostWithoutBody(app);
+
+        (await ReadApplication(response)).AccreditationReference.Should().Be("A27ER5000950583PL");
     }
 
     [Fact]
@@ -371,15 +390,29 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230583GO");
     }
 
-    [Fact]
-    public async Task A_random_number_held_in_another_organisation_is_drawn_again()
+    // RA-783 AC04: a new random number held by any other application, withdrawn included, is drawn
+    // again, and the holder keeps its value. The holder is in another organisation, so its number
+    // isn't one the draw already avoids: only the holder check can cause the redraw.
+    [Theory]
+    [InlineData(ApplicationStatus.Saved)]
+    [InlineData(ApplicationStatus.Submitted)]
+    [InlineData(ApplicationStatus.AwaitingDecision)]
+    [InlineData(ApplicationStatus.Approved)]
+    [InlineData(ApplicationStatus.Rejected)]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    public async Task A_new_number_held_by_another_application_in_any_status_is_drawn_again(
+        ApplicationStatus holderStatus
+    )
     {
         Reset();
-        SeedApplication(configure: a =>
-        {
-            a.OrganisationId = "org-other";
-            a.AccreditationReference = "A26ER0001230583PL";
-        });
+        var holder = SeedApplication(
+            status: holderStatus,
+            configure: a =>
+            {
+                a.OrganisationId = "org-other";
+                a.AccreditationReference = "A26ER0001230583PL";
+            }
+        );
         var app = SeedApplication();
         _factory.FakeSequenceRandom.Enqueue(583, 584);
 
@@ -387,6 +420,9 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230584PL");
+        var holderRecord = await StoredApplication(holder);
+        holderRecord.AccreditationReference.Should().Be("A26ER0001230583PL");
+        holderRecord.ApplicationStatus.Should().Be(holderStatus);
     }
 
     [Fact]
@@ -522,7 +558,9 @@ public class AccreditationNumberEndpointLoggingTests
         _factory.FakePersistence.Clear();
         _factory.FakeSequenceRandom.Clear();
         _factory.LogCapture.Clear();
+        // In another organisation, so only the holder check can cause the redraw.
         var withdrawn = BuildApplication(ApplicationStatus.Withdrawn);
+        withdrawn.OrganisationId = "org-other";
         withdrawn.AccreditationReference = "A26ER0001230583PL";
         var app = BuildApplication(ApplicationStatus.Submitted);
         _factory.FakePersistence.Seed(withdrawn);

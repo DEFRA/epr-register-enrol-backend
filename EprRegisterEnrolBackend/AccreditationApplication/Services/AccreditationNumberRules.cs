@@ -29,9 +29,9 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 ///   </item>
 /// </list>
 ///
-/// A new sequence also avoids every sequence the organisation's other accreditation numbers use
-/// under the same agency, process type and OrgId (its other sites, in any year and any material),
-/// so it can never take the number another site's renewal will need.
+/// A new sequence also avoids every sequence the caller says the organisation's accreditation
+/// numbers use under the same agency, process type and OrgId (its other sites, in any year and any
+/// material), so it doesn't take the number another site's renewal will need.
 ///
 /// In every case the material code is the application's own (<see
 /// cref="RegulatoryReferenceCodes.MaterialCodeFor"/>), so glass becomes GR for remelt or GO for
@@ -66,9 +66,9 @@ public static partial class AccreditationNumberRules
     /// <param name="materialCode">The application's material code: ST, WO, AL, FB, PA, PL, GR or GO.</param>
     /// <param name="randomBelow1000">Returns a random number from 0 to 999.</param>
     /// <param name="organisationAccreditationNumbers">Every accreditation number the
-    /// organisation's applications hold; a new sequence avoids those under this registration's
-    /// agency, process type and OrgId. Malformed ones are skipped: they're other applications'
-    /// data, not this one's source.</param>
+    /// organisation has; a new sequence avoids those under this registration's agency, process
+    /// type and OrgId. Malformed ones are skipped: they're held data to avoid, not this number's
+    /// source.</param>
     public static AccreditationNumberResult Generate(
         int yearAppliedFor,
         string? registrationNumber,
@@ -162,8 +162,8 @@ public static partial class AccreditationNumberRules
         reference is not null && ReferenceFormat().IsMatch(reference) && reference[0] == prefix;
 
     // GL is accepted: 2026 glass numbers from ReEx and the public register end in GL, and the
-    // material is replaced anyway. [0-9] rather than \d,
-    // which also matches non-ASCII digits. S6444: explicit timeout.
+    // material is replaced anyway. [0-9] rather than \d, which also matches non-ASCII digits.
+    // S6444: explicit timeout.
     [GeneratedRegex(
         "^[RA][0-9]{2}[ESWN][RX][0-9]{6}[0-9]{4}(ST|WO|AL|FB|PA|PL|GR|GO|GL)$",
         RegexOptions.None,
@@ -185,12 +185,12 @@ public enum AccreditationNumberCase
 
 /// <summary>
 /// An earlier accreditation: its year and number, for example 2026, A26ER5003240164PL, and where it
-/// came from, so an error can name the right source.
+/// came from, so errors and the issue log name the right source.
 /// </summary>
 public sealed record PriorAccreditation(
     int Year,
     string AccreditationNumber,
-    AccreditationReferenceSourceKind Source = AccreditationReferenceSourceKind.LastYearsAccreditationNumber
+    AccreditationReferenceSourceKind Source
 )
 {
     internal string Description =>

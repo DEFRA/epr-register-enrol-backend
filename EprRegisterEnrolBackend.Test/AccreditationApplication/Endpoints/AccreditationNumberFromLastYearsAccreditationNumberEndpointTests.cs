@@ -254,25 +254,25 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
     }
 
     // With an earlier approval held here, a last year's number for the wrong year is ignored: the
-    // held approval is the history, so a 2026 approval and a 2029 application is a renewal after a
-    // break, whatever the wrong-year number says.
+    // held approval is the history. Here the held 2027 approval makes a 2028 application a
+    // continuous renewal; taking the later, wrong-year 2028 number instead would fail with a 422.
     [Fact]
     public async Task A_wrong_year_last_years_number_is_ignored_when_an_earlier_approval_is_held()
     {
         SeedApplication(
-            2026,
+            2027,
             a =>
             {
                 a.ApplicationStatus = ApplicationStatus.Approved;
-                a.AccreditationReference = "A26ER0001230055PL";
+                a.AccreditationReference = "A27ER0001230055PL";
             }
         );
         var app = SeedApplication(
-            2029,
-            a => a.LastYearsAccreditationNumber = LastYears("A27ER0001230042PL", year: 2027)
+            2028,
+            a => a.LastYearsAccreditationNumber = LastYears("A28ER0001230042PL", year: 2028)
         );
 
-        (await IssuedReference(app)).Should().Be("A29ER0001230583PL");
+        (await IssuedReference(app)).Should().Be("A28ER0001230055PL");
     }
 
     [Fact]

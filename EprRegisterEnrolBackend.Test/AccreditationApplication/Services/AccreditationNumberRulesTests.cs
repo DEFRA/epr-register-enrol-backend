@@ -89,7 +89,7 @@ public class AccreditationNumberRulesTests
         var result = AccreditationNumberRules.Generate(
             approved,
             registration,
-            lastYear is null ? null : new PriorAccreditation(lastYear.Value, lastNumber!),
+            lastYear is null ? null : LastYears(lastYear.Value, lastNumber!),
             material,
             Draws(draws)
         );
@@ -126,7 +126,7 @@ public class AccreditationNumberRulesTests
         var result = AccreditationNumberRules.Generate(
             2027,
             "R26ER5003240079PL",
-            new PriorAccreditation(2026, "A26ER5003240164PL"),
+            LastYears(2026, "A26ER5003240164PL"),
             "PL",
             Draws(""),
             ["A26ER5003240164PL", "A27ER5003240164PL"]
@@ -194,7 +194,7 @@ public class AccreditationNumberRulesTests
         var result = AccreditationNumberRules.Generate(
             2027,
             "R26ER5003240079PL",
-            new PriorAccreditation(2026, lastYears),
+            LastYears(2026, lastYears),
             "PL",
             Draws("")
         );
@@ -211,7 +211,7 @@ public class AccreditationNumberRulesTests
         var result = AccreditationNumberRules.Generate(
             2027,
             "R26ER5003240079PL",
-            new PriorAccreditation(priorYear, "A27ER5003240164PL"),
+            LastYears(priorYear, "A27ER5003240164PL"),
             "PL",
             Draws("")
         );
@@ -239,7 +239,7 @@ public class AccreditationNumberRulesTests
         var result = AccreditationNumberRules.Generate(
             2028,
             "R26ER5003240079PL",
-            new PriorAccreditation(2026, earlier),
+            LastYears(2026, earlier),
             "PL",
             Draws("372")
         );
@@ -283,6 +283,9 @@ public class AccreditationNumberRulesTests
 
         act.Should().Throw<InvalidOperationException>();
     }
+
+    private static PriorAccreditation LastYears(int year, string number) =>
+        new(year, number, AccreditationReferenceSourceKind.LastYearsAccreditationNumber);
 
     // Returns the given comma-separated draws in turn. A renewal must draw nothing, so "" fails
     // the test if a draw is asked for.
