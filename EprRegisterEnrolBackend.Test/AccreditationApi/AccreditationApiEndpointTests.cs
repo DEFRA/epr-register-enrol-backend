@@ -818,7 +818,7 @@ public class AccreditationApiEndpointTests : IDisposable
     [InlineData("suspended")]
     [InlineData("withdrawn")]
     [InlineData("cancelled")]
-    public async Task Search_FiltersByStatus_NoneAreSuspendedOrCancelledYet(string status)
+    public async Task Search_FiltersByStatus_NoneHaveANonApprovedStatusYet(string status)
     {
         await Seed();
 

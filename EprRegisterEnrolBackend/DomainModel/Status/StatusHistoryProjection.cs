@@ -8,7 +8,7 @@ namespace EprRegisterEnrolBackend.DomainModel.Status;
 /// The v2 API's <c>statusHistory[]</c>, projected from an Accreditation's versions (design §4.4, Q21): one entry
 /// per version whose status changed. Status is recorded time only, so an entry applies from the later of 1 January
 /// of the accreditation year and the UK date it was recorded, and to the day before the next entry applies from
-/// (see <see cref="AccreditationApiMapper.BuildHistory"/>).
+/// (see <see cref="StatusHistoryBuilder"/>).
 /// </summary>
 public static class StatusHistoryProjection
 {
@@ -61,5 +61,5 @@ public static class StatusHistoryProjection
     ) =>
         changes.Count == 0
             ? []
-            : AccreditationApiMapper.BuildHistory(changes, versions[0].Year);
+            : StatusHistoryBuilder.Build(changes, versions.Max(v => v.Year));
 }

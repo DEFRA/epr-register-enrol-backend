@@ -144,7 +144,7 @@ and phone number. Treat them as personal data.
 - `status` is the latest `statusHistory` entry whose `effectiveFromDate` is on or before today.
   Today every accreditation has the one status `approved`. The API is built to carry `suspended`,
   `cancelled` and `withdrawn`, which will appear when case management can send them. Overseas
-  sites and interim sites use the same list of statuses. **Handle a status value you do
+  sites use the same list of statuses. **Handle a status value you do
   not know.** The same goes for `tonnageBand`.
 - If no entry is effective yet (for example the only entry is effective in the future), `status`
   is still `approved`: an accreditation that is served has been granted. In that case `status` and
@@ -155,7 +155,8 @@ and phone number. Treat them as personal data.
   starts with the year, and one recorded during the year starts on the day it was recorded. It may be
   in the future. `effectiveToDate` is the day before the next entry's `effectiveFromDate`, and is
   `null` on the latest entry. Where two entries have the same `effectiveFromDate`, the one with the
-  later `recordedAt` takes precedence. `recordedAt` and `createdAt` are UTC times.
+  later `recordedAt` takes precedence, and the earlier one ends on that same date
+  (`effectiveToDate` equals `effectiveFromDate`). `recordedAt` and `createdAt` are UTC times.
 - Until effective-dated history is recorded, each history has one `approved` entry. For an
   accreditation approved before that, its date is when case management last changed it, or the last
   edit, so treat an older approval date as approximate.

@@ -1,4 +1,3 @@
-using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Status;
 using Microsoft.Extensions.Logging;
@@ -187,52 +186,11 @@ public static class AccreditationApiMapper
     // No status changes are held yet, so an accreditation, or one of its sites, has the single
     // `approved` entry the v2 mapping document prescribes for records that predate them. It is
     // recorded when the application was approved (the last case management status push, else the
-    // last edit). A site is recorded on its ReEx approval date when it has one.
+    // last edit). The dates follow from that: see StatusHistoryBuilder.
     private static List<StatusHistoryEntryDto> StatusHistory(
         AccreditationApplicationModel application,
         OverseasSiteModel? site
-    )
-    {
-        var recordedAt =
-            site is null ? Approval(application) : ParseInstant(site.ValidFrom) ?? Approval(application);
-
-        return BuildHistory([(Approved, recordedAt)], application.Year);
-    }
-
-    // The history from the status changes recorded for an accreditation, an overseas site or an
-    // interim site. A change applies from the later of 1 January of the accreditation year and the
-    // UK date it was recorded (a status recorded before the year starts with the year), and to the
-    // day before the next change applies from, so the latest has no end. Entries are ordered by when
-    // they apply from, and where two apply from the same date the one recorded later comes last, so
-    // it takes precedence.
-    internal static List<StatusHistoryEntryDto> BuildHistory(
-        IEnumerable<(string Status, DateTime RecordedAt)> changes,
-        int accreditationYear
-    )
-    {
-        var startOfYear = new DateOnly(accreditationYear, 1, 1);
-        var ordered = changes
-            .Select(change => (change.Status, change.RecordedAt, From: Later(startOfYear, UkDate(change.RecordedAt))))
-            .OrderBy(change => change.From)
-            .ThenBy(change => change.RecordedAt)
-            .ToList();
-
-        return ordered
-            .Select(
-                (change, index) =>
-                    new StatusHistoryEntryDto
-                    {
-                        Status = change.Status,
-                        EffectiveFromDate = change.From,
-                        EffectiveToDate =
-                            index + 1 < ordered.Count ? ordered[index + 1].From.AddDays(-1) : null,
-                        RecordedAt = change.RecordedAt,
-                    }
-            )
-            .ToList();
-    }
-
-    private static DateOnly Later(DateOnly a, DateOnly b) => a >= b ? a : b;
+    ) => StatusHistoryBuilder.Build([(Approved, Approval(application))], application.Year);
 
     // The status for today: the latest entry whose first day is on or before today. A record
     // always starts out approved, so a first entry that is not yet in effect still projects as
@@ -258,17 +216,6 @@ public static class AccreditationApiMapper
         value.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
             : value.ToUniversalTime();
-
-    // ValidFrom is held as the raw ISO string ReEx sent; unparseable is treated as absent.
-    private static DateTime? ParseInstant(string? value) =>
-        DateTimeOffset.TryParse(
-            value,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal,
-            out var parsed
-        )
-            ? parsed.UtcDateTime
-            : null;
 
     private static InterimSiteDto ToInterimSite(InterimSiteModel interim) =>
         new()

@@ -360,7 +360,7 @@ components:
         phone: { type: string, nullable: true }
     StatusHistoryEntry:
       type: object
-      description: Used by accreditations, accredited overseas sites and interim sites. Where two entries share an `effectiveFromDate`, the one with the later `recordedAt` takes precedence.
+      description: Used by accreditations, accredited overseas sites and interim sites. Where two entries share an `effectiveFromDate`, the one with the later `recordedAt` takes precedence, and the earlier one is kept with its `effectiveToDate` equal to that same date.
       required: [status, effectiveFromDate, effectiveToDate, recordedAt]
       properties:
         status: { $ref: '#/components/schemas/AccreditationStatus' }
