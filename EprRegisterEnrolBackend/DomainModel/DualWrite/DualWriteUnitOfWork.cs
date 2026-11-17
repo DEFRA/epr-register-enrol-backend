@@ -119,7 +119,8 @@ public sealed class DualWriteUnitOfWork(
                 ),
             cancellationToken
         );
-        logger.LogRecorded(conflicts);
+        // An application's conflicts can come from both the ensure-migrated step and the cut's flush.
+        logger.LogRecorded(conflicts.DistinctBy(c => c.Id));
         return committed;
     }
 }

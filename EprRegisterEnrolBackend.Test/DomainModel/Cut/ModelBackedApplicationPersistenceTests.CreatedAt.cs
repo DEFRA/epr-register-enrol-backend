@@ -39,6 +39,36 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         );
     }
 
+    // A read can serve the fallback, but a write stages the projection and the sync would store whatever time it
+    // carries: a time made up at read time must never reach the model.
+    [Fact]
+    public async Task Update_CurrentVersionWithoutCreatedAt_RefusesAndStoresNoInventedTime()
+    {
+        var legacy = await MigratedAsync();
+        var versions = _factory
+            .GetClient()
+            .GetDatabase(_databaseName)
+            .GetCollection<BsonDocument>(DomainModelCollections.ApplicationVersions);
+        await versions.UpdateManyAsync(
+            Builders<BsonDocument>.Filter.Eq("entityId", legacy.Id!.Value),
+            Builders<BsonDocument>.Update.Unset("createdAt"),
+            cancellationToken: Ct
+        );
+        var read = (await ReadThroughModelAsync(legacy.Id!.Value))!;
+        read.PaymentReference = "PAY-9";
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _model.UpdateAsync(read));
+
+        var stored = await versions
+            .Find(
+                Builders<BsonDocument>.Filter.Eq("entityId", legacy.Id!.Value)
+                    & Builders<BsonDocument>.Filter.Eq("isCurrent", true)
+            )
+            .SingleAsync(Ct);
+        Assert.False(stored.Contains("createdAt") && !stored["createdAt"].IsBsonNull);
+        Assert.Equal(0, await StagedCountAsync());
+    }
+
     [Fact]
     public async Task GetByObjectId_CurrentVersionWithCreatedAt_LogsNothing()
     {

@@ -8,7 +8,8 @@ namespace EprRegisterEnrolBackend.DomainModel.ReadModel;
 /// serve what it returns, which is already the model's projection. A document already in hand (a write handler's
 /// result, or GetById's after its backfill) is read back by id instead: a write's working copy carries the legacy
 /// persistence's version and updatedAt, not the model's, and the response filter only runs once the write has
-/// committed, so the read sees the change.
+/// committed, so the read sees the change. It is its own class, beside phase 5's <c>ModelApplicationReader</c>, so the
+/// endpoints keep one <c>IApplicationReader</c> and never branch on the flag.
 /// </summary>
 public sealed class CutApplicationReader(IAccreditationApplicationPersistence persistence)
     : IApplicationReader

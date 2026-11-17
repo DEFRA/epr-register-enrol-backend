@@ -9,7 +9,9 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolBackend.DomainModel.Cut;
 
 /// <summary>
-/// RA-706 decision 6 - the legacy persistence over transaction-scoped copies; a write's version check, guard filters and update operators run here exactly as on the legacy collection; the flush writes the model from the copies and deletes them in the same transaction, so nothing is left outside a transaction.
+/// RA-706 decision 6 - the legacy persistence over transaction-scoped copies. A write's version check, guard filters
+/// and update operators run here exactly as on the legacy collection; the flush writes the model from the copies and
+/// deletes them in the same transaction, so nothing is left outside a transaction.
 /// </summary>
 public sealed class CutStagingPersistence(
     IMongoDbClientFactory connectionFactory,
@@ -39,11 +41,23 @@ public sealed class CutStagingPersistence(
     /// <summary>
     /// Deletes the specified staged application copies in the same transaction.
     /// </summary>
-    public async Task DeleteStagedAsync(IEnumerable<ObjectId> applicationIds, IClientSessionHandle session, CancellationToken cancellationToken)
+    public async Task DeleteStagedAsync(
+        IEnumerable<ObjectId> applicationIds,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
+    )
     {
         var ids = applicationIds.ToList();
-        if (ids.Count == 0) return;
-        await Collection.DeleteManyAsync(session, Builders<AccreditationApplicationModel>.Filter.In(a => a.Id, ids.Select(id => (ObjectId?)id)), cancellationToken: cancellationToken);
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        await Collection.DeleteManyAsync(
+            session,
+            Builders<AccreditationApplicationModel>.Filter.In(a => a.Id, ids.Select(id => (ObjectId?)id)),
+            cancellationToken: cancellationToken
+        );
     }
 
     /// <summary>

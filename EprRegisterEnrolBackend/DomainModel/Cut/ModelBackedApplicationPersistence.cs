@@ -22,19 +22,24 @@ public sealed class ModelBackedApplicationPersistence(
     ILogger<ModelBackedApplicationPersistence> logger
 ) : IAccreditationApplicationPersistence
 {
+    // The accreditation API's status name for an approved accreditation, as the legacy persistence compares it.
+    private const string ApprovedStatusName = "approved";
+
     private async Task<T> RunInOwnTransactionAsync<T>(
         Func<IClientSessionHandle, CancellationToken, Task<T>> write,
         CancellationToken cancellationToken
     )
     {
-        return await InsertRaceRetry.RunInTransactionAsync(
+        // Set by each attempt, so only the attempt that committed is logged.
+        IReadOnlyList<MigrationConflict> conflicts = [];
+        var committed = await InsertRaceRetry.RunInTransactionAsync(
             clientFactory,
             async (session, token) =>
             {
                 var flush = cutFlush();
                 flush.Begin(session);
                 var result = await write(session, token);
-                await flush.FlushAsync(session, token);
+                conflicts = await flush.FlushAsync(session, token);
                 return result;
             },
             attempt =>
@@ -44,6 +49,8 @@ public sealed class ModelBackedApplicationPersistence(
                 ),
             cancellationToken
         );
+        logger.LogRecorded(conflicts);
+        return committed;
     }
 
     // maxTime limits the lookup query (RA-702); the per-application projection reads aren't limited yet: batching
@@ -76,7 +83,9 @@ public sealed class ModelBackedApplicationPersistence(
                     ? await ReadAsync(candidate.EntityId, readSession, ct)
                     : await ProjectAsync(candidate.EntityId, readSession, ct);
             if (application != null)
+            {
                 projected.Add(application);
+            }
         }
 
         return projected;
@@ -100,7 +109,7 @@ public sealed class ModelBackedApplicationPersistence(
     {
         if (await staging.GetByObjectIdAsync(id, session, ct) is null)
         {
-            var projected = await ProjectAsync(id, session, ct);
+            var projected = await ProjectAsync(id, session, ct, forWrite: true);
             if (projected != null)
             {
                 await staging.StageAsync(projected, session, ct);
@@ -115,7 +124,10 @@ public sealed class ModelBackedApplicationPersistence(
     private static IClientSessionHandle RequireTransaction(IClientSessionHandle? session)
     {
         if (session != null && session.IsInTransaction)
+        {
             return session;
+        }
+
         throw new NotSupportedException(
             "RA-706: a write with a session must run in its transaction"
         );
@@ -149,6 +161,32 @@ public sealed class ModelBackedApplicationPersistence(
         Builders<ApplicationEntity>.Filter.Eq(a => a.ReExOrganisationId, organisationId)
         & Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
 
+    // The organisation's applications, found by its number; null when the model has no such organisation.
+    private async Task<FilterDefinition<ApplicationEntity>?> OfOrganisationNumberAsync(
+        int organisationNumber,
+        CancellationToken ct
+    )
+    {
+        var organisation = await stores.Organisations.FindByOrganisationNumberAsync(
+            organisationNumber,
+            null,
+            ct
+        );
+        return organisation is null
+            ? null
+            : Builders<ApplicationEntity>.Filter.Eq(
+                a => a.ReExOrganisationId,
+                organisation.ReExOrganisationId
+            );
+    }
+
+    private static FilterDefinition<ApplicationEntity> OnRegistrationOnly(string registrationId) =>
+        Builders<ApplicationEntity>.Filter.Eq(a => a.ReExRegistrationId, registrationId);
+
+    private static IEnumerable<OverseasSiteModel> SitesOf(
+        IEnumerable<AccreditationApplicationModel> applications
+    ) => applications.SelectMany(a => a.OverseasSites?.Sites ?? []);
+
     private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
 
     public async Task<
@@ -181,26 +219,33 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
+    // forWrite: the projection is about to be staged, and the sync stores whatever createdAt it carries.
     private async Task<AccreditationApplicationModel?> ProjectAsync(
         ObjectId id,
         IClientSessionHandle session,
-        CancellationToken ct
+        CancellationToken ct,
+        bool forWrite = false
     )
     {
         var sources = await readModel.LoadAsync(id, session, ct);
         if (sources is null)
+        {
             return null;
+        }
 
         var legacy = ApplicationProjection.ToLegacy(sources);
 
         legacy.Version = sources.Application.Version;
         legacy.CreatedAt =
-            sources.Application.CreatedAt ?? MissedByTheBackfill(sources.Application);
+            sources.Application.CreatedAt ?? MissedByTheBackfill(sources.Application, forWrite);
         legacy.UpdatedAt = sources.Application.ValidFrom;
 
         legacy.RegistrationEntityId = sources.Application.RegistrationId;
         legacy.AccreditationEntityId = (
-            (AccreditationDetails)sources.Application.Details
+            sources.Application.Details as AccreditationDetails
+            ?? throw new InvalidOperationException(
+                $"Application {id} is not an accreditation application: its details are {sources.Application.Details.GetType().Name}."
+            )
         ).AccreditationId;
 
         return legacy;
@@ -208,9 +253,17 @@ public sealed class ModelBackedApplicationPersistence(
 
     // Decision 5: the backfill fills createdAt on every version written before the model held it, and readiness
     // check A lists any it missed. The legacy shape needs a time, so a missed one gets when the current version was
-    // written: loudly, since it moves the application in the GET list's order.
-    private DateTime MissedByTheBackfill(ApplicationEntity application)
+    // written: loudly, since it moves the application in the GET list's order. A write refuses instead: it would store
+    // that made-up time as the application's createdAt, for good.
+    private DateTime MissedByTheBackfill(ApplicationEntity application, bool forWrite)
     {
+        if (forWrite)
+        {
+            throw new InvalidOperationException(
+                $"Application {application.EntityId} has no createdAt in the model (missed by the backfill), so it cannot be written: run the createdAt backfill until cut-readiness check A lists nothing."
+            );
+        }
+
         logger.LogWarning(
             "Application {ApplicationId} has no createdAt in the model (missed by the backfill); serving its current version's validFrom {ValidFrom} instead",
             application.EntityId,
@@ -232,7 +285,9 @@ public sealed class ModelBackedApplicationPersistence(
     )
     {
         if (!ObjectId.TryParse(applicationId, out var id))
+        {
             return null;
+        }
 
         using var ownSession = session is null
             ? await clientFactory.GetClient().StartSessionAsync()
@@ -257,7 +312,7 @@ public sealed class ModelBackedApplicationPersistence(
                 CancellationToken.None
             );
         }
-        catch (Exception e)
+        catch (Exception e) when (e is not OperationCanceledException)
         {
             logger.LogError(
                 e,
@@ -408,20 +463,15 @@ public sealed class ModelBackedApplicationPersistence(
         TimeSpan? maxTime = null
     )
     {
-        var organisation = await stores.Organisations.FindByOrganisationNumberAsync(
-            orgId,
-            null,
-            CancellationToken.None
-        );
-        if (organisation is null)
+        var ofOrganisation = await OfOrganisationNumberAsync(orgId, CancellationToken.None);
+        if (ofOrganisation is null)
+        {
             return null;
+        }
 
         var envelope =
             Builders<ApplicationEntity>.Filter.Eq(a => a.Status, ApplicationStatus.Approved)
-            & Builders<ApplicationEntity>.Filter.Eq(
-                a => a.ReExOrganisationId,
-                organisation.ReExOrganisationId
-            );
+            & ofOrganisation;
 
         var results = await ProjectCurrentAsync(
             envelope,
@@ -455,8 +505,10 @@ public sealed class ModelBackedApplicationPersistence(
     )
     {
         // RA-702, as legacy: every accreditation served is approved, so a search for any other status finds none.
-        if (filter.Status is not null && filter.Status != "approved")
+        if (filter.Status is not null && filter.Status != ApprovedStatusName)
+        {
             return ([], 0);
+        }
 
         var envelope = Builders<ApplicationEntity>.Filter.Eq(
             a => a.Status,
@@ -464,17 +516,15 @@ public sealed class ModelBackedApplicationPersistence(
         );
         if (filter.OrganisationNumber.HasValue)
         {
-            var organisation = await stores.Organisations.FindByOrganisationNumberAsync(
+            var ofOrganisation = await OfOrganisationNumberAsync(
                 filter.OrganisationNumber.Value,
-                null,
                 CancellationToken.None
             );
-            if (organisation is null)
+            if (ofOrganisation is null)
+            {
                 return ([], 0);
-            envelope &= Builders<ApplicationEntity>.Filter.Eq(
-                a => a.ReExOrganisationId,
-                organisation.ReExOrganisationId
-            );
+            }
+            envelope &= ofOrganisation;
         }
 
         var results = await ProjectCurrentAsync(
@@ -538,13 +588,12 @@ public sealed class ModelBackedApplicationPersistence(
         IClientSessionHandle? session = null
     )
     {
-        var envelope = Builders<ApplicationEntity>.Filter.Eq(
-            a => a.ReExRegistrationId,
-            registrationId
+        var results = await ProjectCurrentAsync(
+            OnRegistrationOnly(registrationId),
+            session,
+            CancellationToken.None
         );
-        var results = await ProjectCurrentAsync(envelope, session, CancellationToken.None);
-        return results
-            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+        return SitesOf(results)
             .Select(s => s.OrsId)
             .OfType<string>()
             .ToList();
@@ -555,13 +604,12 @@ public sealed class ModelBackedApplicationPersistence(
         IClientSessionHandle? session = null
     )
     {
-        var envelope = Builders<ApplicationEntity>.Filter.Eq(
-            a => a.ReExRegistrationId,
-            registrationId
+        var results = await ProjectCurrentAsync(
+            OnRegistrationOnly(registrationId),
+            session,
+            CancellationToken.None
         );
-        var results = await ProjectCurrentAsync(envelope, session, CancellationToken.None);
-        return results
-            .SelectMany(a => a.OverseasSites?.Sites ?? [])
+        return SitesOf(results)
             .SelectMany(InterimSiteSync.All)
             .Select(i => i.SiteNumber)
             .OfType<string>()
@@ -617,7 +665,10 @@ public sealed class ModelBackedApplicationPersistence(
             foreach (var id in staging.StagedIds(session))
             {
                 if (results.Any(a => a.Id == id))
+                {
                     continue;
+                }
+
                 var staged = await staging.GetByObjectIdAsync(id, session, cancellationToken);
                 if (
                     staged is not null
@@ -672,19 +723,13 @@ public sealed class ModelBackedApplicationPersistence(
         CancellationToken cancellationToken = default
     )
     {
-        var organisation = await stores.Organisations.FindByOrganisationNumberAsync(
-            orgId,
-            null,
-            cancellationToken
-        );
-        if (organisation is null)
+        var ofOrganisation = await OfOrganisationNumberAsync(orgId, cancellationToken);
+        if (ofOrganisation is null)
+        {
             return [];
+        }
 
-        var envelope = Builders<ApplicationEntity>.Filter.Eq(
-            a => a.ReExOrganisationId,
-            organisation.ReExOrganisationId
-        );
-        var results = await ProjectCurrentAsync(envelope, null, cancellationToken);
+        var results = await ProjectCurrentAsync(ofOrganisation, null, cancellationToken);
         return results.Where(a => a.OrgId == orgId && a.Year == year).OrderBy(a => a.Id).ToList();
     }
 
@@ -742,7 +787,9 @@ public sealed class ModelBackedApplicationPersistence(
     )
     {
         if (await staging.GetByObjectIdAsync(applicationId, session, cancellationToken) is null)
+        {
             return;
+        }
         await staging.StampDomainModelForeignKeysAsync(
             applicationId,
             registrationEntityId,

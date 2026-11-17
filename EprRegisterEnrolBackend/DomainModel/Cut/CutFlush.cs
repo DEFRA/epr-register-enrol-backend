@@ -6,7 +6,9 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolBackend.DomainModel.Cut;
 
 /// <summary>
-/// RA-706 decision 6 - before the transaction commits, every staged application is brought into the model by the dual-write migrator and sync (reading the staged copy through the model-backed persistence), and the copies are deleted in the same transaction; returns the migration's conflicts for the caller to log.
+/// RA-706 decision 6 - before the transaction commits, every staged application is brought into the model by the
+/// dual-write migrator and sync (reading the staged copy through the model-backed persistence), and the copies are
+/// deleted in the same transaction. Returns the migration's conflicts for the caller to log once it has committed.
 /// </summary>
 public sealed class CutFlush(
     IApplicationGroupMigrator migrator,
@@ -15,7 +17,8 @@ public sealed class CutFlush(
 )
 {
     /// <summary>
-    /// called at the start of each transaction attempt; a retried attempt reuses the session and must not inherit what the rolled-back attempt staged.
+    /// Called at the start of each transaction attempt: a retried attempt reuses the session and must not inherit what
+    /// the rolled-back attempt staged.
     /// </summary>
     public void Begin(IClientSessionHandle session) => staging.Forget(session);
 
