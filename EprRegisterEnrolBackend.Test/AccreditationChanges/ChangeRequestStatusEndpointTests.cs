@@ -5,6 +5,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DevSeed;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Infrastructure;
@@ -26,6 +27,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         .ToString();
     private static readonly string Sites = $"/api/v1/accreditation-changes/{Org}/{AppId}/requests/current/sites";
     private static readonly DateTime Watermark = new(2026, 5, 1, 9, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime SubmittedAt = Watermark.AddDays(-1);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -65,7 +67,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
             MaterialType = MaterialType.Plastic,
             Year = Year,
             Status = ChangeRequestStatus.Submitted,
-            SubmittedAt = Watermark.AddDays(-1),
+            SubmittedAt = SubmittedAt,
             Sites =
             [
                 new ChangeRequestSite
@@ -119,7 +121,6 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
     [InlineData("updated", ChangeItemStatus.Updated)]
     [InlineData("assessment-in-progress", ChangeItemStatus.Updated)]
     [InlineData("rejected", ChangeItemStatus.Rejected)]
-    [InlineData("approved", ChangeItemStatus.Approved)]
     public async Task MappedState_SetsTheItemsStatusAndAdvancesItsWatermark(
         string toStateId,
         ChangeItemStatus expected
@@ -287,6 +288,135 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         (await Push("rejected", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
 
         Item().Status.Should().Be(ChangeItemStatus.Rejected);
+    }
+
+    // ---------------------------------------------------------------- grant (RA-495 task 007)
+
+    private AccreditationApplicationModel Legacy() => _factory.FakePersistence.GetByIdAsync(Org, AppId).Result!;
+
+    private OverseasSiteModel LegacySite(int siteId) =>
+        Legacy().OverseasSites!.Sites.Single(s => s.SiteId == siteId);
+
+    [Theory]
+    [InlineData(ChangeItemStatus.Submitted)]
+    [InlineData(ChangeItemStatus.DulyMade)]
+    [InlineData(ChangeItemStatus.Updated)]
+    public async Task Approved_GrantsTheItemFromTheSubmissionDate(ChangeItemStatus status)
+    {
+        SeedSubmittedRequest(status, Watermark);
+        var occurredAt = Watermark.AddMinutes(5);
+
+        var response = await Push("approved", occurredAt);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().Status.Should().Be(ChangeItemStatus.Approved);
+        Item().ValidFrom.Should().Be(SubmittedAt);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
+        Item(_siblingWorkItemId).Status.Should().Be(ChangeItemStatus.Submitted);
+        Item(_siblingWorkItemId).ValidFrom.Should().BeNull();
+    }
+
+    // The registered site is already on the legacy accreditation application, unselected: the grant selects it,
+    // accredited from the submission date, and adds no site.
+    [Fact]
+    public async Task Approved_SelectsTheSiteOnTheAccreditationFromTheSubmissionDate()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var sitesBefore = Legacy().OverseasSites!.Sites.Count;
+        LegacySite(SiteId).Selected.Should().BeFalse();
+
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        LegacySite(SiteId).Selected.Should().BeTrue();
+        LegacySite(SiteId).ValidFrom.Should().Be(SiteApprovalDate.Format(SubmittedAt));
+        Legacy().OverseasSites!.Sites.Should().HaveCount(sitesBefore);
+        // Only the granted site: its sibling item is still being assessed.
+        LegacySite(901914).Selected.Should().BeFalse();
+        LegacySite(901914).ValidFrom.Should().BeNull();
+    }
+
+    // AC: the site is on the Accredited tab, the request shows the item granted from its submission date, and the
+    // site is no longer held by the request (the add-site check now refuses it as accredited, not as pending).
+    [Fact]
+    public async Task Approved_SiteIsAccreditedAndNoLongerPending()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var view = await _client.GetFromJsonAsync<System.Text.Json.JsonElement>(
+            $"/api/v1/accreditation-changes/{Org}/{AppId}",
+            Ct
+        );
+        var site = view
+            .GetProperty("sites")
+            .EnumerateArray()
+            .Single(s => s.GetProperty("siteId").GetInt32() == SiteId);
+        site.GetProperty("accreditationStatus").GetString().Should().Be("Accredited");
+        site.GetProperty("pendingRequestId").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
+        view.GetProperty("pendingOrsIds").EnumerateArray().Select(e => e.GetString()).Should().NotContain("005");
+        var item = view
+            .GetProperty("requests")
+            .EnumerateArray()
+            .SelectMany(r => r.GetProperty("sites").EnumerateArray())
+            .Single(s => s.GetProperty("siteId").GetInt32() == SiteId);
+        item.GetProperty("status").GetString().Should().Be("Approved");
+        item.GetProperty("validFrom").GetDateTime().ToUniversalTime().Should().Be(SubmittedAt);
+
+        var again = await _client.PostAsJsonAsync(Sites, new { siteId = SiteId }, Ct);
+        again.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await again.Content.ReadAsStringAsync(Ct)).Should().Contain("already accredited");
+    }
+
+    [Fact]
+    public async Task ApprovedAgain_ChangesNothing()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+        var granted = Item();
+        var updates = _factory.FakeChangeRequests.UpdateCount;
+        var legacyVersion = Legacy().Version;
+
+        (await Push("approved", Watermark.AddMinutes(10))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Item().Should().BeEquivalentTo(granted);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(updates);
+        Legacy().Version.Should().Be(legacyVersion);
+    }
+
+    // The site the item was raised for has gone from the accreditation application: nothing to grant, and a
+    // retry would fail the same way, so a 409 with nothing written.
+    [Fact]
+    public async Task Approved_SiteNotOnTheAccreditation_Returns409AndWritesNothing()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var application = Legacy();
+        application.OverseasSites!.Sites.RemoveAll(s => s.SiteId == SiteId);
+        await _factory.FakePersistence.UpdateAsync(application);
+
+        var response = await Push("approved", Watermark.AddMinutes(5));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(Watermark);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // Without dual-write there is no transaction: a lost race on the item after the site was selected is read
+    // again, and the grant, already applied to the site, is not applied twice.
+    [Fact]
+    public async Task Approved_LostRaceOnTheItem_IsReadAgainAndTheSiteSelectedOnce()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var lost = 0;
+        _factory.FakeChangeRequests.LoseUpdateWhen = _ => Interlocked.Increment(ref lost) == 1;
+        var versionBefore = Legacy().Version;
+
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Item().Status.Should().Be(ChangeItemStatus.Approved);
+        LegacySite(SiteId).Selected.Should().BeTrue();
+        Legacy().Version.Should().Be(versionBefore + 1);
     }
 
     // ---------------------------------------------------------------- concurrency

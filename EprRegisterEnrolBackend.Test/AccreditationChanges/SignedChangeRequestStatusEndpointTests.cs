@@ -4,10 +4,12 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.Config;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
@@ -132,7 +134,8 @@ public class SignedChangeRequestStatusEndpointTests
     }
 
     // The in-year changes flag outside Development needs dual-write on (FeatureFlags.EnsureInYearChangesHasDualWrite),
-    // and dual-write needs expand. Neither is reached by this route.
+    // and dual-write needs expand. The route runs in the unit of work (RA-495 task 007), which here has no Mongo, so
+    // it is the legacy-only one: this class tests the signature, ChangeRequestGrantDualWriteTests the transaction.
     public class Factory : SignedCaseManagementTestFactory
     {
         public const string FrontendSecret = "ra-495-frontend-secret";
@@ -147,8 +150,10 @@ public class SignedChangeRequestStatusEndpointTests
             builder.UseSetting("DomainModel:ExpandEnabled", "true");
             builder.UseSetting("AUTH_SHARED_SECRET:FRONTEND", FrontendSecret);
             builder.ConfigureServices(services =>
-                services.AddSingleton<IChangeRequestPersistence>(FakeChangeRequests)
-            );
+            {
+                services.AddSingleton<IChangeRequestPersistence>(FakeChangeRequests);
+                services.Replace(ServiceDescriptor.Singleton<IDualWriteUnitOfWork, LegacyOnlyUnitOfWork>());
+            });
         }
     }
 }

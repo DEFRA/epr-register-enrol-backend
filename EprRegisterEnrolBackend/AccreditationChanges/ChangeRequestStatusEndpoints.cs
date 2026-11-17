@@ -1,5 +1,8 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationChanges;
 
@@ -7,15 +10,19 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 /// RA-495: Case Management pushes each add-ORS work item's status changes to the change request item it was raised
 /// for. The same caller, auth scheme, body and guards as the accreditation application's case-management status
 /// route (<c>AccreditationApplicationEndpoints.StatusChangedFromCaseManagement</c>), applied to one item rather than
-/// a whole application.
+/// a whole application. RA-495 task 007: every push runs in the dual-write unit of work, and <c>approved</c> grants the
+/// site there (<see cref="ChangeRequestGrant"/>), so the item and the accreditation commit together or not at all.
 /// </summary>
 public static class ChangeRequestStatusEndpoints
 {
     internal const string Route = "api/v1/accreditation-changes/case-management/{workItemId}/status";
 
-    // Sibling items share their request's document, so pushes for them can race on its version. Each lost race is
-    // read again; past this the push fails with a 503, which Case Management's push pipeline retries.
+    // Sibling items share their request's document, so pushes for them can race on its version. Without dual-write
+    // each lost race is read again; past this the push fails with a 503, which Case Management's push pipeline
+    // retries. With dual-write the transaction itself retries a write conflict, and anything else rolls back as a 500.
     private const int MaxAttempts = 3;
+
+    private const string Operation = "ChangeRequestStatusChangedFromCaseManagement";
 
     public static void UseChangeRequestStatusEndpoints(this IEndpointRouteBuilder app) =>
         app.MapPost(Route, StatusChangedFromCaseManagement)
@@ -37,7 +44,7 @@ public static class ChangeRequestStatusEndpoints
             "submitted" => ChangeItemStatus.Submitted,
             "duly-made" or "assessment-started" => ChangeItemStatus.DulyMade,
             "updated" or "assessment-in-progress" => ChangeItemStatus.Updated,
-            // RA-495 task 007 replaces this with the grant: the site joins the accreditation in the same write.
+            // The grant: the site joins the accreditation in the same transaction (ChangeRequestGrant).
             "approved" => ChangeItemStatus.Approved,
             "rejected" => ChangeItemStatus.Rejected,
             _ => null,
@@ -60,6 +67,8 @@ public static class ChangeRequestStatusEndpoints
         Guid workItemId,
         StatusChangedFromCaseManagementRequest request,
         IChangeRequestPersistence persistence,
+        IAccreditationApplicationPersistence applications,
+        IDualWriteUnitOfWork unitOfWork,
         HttpContext httpContext,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
@@ -71,11 +80,14 @@ public static class ChangeRequestStatusEndpoints
             ? values.ToString()
             : "(absent)";
         var push = new Push(workItemId, request, MapState(request.ToStateId), correlationId);
+        var stores = new PushStores(persistence, applications, httpContext.RequestServices);
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            var changeRequest = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId, cancellationToken);
-            if (changeRequest is null)
+            // Read once outside the transaction for the accreditation application the unit of work migrates and
+            // syncs; the work reads it again in the session.
+            var known = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId, cancellationToken);
+            if (known is null)
             {
                 logger.LogWarning(
                     "Change request status push: no item for workItemId={WorkItemId} correlationId={CorrelationId}",
@@ -84,19 +96,19 @@ public static class ChangeRequestStatusEndpoints
                 );
                 return Results.NotFound();
             }
-            var item = changeRequest.Sites.Single(s => s.CaseManagementWorkItemId == workItemId);
 
-            if (GuardPush(logger, item, push) is { } guarded)
-                return guarded;
-
-            if (push.MappedStatus is { } status)
-                item.Status = status;
-            item.CaseManagementStatusUpdatedAt = request.OccurredAt;
-
-            if (await persistence.UpdateAsync(changeRequest, cancellationToken))
+            try
             {
-                LogApplied(logger, item, push);
-                return Results.Ok(item);
+                return await unitOfWork.RunAsync(
+                    Operation,
+                    known.ApplicationId ?? "",
+                    (session, token) => ApplyPushAsync(stores, logger, push, session, token),
+                    cancellationToken
+                );
+            }
+            catch (ChangeRequestWriteConflictException)
+            {
+                // Only without dual-write: in a transaction the unit of work rolls it back as a 500.
             }
         }
 
@@ -110,6 +122,67 @@ public static class ChangeRequestStatusEndpoints
             detail: "The change request was being changed at the same time. Try again.",
             statusCode: StatusCodes.Status503ServiceUnavailable
         );
+    }
+
+    private sealed record PushStores(
+        IChangeRequestPersistence Requests,
+        IAccreditationApplicationPersistence Applications,
+        IServiceProvider Services
+    );
+
+    // One push in the unit of work, every read and write in its session: the guards, the grant when approved, and the
+    // item last, so a failure anywhere leaves the item as it was.
+    private static async Task<IResult> ApplyPushAsync(
+        PushStores stores,
+        ILogger logger,
+        Push push,
+        IClientSessionHandle? session,
+        CancellationToken cancellationToken
+    )
+    {
+        var changeRequest = await stores.Requests.GetByCaseManagementWorkItemIdAsync(
+            push.WorkItemId,
+            cancellationToken,
+            session
+        );
+        if (changeRequest is null)
+            return Results.NotFound();
+        var item = changeRequest.Sites.Single(s => s.CaseManagementWorkItemId == push.WorkItemId);
+
+        if (GuardPush(logger, item, push) is { } guarded)
+            return guarded;
+
+        if (push.MappedStatus == ChangeItemStatus.Approved)
+        {
+            var refused = await ChangeRequestGrant.ApplyAsync(
+                changeRequest,
+                item,
+                stores.Applications,
+                stores.Services,
+                session,
+                cancellationToken
+            );
+            if (refused is not null)
+            {
+                logger.LogWarning(
+                    "Change request status push: nothing to grant for workItemId={WorkItemId} correlationId={CorrelationId}",
+                    push.WorkItemId,
+                    push.CorrelationId
+                );
+                return refused;
+            }
+            item.ValidFrom = changeRequest.SubmittedAt;
+        }
+
+        if (push.MappedStatus is { } status)
+            item.Status = status;
+        item.CaseManagementStatusUpdatedAt = push.Request.OccurredAt;
+
+        if (!await stores.Requests.UpdateAsync(changeRequest, cancellationToken, session))
+            throw new ChangeRequestWriteConflictException();
+
+        LogApplied(logger, item, push);
+        return Results.Ok(item);
     }
 
     // The application route's guards, in its order: ordering, final status, approve/reject legality. Null when the

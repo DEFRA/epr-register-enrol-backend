@@ -104,17 +104,20 @@ public static class AccreditationFromApplication
                 .Where(s => s.Selected)
                 .Select(s => (Site: s, OverseasSiteId: overseasSiteIdOf(s)))
                 .Where(x => x.OverseasSiteId is not null)
-                .Select(x => new AccreditationOverseasSiteEntry
-                {
-                    OverseasSiteId = x.OverseasSiteId!.Value,
-                    OrsId = x.Site.OrsId,
-                    Status = AccreditedSiteStatus.Approved,
-                    BesEvidence =
-                        LegacyApplicationMapper
-                            .ToBesEvidence(x.Site.BesEvidence)
-                            ?.BesEvidenceUploads
-                        ?? [],
-                })
+                .Select(x => SiteEntry(x.Site, x.OverseasSiteId!.Value))
                 .ToList(),
+        };
+
+    /// <summary>
+    /// The Accreditation's entry for a selected legacy site. RA-495: an in-year grant appends one the same way, so
+    /// an Accreditation built from the legacy application afterwards holds the same entry.
+    /// </summary>
+    public static AccreditationOverseasSiteEntry SiteEntry(OverseasSiteModel site, ObjectId overseasSiteId) =>
+        new()
+        {
+            OverseasSiteId = overseasSiteId,
+            OrsId = site.OrsId,
+            Status = AccreditedSiteStatus.Approved,
+            BesEvidence = LegacyApplicationMapper.ToBesEvidence(site.BesEvidence)?.BesEvidenceUploads ?? [],
         };
 }
