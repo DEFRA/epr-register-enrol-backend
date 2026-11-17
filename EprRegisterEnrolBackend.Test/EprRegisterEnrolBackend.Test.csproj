@@ -48,6 +48,12 @@
     <None Include="..\tools\domain-model\read-switch-readiness-test.js" Link="DomainModel\ReadModel\read-switch-readiness-test.js" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The cut readiness scripts QA runs before LegacyWrites goes off, run by CutReadinessScriptTests under Jint. -->
+  <ItemGroup>
+    <None Include="..\tools\domain-model\cut-readiness-checks.js" Link="DomainModel\Migration\cut-readiness-checks.js" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\tools\domain-model\cut-readiness-test.js" Link="DomainModel\Migration\cut-readiness-test.js" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\tools\CustomAnalyzers\CustomAnalyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>

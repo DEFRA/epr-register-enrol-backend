@@ -9,15 +9,27 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
 public class AccreditationApplicationPersistence(
     IMongoDbClientFactory connectionFactory,
-    ILoggerFactory loggerFactory
+    ILoggerFactory loggerFactory,
+    string collectionName
 )
     : MongoService<AccreditationApplicationModel>(
         connectionFactory,
-        DomainModelCollections.LegacyApplications,
+        collectionName,
         loggerFactory
     ),
         IAccreditationApplicationPersistence
 {
+    /// <summary>
+    /// The container uses this constructor (the legacy collection).
+    /// The three-argument form is for RA-706's staging copies.
+    /// </summary>
+    public AccreditationApplicationPersistence(
+        IMongoDbClientFactory connectionFactory,
+        ILoggerFactory loggerFactory
+    ) : this(connectionFactory, loggerFactory, DomainModelCollections.LegacyApplications)
+    {
+    }
+
     public async Task<AccreditationApplicationModel?> CreateAsync(
         AccreditationApplicationModel application
     )

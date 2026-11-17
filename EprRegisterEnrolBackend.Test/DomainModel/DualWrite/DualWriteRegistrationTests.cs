@@ -127,6 +127,10 @@ public class DualWriteRegistrationTests
             services,
             d => d.ImplementationType == typeof(DomainModelMigrationService)
         );
+        Assert.DoesNotContain(
+            services,
+            d => d.ImplementationType == typeof(ApplicationCreatedAtBackfillService)
+        );
     }
 
     [Fact]
@@ -142,5 +146,10 @@ public class DualWriteRegistrationTests
         );
 
         Assert.Contains(services, d => d.ImplementationType == typeof(DomainModelMigrationService));
+        // RA-706: the migration also fills createdAt on Application versions written before the model held it.
+        Assert.Contains(
+            services,
+            d => d.ImplementationType == typeof(ApplicationCreatedAtBackfillService)
+        );
     }
 }

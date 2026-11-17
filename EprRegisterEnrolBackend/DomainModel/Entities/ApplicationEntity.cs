@@ -30,7 +30,7 @@ public class ApplicationEntity : VersionedEntityBase
     /// Which type this application is, taken from <see cref="Details"/> so the two can never disagree. Stored for
     /// queries and indexes; it is the same string as <c>details._t</c>. Never read back: <see cref="Details"/> decides.
     /// </summary>
-    [BsonElement("applicationType")]
+    [BsonElement(ApplicationFields.ApplicationType)]
     [BsonRepresentation(BsonType.String)]
     public ApplicationType ApplicationType => Details.ApplicationType;
 
@@ -61,6 +61,13 @@ public class ApplicationEntity : VersionedEntityBase
     public string? WithdrawalReason { get; set; }
     public DateTime? DateSent { get; set; }
     public DateTime DateLastEdited { get; set; }
+
+    /// <summary>
+    /// When the application was created (legacy createdAt for migrated ones); nullable because versions written
+    /// before RA-706 have none until the createdAt backfill reaches them; it is what GET list orders newest-first
+    /// by once legacy is cut.
+    /// </summary>
+    public DateTime? CreatedAt { get; set; }
     public ApplicationQuery? Query { get; set; }
 
     /// <summary>The fields that belong to this type only.</summary>

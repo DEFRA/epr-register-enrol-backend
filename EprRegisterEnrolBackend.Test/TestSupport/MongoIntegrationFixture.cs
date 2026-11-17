@@ -67,9 +67,34 @@ public sealed class TestMongoDbClientFactory : IMongoDbClientFactory
     private readonly IMongoDatabase _database;
 
     public TestMongoDbClientFactory(string connectionString, string databaseName)
+        : this(MongoClientSettings.FromConnectionString(connectionString), databaseName) { }
+
+    private TestMongoDbClientFactory(MongoClientSettings settings, string databaseName)
     {
-        _client = new MongoClient(connectionString);
+        _client = new MongoClient(settings);
         _database = _client.GetDatabase(databaseName);
+    }
+
+    /// <summary>
+    /// A factory whose client records every command it sends to <paramref name="commands"/>, so a test can see what a
+    /// query asked the server for (a time limit, say) without needing the server to act on it.
+    /// </summary>
+    public static TestMongoDbClientFactory WatchingCommands(
+        string connectionString,
+        string databaseName,
+        List<MongoDB.Bson.BsonDocument> commands
+    )
+    {
+        var settings = MongoClientSettings.FromConnectionString(connectionString);
+        settings.ClusterConfigurator = cluster =>
+            cluster.Subscribe<MongoDB.Driver.Core.Events.CommandStartedEvent>(e =>
+            {
+                lock (commands)
+                {
+                    commands.Add(e.Command.DeepClone().AsBsonDocument);
+                }
+            });
+        return new TestMongoDbClientFactory(settings, databaseName);
     }
 
     /// <summary>

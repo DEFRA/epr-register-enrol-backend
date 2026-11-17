@@ -16,7 +16,7 @@ public static class FeatureFlags
     private const string DualWriteKey = $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.DualWrite)}";
 
     /// <summary>
-    /// RA-705: serves every read from the domain model. See <see cref="ReadFromModelPrerequisites"/>.
+    /// RA-705: serves every read from the domain model. See <see cref="s_readFromModelPrerequisites"/>.
     /// </summary>
     public const string ReadFromModelKey =
         $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.ReadFromModel)}";
@@ -30,9 +30,22 @@ public static class FeatureFlags
     /// <summary>
     /// The one place that lists ReadFromModel's prerequisites.
     /// </summary>
-    private static readonly (string Key, string Reason)[] ReadFromModelPrerequisites =
+    private static readonly (string Key, string Reason)[] s_readFromModelPrerequisites =
         [
             (DualWriteKey, "On CDP only dual-write keeps the model current."),
+            (DualWriteSeedKey, "Only seed dual-write writes a new application's initial version to the model."),
+            (ExpandEnabledKey, "On CDP only expand creates the model collections."),
+        ];
+
+    /// <summary>
+    /// RA-706: cut legacy writes.
+    /// </summary>
+    public const string LegacyWritesKey = $"{DomainModelConfig.SectionName}:{nameof(DomainModelConfig.LegacyWrites)}";
+
+    private static readonly (string Key, string Reason)[] s_legacyWritesCutPrerequisites =
+        [
+            (ReadFromModelKey, "Legacy is frozen, so every read must come from the model."),
+            (DualWriteKey, "Only dual-write writes the model."),
             (DualWriteSeedKey, "Only seed dual-write writes a new application's initial version to the model."),
             (ExpandEnabledKey, "On CDP only expand creates the model collections."),
         ];
@@ -65,7 +78,7 @@ public static class FeatureFlags
     }
 
     /// <summary>
-    /// RA-705: ReadFromModel serves every read from the domain model. See <see cref="ReadFromModelPrerequisites"/>.
+    /// RA-705: ReadFromModel serves every read from the domain model. See <see cref="s_readFromModelPrerequisites"/>.
     /// Development is exempt: there the dev seeds write the model directly.
     /// </summary>
     public static void EnsureReadFromModelHasItsPrerequisites(
@@ -75,7 +88,7 @@ public static class FeatureFlags
     {
         if (configuration.GetValue<bool>(ReadFromModelKey) && !environment.IsDevelopment())
         {
-            foreach (var (key, reason) in ReadFromModelPrerequisites)
+            foreach (var (key, reason) in s_readFromModelPrerequisites)
             {
                 if (!configuration.GetValue<bool>(key))
                 {
@@ -84,6 +97,36 @@ public static class FeatureFlags
                             + $"{ReadFromModelKey} off. {reason}"
                     );
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// RA-706: LegacyWrites off is the cut. There is no Development exemption because a frozen legacy read,
+    /// or a write that reaches neither store, is wrong locally too. It also requires InYearChangesEnabled off.
+    /// </summary>
+    public static void EnsureLegacyWritesCutHasItsPrerequisites(IConfiguration configuration)
+    {
+        if (!configuration.GetValue(LegacyWritesKey, true))
+        {
+            foreach (var (key, reason) in s_legacyWritesCutPrerequisites)
+            {
+                if (!configuration.GetValue<bool>(key))
+                {
+                    throw new InvalidOperationException(
+                        $"{LegacyWritesKey} off needs {key}: turn {key} on, or {LegacyWritesKey} back on. {reason}"
+                    );
+                }
+            }
+
+            if (configuration.GetValue<bool>(InYearChangesEnabledKey))
+            {
+                throw new InvalidOperationException(
+                    $"{LegacyWritesKey} off needs {InYearChangesEnabledKey} off: turn "
+                        + $"{InYearChangesEnabledKey} off, or {LegacyWritesKey} back on. "
+                        + "The in-year changes routes still read the legacy collection, "
+                        + "which the cut freezes."
+                );
             }
         }
     }

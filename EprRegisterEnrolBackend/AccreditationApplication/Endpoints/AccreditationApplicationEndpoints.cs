@@ -1162,7 +1162,7 @@ public static class AccreditationApplicationEndpoints
 
         // The backfills work on the legacy document (the one that is saved); the response comes from
         // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
-        // and UpdatedAt from legacy.
+        // and UpdatedAt from legacy, and after the cut (LegacyWrites off) the model's throughout.
         // An application the model doesn't hold yet is migrated first, rather than answering 404 for good (self-heal,
         // decided 2026-11-16).
         var served = await services.Reader.ServeOrMigrateAsync(
@@ -1174,6 +1174,11 @@ public static class AccreditationApplicationEndpoints
         {
             return Results.NotFound();
         }
+
+        // Served from the model, a failed backfill save holds neither value; the response still answers with what
+        // ReEx resolved (RA-526: no nation would show the wrong nation's bank details). A value the source holds wins.
+        served.OrgId ??= application.OrgId;
+        served.Nation ??= application.Nation;
 
         await AddNotificationStatusAsync(served, applicationId, services, cancellationToken);
 

@@ -33,6 +33,7 @@ public static class LegacyApplicationMapper
             WithdrawalReason = legacy.WithdrawalReason,
             DateSent = legacy.DateSent,
             DateLastEdited = legacy.DateLastEdited,
+            CreatedAt = legacy.CreatedAt,
             SubmittedBy = legacy.SubmittedBy is null
                 ? null
                 : new Submitter
