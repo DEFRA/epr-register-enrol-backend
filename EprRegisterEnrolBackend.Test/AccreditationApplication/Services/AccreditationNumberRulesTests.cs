@@ -87,12 +87,14 @@ public class AccreditationNumberRulesTests
     )
     {
         var result = AccreditationNumberRules.Generate(
-            approved,
-            registration,
-            lastYear is null ? null : LastYears(lastYear.Value, lastNumber!),
-            material,
-            Draws(draws),
-            []
+            new AccreditationNumberRequest(
+                approved,
+                registration,
+                lastYear is null ? null : LastYears(lastYear.Value, lastNumber!),
+                material,
+                []
+            ),
+            Draws(draws)
         );
 
         result.Error.Should().BeNull();
@@ -117,7 +119,16 @@ public class AccreditationNumberRulesTests
         string expected
     ) =>
         AccreditationNumberRules
-            .Generate(2027, "R26ER5003240079PL", null, "PL", Draws(draws), [otherSitesNumber])
+            .Generate(
+                new AccreditationNumberRequest(
+                    2027,
+                    "R26ER5003240079PL",
+                    null,
+                    "PL",
+                    [otherSitesNumber]
+                ),
+                Draws(draws)
+            )
             .AccreditationNumber.Should()
             .Be(expected);
 
@@ -125,12 +136,14 @@ public class AccreditationNumberRulesTests
     public void ContinuousRenewal_IgnoresTheOrganisationsOtherSites()
     {
         var result = AccreditationNumberRules.Generate(
-            2027,
-            "R26ER5003240079PL",
-            LastYears(2026, "A26ER5003240164PL"),
-            "PL",
-            Draws(""),
-            ["A26ER5003240164PL", "A27ER5003240164PL"]
+            new AccreditationNumberRequest(
+                2027,
+                "R26ER5003240079PL",
+                LastYears(2026, "A26ER5003240164PL"),
+                "PL",
+                ["A26ER5003240164PL", "A27ER5003240164PL"]
+            ),
+            Draws("")
         );
 
         result.AccreditationNumber.Should().Be("A27ER5003240164PL");
@@ -152,12 +165,14 @@ public class AccreditationNumberRulesTests
     public void GlIsNeverIssued()
     {
         var result = AccreditationNumberRules.Generate(
-            2027,
-            "R26ER5003240079GL",
-            null,
-            "GL",
-            Draws("241"),
-            []
+            new AccreditationNumberRequest(
+                2027,
+                "R26ER5003240079GL",
+                null,
+                "GL",
+                []
+            ),
+            Draws("241")
         );
 
         result.IsValid.Should().BeFalse();
@@ -174,12 +189,14 @@ public class AccreditationNumberRulesTests
     public void FirstTime_RejectsAnInvalidRegistrationNumber(string? registrationNumber)
     {
         var result = AccreditationNumberRules.Generate(
-            2027,
-            registrationNumber,
-            null,
-            "PL",
-            Draws("583"),
-            []
+            new AccreditationNumberRequest(
+                2027,
+                registrationNumber,
+                null,
+                "PL",
+                []
+            ),
+            Draws("583")
         );
 
         result.IsValid.Should().BeFalse();
@@ -195,12 +212,14 @@ public class AccreditationNumberRulesTests
     )
     {
         var result = AccreditationNumberRules.Generate(
-            2027,
-            "R26ER5003240079PL",
-            LastYears(2026, lastYears),
-            "PL",
-            Draws(""),
-            []
+            new AccreditationNumberRequest(
+                2027,
+                "R26ER5003240079PL",
+                LastYears(2026, lastYears),
+                "PL",
+                []
+            ),
+            Draws("")
         );
 
         result.IsValid.Should().BeFalse();
@@ -213,12 +232,14 @@ public class AccreditationNumberRulesTests
     public void RejectsAnEarlierAccreditationThatIsNotBeforeTheYearAppliedFor(int priorYear)
     {
         var result = AccreditationNumberRules.Generate(
-            2027,
-            "R26ER5003240079PL",
-            LastYears(priorYear, "A27ER5003240164PL"),
-            "PL",
-            Draws(""),
-            []
+            new AccreditationNumberRequest(
+                2027,
+                "R26ER5003240079PL",
+                LastYears(priorYear, "A27ER5003240164PL"),
+                "PL",
+                []
+            ),
+            Draws("")
         );
 
         result.IsValid.Should().BeFalse();
@@ -231,12 +252,14 @@ public class AccreditationNumberRulesTests
     public void ReportsNoSequenceLeft_WhenEveryDrawIsAnExcludedSequence()
     {
         var result = AccreditationNumberRules.Generate(
-            2027,
-            "R26ER5003240079PL",
-            null,
-            "PL",
-            () => 79,
-            []
+            new AccreditationNumberRequest(
+                2027,
+                "R26ER5003240079PL",
+                null,
+                "PL",
+                []
+            ),
+            () => 79
         );
 
         result.IsValid.Should().BeFalse();
@@ -247,7 +270,16 @@ public class AccreditationNumberRulesTests
     [Fact]
     public void AnInvalidSource_IsNotReportedAsNoSequenceLeft() =>
         AccreditationNumberRules
-            .Generate(2027, "R26ER500324079PL", null, "PL", Draws("583"), [])
+            .Generate(
+                new AccreditationNumberRequest(
+                    2027,
+                    "R26ER500324079PL",
+                    null,
+                    "PL",
+                    []
+                ),
+                Draws("583")
+            )
             .NoSequenceLeft.Should()
             .BeFalse();
 
@@ -282,12 +314,14 @@ public class AccreditationNumberRulesTests
     public void RenewalAfterBreak_RejectsAnInvalidEarlierNumber_RatherThanIgnoringIt(string earlier)
     {
         var result = AccreditationNumberRules.Generate(
-            2028,
-            "R26ER5003240079PL",
-            LastYears(2026, earlier),
-            "PL",
-            Draws("372"),
-            []
+            new AccreditationNumberRequest(
+                2028,
+                "R26ER5003240079PL",
+                LastYears(2026, earlier),
+                "PL",
+                []
+            ),
+            Draws("372")
         );
 
         result.IsValid.Should().BeFalse();
@@ -303,12 +337,14 @@ public class AccreditationNumberRulesTests
     )
     {
         var result = AccreditationNumberRules.Generate(
-            2027,
-            "R26ER5003240079PL",
-            new PriorAccreditation(2026, "A26ER500324164PL", source),
-            "PL",
-            Draws(""),
-            []
+            new AccreditationNumberRequest(
+                2027,
+                "R26ER5003240079PL",
+                new PriorAccreditation(2026, "A26ER500324164PL", source),
+                "PL",
+                []
+            ),
+            Draws("")
         );
 
         result.Error.Should().StartWith(expected);
@@ -321,12 +357,14 @@ public class AccreditationNumberRulesTests
     {
         var act = () =>
             AccreditationNumberRules.Generate(
-                2027,
-                "R26ER5003240079PL",
-                null,
-                "PL",
-                () => draw,
-                []
+                new AccreditationNumberRequest(
+                    2027,
+                    "R26ER5003240079PL",
+                    null,
+                    "PL",
+                    []
+                ),
+                () => draw
             );
 
         act.Should().Throw<InvalidOperationException>();

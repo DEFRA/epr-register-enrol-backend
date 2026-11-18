@@ -61,27 +61,22 @@ public static partial class AccreditationNumberRules
             _ => AccreditationNumberCase.RenewalAfterBreak,
         };
 
-    /// <param name="yearAppliedFor">The application's year, for example 2027.</param>
-    /// <param name="registrationNumber">The registration number, for example R26ER5003240079PL.</param>
-    /// <param name="latestAccreditation">The operator's latest accreditation for this
-    /// registration and material before <paramref name="yearAppliedFor"/>, or null if never
-    /// accredited.</param>
-    /// <param name="materialCode">The application's material code: ST, WO, AL, FB, PA, PL, GR or GO.</param>
+    /// <param name="request">The history and material to build from.</param>
     /// <param name="randomSequenceDigits">Returns a new sequence's 3 random digits, from 0 to 999.</param>
-    /// <param name="organisationAccreditationNumbers">Every accreditation number the
-    /// organisation has; a new sequence avoids those under this registration's agency, process
-    /// type and OrgId. Malformed ones are skipped: they're held data to avoid, not this number's
-    /// source.</param>
     public static AccreditationNumberResult Generate(
-        int yearAppliedFor,
-        string? registrationNumber,
-        PriorAccreditation? latestAccreditation,
-        string materialCode,
-        Func<int> randomSequenceDigits,
-        IEnumerable<string> organisationAccreditationNumbers
+        AccreditationNumberRequest request,
+        Func<int> randomSequenceDigits
     )
     {
+        ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(randomSequenceDigits);
+        var (
+            yearAppliedFor,
+            registrationNumber,
+            latestAccreditation,
+            materialCode,
+            organisationAccreditationNumbers
+        ) = request;
 
         if (!MaterialCodeFormat().IsMatch(materialCode))
             return AccreditationNumberResult.Invalid(
@@ -160,7 +155,7 @@ public static partial class AccreditationNumberRules
     private static HashSet<string> ExcludedSequences(
         string registrationNumber,
         PriorAccreditation? latestAccreditation,
-        IEnumerable<string>? organisationAccreditationNumbers
+        IEnumerable<string> organisationAccreditationNumbers
     )
     {
         var excluded = new HashSet<string> { registrationNumber[SequenceDigits] };

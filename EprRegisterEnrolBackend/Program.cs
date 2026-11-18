@@ -186,6 +186,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     >();
     builder.Services.AddSingleton<IRegulatoryNumberGenerator, RegulatoryNumberGenerator>();
     builder.Services.AddSingleton<IAccreditationSequenceRandom, AccreditationSequenceRandom>();
+    builder.Services.AddScoped<AccreditationNumberIssuer>();
     builder.Services.AddSingleton<
         IRegulatoryNumberBackfillStatus,
         RegulatoryNumberBackfillStatus

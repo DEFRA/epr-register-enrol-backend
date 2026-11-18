@@ -164,21 +164,32 @@ public class DevAccreditationHistorySeedServiceTests
         previous.Should().NotBeNull();
         AccreditationNumberRules
             .Generate(
-                2027,
-                "R26ER0500036908PL",
-                new PriorAccreditation(
-                    2026,
-                    previous!.AccreditationReference!,
-                    AccreditationReferenceSourceKind.PreviousAccreditation
+                new AccreditationNumberRequest(
+                    2027,
+                    "R26ER0500036908PL",
+                    new PriorAccreditation(
+                        2026,
+                        previous!.AccreditationReference!,
+                        AccreditationReferenceSourceKind.PreviousAccreditation
+                    ),
+                    "PL",
+                    []
                 ),
-                "PL",
-                () => throw new InvalidOperationException("A renewal draws no random sequence."),
-                []
+                () => throw new InvalidOperationException("A renewal draws no random sequence.")
             )
             .AccreditationNumber.Should()
             .Be("A27ER0500030042PL");
         AccreditationNumberRules
-            .Generate(2027, "R26ER0500036908PL", null, "PL", () => 583, [])
+            .Generate(
+                new AccreditationNumberRequest(
+                    2027,
+                    "R26ER0500036908PL",
+                    null,
+                    "PL",
+                    []
+                ),
+                () => 583
+            )
             .AccreditationNumber.Should()
             .Be("A27ER0500030583PL", because: "without the 2026 accreditation it would be a new number");
     }

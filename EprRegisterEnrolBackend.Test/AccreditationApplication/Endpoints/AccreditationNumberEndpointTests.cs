@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
@@ -266,7 +267,7 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
             TestContext.Current.CancellationToken
         );
         message.Should()
-            .Contain($"{AccreditationApplicationEndpoints.MaxAccreditationNumberAttempts} attempts");
+            .Contain($"{AccreditationNumberIssuer.MaxAttempts} attempts");
         (await StoredApplication(app)).AccreditationReference.Should().BeNull();
     }
 
