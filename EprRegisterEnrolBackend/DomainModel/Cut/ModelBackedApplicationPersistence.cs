@@ -697,6 +697,18 @@ public sealed class ModelBackedApplicationPersistence(
         return results.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
     }
 
+    // epr-2uxy: the isNewSite correction fixes the legacy documents and must run before the cut. The model does
+    // not store or project createdAt yet (design doc §5, "dateLastEdited, createdAt, updatedAt"), so the
+    // created-before window it filters on cannot be read from here: refuse rather than scan the wrong set.
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetCreatedBeforeWithOverseasSitesAsync(
+        DateTime createdBefore,
+        CancellationToken cancellationToken = default
+    ) =>
+        throw new NotSupportedException(
+            "The epr-2uxy isNewSite audit and correction read the legacy collection and cannot run once "
+                + "LegacyWrites is off: the domain model holds no createdAt to bound them by."
+        );
+
     // RA-766's charge correction, as legacy's query: every open application with a work item, Queried left out.
     public async Task<
         IReadOnlyList<AccreditationApplicationModel>

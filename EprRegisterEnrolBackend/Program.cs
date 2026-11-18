@@ -225,6 +225,11 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<ChargeCorrectionMigration>();
 
+    // epr-2uxy: read-only audit and gated correction of wrongly-defaulted overseas-site isNewSite.
+    // Both off by default (Diagnostics:Ra292*) - see docs/diagnostics/epr-2uxy-isnewsite-correction.md.
+    builder.Services.AddHostedService<IsNewSiteAudit>();
+    builder.Services.AddHostedService<IsNewSiteCorrectionMigration>();
+
     // RA-646: fixed test accreditations for other teams to read in dev, test and ext-test.
     // Off unless TestData:SeedOnStartup is set, which only those environments do.
     builder.Services.Configure<TestDataConfig>(

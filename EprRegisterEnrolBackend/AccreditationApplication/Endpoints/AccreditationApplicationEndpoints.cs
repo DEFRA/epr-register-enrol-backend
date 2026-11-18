@@ -1766,6 +1766,36 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(reason);
         }
 
+        // epr-2uxy: this PATCH edits, selects and drops the sites the application already holds; it
+        // never creates one (the Registration & Accreditation frontend only ever sends back a filtered or mapped copy of the
+        // application's own list). A new site goes through POST .../overseas-sites, which validates
+        // it and allocates its OrsId. Accepting an unknown SiteId here used to store a site with
+        // isNewSite: true and whatever OrsId the client sent - possibly none - which is the shape
+        // the epr-2uxy correction must be able to read as a wrongly-defaulted ReEx site.
+        if (
+            request.Sites != null
+            && OverseasSiteMerge.UnknownSiteIds(application.OverseasSites.Sites, request.Sites)
+                is { Count: > 0 } unknownSiteIds
+        )
+        {
+            loggerFactory
+                .CreateLogger("AccreditationApplicationEndpoints")
+                .LogError(
+                    "PatchOverseasSites rejected for application {ApplicationId}: the body carries "
+                        + "overseas site ids {SiteIds} the application does not hold. New sites are "
+                        + "added through POST .../overseas-sites",
+                    applicationId,
+                    string.Join(", ", unknownSiteIds)
+                );
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Unknown overseas site",
+                detail: "The application holds no overseas site with id "
+                    + $"{string.Join(", ", unknownSiteIds)}. Add a new site with POST "
+                    + ".../overseas-sites."
+            );
+        }
+
         // RA-292 AC01/AC02: isNewSite (site and interim) is re-derived server-side against the
         // persisted list; whatever the client sent for it is discarded.
         if (request.Sites != null)

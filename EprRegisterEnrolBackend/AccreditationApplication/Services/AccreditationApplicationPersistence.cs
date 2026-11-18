@@ -472,6 +472,23 @@ public class AccreditationApplicationPersistence(
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<
+        IReadOnlyList<AccreditationApplicationModel>
+    > GetCreatedBeforeWithOverseasSitesAsync(
+        DateTime createdBefore,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var filter = Builders<AccreditationApplicationModel>.Filter;
+        return await Collection
+            .Find(
+                filter.Lt(a => a.CreatedAt, createdBefore)
+                    & filter.SizeGt(a => a.OverseasSites!.Sites, 0)
+            )
+            .SortBy(a => a.Id)
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null

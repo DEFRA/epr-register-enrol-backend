@@ -368,6 +368,17 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             _store.Where(a => a.OrgId == orgId && a.Year == year).Select(ShallowCopy).ToList()
         );
 
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetCreatedBeforeWithOverseasSitesAsync(
+        DateTime createdBefore,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a => a.CreatedAt < createdBefore && a.OverseasSites?.Sites.Count > 0)
+                .Select(ShallowCopy)
+                .ToList()
+        );
+
     public Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenNotQueriedWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     ) =>

@@ -16,9 +16,26 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 public static class OverseasSiteMerge
 {
     /// <summary>
+    /// epr-2uxy: the incoming ORS site ids that <paramref name="persisted"/> does not hold. The
+    /// PATCH only ever edits sites the application already has; a non-empty result is rejected
+    /// there with a 400, because a site created this way would skip the add-site rules and could
+    /// carry <c>isNewSite: true</c> with no <c>OrsId</c>.
+    /// </summary>
+    public static IReadOnlyList<int> UnknownSiteIds(
+        IEnumerable<OverseasSiteModel>? persisted,
+        IEnumerable<OverseasSiteModel> incoming
+    )
+    {
+        var known = (persisted ?? []).Select(s => s.SiteId).ToHashSet();
+        return [.. incoming.Select(s => s.SiteId).Where(id => !known.Contains(id)).Distinct()];
+    }
+
+    /// <summary>
     /// Returns the incoming sites with server-owned fields restored from
     /// <paramref name="persisted"/>, matched on <c>SiteId</c>. ORS and interim ids are looked up
-    /// separately so the two can never be confused. An unknown id is treated as new.
+    /// separately so the two can never be confused. Every incoming ORS id must already be
+    /// persisted (see <see cref="UnknownSiteIds"/>); an unknown one throws rather than being
+    /// stored as a new site. An unknown interim id is treated as new.
     ///
     /// ORS sites the client omits are dropped. Interim sites are never dropped: see
     /// <see cref="ReattachOmittedInterimSites"/>.
@@ -55,29 +72,29 @@ public static class OverseasSiteMerge
         var merged = incoming.ToList();
         foreach (var site in merged)
         {
-            if (persistedSites.TryGetValue(site.SiteId, out var knownSite))
+            if (!persistedSites.TryGetValue(site.SiteId, out var knownSite))
             {
-                // Fixed at creation and never changed by any journey, and the key the OrsId
-                // uniqueness guard relies on - so a PATCH altering it is always wrong.
-                site.OrsId = knownSite.OrsId;
-
-                site.IsNewSite = knownSite.IsNewSite;
-
-                // Set only by promote/revert. A body omitting it would deserialise to false and
-                // silently un-promote the site.
-                site.RegisteredNowAccredited = knownSite.RegisteredNowAccredited;
-
-                // [JsonIgnore], so it can never come back on a PATCH; carrying it across keeps a
-                // promoted site's revert target.
-                site.PreviousSites = knownSite.PreviousSites;
+                // epr-2uxy: the caller rejects unknown ids first, so reaching here is a bug. It
+                // used to store the site as new with whatever OrsId the client sent.
+                throw new InvalidOperationException(
+                    $"Overseas site {site.SiteId} is not held by the application; new sites are "
+                        + "added through AddOverseasSite, never through the overseas-sites PATCH."
+                );
             }
-            else
-            {
-                // A site the server has never seen is new and cannot have been promoted. OrsId is
-                // left as supplied - there is nothing persisted to restore.
-                site.IsNewSite = true;
-                site.RegisteredNowAccredited = false;
-            }
+
+            // Fixed at creation and never changed by any journey, and the key the OrsId
+            // uniqueness guard relies on - so a PATCH altering it is always wrong.
+            site.OrsId = knownSite.OrsId;
+
+            site.IsNewSite = knownSite.IsNewSite;
+
+            // Set only by promote/revert. A body omitting it would deserialise to false and
+            // silently un-promote the site.
+            site.RegisteredNowAccredited = knownSite.RegisteredNowAccredited;
+
+            // [JsonIgnore], so it can never come back on a PATCH; carrying it across keeps a
+            // promoted site's revert target.
+            site.PreviousSites = knownSite.PreviousSites;
 
             // RA-603: a client sending only the singular field is read as a one-element list.
             // When the list IS present it is authoritative and the singular field is ignored.
