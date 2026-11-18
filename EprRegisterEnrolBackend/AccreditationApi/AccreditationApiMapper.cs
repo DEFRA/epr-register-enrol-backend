@@ -188,8 +188,6 @@ public static class AccreditationApiMapper
     private static DateTime Approval(AccreditationApplicationModel application) =>
         AsUtc(application.CaseManagementStatusUpdatedAt ?? application.DateLastEdited);
 
-    private static DateOnly UkDate(DateTime utc) => UkCalendar.ToUkDate(utc);
-
     private static DateTime AsUtc(DateTime value) =>
         value.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
