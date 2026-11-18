@@ -37,13 +37,33 @@ public sealed class OrganisationNameCorrectionOptions
 // domain model organisation's name (the domain read model projects it from there, so nothing else
 // holds a copy). Case management holds its own copy, which management-be corrects.
 //
-// Matching rule: the 2027 applications are found by OrgId and Year, then every one must belong to
-// 500069 on every key it holds - the same ReEx organisation id, and registration and accreditation
-// references that carry 500069 - and hold the old or the new name. At least one must hold the
-// registration reference the story names (R26NR5000690003GL), proving it is the accreditation we
-// were asked about. The domain organisation is found by the applications' ReEx organisation id or by
-// number 500069; more than one, a mismatched key, or an unexpected name aborts. Every record is
-// planned before anything is written, so an abort means no writes at all.
+// Matching rule: the 2027 applications are found by OrgId and Year, by the ReEx organisation id
+// (for drafts not yet holding their OrgId), and by the two registration references below (so a
+// record under one of them holding another OrgId or ReEx organisation id is seen, and aborts the
+// run, rather than being silently missed). Every one must be Year 2027, hold OrgId null or 500069,
+// the single ReEx organisation id of the OrgId matches, and the old or the new name. 500069 holds
+// two registrations, so references are checked against an explicit allow-list rather than derived
+// from the organisation number (the EA registration's reference carries 500226, not 500069):
+//
+//   registration (NIEA)  R26NR5000690003GR  2026 accreditation A26NR5000690003GR
+//   registration (EA)    R26ER5002260055GR  2026 accreditation A26ER5002260023GR
+//
+// A record's registration reference must be null or one of the two. Its accreditation reference
+// must be null or a 2027 reference for its own registration: derived for 2027
+// (AccreditationReferenceDerivation: leading character 'A', characters 2-3 the year, the rest
+// copied), with the 4-digit sequence (characters 12-15) accepted as any ASCII digits. Deriving
+// from the registration or from its 2026 accreditation gives the same shape once the sequence is
+// masked: A27NR500069####GR for the NIEA registration, A27ER500226####GR for the EA one. The
+// sequence is tolerated because a 2027 number can be issued with a sequence other than the
+// derived one (RA-691). A cross-pair aborts. A draft with no registration yet may hold either
+// shape. Management-be applies the same rule.
+//
+// At least one 2027 record must hold one of the two registrations, proving these are the
+// accreditations we were asked about. The domain organisation is found by the applications' ReEx
+// organisation id or by number 500069; more than one, a mismatched key, or an unexpected name
+// aborts (no reference is checked there). Every record is planned before anything is written, so
+// an abort means no writes at all. The completion log counts the records per registration, so the
+// spot check can confirm both registrations are covered.
 //
 // Each rename is a single targeted update guarded on the record still holding the old name, so a
 // re-run is a no-op and a concurrent write cannot be clobbered. Only the name is set: status,
@@ -73,7 +93,31 @@ public class OrganisationNameCorrectionMigration(
     internal const int AccreditationYear = 2027;
     internal const string OldName = "Encirc Ltd";
     internal const string NewName = "VIDRALA UK & IRELAND LIMITED";
-    internal const string NamedRegistrationReference = "R26NR5000690003GL";
+    internal const string NiRegistrationReference = "R26NR5000690003GR";
+    internal const string EaRegistrationReference = "R26ER5002260055GR";
+
+    // Each allowed registration reference, with the shape of a 2027 accreditation reference for it:
+    // derived for 2027, its 4-digit sequence masked (see the class comment).
+    internal static readonly IReadOnlyDictionary<string, string> AllowedReferences =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [NiRegistrationReference] = Derived2027Shape(NiRegistrationReference),
+            [EaRegistrationReference] = Derived2027Shape(EaRegistrationReference),
+        };
+
+    // Characters 12-15 (1-based) of a reference: the sequence, tolerated as any 4 ASCII digits.
+    private const int SequenceStart = 11;
+    private const int SequenceEnd = 15;
+
+    private static string Derived2027Shape(string registration) =>
+        Shape(
+            AccreditationReferenceDerivation
+                .Derive(registration, AccreditationReferenceSourceKind.Registration, AccreditationYear)
+                .Reference!
+        );
+
+    // Bucket for the completion counts of a record with no registration yet.
+    private const string NoRegistration = "no registration";
 
     internal enum RunResult
     {
@@ -150,12 +194,16 @@ public class OrganisationNameCorrectionMigration(
             return RunResult.Aborted;
         }
 
+        var counts = AllowedReferences.Keys.Append(NoRegistration)
+            .ToDictionary(r => r, _ => new RegistrationCount(), StringComparer.Ordinal);
         foreach (var application in plan.Applications)
-            await ReportAndApplyAsync(
+        {
+            var renamed = await ReportAndApplyAsync(
                 "application",
                 application.Id,
-                $" ({application.ApplicationReference}, {application.RegistrationReference}/"
-                    + $"{application.AccreditationReference}, {application.Status})",
+                $" (application {application.ApplicationReference ?? "(null)"}, registration "
+                    + $"{application.RegistrationReference ?? "(null)"}, accreditation "
+                    + $"{application.AccreditationReference ?? "(null)"}, status {application.Status})",
                 application.AlreadyRenamed,
                 mode,
                 confirmedBy,
@@ -173,6 +221,9 @@ public class OrganisationNameCorrectionMigration(
                         cancellationToken: cancellationToken
                     ) is not null
             );
+            counts[application.RegistrationReference ?? NoRegistration]
+                .Add(application.AlreadyRenamed, confirmedBy is not null, renamed);
+        }
 
         if (plan.Organisation is { } organisation)
         {
@@ -202,7 +253,15 @@ public class OrganisationNameCorrectionMigration(
             );
 
         if (logger.IsEnabled(LogLevel.Information))
-            logger.LogInformation("RA-764 organisation name correction complete. Mode={Mode}", mode);
+            logger.LogInformation(
+                "RA-764 organisation name correction complete. Mode={Mode}. Applications per "
+                    + "registration: {RegistrationCounts}",
+                mode,
+                string.Join(
+                    "; ",
+                    counts.Select(c => $"{c.Key}: {c.Value.Describe(confirmedBy is not null)}")
+                )
+            );
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
 
@@ -269,24 +328,49 @@ public class OrganisationNameCorrectionMigration(
             ),
         ];
 
+        // A record under one of the registrations but holding another OrgId (the EA registration's
+        // references carry 500226) or ReEx organisation id would be missed by both lookups above;
+        // found here, it fails the identity check below and aborts the run instead.
+        var byRegistration = await applications.GetByRegistrationReferencesAndYearAsync(
+            [.. AllowedReferences.Keys],
+            AccreditationYear,
+            cancellationToken
+        );
+        var knownIds = found.Select(a => a.Id).ToHashSet();
+        found = [.. found, .. byRegistration.Where(a => !knownIds.Contains(a.Id))];
+
         var applicationPlans = new List<ApplicationPlan>();
         foreach (var application in found)
         {
-            if (!IsTargetApplication(application) || application.Id is not { } id)
+            if (
+                !IsTargetApplication(application, reExOrganisationIds[0])
+                || application.Id is not { } id
+            )
             {
                 logger.LogError(
-                    "RA-764 {OrgId}: application {ApplicationId} is Year {Year}, registration "
-                        + "{RegistrationReference}, accreditation {AccreditationReference}, name "
-                        + "\"{OrganisationName}\"; expected {ExpectedYear} references for "
-                        + "{ExpectedOrgId} and the name \"{OldName}\" or \"{NewName}\"",
+                    "RA-764 {OrgId}: application {ApplicationId} is Year {Year}, OrgId "
+                        + "{ApplicationOrgId}, ReEx organisation {ReExOrganisationId}, status "
+                        + "{ApplicationStatus}, registration {RegistrationReference}, accreditation "
+                        + "{AccreditationReference}, name \"{OrganisationName}\"; expected Year "
+                        + "{ExpectedYear}, OrgId null or {ExpectedOrgId}, ReEx organisation "
+                        + "{ExpectedReExOrganisationId}, registration null or one "
+                        + "of {AllowedRegistrations}, an accreditation null or one for its "
+                        + "registration ({AllowedAccreditations}), and the name \"{OldName}\" or "
+                        + "\"{NewName}\"",
                     OrgId,
                     application.Id,
                     application.Year,
+                    application.OrgId,
+                    application.OrganisationId,
+                    application.ApplicationStatus,
                     application.RegistrationReference,
                     application.AccreditationReference,
                     application.OrganisationName,
                     AccreditationYear,
                     OrgId,
+                    reExOrganisationIds[0],
+                    string.Join(", ", AllowedReferences.Keys),
+                    string.Join("; ", AllowedReferences.Select(r => $"{r.Key}: {r.Value}")),
                     OldName,
                     NewName
                 );
@@ -304,15 +388,20 @@ public class OrganisationNameCorrectionMigration(
             );
         }
 
-        if (!found.Any(a => a.RegistrationReference == NamedRegistrationReference))
+        if (
+            !found.Any(a =>
+                a.RegistrationReference is { } registration
+                && AllowedReferences.ContainsKey(registration)
+            )
+        )
         {
             logger.LogError(
                 "RA-764 {OrgId}: none of its {Count} {Year} applications holds registration "
-                    + "{RegistrationReference}",
+                    + "{AllowedRegistrations}",
                 OrgId,
                 found.Count,
                 AccreditationYear,
-                NamedRegistrationReference
+                string.Join(" or ", AllowedReferences.Keys)
             );
             return null;
         }
@@ -384,19 +473,36 @@ public class OrganisationNameCorrectionMigration(
         return (true, new OrganisationPlan(organisation.Id, organisation.Name == NewName, otherYears));
     }
 
-    // Every reference carries the organisation number at characters 5-10 (see
-    // AccreditationReferenceDerivation), so a record holding a reference for any other organisation
-    // is not ours, whatever its OrgId says.
-    private static bool IsTargetApplication(AccreditationApplicationModel application) =>
+    // References are checked against the allow-list, not the organisation number they carry: the EA
+    // registration's reference carries 500226 (see the class comment).
+    private static bool IsTargetApplication(
+        AccreditationApplicationModel application,
+        string reExOrganisationId
+    ) =>
         application.OrgId is null or OrgId
+        && application.OrganisationId == reExOrganisationId
         && application.Year == AccreditationYear
-        && IsNullOrForOrg(application.RegistrationReference)
-        && IsNullOrForOrg(application.AccreditationReference)
+        && HasAllowedReferences(application.RegistrationReference, application.AccreditationReference)
         && application.OrganisationName is OldName or NewName;
 
-    private static bool IsNullOrForOrg(string? reference) =>
-        reference is null
-        || (reference.Length == 17 && reference[5..11] == OrgId.ToString("D6"));
+    private static bool HasAllowedReferences(string? registration, string? accreditation)
+    {
+        if (registration is null)
+            return accreditation is null
+                || AllowedReferences.Values.Any(shape => HasShape(accreditation, shape));
+        return AllowedReferences.TryGetValue(registration, out var forRegistration)
+            && (accreditation is null || HasShape(accreditation, forRegistration));
+    }
+
+    // Ordinal: the same as the derived reference except, perhaps, its 4-digit sequence.
+    private static bool HasShape(string accreditation, string shape) =>
+        accreditation.Length == 17
+        && accreditation[SequenceStart..SequenceEnd].All(char.IsAsciiDigit)
+        && string.Equals(Shape(accreditation), shape, StringComparison.Ordinal);
+
+    // A reference with its sequence masked, e.g. A27NR500069####GR.
+    private static string Shape(string reference) =>
+        $"{reference[..SequenceStart]}####{reference[SequenceEnd..]}";
 
     // A domain organisation seeded before it had a number holds none, so a null number is accepted.
     private static bool IsTargetOrganisation(
@@ -550,5 +656,29 @@ public class OrganisationNameCorrectionMigration(
                 NewName,
                 confirmedBy
             );
+    }
+
+    // One registration's applications for the completion log: renamed (or, in a dry run, to be
+    // renamed), already renamed, and - on an apply - changed after planning so not written.
+    private sealed class RegistrationCount
+    {
+        private int _renamed;
+        private int _skipped;
+        private int _notWritten;
+
+        public void Add(bool alreadyRenamed, bool applying, bool renamed)
+        {
+            if (alreadyRenamed)
+                _skipped++;
+            else if (!applying || renamed)
+                _renamed++;
+            else
+                _notWritten++;
+        }
+
+        public string Describe(bool applying) =>
+            applying
+                ? $"{_renamed} applied, {_skipped} skipped (already renamed), {_notWritten} not written"
+                : $"{_renamed} planned, {_skipped} skipped (already renamed)";
     }
 }
