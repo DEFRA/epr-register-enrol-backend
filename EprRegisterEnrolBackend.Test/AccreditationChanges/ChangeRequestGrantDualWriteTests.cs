@@ -125,6 +125,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
                 OrganisationName = "Acme Recycling Ltd",
                 RegistrationId = ReExRegistrationId,
                 IsExporter = true,
+                WasteProcessingType = "exporter",
                 Nation = Nation.England,
                 MaterialType = MaterialType.Steel,
                 Year = 2026,
@@ -289,6 +290,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         var entry = accreditation.AccreditationOverseasSites.Single(e => e.OrsId == GrantedOrsId);
         Assert.Equal(ors.EntityId, entry.OverseasSiteId);
         Assert.Equal(AccreditedSiteStatus.Approved, entry.Status);
+        Assert.Equal(SubmittedAt, entry.AccreditedFrom);
         Assert.Equal(ChangeReason.ChangeRequestGranted, accreditation.LastChange.Reason);
         Assert.True(accreditation.Version > 1, "the grant is a new version of the existing Accreditation");
 
@@ -355,8 +357,8 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         return accreditation;
     }
 
-    // The fields the reconciliation report found differing between legacy and the model, for the one application.
-    private async Task<IReadOnlyDictionary<string, long>> ReconciliationDifferencesAsync()
+    // The fields the reconciliation report found differing between legacy and the model, across the applications.
+    private async Task<IReadOnlyDictionary<string, long>> ReconciliationDifferencesAsync(int applications = 1)
     {
         var report = await new ApplicationReconciler(
             _factory.Services.GetRequiredService<IMongoDbClientFactory>(),
@@ -365,9 +367,11 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
             Stores.Conflicts,
             TimeProvider.System
         ).RunAsync(Ct);
-        Assert.Equal(1, report.Applications);
+        Assert.Equal(applications, report.Applications);
         Assert.Equal(0, report.NotMigrated + report.Unreadable + report.AcceptedConflicts);
-        return report.DifferencesByField;
+        // A value only the model holds (legacy has none) is a difference too, reported apart.
+        var modelOnly = report.ModelOnlyByField.Select(f => KeyValuePair.Create($"modelOnly:{f.Key}", f.Value));
+        return report.DifferencesByField.Concat(modelOnly).ToDictionary();
     }
 
     // As the operator's own add-to-accreditation journey and BES upload write them, then the approval carries them to
@@ -454,14 +458,24 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         Assert.Equal("28.6139, 77.2090", (await OrsAsync(GrantedOrsId)).Coordinates);
     }
 
-    [Fact]
-    public async Task Approved_OrsAlreadyFirstApproved_KeepsItsDate()
+    // An ORS first approved before: in an earlier year (ReEx's date) or by an application's approval here.
+    public static TheoryData<FirstApprovalSource, string?> EarlierApprovals =>
+        new() { { FirstApprovalSource.ReEx, "2024-01-01" }, { FirstApprovalSource.ThisService, null } };
+
+    // 3bb.43: the ORS keeps its first approved date, and the Accreditation's entry records the grant's, which is the
+    // date legacy writes onto the site and the model serves for it, so reconciliation finds nothing new.
+    [Theory]
+    [MemberData(nameof(EarlierApprovals))]
+    public async Task Approved_OrsAlreadyFirstApproved_KeepsItsDate(
+        FirstApprovalSource source,
+        string? reExValidFrom
+    )
     {
         var application = await SubmittedAsync();
         await MigrateAsync(application);
         var earlier = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var ors = await OrsAsync(GrantedOrsId);
-        ors.RecordFirstApproval(earlier, FirstApprovalSource.ThisService);
+        ors.RecordFirstApproval(earlier, source, reExValidFrom);
         await Stores.OverseasSites.Versions.UpdateAsync(
             ors,
             ors.Version,
@@ -474,11 +488,47 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var after = await OrsAsync(GrantedOrsId);
         Assert.Equal(earlier, after.FirstApprovedAt);
+        Assert.Equal(source, after.FirstApprovalSource);
         Assert.Equal(ors.Version + 1, after.Version);
-        Assert.Contains(
-            (await AccreditationEntityAsync(application)).AccreditationOverseasSites,
-            e => e.OrsId == GrantedOrsId
+        var entry = (await AccreditationEntityAsync(application)).AccreditationOverseasSites.Single(e =>
+            e.OrsId == GrantedOrsId
         );
+        Assert.Equal(SubmittedAt, entry.AccreditedFrom);
+        Assert.Empty(await ReconciliationDifferencesAsync());
+    }
+
+    // 3bb.44: the grant's date is the granted accreditation's, not the ORS's, so another application holding the same
+    // ORS (here next year's re-accreditation, in flight, whose legacy copy of the site has no validFrom) is not served
+    // it. Reconciling both applications finds nothing new.
+    [Fact]
+    public async Task Approved_AnotherApplicationHoldingTheOrs_IsNotServedTheGrantDate()
+    {
+        await SubmittedAsync();
+        await Applications.CreateAsync(
+            new AccreditationApplicationModel
+            {
+                Id = ObjectId.GenerateNewId(),
+                OrganisationId = OrganisationId,
+                OrganisationName = "Acme Recycling Ltd",
+                RegistrationId = ReExRegistrationId,
+                IsExporter = true,
+                WasteProcessingType = "exporter",
+                Nation = Nation.England,
+                MaterialType = MaterialType.Steel,
+                Year = 2027,
+                ApplicationStatus = ApplicationStatus.Started,
+                RegistrationReference = "R26ER5000270001ST",
+                OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites = [Site(1, "001", selected: true), Site(2, GrantedOrsId, selected: true)],
+                },
+            }
+        );
+
+        Assert.Equal(HttpStatusCode.OK, (await PushAsync("approved", Watermark.AddMinutes(5))).StatusCode);
+
+        Assert.Equal(SubmittedAt, (await OrsAsync(GrantedOrsId)).FirstApprovedAt);
+        Assert.Empty(await ReconciliationDifferencesAsync(applications: 2));
     }
 
     // A failure after every grant write (the unit of work's own sync) rolls them all back, item included: Case

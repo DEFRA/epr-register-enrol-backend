@@ -48,8 +48,8 @@ public class OverseasSiteEntity : VersionedEntityBase
     public DateTime? FirstApprovedAt { get; set; }
 
     /// <summary>
-    /// Where <see cref="FirstApprovedAt"/> came from. Only ReEx's date and a granted change request's are on the legacy
-    /// application (see <see cref="LegacyValidFrom"/>).
+    /// Where <see cref="FirstApprovedAt"/> came from. Only ReEx's date is served as the sites' <c>validFrom</c> (see
+    /// <see cref="LegacyValidFrom"/>).
     /// </summary>
     [BsonRepresentation(BsonType.String)]
     public FirstApprovalSource? FirstApprovalSource { get; set; }
@@ -97,17 +97,16 @@ public class OverseasSiteEntity : VersionedEntityBase
     }
 
     /// <summary>
-    /// The site's <c>validFrom</c> as the legacy application holds it: ReEx's string as received (an ORS recorded
-    /// before the string was kept gives its date in the one form the model has), or a granted change request's date
-    /// as the grant writes it (3bb.28). Null for an application's approval here, which legacy never writes.
+    /// The site's <c>validFrom</c> as a legacy application holds it, for an application whose Accreditation records no
+    /// date of its own for the site (<see cref="AccreditationOverseasSiteEntry.AccreditedFrom"/>): ReEx's string as
+    /// received (an ORS recorded before the string was kept gives its date in the one form the model has). Null for a
+    /// date from this service: legacy never writes an application's approval, and writes a granted change request's
+    /// only onto the granted accreditation's site, which serves its entry's date (3bb.43, 3bb.44).
     /// </summary>
     public string? LegacyValidFrom() =>
-        FirstApprovalSource switch
-        {
-            Entities.FirstApprovalSource.ReEx => ReExValidFrom ?? SiteApprovalDate.Format(FirstApprovedAt),
-            Entities.FirstApprovalSource.ChangeRequest => SiteApprovalDate.Format(FirstApprovedAt),
-            _ => null,
-        };
+        FirstApprovalSource == Entities.FirstApprovalSource.ReEx
+            ? ReExValidFrom ?? SiteApprovalDate.Format(FirstApprovedAt)
+            : null;
 
     private static string? ReExStringFor(FirstApprovalSource source, string? reExValidFrom) =>
         source == Entities.FirstApprovalSource.ReEx ? reExValidFrom : null;

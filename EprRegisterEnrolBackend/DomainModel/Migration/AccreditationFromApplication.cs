@@ -110,7 +110,8 @@ public static class AccreditationFromApplication
 
     /// <summary>
     /// The Accreditation's entry for a selected legacy site. RA-495: an in-year grant appends one the same way, so
-    /// an Accreditation built from the legacy application afterwards holds the same entry.
+    /// an Accreditation built from the legacy application afterwards holds the same entry, but for the grant's
+    /// <see cref="AccreditationOverseasSiteEntry.AccreditedFrom"/>, which only the grant records.
     /// </summary>
     public static AccreditationOverseasSiteEntry SiteEntry(OverseasSiteModel site, ObjectId overseasSiteId) =>
         new()

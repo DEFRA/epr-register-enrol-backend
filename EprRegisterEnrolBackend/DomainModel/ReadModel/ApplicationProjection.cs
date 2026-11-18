@@ -65,7 +65,7 @@ public static class ApplicationProjection
             Prns = ToPrns(details.Prns),
             BusinessPlan = Convert<AccreditationApplicationBusinessPlan>(details.BusinessPlan)!,
             SamplingPlan = Convert<AccreditationApplicationSamplingPlan>(details.SamplingPlan)!,
-            OverseasSites = ToOverseasSites(details, sources.OverseasSites),
+            OverseasSites = ToOverseasSites(details, sources.OverseasSites, sources.Accreditation),
             BesEvidence = Convert<AccreditationApplicationBesEvidence>(details.BesEvidence),
             Query = Convert<AccreditationApplicationQuery>(application.Query),
         };
@@ -94,14 +94,15 @@ public static class ApplicationProjection
 
     private static AccreditationApplicationOverseasSites? ToOverseasSites(
         AccreditationDetails details,
-        IReadOnlyDictionary<ObjectId, OverseasSiteEntity> sites
+        IReadOnlyDictionary<ObjectId, OverseasSiteEntity> sites,
+        AccreditationEntity? accreditation
     ) =>
         details.OverseasSitesSection is not { } section
             ? null
             : new AccreditationApplicationOverseasSites
             {
                 Sites = details.ApplicationOverseasSites.ConvertAll(entry =>
-                    ToSite(entry, Find(sites, entry))
+                    ToSite(entry, Find(sites, entry), AccreditedFrom(accreditation, entry))
                 ),
                 SectionStatus = section.SectionStatus,
                 Versions = section.Versions.ConvertAll(snapshot => new OverseasSitesSnapshot
@@ -120,9 +121,21 @@ public static class ApplicationProjection
             ? site
             : new OverseasSiteEntity();
 
+    // When this application's Accreditation accredits the site from a date of its own (a granted in-year change
+    // request's): only the application that approved the Accreditation points at it, so no other application holding
+    // the ORS is served it (3bb.44).
+    private static DateTime? AccreditedFrom(
+        AccreditationEntity? accreditation,
+        ApplicationOverseasSiteEntry entry
+    ) =>
+        accreditation
+            ?.AccreditationOverseasSites.Find(e => e.OverseasSiteId == entry.OverseasSiteId)
+            ?.AccreditedFrom;
+
     private static OverseasSiteModel ToSite(
         ApplicationOverseasSiteEntry entry,
-        OverseasSiteEntity ors
+        OverseasSiteEntity ors,
+        DateTime? accreditedFrom
     )
     {
         var fields = Overlaid(LegacySiteMapper.Details(ors), entry.ProposedChanges);
@@ -154,8 +167,9 @@ public static class ApplicationProjection
                 : null,
             IsEu = fields["isEu"].AsBoolean,
             IsOecd = fields["isOecd"].AsBoolean,
-            // What legacy holds: ReEx's string as received or a granted change request's date, not an approval here.
-            ValidFrom = ors.LegacyValidFrom(),
+            // What legacy holds: a granted change request's date on this accreditation (3bb.43), else ReEx's string as
+            // received; never an approval here.
+            ValidFrom = SiteApprovalDate.Format(accreditedFrom) ?? ors.LegacyValidFrom(),
             Selected = entry.Selected,
             BesEvidence = Convert<BesEvidenceModel>(entry.BesEvidence),
             IsNewSite = entry.IsNewSite,

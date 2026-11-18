@@ -16,8 +16,10 @@ public enum FirstApprovalSource
     ThisService,
 
     /// <summary>
-    /// An in-year change request granted in this service (RA-495), from the request's submission date. Legacy writes
-    /// it onto the granted site as its validFrom, so it is served as one (3bb.28).
+    /// An in-year change request granted in this service (RA-495), from the request's submission date. Kept apart from
+    /// <see cref="ThisService"/> to say how the site was first approved; it is not served as validFrom. The grant's
+    /// date is served from the granted Accreditation's entry for the site, to that accreditation's application only
+    /// (<see cref="AccreditationOverseasSiteEntry.AccreditedFrom"/>, 3bb.43, 3bb.44).
     /// </summary>
     ChangeRequest,
 }

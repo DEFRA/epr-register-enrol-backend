@@ -190,14 +190,21 @@ internal static class ChangeRequestGrant
         var change = ChangeInfo.Of(ChangeReason.ChangeRequestGranted, applicationId, ors.OrsId);
         // One ORS version for the grant; a versioned update that changes nothing writes nothing, so a replay is a
         // no-op.
+        // The ORS's first approved date is when it was first approved ever, so one it already has stays. It is not what
+        // the site is served as validFrom: that is the Accreditation entry's, below (3bb.43).
         ApplySuppliedAnswers(ors, answers, site);
         if (ors.FirstApprovedAt is null)
             ors.RecordFirstApproval(submittedAt, FirstApprovalSource.ChangeRequest);
         await stores.OverseasSites.Versions.UpdateAsync(ors, ors.Version, change, session, cancellationToken);
 
+        // The entry records the date legacy writes as this accreditation's site validFrom, so it is served to this
+        // accreditation's application only, not to every application holding the ORS (3bb.44). It is added once, with
+        // the legacy write it mirrors, so a replay writes neither.
         if (!accreditation.AccreditationOverseasSites.Exists(e => e.OverseasSiteId == ors.EntityId))
         {
-            accreditation.AccreditationOverseasSites.Add(AccreditationFromApplication.SiteEntry(site, ors.EntityId));
+            var entry = AccreditationFromApplication.SiteEntry(site, ors.EntityId);
+            entry.AccreditedFrom = submittedAt;
+            accreditation.AccreditationOverseasSites.Add(entry);
             await stores.Accreditations.Versions.UpdateAsync(
                 accreditation,
                 accreditation.Version,
