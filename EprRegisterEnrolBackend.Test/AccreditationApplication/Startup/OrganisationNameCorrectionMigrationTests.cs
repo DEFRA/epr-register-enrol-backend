@@ -27,7 +27,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
     private const string NewName = "VIDRALA UK & IRELAND LIMITED";
     private const string ReExId = "reex-500069";
     // 500069's two registrations (glass remelt): NIEA, whose references carry 500069, and EA, whose
-    // carry 500226.
+    // references carry 500226.
     private const string Registration = "R26NR5000690003GR";
     private const string Accreditation2026 = "A26NR5000690003GR";
     private const string Accreditation2027 = "A27NR5000690003GR";
@@ -583,6 +583,98 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
         await AssertAbortsWithoutWritingAsync(
             $"registration {registration ?? "(null)"}, accreditation {accreditation ?? "(null)"}, "
         );
+    }
+
+    // Review of PR #271: neither the OrgId nor the ReEx id lookup returns a record under one of the
+    // registrations holding another OrgId or ReEx organisation id, so it would have been silently
+    // left on the old name. Found by its registration, it aborts the run instead.
+    [Theory]
+    [InlineData(500226, ReExId)]
+    [InlineData(null, "reex-500226")]
+    [InlineData(500226, "reex-500226")]
+    public async Task An_application_under_a_registration_for_another_OrgId_or_ReEx_id_aborts(
+        int? orgId,
+        string reExId
+    )
+    {
+        await SeedOldStateAsync();
+        await SeedOrganisationAsync();
+        var stray = await SeedAsync(
+            Application(
+                orgId: orgId,
+                reExId: reExId,
+                registration: EaRegistration,
+                accreditation: null
+            )
+        );
+
+        await AssertAbortsWithoutWritingAsync(
+            $"application {stray} is Year 2027, OrgId {orgId?.ToString() ?? "(null)"}, ReEx "
+                + $"organisation {reExId}, status Approved, registration {EaRegistration}"
+        );
+        Logged(LogLevel.Error)
+            .Should()
+            .Contain(m => m.Contains($"ReEx organisation {ReExId}, registration null or one"));
+    }
+
+    [Fact]
+    public async Task Another_years_application_under_a_registration_is_not_looked_at()
+    {
+        var target = await SeedAsync(Application());
+        var other = await SeedAsync(
+            Application(year: 2026, orgId: 500226, registration: EaRegistration, accreditation: null)
+        );
+
+        var result = await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        result.Should().Be(RunResult.Applied);
+        (await ReadRawAsync(_raw, target))["organisationName"].AsString.Should().Be(NewName);
+        (await ReadRawAsync(_raw, other))["organisationName"].AsString.Should().Be(OldName);
+    }
+
+    private string Completion() =>
+        Logged(LogLevel.Information)
+            .Should()
+            .ContainSingle(m => m.Contains("organisation name correction complete"))
+            .Subject;
+
+    // Review of PR #271: the spot check counts the applications per registration.
+    [Fact]
+    public async Task The_completion_log_counts_the_applications_per_registration()
+    {
+        var applications = await SeedBothRegistrationsAsync();
+        await SeedAsync(Application(registration: null, accreditation: null, orgId: null));
+        await SeedOrganisationAsync();
+
+        await RunAsync(CreateMigration(enabled: true));
+        Completion()
+            .Should()
+            .Contain(
+                $"{Registration}: 1 planned, 0 skipped (already renamed); {EaRegistration}: 2 "
+                    + "planned, 0 skipped (already renamed); no registration: 1 planned, 0 skipped"
+            );
+        Logged(LogLevel.Information)
+            .Should()
+            .Contain(m =>
+                m.Contains(applications[1].ToString())
+                && m.Contains($"registration {EaRegistration}, accreditation (null), status Approved)")
+            );
+
+        _logger.Entries.Clear();
+        await _persistence.UpdateFieldsAsync(
+            applications[2],
+            Builders<AccreditationApplicationModel>.Filter.Empty,
+            Builders<AccreditationApplicationModel>.Update.Set(a => a.OrganisationName, NewName),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        await RunAsync(CreateMigration(enabled: true, apply: true));
+        Completion()
+            .Should()
+            .Contain(
+                $"{Registration}: 1 applied, 0 skipped (already renamed), 0 not written; "
+                    + $"{EaRegistration}: 1 applied, 1 skipped (already renamed), 0 not written; "
+                    + "no registration: 1 applied, 0 skipped (already renamed), 0 not written"
+            );
     }
 
     // Prod has no data access, so the abort log is the only evidence of the unexpected record.
