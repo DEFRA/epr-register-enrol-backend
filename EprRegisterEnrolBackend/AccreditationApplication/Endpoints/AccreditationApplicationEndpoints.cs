@@ -478,8 +478,8 @@ public static class AccreditationApplicationEndpoints
     // RA-783: the accreditation reference is built by AccreditationNumberRules from the
     // operator's history: a continuous renewal keeps last year's number with the year changed; a
     // first-time accreditation or a renewal after a break gets the registration's agency, process
-    // type and OrgId with a new random sequence. The material code is always the application's
-    // own, so glass is GR or GO. It is never drawn from a sequence counter.
+    // type and OrgId with a new random sequence. Glass is always GR or GO (see MaterialCodeFor).
+    // It is never drawn from a sequence counter.
     //
     // Deliberately takes no request body. The nation, OrgId, year and regenerate an older
     // management-be still sends are ignored: the application's stored Year is authoritative, and
@@ -588,13 +588,10 @@ public static class AccreditationApplicationEndpoints
 
         var latest = ChooseLatest(previous, lastYears, application.Year);
 
-        // RA-783: ReEx should always say whether a glass registration is remelt or other. When it
-        // didn't, the number is issued as other (GO), the only glass codes case management accepts
-        // being GR and GO, and an error is logged so someone can confirm the process.
-        var glassProcessMissing = IsGlassWithNoProcess(application);
-        var materialCode = RegulatoryReferenceCodes.MaterialCodeFor(
-            application.MaterialType,
-            glassProcessMissing ? GlassRecyclingProcess.Other : application.GlassRecyclingProcess
+        var (materialCode, glassProcessUnknown) = MaterialCodeFor(
+            application,
+            latest,
+            registrationReference
         );
 
         var organisationAccreditationNumbers = await OrganisationAccreditationNumbersAsync(
@@ -612,13 +609,13 @@ public static class AccreditationApplicationEndpoints
             materialCode,
             organisationAccreditationNumbers
         );
-        if (unheld is not { } number)
+        if (unheld is null)
             return (failure!, null);
-        var built = number.Built;
+        var issued = unheld.Generated;
 
         // A renewal names the number it renews; a new number names the registration it's built on.
         var (sourceKind, sourceReference) =
-            built.Case == AccreditationNumberCase.ContinuousRenewal
+            issued.Case == AccreditationNumberCase.ContinuousRenewal
                 ? (latest!.Source, latest.AccreditationNumber)
                 : (AccreditationReferenceSourceKind.Registration, registrationReference);
         var sourceApplicationId =
@@ -626,14 +623,14 @@ public static class AccreditationApplicationEndpoints
                 ? previous?.ApplicationId
                 : null;
 
-        application.AccreditationReference = built.AccreditationNumber;
+        application.AccreditationReference = issued.AccreditationNumber;
         application.DateLastEdited = DateTime.UtcNow;
 
         var updated = await persistence.UpdateAsync(application, session);
         if (updated is null)
             return (Results.Problem("Failed to update accreditation number."), null);
 
-        var withdrawnHolderIds = number.WithdrawnHolderIds;
+        var withdrawnHolderIds = unheld.WithdrawnHolderIds;
         return (
             Results.Ok(updated),
             () =>
@@ -642,15 +639,15 @@ public static class AccreditationApplicationEndpoints
                 LogAccreditationReferenceIssued(
                     logger,
                     updated,
-                    built.Case!.Value,
+                    issued.Case!.Value,
                     sourceKind,
                     sourceReference,
                     sourceApplicationId,
                     withdrawnHolderIds
                 );
-                if (glassProcessMissing)
+                if (glassProcessUnknown)
                     logger.LogError(
-                        GlassProcessMissingTemplate,
+                        GlassProcessUnknownTemplate,
                         updated.ApplicationReference,
                         updated.Id,
                         updated.OrganisationId,
@@ -662,8 +659,13 @@ public static class AccreditationApplicationEndpoints
         );
     }
 
-    private const string GlassProcessMissingTemplate =
-        "GenerateOrUpdateAccreditationNumber: no glass recycling process held, so the accreditation number was issued as other (GO); confirm the process. applicationReference={ApplicationReference} applicationId={ApplicationId} organisationId={OrganisationId} orgId={OrgId} registrationReference={RegistrationReference} accreditationReference={AccreditationReference}";
+    private const string GlassProcessUnknownTemplate =
+        "GenerateOrUpdateAccreditationNumber: no glass recycling process held or carried by an "
+        + "earlier number, so the accreditation number was issued as other (GO); confirm the "
+        + "process. applicationReference={ApplicationReference} applicationId={ApplicationId} "
+        + "organisationId={OrganisationId} orgId={OrgId} "
+        + "registrationReference={RegistrationReference} "
+        + "accreditationReference={AccreditationReference}";
 
     // RA-783 AC04: a new number's sequence avoids every accreditation number the organisation's
     // applications hold here - issued, replaced, or last year's from ReEx - so a site can't take
@@ -685,8 +687,42 @@ public static class AccreditationApplicationEndpoints
                 .SelectMany(HeldAccreditationNumbers)
                 .ToList();
 
-    private static bool IsGlassWithNoProcess(AccreditationApplicationModel application) =>
-        application.MaterialType == MaterialType.Glass && application.GlassRecyclingProcess is null;
+    // RA-783: the material code to issue, and whether glass was issued as other (GO) only because
+    // its process is unknown. Glass is GR or GO:
+    // 1. The application's recycling process, when it holds one, even if an earlier number
+    //    carries the other code.
+    // 2. Otherwise GR or GO from the latest accreditation number, then the registration number.
+    // 3. Otherwise (2026 ReEx numbers end in GL) other (GO), the only other glass code case
+    //    management accepts, with an error logged so someone can confirm the process.
+    private static (string MaterialCode, bool GlassProcessUnknown) MaterialCodeFor(
+        AccreditationApplicationModel application,
+        PriorAccreditation? latest,
+        string registrationReference
+    )
+    {
+        if (
+            application.MaterialType != MaterialType.Glass
+            || application.GlassRecyclingProcess is not null
+        )
+            return (
+                RegulatoryReferenceCodes.MaterialCodeFor(
+                    application.MaterialType,
+                    application.GlassRecyclingProcess
+                ),
+                false
+            );
+
+        return AccreditationNumberRules.GlassMaterialCodeFrom(latest, registrationReference) is
+        { } carried
+            ? (carried, false)
+            : (
+                RegulatoryReferenceCodes.MaterialCodeFor(
+                    MaterialType.Glass,
+                    GlassRecyclingProcess.Other
+                ),
+                true
+            );
+    }
 
     // The operator's latest accreditation before this year: the later of the approval held here
     // and last year's number from ReEx, the one held here on the same year. Last year's number
@@ -721,7 +757,7 @@ public static class AccreditationApplicationEndpoints
     // A number no other application holds, and the withdrawn applications already holding it (only
     // ever a continuous renewal's).
     private sealed record UnheldAccreditationNumber(
-        AccreditationNumberResult Built,
+        AccreditationNumberResult Generated,
         IReadOnlyList<ObjectId> WithdrawnHolderIds
     );
 
@@ -749,35 +785,42 @@ public static class AccreditationApplicationEndpoints
     {
         for (var attempt = 1; attempt <= MaxAccreditationNumberAttempts; attempt++)
         {
-            var built = AccreditationNumberRules.Generate(
+            var generated = AccreditationNumberRules.Generate(
                 application.Year,
                 registrationReference,
                 latest,
                 materialCode,
-                random.NextBelow1000,
+                random.NextSequenceDigits,
                 organisationAccreditationNumbers
             );
+            // The organisation already uses nearly every sequence: the same conflict as every
+            // number drawn being held.
+            if (generated.NoSequenceLeft)
+                break;
             // A malformed source fails visibly rather than issuing a wrong number.
-            if (!built.IsValid)
-                return (null, Results.UnprocessableEntity(built.Error));
+            if (!generated.IsValid)
+                return (null, Results.UnprocessableEntity(generated.Error));
 
             var holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
-                built.AccreditationNumber!,
+                generated.AccreditationNumber!,
                 application.Id!.Value
             );
 
-            if (built.Case == AccreditationNumberCase.ContinuousRenewal)
+            if (generated.Case == AccreditationNumberCase.ContinuousRenewal)
                 return holders.Any(h => h.BlocksIssuing)
                     ? (
                         null,
                         Results.Conflict(
-                            $"Accreditation reference {built.AccreditationNumber} is already held by another application; it cannot be issued again."
+                            $"Accreditation reference {generated.AccreditationNumber} is already held by another application; it cannot be issued again."
                         )
                     )
-                    : (new UnheldAccreditationNumber(built, [.. holders.Select(h => h.Id)]), null);
+                    : (
+                        new UnheldAccreditationNumber(generated, [.. holders.Select(h => h.Id)]),
+                        null
+                    );
 
             if (holders.Count == 0)
-                return (new UnheldAccreditationNumber(built, []), null);
+                return (new UnheldAccreditationNumber(generated, []), null);
         }
 
         return (

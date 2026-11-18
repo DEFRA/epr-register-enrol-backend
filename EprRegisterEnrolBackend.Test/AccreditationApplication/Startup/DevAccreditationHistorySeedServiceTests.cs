@@ -172,12 +172,13 @@ public class DevAccreditationHistorySeedServiceTests
                     AccreditationReferenceSourceKind.PreviousAccreditation
                 ),
                 "PL",
-                () => throw new InvalidOperationException("A renewal draws no random sequence.")
+                () => throw new InvalidOperationException("A renewal draws no random sequence."),
+                []
             )
             .AccreditationNumber.Should()
             .Be("A27ER0500030042PL");
         AccreditationNumberRules
-            .Generate(2027, "R26ER0500036908PL", null, "PL", () => 583)
+            .Generate(2027, "R26ER0500036908PL", null, "PL", () => 583, [])
             .AccreditationNumber.Should()
             .Be("A27ER0500030583PL", because: "without the 2026 accreditation it would be a new number");
     }

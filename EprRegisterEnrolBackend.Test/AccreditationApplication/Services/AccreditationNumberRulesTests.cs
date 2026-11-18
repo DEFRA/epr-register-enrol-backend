@@ -91,7 +91,8 @@ public class AccreditationNumberRulesTests
             registration,
             lastYear is null ? null : LastYears(lastYear.Value, lastNumber!),
             material,
-            Draws(draws)
+            Draws(draws),
+            []
         );
 
         result.Error.Should().BeNull();
@@ -155,7 +156,8 @@ public class AccreditationNumberRulesTests
             "R26ER5003240079GL",
             null,
             "GL",
-            Draws("241")
+            Draws("241"),
+            []
         );
 
         result.IsValid.Should().BeFalse();
@@ -176,7 +178,8 @@ public class AccreditationNumberRulesTests
             registrationNumber,
             null,
             "PL",
-            Draws("583")
+            Draws("583"),
+            []
         );
 
         result.IsValid.Should().BeFalse();
@@ -196,7 +199,8 @@ public class AccreditationNumberRulesTests
             "R26ER5003240079PL",
             LastYears(2026, lastYears),
             "PL",
-            Draws("")
+            Draws(""),
+            []
         );
 
         result.IsValid.Should().BeFalse();
@@ -213,23 +217,64 @@ public class AccreditationNumberRulesTests
             "R26ER5003240079PL",
             LastYears(priorYear, "A27ER5003240164PL"),
             "PL",
-            Draws("")
+            Draws(""),
+            []
         );
 
         result.IsValid.Should().BeFalse();
         result.Error.Should().Contain("isn't before 2027");
     }
 
-    // Only a broken random source can run out of draws, so it throws rather than reporting the data
-    // as invalid.
+    // An organisation using nearly every sequence can run out of draws. That's a conflict the
+    // endpoint returns as a 409, not bad data and not an exception (a 500).
     [Fact]
-    public void Throws_WhenTheRandomSourceKeepsReturningAnExcludedSequence()
+    public void ReportsNoSequenceLeft_WhenEveryDrawIsAnExcludedSequence()
     {
-        var act = () =>
-            AccreditationNumberRules.Generate(2027, "R26ER5003240079PL", null, "PL", () => 79);
+        var result = AccreditationNumberRules.Generate(
+            2027,
+            "R26ER5003240079PL",
+            null,
+            "PL",
+            () => 79,
+            []
+        );
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*0079*");
+        result.IsValid.Should().BeFalse();
+        result.NoSequenceLeft.Should().BeTrue();
+        result.AccreditationNumber.Should().BeNull();
     }
+
+    [Fact]
+    public void AnInvalidSource_IsNotReportedAsNoSequenceLeft() =>
+        AccreditationNumberRules
+            .Generate(2027, "R26ER500324079PL", null, "PL", Draws("583"), [])
+            .NoSequenceLeft.Should()
+            .BeFalse();
+
+    // RA-783: for a glass application holding no recycling process, GR or GO is taken from the
+    // latest accreditation number, then the registration number. 2026 numbers from ReEx end in GL,
+    // which says neither.
+    [Theory]
+    [InlineData("A26ER5003240164GR", "R26ER5003240079GO", "GR")]
+    [InlineData("A26ER5003240164GO", "R26ER5003240079GR", "GO")]
+    [InlineData("A26ER5003240164GL", "R26ER5003240079GR", "GR")]
+    [InlineData(null, "R26ER5003240079GO", "GO")]
+    [InlineData("A26ER5003240164GL", "R26ER5003240079GL", null)]
+    [InlineData(null, "R26ER5003240079GL", null)]
+    [InlineData(null, null, null)]
+    [InlineData("A26ER500324164GR", "R26ER500324079GO", null)]
+    public void GlassMaterialCodeFrom_TakesGrOrGoFromTheEarlierNumbers(
+        string? latestNumber,
+        string? registrationNumber,
+        string? expected
+    ) =>
+        AccreditationNumberRules
+            .GlassMaterialCodeFrom(
+                latestNumber is null ? null : LastYears(2026, latestNumber),
+                registrationNumber
+            )
+            .Should()
+            .Be(expected);
 
     [Theory]
     [InlineData("A26ER500324164PL")]
@@ -241,7 +286,8 @@ public class AccreditationNumberRulesTests
             "R26ER5003240079PL",
             LastYears(2026, earlier),
             "PL",
-            Draws("372")
+            Draws("372"),
+            []
         );
 
         result.IsValid.Should().BeFalse();
@@ -261,7 +307,8 @@ public class AccreditationNumberRulesTests
             "R26ER5003240079PL",
             new PriorAccreditation(2026, "A26ER500324164PL", source),
             "PL",
-            Draws("")
+            Draws(""),
+            []
         );
 
         result.Error.Should().StartWith(expected);
@@ -278,7 +325,8 @@ public class AccreditationNumberRulesTests
                 "R26ER5003240079PL",
                 null,
                 "PL",
-                () => draw
+                () => draw,
+                []
             );
 
         act.Should().Throw<InvalidOperationException>();

@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
@@ -33,9 +32,10 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// numbers use under the same agency, process type and OrgId (its other sites, in any year and any
 /// material), so it doesn't take the number another site's renewal will need.
 ///
-/// In every case the material code is the application's own (<see
+/// In every case the material code is the caller's: the application's own (<see
 /// cref="RegulatoryReferenceCodes.MaterialCodeFor"/>), so glass becomes GR for remelt or GO for
-/// other, even when the number it starts from ends in GL.
+/// other, even when the number it starts from ends in GL. When a glass application holds no
+/// process, <see cref="GlassMaterialCodeFrom"/> takes it from the earlier numbers.
 ///
 /// Deliberately I/O-free: the caller supplies the history and a source of random digits, and
 /// checks the result isn't already held by another application. A random number that is held
@@ -43,11 +43,14 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// </remarks>
 public static partial class AccreditationNumberRules
 {
-    // Tries for a random sequence that isn't excluded. An organisation excludes a handful of the
-    // 1,000 values (its registration, earlier accreditation and other sites' sequences), so
-    // running out means the random source is broken, not the data: it throws rather than returning
-    // an invalid result.
+    // Tries for a random sequence that isn't excluded. The draws are cheap (no I/O), unlike the
+    // endpoint's retries, which re-read the holders. An organisation usually excludes a handful of
+    // the 1,000 values; running out means it already uses most of them, and comes back as
+    // SequencesExhausted, which the endpoint returns as a conflict.
     internal const int MaxSequenceAttempts = 50;
+
+    // Every material code issued. GL is never issued: glass is always GR or GO.
+    private const string IssuedMaterialCodes = "ST|WO|AL|FB|PA|PL|GR|GO";
 
     /// <summary>Which rule applies, from the year of the operator's latest accreditation.</summary>
     public static AccreditationNumberCase CaseFor(int yearAppliedFor, int? latestAccreditedYear) =>
@@ -64,7 +67,7 @@ public static partial class AccreditationNumberRules
     /// registration and material before <paramref name="yearAppliedFor"/>, or null if never
     /// accredited.</param>
     /// <param name="materialCode">The application's material code: ST, WO, AL, FB, PA, PL, GR or GO.</param>
-    /// <param name="randomBelow1000">Returns a random number from 0 to 999.</param>
+    /// <param name="randomSequenceDigits">Returns a new sequence's 3 random digits, from 0 to 999.</param>
     /// <param name="organisationAccreditationNumbers">Every accreditation number the
     /// organisation has; a new sequence avoids those under this registration's agency, process
     /// type and OrgId. Malformed ones are skipped: they're held data to avoid, not this number's
@@ -74,12 +77,11 @@ public static partial class AccreditationNumberRules
         string? registrationNumber,
         PriorAccreditation? latestAccreditation,
         string materialCode,
-        Func<int> randomBelow1000,
-        IEnumerable<string>? organisationAccreditationNumbers = null
+        Func<int> randomSequenceDigits,
+        IEnumerable<string> organisationAccreditationNumbers
     )
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(yearAppliedFor);
-        ArgumentNullException.ThrowIfNull(randomBelow1000);
+        ArgumentNullException.ThrowIfNull(randomSequenceDigits);
 
         if (!MaterialCodeFormat().IsMatch(materialCode))
             return AccreditationNumberResult.Invalid(
@@ -100,7 +102,7 @@ public static partial class AccreditationNumberRules
             var lastYears = latestAccreditation!.AccreditationNumber;
             return AccreditationNumberResult.Valid(
                 numberCase,
-                $"A{year}{lastYears[AgencyToSequence]}{materialCode}"
+                $"A{year}{lastYears[AllButYearAndMaterial]}{materialCode}"
             );
         }
 
@@ -115,12 +117,30 @@ public static partial class AccreditationNumberRules
             latestAccreditation,
             organisationAccreditationNumbers
         );
-        var sequence = DrawSequence(randomBelow1000, excluded);
+        if (DrawSequence(randomSequenceDigits, excluded) is not { } sequence)
+            return AccreditationNumberResult.SequencesExhausted(
+                $"Every sequence drawn in {MaxSequenceAttempts} draws is already used by the "
+                    + "organisation's accreditation numbers."
+            );
         return AccreditationNumberResult.Valid(
             numberCase,
-            $"A{year}{registrationNumber![AgencyToOrg]}{sequence}{materialCode}"
+            $"A{year}{registrationNumber![AgencyProcessTypeAndOrgId]}{sequence}{materialCode}"
         );
     }
+
+    /// <summary>
+    /// The glass material code an earlier number already carries, for a glass application that
+    /// holds no recycling process: GR or GO from the latest accreditation number, else from the
+    /// registration number. Null when neither carries one, as 2026 numbers from ReEx end in GL.
+    /// </summary>
+    public static string? GlassMaterialCodeFrom(
+        PriorAccreditation? latestAccreditation,
+        string? registrationNumber
+    ) =>
+        new[] { latestAccreditation?.AccreditationNumber, registrationNumber }
+            .Where(number => number is not null && ReferenceFormat().IsMatch(number))
+            .Select(number => number![^2..])
+            .FirstOrDefault(code => code is "GR" or "GO");
 
     // Why an earlier accreditation can't be used, or null when it can.
     private static string? InvalidPrior(PriorAccreditation prior, int yearAppliedFor)
@@ -143,24 +163,27 @@ public static partial class AccreditationNumberRules
         IEnumerable<string>? organisationAccreditationNumbers
     )
     {
-        var excluded = new HashSet<string> { registrationNumber[Sequence] };
+        var excluded = new HashSet<string> { registrationNumber[SequenceDigits] };
         if (latestAccreditation is { } earlier)
-            excluded.Add(earlier.AccreditationNumber[Sequence]);
-        var agencyToOrg = registrationNumber[AgencyToOrg];
+            excluded.Add(earlier.AccreditationNumber[SequenceDigits]);
+        var agencyProcessTypeAndOrgId = registrationNumber[AgencyProcessTypeAndOrgId];
         excluded.UnionWith(
-            (organisationAccreditationNumbers ?? [])
-                .Where(held => IsReference(held, 'A') && held[AgencyToOrg] == agencyToOrg)
-                .Select(held => held[Sequence])
+            organisationAccreditationNumbers
+                .Where(held =>
+                    IsReference(held, 'A')
+                    && held[AgencyProcessTypeAndOrgId] == agencyProcessTypeAndOrgId
+                )
+                .Select(held => held[SequenceDigits])
         );
         return excluded;
     }
 
-    // 0 + 3 random digits, not one of the excluded sequences.
-    private static string DrawSequence(Func<int> randomBelow1000, HashSet<string> excluded)
+    // 0 + 3 random digits, not one of the excluded sequences; null if every draw was excluded.
+    private static string? DrawSequence(Func<int> randomSequenceDigits, HashSet<string> excluded)
     {
         for (var attempt = 0; attempt < MaxSequenceAttempts; attempt++)
         {
-            var draw = randomBelow1000();
+            var draw = randomSequenceDigits();
             if (draw is < 0 or > 999)
                 throw new InvalidOperationException(
                     $"The random source returned {draw}; it must be from 0 to 999."
@@ -171,16 +194,15 @@ public static partial class AccreditationNumberRules
                 return sequence;
         }
 
-        throw new InvalidOperationException(
-            $"The random source gave only excluded sequences ({string.Join(", ", excluded)}) in "
-                + $"{MaxSequenceAttempts} draws."
-        );
+        return null;
     }
 
-    // Positions in a 17-character reference.
-    private static readonly Range AgencyToOrg = 3..11;
-    private static readonly Range AgencyToSequence = 3..15;
-    private static readonly Range Sequence = 11..15;
+    // Positions in a 17-character reference, A26ER5003240164PL:
+    // ER500324 (agency, process type and OrgId), ER5003240164 (all but the prefix, year and
+    // material) and 0164 (the sequence).
+    private static readonly Range AgencyProcessTypeAndOrgId = 3..11;
+    private static readonly Range AllButYearAndMaterial = 3..15;
+    private static readonly Range SequenceDigits = 11..15;
 
     private static bool IsReference(string? reference, char prefix) =>
         reference is not null && ReferenceFormat().IsMatch(reference) && reference[0] == prefix;
@@ -189,69 +211,16 @@ public static partial class AccreditationNumberRules
     // material is replaced anyway. [0-9] rather than \d, which also matches non-ASCII digits.
     // S6444: explicit timeout.
     [GeneratedRegex(
-        "^[RA][0-9]{2}[ESWN][RX][0-9]{6}[0-9]{4}(ST|WO|AL|FB|PA|PL|GR|GO|GL)$",
+        "^[RA][0-9]{2}[ESWN][RX][0-9]{6}[0-9]{4}(" + IssuedMaterialCodes + "|GL)$",
         RegexOptions.None,
         matchTimeoutMilliseconds: 100
     )]
     private static partial Regex ReferenceFormat();
 
-    // GL is never issued: glass is always GR or GO.
-    [GeneratedRegex("^(ST|WO|AL|FB|PA|PL|GR|GO)$", RegexOptions.None, matchTimeoutMilliseconds: 100)]
+    [GeneratedRegex(
+        "^(" + IssuedMaterialCodes + ")$",
+        RegexOptions.None,
+        matchTimeoutMilliseconds: 100
+    )]
     private static partial Regex MaterialCodeFormat();
-}
-
-public enum AccreditationNumberCase
-{
-    ContinuousRenewal,
-    FirstTime,
-    RenewalAfterBreak,
-}
-
-/// <summary>
-/// An earlier accreditation: its year and number, for example 2026, A26ER5003240164PL, and where it
-/// came from, so errors and the issue log name the right source.
-/// </summary>
-public sealed record PriorAccreditation(
-    int Year,
-    string AccreditationNumber,
-    AccreditationReferenceSourceKind Source
-)
-{
-    internal string Description =>
-        Source == AccreditationReferenceSourceKind.PreviousAccreditation
-            ? "The previous accreditation reference"
-            : "Last year's accreditation number";
-}
-
-public sealed record AccreditationNumberResult
-{
-    private AccreditationNumberResult(
-        AccreditationNumberCase? numberCase,
-        string? accreditationNumber,
-        string? error
-    )
-    {
-        Case = numberCase;
-        AccreditationNumber = accreditationNumber;
-        Error = error;
-    }
-
-    /// <summary>Which rule built the number; null when it couldn't be built.</summary>
-    public AccreditationNumberCase? Case { get; }
-
-    /// <summary>The number; null when it couldn't be built.</summary>
-    public string? AccreditationNumber { get; }
-
-    /// <summary>Why the number couldn't be built; null when it was.</summary>
-    public string? Error { get; }
-
-    public bool IsValid => Error is null;
-
-    internal static AccreditationNumberResult Valid(
-        AccreditationNumberCase numberCase,
-        string accreditationNumber
-    ) => new(numberCase, accreditationNumber, error: null);
-
-    internal static AccreditationNumberResult Invalid(string error) =>
-        new(numberCase: null, accreditationNumber: null, error);
 }

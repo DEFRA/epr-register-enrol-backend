@@ -24,7 +24,7 @@ public sealed class FakeAccreditationSequenceRandom : IAccreditationSequenceRand
             _draws.Clear();
     }
 
-    public int NextBelow1000()
+    public int NextSequenceDigits()
     {
         lock (_lock)
             return _draws.Count > 0 ? _draws.Dequeue() : DefaultDraw;

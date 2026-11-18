@@ -270,6 +270,29 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         (await StoredApplication(app)).AccreditationReference.Should().BeNull();
     }
 
+    // The organisation already uses every sequence the random source gives (here, 0583 on every
+    // draw), so no new number can be found: the same 409 as every number drawn being held, not a 500.
+    [Fact]
+    public async Task Gives_up_with_409_when_the_organisation_already_uses_every_sequence_drawn()
+    {
+        Reset();
+        SeedApplication(configure: a =>
+        {
+            a.RegistrationId = "reg-other-site";
+            a.AccreditationReference = "A26ER0001230583PL";
+        });
+        var app = SeedApplication(configure: a => a.RegistrationId = "reg-this-site");
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var message = await response.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken
+        );
+        message.Should().Contain("isn't already held");
+        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
+    }
+
     // RA-783 AC04: another site of the same organisation holds last year's number 0164 for its
     // renewal, not yet issued. A first-time number here must not take 0164, or that renewal could
     // never be issued.
@@ -352,8 +375,33 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         (await ReadApplication(response)).AccreditationReference.Should().Be(expected);
     }
 
-    // RA-783: ReEx gave no glass process, so the number is issued as other (GO), which case
-    // management accepts, rather than refusing approval. The error log is in the logging tests.
+    // RA-783: with no glass process held, GR or GO is taken from the registration number when it
+    // carries one.
+    [Theory]
+    [InlineData("R25ER0001230042GR", "A26ER0001230583GR")]
+    [InlineData("R25ER0001230042GO", "A26ER0001230583GO")]
+    public async Task Glass_without_a_recycling_process_takes_GR_or_GO_from_the_registration_number(
+        string registrationReference,
+        string expected
+    )
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.MaterialType = MaterialType.Glass;
+            a.GlassRecyclingProcess = null;
+            a.RegistrationReference = registrationReference;
+        });
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplication(response)).AccreditationReference.Should().Be(expected);
+    }
+
+    // RA-783: ReEx gave no glass process and no earlier number carries one (2026 numbers end in
+    // GL), so the number is issued as other (GO), which case management accepts, rather than
+    // refusing approval. The error log is in the logging tests.
     [Fact]
     public async Task Glass_without_a_recycling_process_is_issued_as_other()
     {
@@ -604,6 +652,29 @@ public class AccreditationNumberEndpointLoggingTests
         entry.Message.Should().Contain("orgId=123");
         entry.Message.Should().Contain("registrationReference=R25ER0001230042GL");
         entry.Message.Should().Contain("accreditationReference=A26ER0001230583GO");
+    }
+
+    // The registration number says remelt, so the process is known and nothing is logged.
+    [Fact]
+    public async Task Logs_no_error_for_glass_whose_process_comes_from_the_registration_number()
+    {
+        _factory.FakePersistence.Clear();
+        _factory.FakeSequenceRandom.Clear();
+        _factory.LogCapture.Clear();
+        var app = BuildApplication(ApplicationStatus.Submitted);
+        app.MaterialType = MaterialType.Glass;
+        app.GlassRecyclingProcess = null;
+        app.RegistrationReference = "R25ER0001230042GR";
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        _factory.LogCapture.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 
     [Fact]

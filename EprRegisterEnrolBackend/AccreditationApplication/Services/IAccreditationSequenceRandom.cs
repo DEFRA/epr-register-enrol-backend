@@ -6,6 +6,6 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// </summary>
 public interface IAccreditationSequenceRandom
 {
-    /// <summary>A random number from 0 to 999.</summary>
-    int NextBelow1000();
+    /// <summary>The 3 random digits after a new sequence's leading 0: a number from 0 to 999.</summary>
+    int NextSequenceDigits();
 }

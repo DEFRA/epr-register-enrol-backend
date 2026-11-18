@@ -148,6 +148,32 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
         (await IssuedReference(app)).Should().Be("A27ER0001230042GR");
     }
 
+    // RA-783: with no glass process held, GR or GO comes from last year's number before the
+    // registration number.
+    [Theory]
+    [InlineData("A26ER0001230042GO", "R26ER0001239999GL", "A27ER0001230042GO")]
+    [InlineData("A26ER0001230042GO", "R26ER0001239999GR", "A27ER0001230042GO")]
+    [InlineData("A26ER0001230042GL", "R26ER0001239999GR", "A27ER0001230042GR")]
+    public async Task A_glass_renewal_with_no_recycling_process_takes_GR_or_GO_from_the_earlier_numbers(
+        string lastYearsNumber,
+        string registrationReference,
+        string expected
+    )
+    {
+        var app = SeedApplication(
+            2027,
+            a =>
+            {
+                a.MaterialType = MaterialType.Glass;
+                a.GlassRecyclingProcess = null;
+                a.RegistrationReference = registrationReference;
+                a.LastYearsAccreditationNumber = LastYears(lastYearsNumber);
+            }
+        );
+
+        (await IssuedReference(app)).Should().Be(expected);
+    }
+
     // RA-783 AC07: 2026 glass numbers from ReEx end in GL; the renewal keeps the sequence and
     // takes GR or GO from this year's recycling process.
     [Theory]
