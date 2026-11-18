@@ -75,7 +75,9 @@ internal static class ChangeRequestGrant
                 throw new ChangeRequestWriteConflictException();
         }
 
-        // Without dual-write there is no session and no model to write, as for every other write path.
+        // Without dual-write there is no session and no model to write, as for every other write path. The model's
+        // stores are resolved only here, not injected: they exist only with dual-write on, and building them reaches
+        // Mongo, which a push without a session must not wait on.
         if (session is not null)
         {
             await GrantInModelAsync(
