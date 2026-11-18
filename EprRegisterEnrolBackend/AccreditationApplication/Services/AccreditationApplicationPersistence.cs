@@ -444,6 +444,23 @@ public class AccreditationApplicationPersistence(
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);
 
+    public async Task<
+        IReadOnlyList<AccreditationApplicationModel>
+    > GetByRegistrationReferencesAndYearAsync(
+        IReadOnlyCollection<string> registrationReferences,
+        int year,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Collection
+            .Find(
+                Builders<AccreditationApplicationModel>.Filter.In(
+                    a => a.RegistrationReference,
+                    registrationReferences
+                ) & Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Year, year)
+            )
+            .SortBy(a => a.Id)
+            .ToListAsync(cancellationToken);
+
     // RA-766: the statuses ChargeCorrectionMigration leaves alone: the three an application can no
     // longer leave, and Queried, whose answer (and so its charge) has not been sent yet.
     internal static readonly ApplicationStatus[] ExcludedStatuses =
