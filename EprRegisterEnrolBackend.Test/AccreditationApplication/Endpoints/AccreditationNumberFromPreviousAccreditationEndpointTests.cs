@@ -11,9 +11,10 @@ using NSubstitute.ClearExtensions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
-// RA-690: when this backend holds an approved accreditation for the same registration, material
-// and glass process in an earlier year, the new reference is the most recent one with YY swapped.
-// Otherwise it falls back to the registration reference (see AccreditationNumberEndpointTests).
+// RA-690/RA-783: when this backend holds an approved accreditation for the same registration
+// and material for last year, the new reference is that one with YY swapped. One for
+// an earlier year makes it a renewal after a break, and none a first-time accreditation: both get
+// the registration's agency and OrgId with a random sequence (see AccreditationNumberEndpointTests).
 public class AccreditationNumberFromPreviousAccreditationEndpointTests
     : IClassFixture<AccreditationApplicationTestFactory>
 {
@@ -40,6 +41,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         _client = factory.CreateClient();
         _factory.FakePersistence.Clear();
         _factory.FakeCounters.Clear();
+        _factory.FakeSequenceRandom.Clear();
         _factory.MockReExAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCaseWorkingAdapter.ClearSubstitute(ClearOptions.All);
         _factory.MockCdpUploaderService.ClearSubstitute(ClearOptions.All);
@@ -111,13 +113,16 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         (await Stored(app)).AccreditationReference.Should().Be("A27ER0001230042PL");
     }
 
+    // RA-783 AC03: accredited before but not last year, so a new sequence, reusing neither the
+    // registration's (9999) nor the earlier accreditation's (0042).
     [Fact]
-    public async Task A_lapsed_renewal_derives_from_the_previous_reference_across_the_gap()
+    public async Task A_renewal_after_a_break_gets_a_new_sequence()
     {
         SeedPrevious(2026, "A26ER0001230042PL");
         var app = SeedApplication(2028);
+        _factory.FakeSequenceRandom.Enqueue(42, 583);
 
-        (await IssuedReference(app)).Should().Be("A28ER0001230042PL");
+        (await IssuedReference(app)).Should().Be("A28ER0001230583PL");
     }
 
     [Fact]
@@ -162,7 +167,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         SeedPrevious(2026, "A26ER0001230042PL", a => a.ApplicationStatus = status);
         var app = SeedApplication(2027);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL");
     }
 
     [Theory]
@@ -175,7 +180,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         SeedPrevious(2026, accreditationReference);
         var app = SeedApplication(2027);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL");
     }
 
     public static TheoryData<string, Action<AccreditationApplicationModel>> UnrelatedPrevious =>
@@ -198,11 +203,13 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
         SeedPrevious(2026, "A26ER0001230042PL", unrelate);
         var app = SeedApplication(2027);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL", because);
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL", because);
     }
 
+    // RA-783: a renewal keeps its number when the operator changes glass process, and takes this
+    // year's GR or GO.
     [Fact]
-    public async Task A_glass_accreditation_never_inherits_the_other_glass_process_reference()
+    public async Task A_glass_renewal_that_changes_process_keeps_its_sequence_with_this_years_code()
     {
         SeedPrevious(
             2026,
@@ -223,7 +230,7 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
             }
         );
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999GO");
+        (await IssuedReference(app)).Should().Be("A27ER0001230042GO");
     }
 
     [Fact]
@@ -252,20 +259,20 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task A_2026_application_with_no_earlier_history_derives_from_the_registration_reference()
+    public async Task A_2026_application_with_no_earlier_history_gets_a_first_time_number()
     {
         var app = SeedApplication(2026);
 
-        (await IssuedReference(app)).Should().Be("A26ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A26ER0001230583PL");
     }
 
     [Fact]
-    public async Task An_application_without_a_registration_id_derives_from_the_registration_reference()
+    public async Task An_application_without_a_registration_id_gets_a_first_time_number()
     {
         SeedPrevious(2026, "A26ER0001230042PL", a => a.RegistrationId = null);
         var app = SeedApplication(2027, a => a.RegistrationId = null);
 
-        (await IssuedReference(app)).Should().Be("A27ER0001239999PL");
+        (await IssuedReference(app)).Should().Be("A27ER0001230583PL");
     }
 
     [Fact]
@@ -273,6 +280,24 @@ public class AccreditationNumberFromPreviousAccreditationEndpointTests
     {
         SeedPrevious(2026, "A26ER000123004PL");
         var app = SeedApplication(2027);
+
+        var response = await Post(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var message = await response.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken
+        );
+        message.Should().Contain("A26ER000123004PL").And.Contain("previous accreditation");
+        (await Stored(app)).AccreditationReference.Should().BeNull();
+    }
+
+    // RA-783: a malformed earlier number fails visibly on a renewal after a break too, rather than
+    // being left out of the sequences the new number must avoid.
+    [Fact]
+    public async Task A_malformed_earlier_reference_after_a_break_returns_422_naming_it()
+    {
+        SeedPrevious(2026, "A26ER000123004PL");
+        var app = SeedApplication(2028);
 
         var response = await Post(app);
 
@@ -359,10 +384,67 @@ public class AccreditationNumberFromPreviousAccreditationLoggingTests
             )
             .Subject;
         entry.Message.Should().Contain("accreditationReference=A27ER0001230042PL");
+        entry.Message.Should().Contain("case=ContinuousRenewal");
         entry.Message.Should().Contain("sourceKind=PreviousAccreditation");
         entry.Message.Should().Contain("sourceReference=A26ER0001230042PL");
         entry.Message.Should().Contain($"sourceApplicationId={previous.Id}");
         entry.Message.Should().NotContain("withdrawnHolderIds");
+    }
+
+    // RA-783: a renewal after a break names the registration its new number is built on, not the
+    // earlier accreditation.
+    [Fact]
+    public async Task Logs_a_renewal_after_a_break_as_built_on_the_registration()
+    {
+        _factory.FakePersistence.Clear();
+        _factory.FakeSequenceRandom.Clear();
+        _factory.LogCapture.Clear();
+        var previous = new AccreditationApplicationModel
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = "org-123",
+            RegistrationId = "reg-1",
+            Year = 2026,
+            MaterialType = MaterialType.Plastic,
+            ApplicationStatus = ApplicationStatus.Approved,
+            RegistrationReference = "R25ER0001230042PL",
+            AccreditationReference = "A26ER0001230042PL",
+        };
+        var app = new AccreditationApplicationModel
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = "org-123",
+            RegistrationId = "reg-1",
+            Year = 2028,
+            MaterialType = MaterialType.Plastic,
+            ApplicationStatus = ApplicationStatus.Submitted,
+            RegistrationReference = "R27ER0001239999PL",
+        };
+        _factory.FakePersistence.Seed(previous);
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var entry = _factory
+            .LogCapture.Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Information
+                && e.Message.StartsWith(
+                    "GenerateOrUpdateAccreditationNumber: issued",
+                    StringComparison.Ordinal
+                )
+            )
+            .Subject;
+        entry.Message.Should().Contain("accreditationReference=A28ER0001230583PL");
+        entry.Message.Should().Contain("case=RenewalAfterBreak");
+        entry.Message.Should().Contain("sourceKind=Registration");
+        entry.Message.Should().Contain("sourceReference=R27ER0001239999PL");
+        entry.Message.Should().NotContain("sourceApplicationId");
     }
 
     // RA-690: a renewal that was withdrawn and restarted derives the same reference again. The
@@ -394,6 +476,7 @@ public class AccreditationNumberFromPreviousAccreditationLoggingTests
             )
             .Subject;
         entry.Message.Should().Contain("accreditationReference=A27ER0001230042PL");
+        entry.Message.Should().Contain("case=ContinuousRenewal");
         entry.Message.Should().Contain("sourceKind=PreviousAccreditation");
         entry.Message.Should().Contain($"sourceApplicationId={previous.Id}");
         entry.Message.Should().Contain($"withdrawnHolderIds={withdrawn.Id}");

@@ -7,9 +7,9 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 // atomically-incremented sequence value from the correct one of the eight
 // registration (R-*) regulatoryNumberSequences pools.
 //
-// RA-690: registration numbers only - accreditation references are derived from
-// the registration reference (AccreditationReferenceDerivation), never drawn
-// from a counter, so there is no accreditation code path here.
+// RA-690: registration numbers only - accreditation references are built by
+// AccreditationNumberRules (RA-783), never drawn from a counter, so there is no
+// accreditation code path here.
 public interface IRegulatoryNumberGenerator
 {
     Task<string> GenerateAsync(RegulatoryNumberSpec spec, CancellationToken ct = default);

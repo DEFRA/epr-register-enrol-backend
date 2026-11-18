@@ -302,7 +302,7 @@ public class StubReExApiAdapter(
         // RA-000: an E2E test organisation gets a stable org number derived from its id, so
         // it behaves like a real ReEx organisation that has one recorded (e.g. Submit stamps
         // it as the application's OrgId). RA-690: accreditation-number no longer needs it -
-        // that reference is derived from the registration reference.
+        // that number is built from the registration reference or last year's number.
         if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
             return TestOrganisationNumber(organisationId);
 

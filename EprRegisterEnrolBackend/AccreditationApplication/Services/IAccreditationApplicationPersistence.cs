@@ -35,19 +35,21 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
-    /// RA-690: the latest previous approved accreditation for the same registration - the source
-    /// an accreditation reference is derived from on renewal. Matches the organisation,
-    /// registration, material and glass process, a year strictly before
+    /// RA-690: the latest previous approved accreditation for the same registration. RA-783: its
+    /// year decides whether approval is a continuous renewal (the year before, so its number is
+    /// renewed) or a renewal after a break (an earlier year, so a new sequence that avoids its
+    /// own). Matches the organisation, registration and material (not the glass process: a
+    /// renewal keeps its number when the operator changes process, and takes this year's GR or
+    /// GO), a year strictly before
     /// <paramref name="beforeYear"/>, status Approved and a non-empty accreditation reference.
     /// Highest year wins, then most recently edited, so a lapsed renewal (e.g. 2026 to 2028)
-    /// still finds the 2026 accreditation. Runs server-side and returns at most one; null when
-    /// nothing matches.
+    /// still finds the 2026 accreditation, which makes it a renewal after a break. Runs
+    /// server-side and returns at most one; null when nothing matches.
     /// </summary>
     Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        GlassRecyclingProcess? glassRecyclingProcess,
         int beforeYear
     );
 

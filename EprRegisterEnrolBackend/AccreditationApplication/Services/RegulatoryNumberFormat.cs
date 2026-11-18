@@ -12,8 +12,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// Pure, so <see cref="RegulatoryNumberGenerator"/> and the dev seeds format numbers the same way.
 /// <see cref="For"/> resolves and validates every code, so the generator can reject an invalid
 /// spec before drawing a sequence number. There is no accreditation number entry point: an
-/// accreditation number is derived from the registration number (see
-/// <see cref="AccreditationReferenceDerivation"/>), not formatted from a spec.
+/// accreditation number is built by <see cref="AccreditationNumberRules"/> from the registration
+/// number or last year's accreditation number, not formatted from a spec.
 /// </remarks>
 public sealed class RegulatoryNumberFormat
 {
