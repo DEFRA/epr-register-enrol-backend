@@ -88,7 +88,7 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
             );
         items.Select(i => i.ItemId).Should().OnlyHaveUniqueItems();
         requests.Should().OnlyContain(r => r.Year == Year && r.MaterialType == MaterialType.Plastic);
-        requests.Should().OnlyContain(r => r.AccreditationReference == "A26EX0500180101PL");
+        requests.Should().OnlyContain(r => r.AccreditationReference == "A26EX0500180001PL");
         requests.Should().OnlyContain(r => r.RegistrationId == "aaa000000000000000050018");
     }
 
@@ -378,7 +378,7 @@ public sealed class DevChangeRequestSeedServiceTests : IDisposable
             Ct
         );
         nextYears.Should().HaveCount(lastYears.Count);
-        nextYears.Should().OnlyContain(r => r.Year == 2027 && r.AccreditationReference == "A27EX0500180101PL");
+        nextYears.Should().OnlyContain(r => r.Year == 2027 && r.AccreditationReference == "A27EX0500180001PL");
         nextYears.Select(r => r.RequestId).Should().NotIntersectWith(lastYears.Select(r => r.RequestId));
         ItemsOf(nextYears).Should().OnlyContain(i => i.ValidFrom == null || i.ValidFrom.Value.Year == 2027);
     }

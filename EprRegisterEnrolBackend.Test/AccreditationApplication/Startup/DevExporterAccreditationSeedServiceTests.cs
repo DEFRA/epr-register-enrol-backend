@@ -104,7 +104,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         seeded.IsExporter.Should().BeTrue();
         seeded.WasteProcessingType.Should().Be("exporter");
         seeded.OrganisationName.Should().Be("Manage Accreditation Test Ltd");
-        seeded.AccreditationReference.Should().Be("A26EX0500180101PL");
+        seeded.AccreditationReference.Should().Be("A26EX0500180001PL");
         seeded.RegistrationReference.Should().Be("R26EX0500180001PL");
     }
 
@@ -116,7 +116,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         );
 
         seeded.Year.Should().Be(2031);
-        seeded.AccreditationReference.Should().Be("A31EX0500180101PL");
+        seeded.AccreditationReference.Should().Be("A31EX0500180001PL");
         seeded.RegistrationReference.Should().Be("R31EX0500180001PL");
     }
 
@@ -149,7 +149,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         seeded.WasteProcessingType.Should().Be("reprocessor");
         seeded.OrganisationName.Should().Be("Manage Accreditation Test Ltd");
         seeded.SiteAddress.Should().Be("Unit 18, Furnace Lane, Doncaster, DN4 5HT");
-        seeded.AccreditationReference.Should().Be("A26ER0500180102GR");
+        seeded.AccreditationReference.Should().Be("A26ER0500180002GR");
         seeded.RegistrationReference.Should().Be("R26ER0500180002GR");
         seeded.OverseasSites.Should().BeNull();
 
@@ -172,7 +172,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         );
 
         seeded.Id.Should().Be(ObjectId.Parse("b20310000000000000050018"));
-        seeded.AccreditationReference.Should().Be("A31ER0500180102GR");
+        seeded.AccreditationReference.Should().Be("A31ER0500180002GR");
     }
 
     // RA-697: org 50020, an Approved exporter with no change requests, for the empty states.
@@ -186,7 +186,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         seeded.RegistrationId.Should().Be("aaa000000000000000050020");
         seeded.MaterialType.Should().Be(MaterialType.Plastic);
         seeded.OrganisationName.Should().Be("No Change Requests Ltd");
-        seeded.AccreditationReference.Should().Be("A26EX0500200101PL");
+        seeded.AccreditationReference.Should().Be("A26EX0500200001PL");
         seeded.OverseasSites!.Sites.Select(s => (s.OrsId, s.Selected))
             .Should()
             .Equal(("001", true), ("002", false));
@@ -325,7 +325,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         seeded.MaterialType.Should().Be(MaterialType.Plastic);
         seeded.IsExporter.Should().BeTrue();
         seeded.OrganisationName.Should().Be("In-Year Change Exports Ltd");
-        seeded.AccreditationReference.Should().Be("A26EX0500190101PL");
+        seeded.AccreditationReference.Should().Be("A26EX0500190001PL");
         seeded.RegistrationReference.Should().Be("R26EX0500190001PL");
         var registration = await _registrations.FindCurrentByReExRegistrationIdAsync(
             "aaa000000000000000050019",

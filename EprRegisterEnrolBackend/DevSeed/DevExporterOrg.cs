@@ -159,16 +159,10 @@ internal sealed class DevExporterOrg
             )
             .RegistrationNumber(sequence: 1);
 
-    // Built as a real first-time accreditation number is (AccreditationNumberRules), with a fixed
-    // "random" sequence so the seed is the same every time, e.g. A26EX0500180101PL. Every year
-    // keeps the sequence, as a continuous renewal would.
+    // As ReEx issued the 2026 numbers, the registration's sequence, e.g. A26EX0500180001PL. Every
+    // year keeps it, as a continuous renewal would.
     internal string AccreditationNumberFor(int year) =>
-        DevAccreditationNumber.For(
-            year,
-            RegistrationNumberFor(year),
-            RegulatoryReferenceCodes.MaterialCodeFor(Material, glassRecyclingProcess: null),
-            sequence: 1
-        );
+        DevAccreditationNumber.For(year, RegistrationNumberFor(year));
 }
 
 /// <summary>
@@ -207,25 +201,20 @@ internal sealed class DevReprocessorRegistration
             )
             .RegistrationNumber(Sequence);
 
-    // e.g. A26ER0500180102GR, built as the exporter registration's is.
+    // e.g. A26ER0500180002GR, built as the exporter registration's is.
     internal string AccreditationNumberFor(int year) =>
-        DevAccreditationNumber.For(
-            year,
-            RegistrationNumberFor(year),
-            RegulatoryReferenceCodes.MaterialCodeFor(Material, GlassRecyclingProcess),
-            Sequence
-        );
+        DevAccreditationNumber.For(year, RegistrationNumberFor(year));
 }
 
 /// <summary>
-/// RA-783: a dev seed's accreditation number, built by <see cref="AccreditationNumberRules"/> as a
-/// first-time number. Its "random" draw is fixed at 100 + the registration's sequence, so it never
-/// equals the registration's own sequence and differs between an org's registrations.
+/// A dev seed's accreditation number: <c>A</c>, the year, then the registration number from its
+/// fourth character, so the sequence is the registration's. That is how many 2026 numbers ReEx
+/// issued looked, and the operator E2E tests expect these exact numbers. It stands for an
+/// accreditation that already exists, not one this service issues: approval issues a new number
+/// with <see cref="AccreditationNumberRules"/>, which never reuses the registration's sequence.
 /// </summary>
 internal static class DevAccreditationNumber
 {
-    internal static string For(int year, string registrationNumber, string materialCode, int sequence) =>
-        AccreditationNumberRules
-            .Generate(year, registrationNumber, latestAccreditation: null, materialCode, () => 100 + sequence)
-            .AccreditationNumber!;
+    internal static string For(int year, string registrationNumber) =>
+        $"A{year % 100:D2}{registrationNumber[3..]}";
 }

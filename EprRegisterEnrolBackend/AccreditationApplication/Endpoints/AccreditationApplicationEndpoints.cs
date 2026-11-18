@@ -3,7 +3,6 @@ using System.Security.Claims;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
-using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationApplication.Validators;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
@@ -600,12 +599,12 @@ public static class AccreditationApplicationEndpoints
             glassProcessMissing ? GlassRecyclingProcess.Other : application.GlassRecyclingProcess
         );
 
-        // RA-783 AC04: a new number's sequence avoids every accreditation number the organisation
-        // has, 2026 or later: every one its applications hold here (issued, replaced, or last
-        // year's from ReEx), and its rows on the 2026 public register, which covers sites that
-        // haven't started an application here yet. So a site can't take the number another site's
-        // renewal will need. Two sites approved at the same moment can still race to one sequence;
-        // that is rare enough to put right by hand.
+        // RA-783 AC04: a new number's sequence avoids every accreditation number the organisation's
+        // applications hold here - issued, replaced, or last year's from ReEx - so a site can't take
+        // the number another site's renewal will need. Only data in Mongo is checked, so a 2026
+        // number is seen once it's held on one of the organisation's applications (at Seed, or by
+        // the RA-763/RA-784 backfills); until then, and for two sites approved at the same moment,
+        // a clash makes the renewal's approval a 409, rare enough to put right by hand.
         // The case is checked here only to skip the read: Generate ignores these numbers for a
         // continuous renewal anyway, as its number is fixed.
         var organisationAccreditationNumbers =
@@ -614,7 +613,6 @@ public static class AccreditationApplicationEndpoints
                 ? []
                 : (await persistence.GetByOrganisationAsync(application.OrganisationId))
                     .SelectMany(HeldAccreditationNumbers)
-                    .Concat(PublicRegister2026AccreditationNumbers)
                     .ToList();
 
         var (unheld, failure) = await BuildUnheldAccreditationNumberAsync(
@@ -708,16 +706,6 @@ public static class AccreditationApplicationEndpoints
                 AccreditationReferenceSourceKind.PreviousAccreditation
             );
     }
-
-    // RA-783: the 2026 accreditation numbers on the 5 November 2026 public register, held-back
-    // rows included: they're still numbers ReEx issued, so a new sequence must avoid them too.
-    private static readonly IReadOnlyList<string> PublicRegister2026AccreditationNumbers =
-    [
-        .. PublicRegister2026
-            .ByRegistrationNumber.Values.Concat(PublicRegister2026.HeldBack.Values)
-            .Select(entry => entry.AccreditationNumber)
-            .OfType<string>(),
-    ];
 
     // A number no other application holds, and the withdrawn applications already holding it (only
     // ever a continuous renewal's).

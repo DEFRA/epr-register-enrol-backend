@@ -295,25 +295,6 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230583PL");
     }
 
-    // RA-783 AC04: a site accredited in 2026 that hasn't started an application here is only on the
-    // 2026 public register. J. and A. Young (500095) has four plastic sites there, one A26ER5000950064PL;
-    // a new number for another of its sites must not take 0064, or that renewal could never be issued.
-    [Fact]
-    public async Task A_new_number_never_takes_a_sequence_on_the_2026_public_register()
-    {
-        Reset();
-        var app = SeedApplication(configure: a =>
-        {
-            a.Year = 2027;
-            a.RegistrationReference = "R26ER5000950099PL";
-        });
-        _factory.FakeSequenceRandom.Enqueue(64, 583);
-
-        var response = await PostWithoutBody(app);
-
-        (await ReadApplication(response)).AccreditationReference.Should().Be("A27ER5000950583PL");
-    }
-
     [Fact]
     public async Task A_new_number_never_takes_a_sequence_another_site_was_issued_in_an_earlier_year()
     {
