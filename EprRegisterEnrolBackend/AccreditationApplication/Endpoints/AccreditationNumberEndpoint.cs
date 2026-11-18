@@ -60,12 +60,13 @@ internal static class AccreditationNumberEndpoint
                 return result;
             }
 
-            call.Logger.LogInformation(
-                SavedTemplate,
-                issued.AccreditationNumber,
-                applicationId,
-                round
-            );
+            if (call.Logger.IsEnabled(LogLevel.Information))
+                call.Logger.LogInformation(
+                    SavedTemplate,
+                    issued.AccreditationNumber,
+                    applicationId,
+                    round
+                );
             var clashes = await persistence.GetOtherAccreditationReferenceHoldersAsync(
                 issued.AccreditationNumber,
                 attempt.SavedId!.Value
@@ -77,13 +78,14 @@ internal static class AccreditationNumberEndpoint
             }
 
             clashing = issued.AccreditationNumber;
-            call.Logger.LogWarning(
-                ClashTemplate,
-                clashing,
-                string.Join(",", clashes.Select(c => c.Id)),
-                applicationId,
-                round
-            );
+            if (call.Logger.IsEnabled(LogLevel.Warning))
+                call.Logger.LogWarning(
+                    ClashTemplate,
+                    clashing,
+                    string.Join(",", clashes.Select(c => c.Id)),
+                    applicationId,
+                    round
+                );
         }
 
         return await GiveUpAsync(call, clashing!);
@@ -114,7 +116,7 @@ internal static class AccreditationNumberEndpoint
     )
     {
         public ILogger Logger { get; } =
-            LoggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+            LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints));
     }
 
     // Issues and saves a number in one transaction. The attempt is null unless it committed.
@@ -150,12 +152,13 @@ internal static class AccreditationNumberEndpoint
     // a new number rather than returning the one another application holds.
     private static async Task<IResult> GiveUpAsync(Call call, string clashing)
     {
-        call.Logger.LogError(
-            GaveUpTemplate,
-            AccreditationNumberIssuer.MaxAttempts,
-            clashing,
-            call.ApplicationId
-        );
+        if (call.Logger.IsEnabled(LogLevel.Error))
+            call.Logger.LogError(
+                GaveUpTemplate,
+                AccreditationNumberIssuer.MaxAttempts,
+                clashing,
+                call.ApplicationId
+            );
         var cleared = await call.UnitOfWork.RunAsync(
             nameof(GenerateOrUpdateAccreditationNumber),
             call.ApplicationId,
@@ -260,7 +263,7 @@ internal static class AccreditationNumberEndpoint
             updated.Id,
             () =>
             {
-                var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+                var logger = loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints));
                 LogAccreditationReferenceIssued(logger, updated, issued);
                 if (issued.GlassProcessUnknown)
                     logger.LogError(

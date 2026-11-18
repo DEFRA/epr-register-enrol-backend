@@ -994,7 +994,7 @@ public static class AccreditationApplicationEndpoints
         }
 
         services
-            .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+            .LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints))
             .LogWarning(
                 "Failed to persist backfilled data for applicationId={ApplicationId}",
                 applicationId
@@ -1111,7 +1111,7 @@ public static class AccreditationApplicationEndpoints
         catch (Exception ex)
         {
             services
-                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints))
                 .LogWarning(
                     ex,
                     "Failed to resolve notification status for applicationId={ApplicationId}",
@@ -1531,7 +1531,7 @@ public static class AccreditationApplicationEndpoints
         {
             var reason = $"Interim site {duplicateId} appears more than once.";
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(PatchOverseasSites),
                 applicationId,
                 reason
@@ -1588,7 +1588,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(AddOverseasSite),
                 applicationId,
                 validation
@@ -1694,7 +1694,7 @@ public static class AccreditationApplicationEndpoints
         catch (Exception ex)
         {
             services
-                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints))
                 .LogWarning(
                     ex,
                     "Failed to notify ManagementBe of new overseas site for applicationId={ApplicationId}",
@@ -2126,7 +2126,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                services.LoggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                services.LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(UpdateOverseasSite),
                 applicationId,
                 validation
@@ -2313,7 +2313,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(PromoteOverseasSite),
                 applicationId,
                 validation
@@ -2514,7 +2514,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(UpdateInterimSite),
                 applicationId,
                 validation
@@ -2750,7 +2750,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(AddInterimSite),
                 applicationId,
                 validation
@@ -2839,7 +2839,7 @@ public static class AccreditationApplicationEndpoints
         catch (Exception ex)
         {
             services
-                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints))
                 .LogWarning(
                     ex,
                     "Failed to notify ManagementBe of new interim site for applicationId={ApplicationId}",
@@ -3873,7 +3873,7 @@ public static class AccreditationApplicationEndpoints
         ILoggerFactory loggerFactory
     )
     {
-        var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+        var logger = loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints));
         // The Case Management service BE's push hook sends this on every request for
         // cross-service tracing (RA-311). Purely a diagnostic aid — absence must never fail the
         // request.
@@ -4379,7 +4379,7 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+        var logger = loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints));
         // The Case Management service BE's push hook sends this on every request for
         // cross-service tracing (RA-311/RA-368). Purely a diagnostic aid — absence must never
         // fail the request.
@@ -4691,7 +4691,7 @@ public static class AccreditationApplicationEndpoints
         )
         {
             loggerFactory
-                .CreateLogger("AccreditationApplicationEndpoints")
+                .CreateLogger(nameof(AccreditationApplicationEndpoints))
                 .LogWarning(
                     "{Operation}: applicationId={ApplicationId} changed in the case management service but the change was not recorded here; a retry completes it",
                     operation,
