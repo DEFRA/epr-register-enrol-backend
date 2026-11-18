@@ -142,10 +142,9 @@ public class AccreditationApplicationPersistence(
     }
 
     // RA-690: no index yet, so this scans the collection. It runs once per draw on approval (RA-783:
-    // at most MaxAccreditationNumberAttempts, and almost always once), not per read, so the scan
-    // is acceptable for now. The unique index on AccreditationReference that
-    // follows RA-691 (once the counter-era references are migrated) will back it and replace
-    // this check.
+    // at most AccreditationNumberIssuer.MaxAttempts, and almost always once), not per read, so
+    // the scan is acceptable for now. There's no unique index on AccreditationReference: a withdrawn
+    // application keeps its number when its renewal is issued it again.
     public async Task<
         IReadOnlyList<AccreditationReferenceHolder>
     > GetOtherAccreditationReferenceHoldersAsync(

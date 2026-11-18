@@ -290,7 +290,8 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         var message = await response.Content.ReadAsStringAsync(
             TestContext.Current.CancellationToken
         );
-        message.Should().Contain("isn't already held");
+        message.Should().Contain("already uses every accreditation sequence");
+        message.Should().NotContain("attempts");
         (await StoredApplication(app)).AccreditationReference.Should().BeNull();
     }
 

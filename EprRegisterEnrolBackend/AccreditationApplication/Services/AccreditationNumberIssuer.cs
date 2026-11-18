@@ -193,7 +193,8 @@ public sealed class AccreditationNumberIssuer(
     // RA-783 AC04: builds a number no other application holds. The organisation's own numbers are
     // already avoided by the draw; this catches the rest, such as a duplicate live application of
     // another organisation, or a number written after the organisation's were read. Read-then-write:
-    // a unique index is a follow-up to RA-691.
+    // two sites of one organisation and material, both new numbers, approved at the same moment
+    // could draw the same sequence. That's accepted as too rare to guard, and put right by hand.
     // - A continuous renewal's number is fixed, so a live holder is a conflict. A withdrawn holder
     //   doesn't block: an operator who withdrew and started again renews to the same number, and
     //   the withdrawn record keeps it.
@@ -208,10 +209,18 @@ public sealed class AccreditationNumberIssuer(
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             var generated = AccreditationNumberRules.Generate(request, random.NextSequenceDigits);
-            // The organisation already uses nearly every sequence: the same conflict as every
-            // number drawn being held.
+            // The organisation already uses nearly every sequence, so drawing again won't help.
             if (generated.NoSequenceLeft)
-                break;
+                return (
+                    null,
+                    [],
+                    AccreditationNumberIssueOutcome.Failed(
+                        AccreditationNumberIssueFailure.AlreadyHeld,
+                        "The organisation already uses every accreditation sequence drawn for this "
+                            + "agency, process type and OrgId, so no new accreditation reference "
+                            + "could be built."
+                    )
+                );
             // A malformed source fails visibly rather than issuing a wrong number.
             if (!generated.IsValid)
                 return (
