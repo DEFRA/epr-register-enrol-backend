@@ -17,8 +17,8 @@ info:
       the site flags `isNewSite` and `selected`.
     * **Status is a history with effective periods.** `statusHistory[]` records each status with
       the period it applies: `effectiveFromDate` (which may be in the future) and `effectiveToDate`
-      (`null` on the latest entry). `status` is a projection: the latest entry whose
-      `effectiveFromDate` is on or before today.
+      (`null` on the latest entry). `latestStatus` is the latest entry of that history, whether or
+      not its `effectiveFromDate` has arrived, so it always matches the history.
     * **Accredited overseas sites have their own status history** on the same rules, because an
       individual site can be suspended without suspending the whole accreditation.
     * **Tonnage band** is held on the accreditation, and its history is the accreditation's own
@@ -62,7 +62,7 @@ paths:
       operationId: searchAccreditations
       summary: Search accreditations across all organisations
       description: |
-        Returns `AccreditationSummary` items, which carry the current `status` and `tonnageBand`
+        Returns `AccreditationSummary` items, which carry the `latestStatus` and `tonnageBand`
         but no history, so the response stays small. Results are ordered by accreditation number,
         so the order is the same from one page to the next.
 
@@ -232,7 +232,7 @@ components:
       name: status
       in: query
       description: |
-        Only accreditations with this current status. Only `approved` accreditations are served
+        Only accreditations whose `latestStatus.status` is this. Only `approved` accreditations are served
         today, so `suspended`, `cancelled` and `withdrawn` are valid and return an empty page
         until case management can send them.
       schema: { type: string, enum: [approved, suspended, cancelled, withdrawn] }
@@ -392,11 +392,13 @@ components:
     AccreditationSummary:
       type: object
       description: |
-        The accreditation without its history; returned by search. `status` is a projection for
-        today: the latest status history entry whose `effectiveFromDate` is on or before today, so a
-        forward-dated change does not show here until its date arrives. `tonnageBand` is the
-        latest tonnage band history entry.
-      required: [organisationNumber, registrationNumber, accreditationNumber, accreditationYear, material, wasteProcessingType, status]
+        The accreditation without its history; returned by search. `latestStatus` is the latest
+        status history entry, the same entry in the same shape, so it always matches the history.
+        It can be future-dated: a 2027 accreditation approved in November 2026 has a `latestStatus`
+        of `approved` with an `effectiveFromDate` of 2027-01-01, which has not arrived yet. Use its
+        effective dates to tell whether it is in effect. `tonnageBand` is the latest tonnage band
+        history entry.
+      required: [organisationNumber, registrationNumber, accreditationNumber, accreditationYear, material, wasteProcessingType, latestStatus]
       properties:
         organisationNumber: { type: integer, format: int32, description: ReEx numeric organisation number (`OrgId`). }
         registrationNumber: { type: string }
@@ -408,7 +410,9 @@ components:
           allOf: [{ $ref: '#/components/schemas/GlassRecyclingProcess' }]
           nullable: true
         wasteProcessingType: { type: string }
-        status: { $ref: '#/components/schemas/AccreditationStatus' }
+        latestStatus:
+          allOf: [{ $ref: '#/components/schemas/StatusHistoryEntry' }]
+          description: The latest entry in `statusHistory`: the latest `effectiveFromDate`, and the later `recordedAt` where two share one. It is the latest whether or not its `effectiveFromDate` has arrived.
         tonnageBand:
           type: string
           allOf: [{ $ref: '#/components/schemas/TonnageBand' }]
@@ -476,8 +480,9 @@ components:
       description: |
         An overseas site included in an accreditation, with its interim sites. A site has its own
         status history because it can be suspended without suspending the whole accreditation.
-        `status` is projected for today on the same rule as `AccreditationSummary.status`.
-      required: [siteId, siteName, status, statusHistory, interimSites]
+        `latestStatus` is the latest entry of that history, on the same rule as
+        `AccreditationSummary.latestStatus`.
+      required: [siteId, siteName, latestStatus, statusHistory, interimSites]
       properties:
         siteId: { type: integer, format: int32 }
         orsId: { type: string, nullable: true, example: '001' }
@@ -497,7 +502,9 @@ components:
         conditionsOfExport: { type: boolean, nullable: true }
         isEu: { type: boolean }
         isOecd: { type: boolean }
-        status: { $ref: '#/components/schemas/AccreditationStatus' }
+        latestStatus:
+          allOf: [{ $ref: '#/components/schemas/StatusHistoryEntry' }]
+          description: The latest entry in the site's `statusHistory`, the same entry in the same shape.
         statusHistory:
           type: array
           minItems: 1

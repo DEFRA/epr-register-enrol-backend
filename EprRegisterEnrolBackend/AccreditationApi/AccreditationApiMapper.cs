@@ -15,10 +15,8 @@ public static class AccreditationApiMapper
 {
     private const string Approved = "approved";
 
-    public static AccreditationSummaryDto ToSummary(
-        AccreditationApplicationModel application,
-        DateTimeOffset now
-    ) => Summary(application, now, StatusHistory(application));
+    public static AccreditationSummaryDto ToSummary(AccreditationApplicationModel application) =>
+        Summary(application, StatusHistory(application));
 
     // RA-647: a record that cannot be addressed by its business references (organisation number,
     // registration number, accreditation number) cannot honour the contract, so it is dropped from
@@ -27,7 +25,6 @@ public static class AccreditationApiMapper
     // how an operator learns that one exists.
     public static IReadOnlyList<AccreditationSummaryDto> ToSummaries(
         IEnumerable<AccreditationApplicationModel> applications,
-        DateTimeOffset now,
         ILogger logger
     )
     {
@@ -45,7 +42,7 @@ public static class AccreditationApiMapper
                 continue;
             }
 
-            summaries.Add(ToSummary(application, now));
+            summaries.Add(ToSummary(application));
         }
 
         return summaries;
@@ -70,12 +67,11 @@ public static class AccreditationApiMapper
 
     public static AccreditationDto ToAccreditation(
         AccreditationApplicationModel application,
-        DateTimeOffset now,
         bool includeWithdrawn = false
     )
     {
         var history = StatusHistory(application);
-        var summary = Summary(application, now, history);
+        var summary = Summary(application, history);
         var recordedAt = Approval(application);
 
         return new AccreditationDto
@@ -87,7 +83,7 @@ public static class AccreditationApiMapper
             Material = summary.Material,
             GlassRecyclingProcess = summary.GlassRecyclingProcess,
             WasteProcessingType = summary.WasteProcessingType,
-            Status = summary.Status,
+            LatestStatus = summary.LatestStatus,
             TonnageBand = summary.TonnageBand,
             Signatories = application
                 .Prns.Authorisers.Select(a => new SignatoryDto
@@ -101,7 +97,7 @@ public static class AccreditationApiMapper
                 ? AccreditedSites(application)
                     .OrderBy(site => site.OrsId, StringComparer.Ordinal)
                     .ThenBy(site => site.SiteId)
-                    .Select(site => ToOverseasSite(application, site, includeWithdrawn, now))
+                    .Select(site => ToOverseasSite(application, site, includeWithdrawn))
                     .ToList()
                 : null,
             TonnageBandHistory = summary.TonnageBand is null
@@ -120,8 +116,7 @@ public static class AccreditationApiMapper
     public static AccreditedOverseasSiteDto ToOverseasSite(
         AccreditationApplicationModel application,
         OverseasSiteModel site,
-        bool includeWithdrawn,
-        DateTimeOffset now
+        bool includeWithdrawn
     )
     {
         var history = StatusHistory(application);
@@ -140,7 +135,7 @@ public static class AccreditationApiMapper
             ConditionsOfExport = site.ConditionsOfExport,
             IsEu = site.IsEu,
             IsOecd = site.IsOecd,
-            Status = Project(history, now),
+            LatestStatus = StatusHistoryBuilder.Latest(history),
             StatusHistory = history,
             InterimSites = site
                 .InterimSites.Where(interim => includeWithdrawn || interim.RemovedAt is null)
@@ -152,7 +147,6 @@ public static class AccreditationApiMapper
 
     private static AccreditationSummaryDto Summary(
         AccreditationApplicationModel application,
-        DateTimeOffset now,
         IReadOnlyList<StatusHistoryEntryDto> history
     ) =>
         new()
@@ -172,7 +166,7 @@ public static class AccreditationApiMapper
                     }
                     : null,
             WasteProcessingType = IsExporter(application) ? "exporter" : "reprocessor",
-            Status = Project(history, now),
+            LatestStatus = StatusHistoryBuilder.Latest(history),
             TonnageBand = application.Prns.PlannedTonnageBand switch
             {
                 PlannedTonnageBand.UpTo500 => "up_to_500",
@@ -190,21 +184,6 @@ public static class AccreditationApiMapper
     private static List<StatusHistoryEntryDto> StatusHistory(
         AccreditationApplicationModel application
     ) => StatusHistoryBuilder.Build([(Approved, Approval(application))], application.Year);
-
-    // The status for today: the latest entry whose first day is on or before today. A record
-    // always starts out approved, so a first entry that is not yet in effect still projects as
-    // approved rather than as nothing.
-    private static string Project(IReadOnlyList<StatusHistoryEntryDto> history, DateTimeOffset now)
-    {
-        var today = UkDate(now.UtcDateTime);
-        return history
-                .Where(entry => entry.EffectiveFromDate <= today)
-                .OrderBy(entry => entry.EffectiveFromDate)
-                .ThenBy(entry => entry.RecordedAt)
-                .Select(entry => entry.Status)
-                .LastOrDefault()
-            ?? Approved;
-    }
 
     private static DateTime Approval(AccreditationApplicationModel application) =>
         AsUtc(application.CaseManagementStatusUpdatedAt ?? application.DateLastEdited);
