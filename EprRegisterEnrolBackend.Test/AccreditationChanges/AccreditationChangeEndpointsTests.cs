@@ -552,7 +552,7 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
         );
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-        (await response.Content.ReadFromJsonAsync<string>(Ct)).Should().Be(DuplicateFilenameGuard.DuplicateFilenameMessage);
+        await ShouldBeDuplicateFilenameProblem(response);
         var uploads = _factory.FakeChangeRequests.All.Single().Sites.Single().BesEvidence?.BesEvidenceUploads ?? [];
         uploads.Should().NotContain(f => f.FileId == "file-new");
     }
@@ -664,7 +664,15 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
             Ct
         );
         duplicate.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-        (await duplicate.Content.ReadFromJsonAsync<string>(Ct)).Should().Be(DuplicateFilenameGuard.DuplicateFilenameMessage);
+        await ShouldBeDuplicateFilenameProblem(duplicate);
+    }
+
+    // 3bb.48: problem+json with a code, as the cap's, so the frontend can tell the two refusals apart.
+    private static async Task ShouldBeDuplicateFilenameProblem(HttpResponseMessage response)
+    {
+        var problem = await ReadJson(response);
+        problem.GetProperty("code").GetString().Should().Be("DuplicateFilename");
+        problem.GetProperty("detail").GetString().Should().Be(DuplicateFilenameGuard.DuplicateFilenameMessage);
     }
 
     [Fact]
@@ -780,6 +788,113 @@ public sealed class AccreditationChangeEndpointsTests : IDisposable
             .Should()
             .BeEquivalentTo("sites[901912].operationCodes", "sites[901912].conditionsOfExport");
         _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
+    }
+
+    // 3bb.49: upload's 10-file cap again at Submit, across the site's files on the accreditation and the
+    // request's, for a draft uploaded before 3bb.38 or whose accreditation files changed since.
+    [Theory]
+    [InlineData(5, 5, HttpStatusCode.OK)]
+    [InlineData(6, 5, HttpStatusCode.UnprocessableEntity)]
+    public async Task Submit_CombinedBesEvidenceOverTheCap_Returns422AndStaysInProgress(
+        int onSite,
+        int onRequest,
+        HttpStatusCode expected
+    )
+    {
+        await SeedCompleteBesDraftFor901911(
+            accreditation => FindSite(accreditation, 901911).BesEvidence = new BesEvidenceModel
+            {
+                BesEvidenceUploads = BesFiles("held", onSite),
+            },
+            BesFiles("requested", onRequest)
+        );
+
+        var response = await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct);
+
+        response.StatusCode.Should().Be(expected);
+        if (expected == HttpStatusCode.UnprocessableEntity)
+        {
+            var errors = (await ReadJson(response)).GetProperty("errors");
+            errors.EnumerateObject().Select(p => p.Name).Should().Equal("sites[901911].besEvidenceMaxFiles");
+            Strings(errors.GetProperty("sites[901911].besEvidenceMaxFiles"))
+                .Should().Equal(AccreditationApplicationEndpoints.MaxBesEvidenceFilesMessage);
+            _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
+        }
+    }
+
+    // 3bb.49: RA-571's rule again at Submit: no request file may share a base name with a file on the accreditation
+    // application or another of the request's.
+    [Theory]
+    [InlineData("other-site")]
+    [InlineData("sampling-plan")]
+    [InlineData("request")]
+    public async Task Submit_BesEvidenceFilenameClash_Returns422AndStaysInProgress(string heldOn)
+    {
+        List<BesEvidenceFileModel> requested = [BesFile("requested-1", "Evidence.pdf")];
+        if (heldOn == "request")
+            requested.Add(BesFile("requested-2", "EVIDENCE.docx"));
+        await SeedCompleteBesDraftFor901911(
+            accreditation =>
+            {
+                if (heldOn == "other-site")
+                    FindSite(accreditation, 901901).BesEvidence = new BesEvidenceModel
+                    {
+                        BesEvidenceUploads = [BesFile("held", "evidence.docx")],
+                    };
+                if (heldOn == "sampling-plan")
+                    accreditation.SamplingPlan.Files.Add(
+                        new AccreditationApplicationFile
+                        {
+                            FileId = "held",
+                            Filename = "evidence.PDF",
+                            ContentType = "application/pdf",
+                            UploadedByUserId = "user",
+                            S3Key = "sampling-plan/held",
+                        }
+                    );
+            },
+            requested
+        );
+
+        var response = await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var errors = (await ReadJson(response)).GetProperty("errors");
+        errors.EnumerateObject().Select(p => p.Name).Should().Equal("sites[901911].besEvidenceDuplicateFilename");
+        Strings(errors.GetProperty("sites[901911].besEvidenceDuplicateFilename"))
+            .Should().Equal(DuplicateFilenameGuard.DuplicateFilenameMessage);
+        _factory.FakeChangeRequests.All.Single().Status.Should().Be(ChangeRequestStatus.InProgress);
+    }
+
+    // A request file the site already holds is not added again at grant (ChangeRequestGrant), so it clashes with nothing.
+    [Fact]
+    public async Task Submit_RequestFileTheSiteAlreadyHolds_IsNotADuplicate()
+    {
+        var held = BesFile("held", "evidence.pdf");
+        await SeedCompleteBesDraftFor901911(
+            accreditation => FindSite(accreditation, 901911).BesEvidence = new BesEvidenceModel
+            {
+                BesEvidenceUploads = [held],
+            },
+            [BesFile("held", "evidence.pdf"), BesFile("requested-1", "other.pdf")]
+        );
+
+        var response = await _client.PostAsJsonAsync(SubmitUrl, Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    private async Task SeedCompleteBesDraftFor901911(
+        Action<AccreditationApplicationModel> accreditationChange,
+        List<BesEvidenceFileModel> requested
+    )
+    {
+        SeedAccreditationWith(accreditationChange);
+        await AddSite(901911);
+        await Patch(901911, new { coordinates = "13.0827, 80.2707", operationCodes = R3, conditionsOfExport = false });
+        var draft = _factory.FakeChangeRequests.All.Single();
+        draft.Sites.Single().BesEvidence = new BesEvidenceModel { BesEvidenceUploads = requested };
+        (await _factory.FakeChangeRequests.UpdateAsync(draft, Ct)).Should().BeTrue();
     }
 
     [Fact]

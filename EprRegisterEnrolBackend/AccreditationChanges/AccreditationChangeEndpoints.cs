@@ -646,7 +646,7 @@ public static class AccreditationChangeEndpoints
             .ExistingFilenames(accreditation!)
             .Concat(draft.Sites.SelectMany(s => s.BesEvidence?.BesEvidenceUploads ?? []).Select(f => f.Filename));
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile!.Filename, existingFilenames))
-            return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
+            return AccreditationApplicationEndpoints.DuplicateFilenameRejection();
 
         requestSite.BesEvidence ??= new BesEvidenceModel();
         requestSite.BesEvidence.BesEvidenceUploads.Add(
@@ -686,6 +686,49 @@ public static class AccreditationChangeEndpoints
             return Results.NotFound();
 
         return await SaveAndViewAsync(draft, accreditation!, services);
+    }
+
+    internal const string BesEvidenceMaxFilesKey = "besEvidenceMaxFiles";
+    internal const string BesEvidenceDuplicateFilenameKey = "besEvidenceDuplicateFilename";
+
+    /// <summary>
+    /// 3bb.49: the upload's cap and duplicate filename rules (<see cref="AddBesEvidenceFile"/>) again at Submit, as a
+    /// grant cannot refuse: a draft's files may predate 3bb.38's upload checks, or the accreditation's files may have
+    /// changed since. Only the files a grant would add count: a request file the site already holds is skipped
+    /// (<see cref="ChangeRequestRules.GrantedBesEvidence"/>).
+    /// </summary>
+    private static IEnumerable<(string Key, string Message)> BesEvidenceProblems(
+        AccreditationApplicationModel accreditation,
+        AccreditationChangeRequest draft
+    )
+    {
+        var sites = draft
+            .Sites.Select(requestSite =>
+            {
+                var ors = ChangeRequestRules.FindSite(accreditation, requestSite.SiteId);
+                var granted = ChangeRequestRules.GrantedBesEvidence(ors, requestSite.BesEvidence);
+                // GrantedBesEvidence lists the site's own files first, then the ones a grant adds.
+                var heldCount = ors?.BesEvidence?.BesEvidenceUploads.Count ?? 0;
+                return (requestSite.SiteId, Granted: granted, Added: granted.BesEvidenceUploads.Skip(heldCount).ToList());
+            })
+            .ToList();
+        var onAccreditation = DuplicateFilenameGuard.ExistingFilenames(accreditation).ToList();
+        var added = sites.SelectMany(s => s.Added).ToList();
+
+        foreach (var (siteId, granted, siteAdded) in sites.Where(s => s.Added.Count > 0))
+        {
+            if (AccreditationApplicationEndpoints.IsOverBesEvidenceFileCap(granted))
+                yield return ($"sites[{siteId}].{BesEvidenceMaxFilesKey}", AccreditationApplicationEndpoints.MaxBesEvidenceFilesMessage);
+
+            var clashes = siteAdded.Any(file =>
+                DuplicateFilenameGuard.IsDuplicate(
+                    file.Filename,
+                    onAccreditation.Concat(added.Where(other => other != file).Select(other => other.Filename))
+                )
+            );
+            if (clashes)
+                yield return ($"sites[{siteId}].{BesEvidenceDuplicateFilenameKey}", DuplicateFilenameGuard.DuplicateFilenameMessage);
+        }
     }
 
     private static async Task<IResult> Submit(
@@ -731,6 +774,8 @@ public static class AccreditationChangeEndpoints
             .ToDictionary(e => e.Key, e => new[] { e.Message });
         if (draft.Sites.Count == 0)
             incomplete["sites"] = ["Add at least one overseas reprocessing site."];
+        foreach (var (key, message) in BesEvidenceProblems(accreditation!, draft))
+            incomplete[key] = [message];
         if (incomplete.Count > 0)
             return Results.ValidationProblem(
                 incomplete,
