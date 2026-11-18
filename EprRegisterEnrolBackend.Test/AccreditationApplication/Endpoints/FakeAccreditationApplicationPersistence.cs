@@ -379,6 +379,22 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 .ToList()
         );
 
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationReferencesAndYearAsync(
+        IReadOnlyCollection<string> registrationReferences,
+        int year,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a =>
+                    a.Year == year
+                    && a.RegistrationReference is { } reference
+                    && registrationReferences.Contains(reference)
+                )
+                .Select(ShallowCopy)
+                .ToList()
+        );
+
     public Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenNotQueriedWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     ) =>
