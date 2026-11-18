@@ -161,8 +161,8 @@ public sealed class AccreditationNumberIssuer(
     // applications hold here - issued, replaced, or last year's from ReEx - so a site can't take
     // the number another site's renewal will need. Only data in Mongo is checked, so a 2026
     // number is seen once it's held on one of the organisation's applications (at Seed, or by
-    // the RA-763/RA-784 backfills); until then, and for two sites approved at the same moment,
-    // a clash makes the renewal's approval a 409, rare enough to put right by hand.
+    // the RA-763/RA-784 backfills); until then a clash makes the renewal's approval a 409, rare
+    // enough to put right by hand.
     // The case is checked here only to skip the read: Generate ignores these numbers for a
     // continuous renewal anyway, as its number is fixed.
     private async Task<IReadOnlyCollection<string>> OrganisationAccreditationNumbersAsync(
@@ -193,8 +193,8 @@ public sealed class AccreditationNumberIssuer(
     // RA-783 AC04: builds a number no other application holds. The organisation's own numbers are
     // already avoided by the draw; this catches the rest, such as a duplicate live application of
     // another organisation, or a number written after the organisation's were read. Read-then-write:
-    // two sites of one organisation and material, both new numbers, approved at the same moment
-    // could draw the same sequence. That's accepted as too rare to guard, and put right by hand.
+    // two approvals at the same moment can both save one new number, so AccreditationNumberEndpoint
+    // checks again once the save has committed and draws again on a clash.
     // - A continuous renewal's number is fixed, so a live holder is a conflict. A withdrawn holder
     //   doesn't block: an operator who withdrew and started again renews to the same number, and
     //   the withdrawn record keeps it.

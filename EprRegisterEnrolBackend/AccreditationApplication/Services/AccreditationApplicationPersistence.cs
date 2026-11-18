@@ -141,9 +141,9 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
-    // RA-690: no index yet, so this scans the collection. It runs once per draw on approval (RA-783:
-    // at most AccreditationNumberIssuer.MaxAttempts, and almost always once), not per read, so
-    // the scan is acceptable for now. There's no unique index on AccreditationReference: a withdrawn
+    // RA-690: no index yet, so this scans the collection. It runs on approval only (RA-783: once
+    // per draw and once more after the save, almost always twice in all), not per read, so the
+    // scan is acceptable for now. There's no unique index on AccreditationReference: a withdrawn
     // application keeps its number when its renewal is issued it again.
     public async Task<
         IReadOnlyList<AccreditationReferenceHolder>
