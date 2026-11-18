@@ -27,7 +27,8 @@ internal static class ChangeRequestGrant
 {
     /// <summary>
     /// Applies the grant to everything but the item, which the caller writes last. Returns a 409 before any write
-    /// when there is nothing to grant: a retry would fail the same way.
+    /// when there is nothing to grant (not an add-ORS item, no site, or a site already accredited another way): a
+    /// retry would fail the same way.
     /// </summary>
     /// <exception cref="ChangeRequestWriteConflictException">The legacy application changed since it was read.</exception>
     /// <exception cref="InvalidOperationException">The domain model lacks the application, Accreditation or ORS.</exception>
@@ -40,6 +41,10 @@ internal static class ChangeRequestGrant
         CancellationToken cancellationToken
     )
     {
+        // Only an add-ORS item is granted by accrediting its site; any other change type has no grant here yet.
+        if (item.ChangeType != AccreditationChangeRequest.AddOverseasSiteChangeType)
+            return Results.Conflict($"A '{item.ChangeType}' change request item cannot be granted.");
+
         if (changeRequest.SubmittedAt is not { } submittedAt || changeRequest.ApplicationId is null)
             return Results.Conflict("The change request has no submission date or accreditation to grant it on.");
 
@@ -54,10 +59,16 @@ internal static class ChangeRequestGrant
         if (application is null || site is null)
             return Results.Conflict("The overseas site is no longer on the accreditation, so it cannot be granted.");
 
+        // A selected site is this grant's own earlier write only when it carries this grant's date; selected any other
+        // way, it is already accredited and granting it would leave its date, answers and BES evidence half-applied.
+        var validFrom = SiteApprovalDate.Format(submittedAt);
+        if (site.Selected && site.ValidFrom != validFrom)
+            return Results.Conflict("The overseas site is already accredited on the accreditation, so it cannot be granted.");
+
         if (!site.Selected)
         {
             site.Selected = true;
-            site.ValidFrom = SiteApprovalDate.Format(submittedAt);
+            site.ValidFrom = validFrom;
             ApplySuppliedAnswers(site, item.Answers);
             AddBesEvidence(site, item.BesEvidence);
             if (await applications.UpdateAsync(application, session) is null)

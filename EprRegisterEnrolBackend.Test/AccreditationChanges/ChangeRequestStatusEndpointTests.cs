@@ -57,7 +57,8 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
     // A submitted request for 901910 and 901914, each with its own work item; 901910's item is the one pushed to.
     private AccreditationChangeRequest SeedSubmittedRequest(
         ChangeItemStatus status = ChangeItemStatus.Submitted,
-        DateTime? watermark = null
+        DateTime? watermark = null,
+        string changeType = AccreditationChangeRequest.AddOverseasSiteChangeType
     )
     {
         var request = new AccreditationChangeRequest
@@ -72,6 +73,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
             [
                 new ChangeRequestSite
                 {
+                    ChangeType = changeType,
                     SiteId = SiteId,
                     OrsId = "005",
                     SiteName = "Lyon",
@@ -399,6 +401,50 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         Item().Status.Should().Be(ChangeItemStatus.DulyMade);
         Item().CaseManagementStatusUpdatedAt.Should().Be(Watermark);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // A site already accredited some other way is not this grant's to make: granting it would change nothing on the
+    // site yet approve the item, so a 409 with nothing written.
+    [Fact]
+    public async Task Approved_SiteAlreadyAccreditedAnotherWay_Returns409AndWritesNothing()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var application = Legacy();
+        var site = application.OverseasSites!.Sites.Single(s => s.SiteId == SiteId);
+        site.Selected = true;
+        site.ValidFrom = "2025-01-01T00:00:00.000Z";
+        await _factory.FakePersistence.UpdateAsync(application);
+        var versionBefore = Legacy().Version;
+
+        var response = await Push("approved", Watermark.AddMinutes(5));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        Item().ValidFrom.Should().BeNull();
+        LegacySite(SiteId).ValidFrom.Should().Be("2025-01-01T00:00:00.000Z");
+        Legacy().Version.Should().Be(versionBefore);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // Only an add-ORS item is granted by accrediting its site: an approved push for any other change type is a 409
+    // with nothing written.
+    [Fact]
+    public async Task Approved_NotAnAddOrsItem_Returns409AndWritesNothing()
+    {
+        SeedSubmittedRequest(
+            ChangeItemStatus.DulyMade,
+            Watermark,
+            AccreditationChangeRequest.UpdateOverseasSiteChangeType
+        );
+        var versionBefore = Legacy().Version;
+
+        var response = await Push("approved", Watermark.AddMinutes(5));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        LegacySite(SiteId).Selected.Should().BeFalse();
+        Legacy().Version.Should().Be(versionBefore);
         _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
     }
 
