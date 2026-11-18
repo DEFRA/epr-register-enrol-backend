@@ -79,7 +79,8 @@ public class AccreditationApplicationEndpointsPatchOverseasSitesUnknownSiteTests
             cancellationToken: TestContext.Current.CancellationToken
         );
 
-    public static TheoryData<string?> UnknownSiteOrsIds => [null, "", new string('9', 11), "003"];
+    public static TheoryData<string?> UnknownSiteOrsIds =>
+        new() { (string?)null, "", new string('9', 11), "003" };
 
     [Theory]
     [MemberData(nameof(UnknownSiteOrsIds))]

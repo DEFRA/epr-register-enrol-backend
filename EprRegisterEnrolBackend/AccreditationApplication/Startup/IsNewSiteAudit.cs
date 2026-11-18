@@ -73,7 +73,8 @@ public sealed class IsNewSiteAudit(
 
         // Each placeholder name appears once: a repeated name is a separate positional slot to
         // the structured-logging formatter.
-        logger.LogInformation(
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
             "epr-2uxy isNewSite audit (READ-ONLY, nothing written). Applications created before "
                 + "{DeployedAt:o} with overseas sites: {ApplicationsScanned}. Sites per bucket - "
                 + "PROVABLY-CORRUPT: {SitesProvablyCorrupt}; PROMOTED-CORRECTABLE: "
@@ -100,7 +101,8 @@ public sealed class IsNewSiteAudit(
             }
         )
         {
-            logger.LogInformation(
+            if (logger.IsEnabled(LogLevel.Information))
+                logger.LogInformation(
                 "epr-2uxy isNewSite audit {Bucket}: {SiteCount} sites on {ApplicationCount} "
                     + "applications: {ApplicationIds}",
                 IsNewSiteClassifier.BucketName(verdict),
@@ -124,7 +126,8 @@ public sealed class IsNewSiteAudit(
         foreach (var scan in scans)
         {
             foreach (var site in scan.Sites.Where(s => s.Classification.IsCorrectable))
-                logger.LogInformation(
+                if (logger.IsEnabled(LogLevel.Information))
+                    logger.LogInformation(
                     "epr-2uxy {Bucket} application {ApplicationId} ref={ApplicationReference} "
                         + "site {SiteId} '{SiteName}'",
                     IsNewSiteClassifier.BucketName(site.Classification.Verdict),

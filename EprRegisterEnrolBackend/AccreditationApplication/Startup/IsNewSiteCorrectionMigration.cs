@@ -72,13 +72,70 @@ public sealed class IsNewSiteCorrectionMigration(
         }
     }
 
+    private sealed record Gates(string ConfirmedBy, bool Apply, DateTime DeployedAt);
+
     internal async Task<RunResult> RunAsync(CancellationToken cancellationToken)
+    {
+        var (stop, gates) = ReadGates();
+        if (gates is null)
+            return stop;
+
+        var mode = gates.Apply ? "APPLY" : "DRY RUN (nothing will be written)";
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "epr-2uxy isNewSite correction starting. Mode={Mode}. Spot check confirmed by "
+                    + "{ConfirmedBy}. Applications created before {DeployedAt:o}",
+                mode,
+                gates.ConfirmedBy,
+                gates.DeployedAt
+            );
+
+        var persistence = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
+        var scans = await new IsNewSiteScanner(
+            persistence,
+            serviceProvider.GetRequiredService<IReExApiAdapter>(),
+            logger
+        ).ScanAsync(gates.DeployedAt, cancellationToken);
+
+        int sitesCorrected = 0,
+            sitesRefused = 0,
+            applicationsChanged = 0;
+        foreach (var scan in scans)
+        {
+            sitesRefused += LogRefused(scan);
+            var corrected = await CorrectOrReportAsync(persistence, scan, gates, cancellationToken);
+            if (corrected > 0)
+            {
+                sitesCorrected += corrected;
+                applicationsChanged++;
+            }
+        }
+
+        var verb = gates.Apply ? "corrected" : "that would be corrected";
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "epr-2uxy isNewSite correction complete. Mode={Mode}. Applications "
+                    + "{ApplicationsVerb}: {ApplicationsChanged}. Sites {SitesVerb}: "
+                    + "{SitesCorrected}. Sites refused as ambiguous (adjudicate by hand): "
+                    + "{SitesRefused}",
+                mode,
+                verb,
+                applicationsChanged,
+                verb,
+                sitesCorrected,
+                sitesRefused
+            );
+        return gates.Apply ? RunResult.Applied : RunResult.DryRun;
+    }
+
+    // Gates 1-3 and the required window. Null gates means stop, with the result to return.
+    private (RunResult Stop, Gates? Gates) ReadGates()
     {
         var enabled = IsNewSiteConfig.ReadFlag(configuration, IsNewSiteConfig.CorrectKey, logger);
         if (enabled is null)
-            return RunResult.Refused;
+            return (RunResult.Refused, null);
         if (enabled == false)
-            return RunResult.Disabled;
+            return (RunResult.Disabled, null);
 
         var confirmedBy = configuration[IsNewSiteConfig.SpotCheckConfirmedByKey];
         if (string.IsNullOrWhiteSpace(confirmedBy))
@@ -89,100 +146,74 @@ public sealed class IsNewSiteCorrectionMigration(
                     + "operator database",
                 IsNewSiteConfig.SpotCheckConfirmedByKey
             );
-            return RunResult.Refused;
+            return (RunResult.Refused, null);
         }
 
         var apply = IsNewSiteConfig.ReadFlag(configuration, IsNewSiteConfig.ApplyKey, logger);
         if (apply is null)
-            return RunResult.Refused;
+            return (RunResult.Refused, null);
         if (IsNewSiteConfig.ReadDeployedAt(configuration, logger) is not { } deployedAt)
-            return RunResult.Refused;
+            return (RunResult.Refused, null);
 
-        var mode = apply == true ? "APPLY" : "DRY RUN (nothing will be written)";
-        logger.LogInformation(
-            "epr-2uxy isNewSite correction starting. Mode={Mode}. Spot check confirmed by "
-                + "{ConfirmedBy}. Applications created before {DeployedAt:o}",
-            mode,
-            confirmedBy,
-            deployedAt
-        );
+        return (RunResult.Refused, new Gates(confirmedBy, apply.Value, deployedAt));
+    }
 
-        var persistence = serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
-        var scans = await new IsNewSiteScanner(
-            persistence,
-            serviceProvider.GetRequiredService<IReExApiAdapter>(),
-            logger
-        ).ScanAsync(deployedAt, cancellationToken);
+    private int LogRefused(ApplicationScan scan)
+    {
+        var refused = scan
+            .Sites.Where(s => s.Classification.Verdict == IsNewSiteVerdict.AmbiguousRefused)
+            .ToList();
+        foreach (var site in refused)
+            logger.LogWarning(
+                "epr-2uxy REFUSED to correct application {ApplicationId} site {SiteId} "
+                    + "'{SiteName}': no OrsId and no proof it came from ReEx, so it may be a "
+                    + "genuinely new site. refusedBecause: {RefusedBecause}",
+                scan.Id,
+                site.SiteId,
+                site.SiteName,
+                string.Join(", ", site.Classification.RefusedBecause)
+            );
+        return refused.Count;
+    }
 
-        int sitesCorrected = 0,
-            sitesRefused = 0,
-            applicationsChanged = 0;
-        foreach (var scan in scans)
+    // The number of sites corrected (or, in a dry run, that would be).
+    private async Task<int> CorrectOrReportAsync(
+        IAccreditationApplicationPersistence persistence,
+        ApplicationScan scan,
+        Gates gates,
+        CancellationToken cancellationToken
+    )
+    {
+        var planned = scan.Correctable.ToList();
+        if (planned.Count == 0)
+            return 0;
+
+        if (!gates.Apply)
         {
-            foreach (
-                var refused in scan.Sites.Where(s =>
-                    s.Classification.Verdict == IsNewSiteVerdict.AmbiguousRefused
-                )
-            )
-            {
-                sitesRefused++;
-                logger.LogWarning(
-                    "epr-2uxy REFUSED to correct application {ApplicationId} site {SiteId} "
-                        + "'{SiteName}': no OrsId and no proof it came from ReEx, so it may be a "
-                        + "genuinely new site. refusedBecause: {RefusedBecause}",
-                    scan.Id,
-                    refused.SiteId,
-                    refused.SiteName,
-                    string.Join(", ", refused.Classification.RefusedBecause)
-                );
-            }
-
-            var planned = scan.Correctable.ToList();
-            if (planned.Count == 0)
-                continue;
-
-            var siteList = Describe(planned);
-            if (apply != true)
-            {
+            if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation(
                     "epr-2uxy DRY RUN would correct application {ApplicationId} "
                         + "ref={ApplicationReference}: {Sites}",
                     scan.Id,
                     scan.ApplicationReference,
-                    siteList
+                    Describe(planned)
                 );
-                sitesCorrected += planned.Count;
-                applicationsChanged++;
-                continue;
-            }
-
-            if (await CorrectAsync(persistence, scan, planned, cancellationToken))
-            {
-                sitesCorrected += planned.Count;
-                applicationsChanged++;
-                logger.LogInformation(
-                    "epr-2uxy APPLIED: application {ApplicationId} ref={ApplicationReference} "
-                        + "isNewSite set to false on {Sites}. Spot check confirmed by {ConfirmedBy}",
-                    scan.Id,
-                    scan.ApplicationReference,
-                    siteList,
-                    confirmedBy
-                );
-            }
+            return planned.Count;
         }
 
-        logger.LogInformation(
-            "epr-2uxy isNewSite correction complete. Mode={Mode}. Applications {ApplicationsVerb}: "
-                + "{ApplicationsChanged}. Sites {SitesVerb}: {SitesCorrected}. Sites refused as "
-                + "ambiguous (adjudicate by hand): {SitesRefused}",
-            mode,
-            apply == true ? "corrected" : "that would be corrected",
-            applicationsChanged,
-            apply == true ? "corrected" : "that would be corrected",
-            sitesCorrected,
-            sitesRefused
-        );
-        return apply == true ? RunResult.Applied : RunResult.DryRun;
+        if (!await CorrectAsync(persistence, scan, planned, cancellationToken))
+            return 0;
+
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "epr-2uxy APPLIED: application {ApplicationId} ref={ApplicationReference} "
+                    + "isNewSite set to false on {Sites}. Spot check confirmed by {ConfirmedBy}",
+                scan.Id,
+                scan.ApplicationReference,
+                Describe(planned),
+                gates.ConfirmedBy
+            );
+        return planned.Count;
     }
 
     private async Task<bool> CorrectAsync(
