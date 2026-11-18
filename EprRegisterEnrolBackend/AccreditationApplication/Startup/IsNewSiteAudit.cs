@@ -75,21 +75,21 @@ public sealed class IsNewSiteAudit(
         // the structured-logging formatter.
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-            "epr-2uxy isNewSite audit (READ-ONLY, nothing written). Applications created before "
+                "epr-2uxy isNewSite audit (READ-ONLY, nothing written). Applications created before "
                 + "{DeployedAt:o} with overseas sites: {ApplicationsScanned}. Sites per bucket - "
                 + "PROVABLY-CORRUPT: {SitesProvablyCorrupt}; PROMOTED-CORRECTABLE: "
                 + "{SitesPromotedCorrectable}; AMBIGUOUS-REFUSED: {SitesAmbiguousRefused}; "
                 + "ALREADY-CORRECT: {SitesAlreadyCorrect}; not flagged new: {SitesNotFlaggedNew}. "
                 + "Total correctable: {SitesCorrectable}",
-            deployedAt,
-            scans.Count,
-            siteCounts[IsNewSiteVerdict.ProvablyCorrupt],
-            siteCounts[IsNewSiteVerdict.PromotedCorrectable],
-            siteCounts[IsNewSiteVerdict.AmbiguousRefused],
-            siteCounts[IsNewSiteVerdict.AlreadyCorrect],
-            siteCounts[IsNewSiteVerdict.NotFlaggedNew],
-            correctable
-        );
+                deployedAt,
+                scans.Count,
+                siteCounts[IsNewSiteVerdict.ProvablyCorrupt],
+                siteCounts[IsNewSiteVerdict.PromotedCorrectable],
+                siteCounts[IsNewSiteVerdict.AmbiguousRefused],
+                siteCounts[IsNewSiteVerdict.AlreadyCorrect],
+                siteCounts[IsNewSiteVerdict.NotFlaggedNew],
+                correctable
+            );
 
         foreach (
             var verdict in new[]
@@ -103,13 +103,13 @@ public sealed class IsNewSiteAudit(
         {
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation(
-                "epr-2uxy isNewSite audit {Bucket}: {SiteCount} sites on {ApplicationCount} "
+                    "epr-2uxy isNewSite audit {Bucket}: {SiteCount} sites on {ApplicationCount} "
                     + "applications: {ApplicationIds}",
-                IsNewSiteClassifier.BucketName(verdict),
-                siteCounts[verdict],
-                idsByBucket[verdict].Count,
-                string.Join(", ", idsByBucket[verdict])
-            );
+                    IsNewSiteClassifier.BucketName(verdict),
+                    siteCounts[verdict],
+                    idsByBucket[verdict].Count,
+                    string.Join(", ", idsByBucket[verdict])
+                );
         }
 
         if (siteCounts[IsNewSiteVerdict.AmbiguousRefused] > correctable)
@@ -128,14 +128,14 @@ public sealed class IsNewSiteAudit(
             foreach (var site in scan.Sites.Where(s => s.Classification.IsCorrectable))
                 if (logger.IsEnabled(LogLevel.Information))
                     logger.LogInformation(
-                    "epr-2uxy {Bucket} application {ApplicationId} ref={ApplicationReference} "
+                        "epr-2uxy {Bucket} application {ApplicationId} ref={ApplicationReference} "
                         + "site {SiteId} '{SiteName}'",
-                    IsNewSiteClassifier.BucketName(site.Classification.Verdict),
-                    scan.Id,
-                    scan.ApplicationReference,
-                    site.SiteId,
-                    site.SiteName
-                );
+                        IsNewSiteClassifier.BucketName(site.Classification.Verdict),
+                        scan.Id,
+                        scan.ApplicationReference,
+                        site.SiteId,
+                        site.SiteName
+                    );
             foreach (
                 var site in scan.Sites.Where(s =>
                     s.Classification.Verdict == IsNewSiteVerdict.AmbiguousRefused
