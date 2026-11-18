@@ -215,7 +215,7 @@ public interface IAccreditationApplicationPersistence
         CancellationToken cancellationToken = default
     );
     /// <summary>
-    /// epr-2uxy: every application created before <paramref name="createdBefore"/> that holds at
+    /// RA-794: every application created before <paramref name="createdBefore"/> that holds at
     /// least one overseas site, oldest first. Read by the isNewSite audit and correction only
     /// (IsNewSiteScanner); removed with them.
     /// </summary>

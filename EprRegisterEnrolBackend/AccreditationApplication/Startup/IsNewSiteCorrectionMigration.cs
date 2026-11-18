@@ -10,11 +10,11 @@ using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
-// epr-2uxy AC02/AC03: sets isNewSite = false on the overseas sites IsNewSiteClassifier finds
-// PROVABLY-CORRUPT or PROMOTED-CORRECTABLE, and on nothing else. Run it BEFORE management-be's
+// RA-794 AC02/AC03: sets isNewSite = false on the overseas sites IsNewSiteClassifier finds
+// PROVABLY-CORRUPT or PROMOTED-CORRECTABLE, and on nothing else. Run it to completion BEFORE management-be's
 // ReAccreditationIsNewSiteCorrectionMigration: a query-resubmit sends this service's overseas sites
 // and management-be replaces payload.overseasSites.sites[] with them, so an uncorrected true here
-// undoes the management-be correction (docs/diagnostics/epr-2uxy-isnewsite-correction.md).
+// undoes the management-be correction (docs/diagnostics/ra-794-isnewsite-correction.md).
 //
 // Gates, as management-be's:
 //   1. Diagnostics:Ra292CorrectIsNewSite        off (absent) -> does nothing at all.
@@ -33,8 +33,10 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // re-derived: Origin, Status and ProposedByApplicationId are fixed when the ORS is created from
 // isNewSite and only ever carried over (LegacySiteMapper.WithDetailsOf). A site with no OrsId gets
 // an ORS of its own (ApplicationGroupMigrator), which a wrongly-defaulted true made an Operator
-// proposal of this application; it is set here to what the migrator makes of a ReEx site (ReEx,
-// Active, no proposer), in the same transaction. With DualWrite off there is no transaction and
+// proposal of this application (Proposed, or Discarded once the application closed); it is set here
+// to what the migrator makes of a ReEx site (ReEx, Active, no proposer), in the same transaction. That
+// is a re-derivation of the site's origin, not an application-driven lifecycle step, so it is not
+// checked against OverseasSiteTransitions.Registered (design doc §3.4, §6.2). With DualWrite off there is no transaction and
 // nothing in the domain model is written: the migration (which needs DualWrite) has not run, and
 // when it does it reads the corrected legacy document.
 //
@@ -47,7 +49,7 @@ public sealed class IsNewSiteCorrectionMigration(
     ILogger<IsNewSiteCorrectionMigration> logger
 ) : BackgroundService
 {
-    public const string Operation = "Epr2uxyIsNewSiteCorrection";
+    public const string Operation = "Ra794IsNewSiteCorrection";
 
     internal enum RunResult
     {
@@ -68,7 +70,7 @@ public sealed class IsNewSiteCorrectionMigration(
         {
             // Each application is its own guarded write, so a failure part-way leaves a state
             // the next run re-plans from.
-            logger.LogError(ex, "epr-2uxy isNewSite correction failed");
+            logger.LogError(ex, "RA-794 isNewSite correction failed");
         }
     }
 
@@ -83,7 +85,7 @@ public sealed class IsNewSiteCorrectionMigration(
         var mode = gates.Apply ? "APPLY" : "DRY RUN (nothing will be written)";
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-                "epr-2uxy isNewSite correction starting. Mode={Mode}. Spot check confirmed by "
+                "RA-794 isNewSite correction starting. Mode={Mode}. Spot check confirmed by "
                     + "{ConfirmedBy}. Applications created before {DeployedAt:o}",
                 mode,
                 gates.ConfirmedBy,
@@ -114,7 +116,7 @@ public sealed class IsNewSiteCorrectionMigration(
         var verb = gates.Apply ? "corrected" : "that would be corrected";
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-                "epr-2uxy isNewSite correction complete. Mode={Mode}. Applications "
+                "RA-794 isNewSite correction complete. Mode={Mode}. Applications "
                     + "{ApplicationsVerb}: {ApplicationsChanged}. Sites {SitesVerb}: "
                     + "{SitesCorrected}. Sites refused as ambiguous (adjudicate by hand): "
                     + "{SitesRefused}",
@@ -141,7 +143,7 @@ public sealed class IsNewSiteCorrectionMigration(
         if (string.IsNullOrWhiteSpace(confirmedBy))
         {
             logger.LogError(
-                "epr-2uxy isNewSite correction is enabled but {SpotCheckKey} is not set, so it "
+                "RA-794 isNewSite correction is enabled but {SpotCheckKey} is not set, so it "
                     + "will not run. Set it to whoever spot-checked the audit output against the "
                     + "operator database",
                 IsNewSiteConfig.SpotCheckConfirmedByKey
@@ -165,7 +167,7 @@ public sealed class IsNewSiteCorrectionMigration(
             .ToList();
         foreach (var site in refused)
             logger.LogWarning(
-                "epr-2uxy REFUSED to correct application {ApplicationId} site {SiteId} "
+                "RA-794 REFUSED to correct application {ApplicationId} site {SiteId} "
                     + "'{SiteName}': no OrsId and no proof it came from ReEx, so it may be a "
                     + "genuinely new site. refusedBecause: {RefusedBecause}",
                 scan.Id,
@@ -192,7 +194,7 @@ public sealed class IsNewSiteCorrectionMigration(
         {
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation(
-                    "epr-2uxy DRY RUN would correct application {ApplicationId} "
+                    "RA-794 DRY RUN would correct application {ApplicationId} "
                         + "ref={ApplicationReference}: {Sites}",
                     scan.Id,
                     scan.ApplicationReference,
@@ -206,7 +208,7 @@ public sealed class IsNewSiteCorrectionMigration(
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-                "epr-2uxy APPLIED: application {ApplicationId} ref={ApplicationReference} "
+                "RA-794 APPLIED: application {ApplicationId} ref={ApplicationReference} "
                     + "isNewSite set to false on {Sites}. Spot check confirmed by {ConfirmedBy}",
                 scan.Id,
                 scan.ApplicationReference,
@@ -224,7 +226,7 @@ public sealed class IsNewSiteCorrectionMigration(
     )
     {
         var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
-        // Registered only with DomainModel:DualWrite (or DualWriteSeed) on.
+        // Registered only with DomainModel:DualWrite (or DualWriteSeed) on; checked below when needed.
         var stores = serviceProvider.GetService<ApplicationGroupStores>();
         var plannedIds = planned.Select(p => p.SiteId).ToHashSet();
 
@@ -262,9 +264,13 @@ public sealed class IsNewSiteCorrectionMigration(
                 if (written is null)
                     return Results.Conflict();
 
-                if (session is not null && stores is not null)
+                // A session means DomainModel:DualWrite is on, which is what registers the stores.
+                if (session is not null)
                     await CorrectOverseasSiteEntitiesAsync(
-                        stores,
+                        stores
+                            ?? throw new InvalidOperationException(
+                                "The dual-write unit of work ran without the domain model stores registered."
+                            ),
                         scan.Id,
                         sites.Where(s => plannedIds.Contains(s.SiteId)).ToList(),
                         session,
@@ -279,7 +285,7 @@ public sealed class IsNewSiteCorrectionMigration(
             return true;
 
         logger.LogError(
-            "epr-2uxy: application {ApplicationId} was not corrected: it changed after planning "
+            "RA-794: application {ApplicationId} was not corrected: it changed after planning "
                 + "or the write failed ({Result}). Nothing was written to it; re-run the dry run "
                 + "to see its current state",
             scan.Id,
@@ -312,23 +318,38 @@ public sealed class IsNewSiteCorrectionMigration(
             session,
             cancellationToken
         );
+        // The unit of work ensured the application is migrated before this ran, so a missing version or
+        // site entry means the model is out of line with legacy. Throwing rolls the legacy write back too,
+        // and the unit of work's 500 is logged at Error below as "was not corrected".
         if (current is null)
-            return;
+            throw new InvalidOperationException(
+                $"Application {applicationId} has no current version in the domain model, so its ORS "
+                    + "cannot be corrected with its legacy sites."
+            );
 
         var entries = current.AsAccreditation().ApplicationOverseasSites;
         foreach (var site in corrected)
         {
             if (entries.Find(e => e.SiteId == site.SiteId)?.OverseasSiteId is not { } orsEntityId)
-                continue;
+                throw new InvalidOperationException(
+                    $"Application {applicationId} site {site.SiteId} has no ORS in the domain model, so "
+                        + "it cannot be corrected with its legacy site."
+                );
             var ors = await stores.OverseasSites.Versions.FindCurrentAsync(
                 Builders<OverseasSiteEntity>.Filter.Eq(o => o.EntityId, orsEntityId),
                 session,
                 cancellationToken
             );
-            // Only this application's own OrsId-less proposal, which is what the wrong true made.
+            if (ors is null)
+                throw new InvalidOperationException(
+                    $"Application {applicationId} site {site.SiteId} points at ORS {orsEntityId}, which "
+                        + "has no current version in the domain model."
+                );
+            // Only this application's own OrsId-less proposal, which is what the wrong true made. Any
+            // other ORS (one with an OrsId, a ReEx one, another application's proposal) is not this
+            // defect's to change, so it is left as it is.
             if (
-                ors is null
-                || ors.OrsId is not null
+                ors.OrsId is not null
                 || ors.Origin != SiteOrigin.Operator
                 || ors.ProposedByApplicationId != applicationId
             )
@@ -345,7 +366,7 @@ public sealed class IsNewSiteCorrectionMigration(
                 {
                     Reason = ChangeReason.Migration,
                     ApplicationId = applicationId,
-                    ChangedBy = "epr-2uxy isNewSite correction",
+                    ChangedBy = "RA-794 isNewSite correction",
                 },
                 session,
                 cancellationToken

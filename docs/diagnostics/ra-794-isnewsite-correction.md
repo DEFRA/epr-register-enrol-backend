@@ -1,4 +1,4 @@
-# Runbook: correcting wrongly-defaulted `isNewSite` in this service (epr-2uxy)
+# Runbook: correcting wrongly-defaulted `isNewSite` in this service (RA-794)
 
 This service holds the operator's copy of each overseas reprocessing site (ORS). Some ReEx-sourced
 sites still hold `isNewSite: true` from a model default bug. This runbook covers the read-only audit
@@ -6,21 +6,56 @@ and the gated correction for **this service's database**. management-be has its 
 correction for the copy frozen on each work item: see its
 [`docs/diagnostics/ra292-isnewsite-audit.md`](https://github.com/DEFRA/epr-register-enrol-management-be/blob/main/docs/diagnostics/ra292-isnewsite-audit.md).
 
-## Run this service's correction first
+## Run this service's correction to completion first
 
-Run this correction **before** management-be's, or alongside it, never after it.
+Run this correction **to completion** before management-be's correction starts. Never run them at
+the same time, and never run this one after management-be's.
 
 When an operator resubmits a queried overseas-sites or broadly-equivalent-standards section,
 `HttpCaseWorkingApiAdapter.BuildOverseasSitesArray` sends this service's sites, `isNewSite`
 included, and management-be's `ReAccreditationResumeService` replaces `payload.overseasSites.sites[]`
 with them. So while this database still holds the wrong `true`, the next resubmit puts the "New"
-badge back on a work item that management-be has corrected. `OverseasSiteMerge` keeps the stored
-`isNewSite` on every PATCH, so nothing here fixes the value by itself.
+badge back on a work item that management-be has corrected. If that resubmit lands between the two
+runs, it undoes the management-be write. `OverseasSiteMerge` keeps the stored `isNewSite` on every
+PATCH, so nothing here fixes the value by itself.
 
-management-be's window only covers work items submitted before `Ra292DeployedAt`. A work item
-submitted after that date, from an application this service had not yet corrected, carries the wrong
-`true` too and is not covered by management-be's migration. Correcting here first, and then
-resubmitting or running management-be's audit again, is what reaches those.
+"To completion" means the final APPLY run (`Mode=APPLY` on its `RA-794 isNewSite correction
+complete` line) logged no `RA-794: application {ApplicationId} was not corrected` errors. Each of
+those applications changed between planning and writing, or its write failed, so it still holds the
+wrong `true`. Re-run the dry run and then the apply until none are logged. Only then start
+management-be's run.
+
+### What this does not reach
+
+management-be's audit and correction only read work items with `submittedAt < Ra292DeployedAt`. A
+work item submitted after that date, from an application this service had not yet corrected, carries
+the wrong `true` too. It falls outside management-be's window, so neither its diagnostic nor its
+migration sees it, and running them again does not change that. Correcting this service first stops
+the wrong `true` being sent again. A work item that already holds it is reached only when the operator
+resubmits its overseas-sites or broadly-equivalent-standards section after a query, which sends the
+corrected `false`. Any population left after that needs a human decision, recorded on RA-794.
+
+### Handing the refused sites to management-be
+
+management-be must not correct a site this service refused. That site may be genuinely new, and while
+this service still holds `true` for it, the next resubmit would undo the management-be write anyway.
+So the sites refused here are handed to management-be's run in its
+`Diagnostics:Ra292OperatorRefusedSites` setting (`Diagnostics__Ra292OperatorRefusedSites`).
+management-be refuses every site listed there.
+
+- Take them from this service's **final APPLY run**. There is one Warning line per refused site:
+  `RA-794 REFUSED to correct application {ApplicationId} site {SiteId} '{SiteName}': ... refusedBecause: ...`.
+- Write each one as `<ApplicationId>:<SiteId>`, comma-separated. For example:
+  `65f0c0ffee0000000000abcd:3,65f0c0ffee0000000000abcd:7`. `ApplicationId` is the 24-hex application
+  id, which is the work item's `payload.operatorApplicationId`. `SiteId` is the integer site id, which
+  is the work item's `payload.overseasSites.sites[].siteId`.
+- The number of pairs must equal `Sites refused as ambiguous (adjudicate by hand): {SitesRefused}` on
+  that run's `RA-794 isNewSite correction complete` line. If that number is 0, set the value to `none`.
+  management-be refuses to run when the value is empty or absent, or when any entry is malformed.
+- The audit's `RA-794 AMBIGUOUS-REFUSED application {ApplicationId} ...` lines name the same sites. Use
+  them to cross-check the list, not as its source.
+- Whoever confirms management-be's spot check (its `Diagnostics:Ra292SpotCheckConfirmedBy`) confirms
+  that the list is complete.
 
 ## What went wrong
 
@@ -86,7 +121,7 @@ Check the classifier before deciding the data cannot be corrected. If the same r
 many sites, the check is probably wrong rather than the data.
 
 To adjudicate a refused site, check it by hand against ReEx and the operator's journey. Correct only
-what is proven, and record the rest on `epr-2uxy`.
+what is proven, and record the rest on `RA-794`.
 
 ## Configuration
 
@@ -129,7 +164,9 @@ Diagnostics__Ra292DeployedAt=2026-08-11T09:00:00Z
 # 4. When the dry run shows what you expect:
 Diagnostics__Ra292CorrectIsNewSiteApply=true
 
-# 5. Turn all of it off. Then run management-be's audit and correction.
+# 5. Check the APPLY run logged no "was not corrected" errors (otherwise repeat 3 and 4).
+#    Collect its REFUSED lines for management-be's Diagnostics__Ra292OperatorRefusedSites.
+# 6. Turn all of it off. Then run management-be's audit and correction.
 ```
 
 The correction is idempotent: a corrected site reads `false` and is not flagged new on the next run.
@@ -157,13 +194,23 @@ Each correction runs through `IDualWriteUnitOfWork`, as every operator write doe
   way, because `Origin`, `Status` and `ProposedByApplicationId` are set from `isNewSite` when the ORS
   is created and are only carried over after that. A site with no `orsId` has an ORS of its own, and
   the wrong `true` made it an operator proposal of this application. The correction sets it, in the
-  same transaction, to what the migrator makes of a ReEx site: `ReEx`, `Active`, no proposer.
+  same transaction, to what the migrator makes of a ReEx site: `ReEx`, `Active`, no proposer (design
+  doc §3.4 and §6.2). If the model is missing the application's version, the site's entry or its ORS,
+  the write throws, so the whole transaction rolls back, legacy included. The run then logs `was not
+  corrected` at Error.
   `IsNewSiteCorrectionTests.Correction_WithDualWrite_CorrectsTheApplicationVersionAndTheOwnOrs`
   covers this.
 - **`DomainModel:DualWrite` off:** only the legacy document is written. The migration needs dual-write
   to be on, so it has not run, and when it does it reads the corrected document.
-- **After the cut (`LegacyWrites` off):** refuses to run. The domain model does not store
-  `createdAt` yet, so the window cannot be applied. Run this before the cut.
+- **After the cut (`LegacyWrites` off):** it runs the same way against the model. The
+  model-backed persistence applies the window to the Application's own `createdAt`. That field is new
+  in design doc v6.14, and the backfill copies legacy's value into it. The projection also carries
+  `isNewSite`, `orsId` and `previousSites`, so the classifier sees what it sees before the cut. The
+  write goes through the cut's unit of work, and its flush syncs the model. If any current Application
+  version has no `createdAt` (missed by the backfill), the scan refuses and logs at Error instead of
+  leaving that application out unseen. Cut-readiness check A lists those versions.
+  `ModelBackedApplicationPersistenceTests.IsNewSiteCorrection_AfterTheCut_CorrectsTheModelAndLeavesLegacyAlone`
+  covers this.
 
 ## Accepted residual
 

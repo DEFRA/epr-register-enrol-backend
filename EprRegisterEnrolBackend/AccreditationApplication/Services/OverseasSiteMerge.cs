@@ -16,7 +16,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 public static class OverseasSiteMerge
 {
     /// <summary>
-    /// epr-2uxy: the incoming ORS site ids that <paramref name="persisted"/> does not hold. The
+    /// RA-794: the incoming ORS site ids that <paramref name="persisted"/> does not hold. The
     /// PATCH only ever edits sites the application already has; a non-empty result is rejected
     /// there with a 400, because a site created this way would skip the add-site rules and could
     /// carry <c>isNewSite: true</c> with no <c>OrsId</c>.
@@ -74,7 +74,7 @@ public static class OverseasSiteMerge
         {
             if (!persistedSites.TryGetValue(site.SiteId, out var knownSite))
             {
-                // epr-2uxy: the caller rejects unknown ids first, so reaching here is a bug. It
+                // RA-794: the caller rejects unknown ids first, so reaching here is a bug. It
                 // used to store the site as new with whatever OrsId the client sent.
                 throw new InvalidOperationException(
                     $"Overseas site {site.SiteId} is not held by the application; new sites are "

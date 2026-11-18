@@ -225,8 +225,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<ChargeCorrectionMigration>();
 
-    // epr-2uxy: read-only audit and gated correction of wrongly-defaulted overseas-site isNewSite.
-    // Both off by default (Diagnostics:Ra292*) - see docs/diagnostics/epr-2uxy-isnewsite-correction.md.
+    // RA-794: read-only audit and gated correction of wrongly-defaulted overseas-site isNewSite.
+    // Both off by default (Diagnostics:Ra292*) - see docs/diagnostics/ra-794-isnewsite-correction.md.
     builder.Services.AddHostedService<IsNewSiteAudit>();
     builder.Services.AddHostedService<IsNewSiteCorrectionMigration>();
 

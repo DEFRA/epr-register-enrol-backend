@@ -11,8 +11,8 @@ using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
 
-// epr-2uxy: PATCH .../overseas-sites used to store a site it had never seen as new, with whatever
-// OrsId the client sent - possibly none. That is the shape the epr-2uxy correction reads as a
+// RA-794: PATCH .../overseas-sites used to store a site it had never seen as new, with whatever
+// OrsId the client sent - possibly none. That is the shape the RA-794 correction reads as a
 // wrongly-defaulted ReEx site, so a direct API call could have created a genuinely new site the
 // correction would then stamp false. The PATCH now only edits sites the application already holds.
 public class AccreditationApplicationEndpointsPatchOverseasSitesUnknownSiteTests

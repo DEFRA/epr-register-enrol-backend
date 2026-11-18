@@ -1766,12 +1766,12 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(reason);
         }
 
-        // epr-2uxy: this PATCH edits, selects and drops the sites the application already holds; it
+        // RA-794: this PATCH edits, selects and drops the sites the application already holds; it
         // never creates one (the Registration & Accreditation frontend only ever sends back a filtered or mapped copy of the
         // application's own list). A new site goes through POST .../overseas-sites, which validates
         // it and allocates its OrsId. Accepting an unknown SiteId here used to store a site with
         // isNewSite: true and whatever OrsId the client sent - possibly none - which is the shape
-        // the epr-2uxy correction must be able to read as a wrongly-defaulted ReEx site.
+        // the RA-794 correction must be able to read as a wrongly-defaulted ReEx site.
         if (
             request.Sites != null
             && OverseasSiteMerge.UnknownSiteIds(application.OverseasSites.Sites, request.Sites)

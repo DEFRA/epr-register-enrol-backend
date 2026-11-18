@@ -2,7 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
-// epr-2uxy: the per-site verdict. The bucket names are the ones management-be's
+// RA-794: the per-site verdict. The bucket names are the ones management-be's
 // ReAccreditationIsNewSiteAudit and docs/diagnostics/ra292-isnewsite-audit.md use, so a figure
 // from either service means the same thing.
 public enum IsNewSiteVerdict
@@ -41,7 +41,7 @@ public sealed record ReExSiteLookup(IReadOnlyList<OverseasSiteModel>? Sites, str
     public static ReExSiteLookup Failed(string failure) => new(null, failure);
 }
 
-// epr-2uxy: decides whether an overseas site's isNewSite: true is the wrongly-defaulted value.
+// RA-794: decides whether an overseas site's isNewSite: true is the wrongly-defaulted value.
 //
 // The defect: OverseasSiteModel.IsNewSite carried a `= true` initializer from 423d27d (2026-07-26)
 // until RA-292 (26218ca, 2026-08-10). A missing BSON element keeps the initializer, so every site

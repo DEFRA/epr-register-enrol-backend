@@ -24,7 +24,7 @@ using RunResult = EprRegisterEnrolBackend.AccreditationApplication.Startup.IsNew
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
-// epr-2uxy: the classifier on its own.
+// RA-794: the classifier on its own.
 public class IsNewSiteClassifierTests
 {
     internal static OverseasSiteModel Site(
@@ -158,7 +158,7 @@ public class IsNewSiteClassifierTests
         IsNewSiteClassifier.BucketName(verdict).Should().Be(name);
 }
 
-// epr-2uxy: the audit and the correction against the real ephemeral replica set.
+// RA-794: the audit and the correction against the real ephemeral replica set.
 public sealed class IsNewSiteCorrectionTests : IDisposable
 {
     private const string ReExOrganisationId = "6512a0f0c0ffee0000000001";
@@ -182,7 +182,7 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
 
     public IsNewSiteCorrectionTests(MongoIntegrationFixture fixture)
     {
-        _databaseName = MongoIntegrationFixture.NewDatabaseName("epr2uxy");
+        _databaseName = MongoIntegrationFixture.NewDatabaseName("ra794");
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _applications = new AccreditationApplicationPersistence(
             _factory,
@@ -232,11 +232,11 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
     private async Task<AccreditationApplicationModel> SeedAsync(
         DateTime createdAt,
         List<OverseasSiteModel>? sites = null,
-        ApplicationStatus status = ApplicationStatus.Queried
-    ) =>
-        (
-            await _applications.CreateAsync(
-                new AccreditationApplicationModel
+        ApplicationStatus status = ApplicationStatus.Queried,
+        Action<AccreditationApplicationModel>? configure = null
+    )
+    {
+        var application = new AccreditationApplicationModel
                 {
                     Id = ObjectId.GenerateNewId(),
                     OrganisationId = ReExOrganisationId,
@@ -256,9 +256,10 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
                     {
                         Sites = sites ?? MixedSites(),
                     },
-                }
-            )
-        )!;
+                };
+        configure?.Invoke(application);
+        return (await _applications.CreateAsync(application))!;
+    }
 
     private async Task<AccreditationApplicationModel> StoredAsync(
         AccreditationApplicationModel application
@@ -280,10 +281,14 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
             (IsNewSiteConfig.DeployedAtKey, DeployedAt)
         );
 
-    private ServiceProvider Services(IDualWriteUnitOfWork? unitOfWork = null, ApplicationGroupStores? stores = null)
+    private ServiceProvider Services(
+        IDualWriteUnitOfWork? unitOfWork = null,
+        ApplicationGroupStores? stores = null,
+        IAccreditationApplicationPersistence? persistence = null
+    )
     {
         var services = new ServiceCollection()
-            .AddSingleton<IAccreditationApplicationPersistence>(_applications)
+            .AddSingleton(persistence ?? _applications)
             .AddSingleton(_reEx)
             .AddSingleton(unitOfWork ?? new LegacyOnlyUnitOfWork());
         if (stores is not null)
@@ -499,6 +504,170 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
             .Contain(e => e.LogLevel == LogLevel.Error && e.Message.Contains("503"));
     }
 
+    // --- a missing ReEx id ---------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(ReExOrganisationId, null, "registrationId")]
+    [InlineData(ReExOrganisationId, "", "registrationId")]
+    [InlineData("", ReExRegistrationId, "organisationId")]
+    [InlineData(" ", ReExRegistrationId, "organisationId")]
+    public async Task Correction_ApplicationWithoutAReExId_RefusesItsUnprovenSitesAndLogsAnError(
+        string organisationId,
+        string? registrationId,
+        string missing
+    )
+    {
+        var application = await SeedAsync(
+            BeforeDeploy,
+            [IsNewSiteClassifierTests.Site(1, "Carried Over Ltd")],
+            configure: a =>
+            {
+                a.OrganisationId = organisationId;
+                a.RegistrationId = registrationId;
+            }
+        );
+        var id = application.Id!.Value.ToString();
+
+        (await Correction(Apply()).RunAsync(Ct)).Should().Be(RunResult.Applied);
+
+        var stored = (await _applications.GetByIdAsync(organisationId, id))!;
+        stored.Version.Should().Be(application.Version);
+        Flags(stored)[1].Should().BeTrue();
+        _correctionLog
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Warning
+                && e.Message.Contains($"REFUSED to correct application {id} site 1")
+                && e.Message.Contains($"reExUnavailable (no {missing} on the application)")
+            );
+        _correctionLog
+            .Entries.Where(e => e.LogLevel == LogLevel.Error)
+            .Should()
+            .ContainSingle()
+            .Which.Message.Should()
+            .Contain(id)
+            .And.Contain(missing);
+        await _reEx.DidNotReceiveWithAnyArgs().GetAccreditationAsync(default!, default!, default, default);
+    }
+
+    // --- the application changes between the scan and the write ----------------------------------
+
+    // The real persistence, with an operator save slipped in just before the correction re-reads the
+    // application (inside its unit of work) or just before its guarded write.
+    private IAccreditationApplicationPersistence SavedConcurrently(
+        AccreditationApplicationModel application,
+        Action<AccreditationApplicationModel> change,
+        bool beforeTheWrite = false
+    )
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        persistence
+            .GetCreatedBeforeWithOverseasSitesAsync(default, default)
+            .ReturnsForAnyArgs(ci =>
+                _applications.GetCreatedBeforeWithOverseasSitesAsync(ci.ArgAt<DateTime>(0), ci.ArgAt<CancellationToken>(1))
+            );
+        persistence
+            .GetByIdAsync(default!, default!, default)
+            .ReturnsForAnyArgs(async ci =>
+            {
+                if (!beforeTheWrite)
+                    await OperatorSavesAsync(application, change);
+                return await _applications.GetByIdAsync(
+                    ci.ArgAt<string>(0),
+                    ci.ArgAt<string>(1),
+                    ci.ArgAt<IClientSessionHandle?>(2)
+                );
+            });
+        persistence
+            .UpdateFieldsAsync(default, default, default!, default, default)
+            .ReturnsForAnyArgs(async ci =>
+            {
+                if (beforeTheWrite)
+                    await OperatorSavesAsync(application, change);
+                return await _applications.UpdateFieldsAsync(
+                    ci.ArgAt<ObjectId>(0),
+                    ci.ArgAt<FilterDefinition<AccreditationApplicationModel>?>(1),
+                    ci.ArgAt<UpdateDefinition<AccreditationApplicationModel>>(2),
+                    ci.ArgAt<IClientSessionHandle?>(3),
+                    ci.ArgAt<CancellationToken>(4)
+                );
+            });
+        return persistence;
+    }
+
+    private async Task OperatorSavesAsync(
+        AccreditationApplicationModel application,
+        Action<AccreditationApplicationModel> change
+    )
+    {
+        var stored = await StoredAsync(application);
+        change(stored);
+        (await _applications.UpdateAsync(stored)).Should().NotBeNull("precondition: the operator's save lands");
+    }
+
+    private void ShouldLogOneConflictError(AccreditationApplicationModel application) =>
+        _correctionLog
+            .Entries.Where(e => e.LogLevel == LogLevel.Error)
+            .Should()
+            .ContainSingle()
+            .Which.Message.Should()
+            .Contain($"application {application.Id} was not corrected");
+
+    [Fact]
+    public async Task Correction_VersionMovedBeforeTheWrite_WritesNothingAndLogsAnError()
+    {
+        var application = await SeedAsync(BeforeDeploy);
+        var persistence = SavedConcurrently(
+            application,
+            a => a.PaymentReference = "PAY-CONCURRENT",
+            beforeTheWrite: true
+        );
+
+        (await Correction(Apply(), Services(persistence: persistence)).RunAsync(Ct))
+            .Should()
+            .Be(RunResult.Applied);
+
+        var stored = await StoredAsync(application);
+        stored.Version.Should().Be(application.Version + 1, "only the operator's save was written");
+        stored.PaymentReference.Should().Be("PAY-CONCURRENT");
+        Flags(stored).Should().BeEquivalentTo(Flags(application));
+        ShouldLogOneConflictError(application);
+        _correctionLog.Entries.Should().NotContain(e => e.Message.Contains("APPLIED"));
+    }
+
+    public static TheoryData<string> SiteChanges => ["orsId", "siteName", "isNewSite", "removed"];
+
+    [Theory]
+    [MemberData(nameof(SiteChanges))]
+    public async Task Correction_PlannedSiteChangedBeforeTheReRead_WritesNothingAndLogsAnError(string changed)
+    {
+        var application = await SeedAsync(BeforeDeploy);
+        Action<AccreditationApplicationModel> change = changed switch
+        {
+            "orsId" => a => a.OverseasSites!.Sites.Single(s => s.SiteId == 1).OrsId = "001",
+            "siteName" => a => a.OverseasSites!.Sites.Single(s => s.SiteId == 1).SiteName = "Renamed Ltd",
+            "isNewSite" => a => a.OverseasSites!.Sites.Single(s => s.SiteId == 1).IsNewSite = false,
+            "removed" => a => a.OverseasSites!.Sites.RemoveAll(s => s.SiteId == 1),
+            _ => throw new ArgumentOutOfRangeException(nameof(changed), changed, null),
+        };
+        var persistence = SavedConcurrently(application, change);
+
+        (await Correction(Apply(), Services(persistence: persistence)).RunAsync(Ct))
+            .Should()
+            .Be(RunResult.Applied);
+
+        var stored = await StoredAsync(application);
+        stored.Version.Should().Be(application.Version + 1, "only the operator's save was written");
+        var expected = Flags(application);
+        if (changed == "isNewSite")
+            expected[1] = false;
+        if (changed == "removed")
+            expected.Remove(1);
+        Flags(stored).Should().BeEquivalentTo(expected, "the other planned site (2) is left true too");
+        ShouldLogOneConflictError(application);
+        _correctionLog.Entries.Should().NotContain(e => e.Message.Contains("APPLIED"));
+    }
+
     // --- AC04: a query-resubmit after the correction ---------------------------------------------
 
     [Theory]
@@ -537,8 +706,16 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
 
     // --- AC03: the dual-write domain model ---------------------------------------------------
 
-    [Fact]
-    public async Task Correction_WithDualWrite_CorrectsTheApplicationVersionAndTheOwnOrs()
+    // The wrong true made the site an operator proposal: Proposed while the application is in flight,
+    // Discarded once it is closed (ApplicationGroupMigrator.StatusFor). Either way the correction gives it
+    // what the migrator gives a ReEx site: ReEx, Active, no proposer (design doc §3.4).
+    [Theory]
+    [InlineData(ApplicationStatus.Queried, OverseasSiteStatus.Proposed)]
+    [InlineData(ApplicationStatus.Withdrawn, OverseasSiteStatus.Discarded)]
+    public async Task Correction_WithDualWrite_CorrectsTheApplicationVersionAndTheOwnOrs(
+        ApplicationStatus applicationStatus,
+        OverseasSiteStatus proposalStatus
+    )
     {
         var clock = new TestClock(new DateTime(2026, 11, 18, 9, 0, 0, DateTimeKind.Utc));
         var logs = NullLoggerFactory.Instance;
@@ -560,7 +737,8 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
         );
         var application = await SeedAsync(
             BeforeDeploy,
-            [IsNewSiteClassifierTests.Site(1, "Carried Over Ltd")]
+            [IsNewSiteClassifierTests.Site(1, "Carried Over Ltd")],
+            applicationStatus
         );
         await InsertRaceRetry.RunInTransactionAsync(
             _factory,
@@ -568,7 +746,9 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
             _ => { },
             Ct
         );
-        (await OrsForSiteAsync(stores, application, 1)).Origin.Should().Be(SiteOrigin.Operator, "precondition: the wrong true made it a proposal");
+        var proposal = await OrsForSiteAsync(stores, application, 1);
+        proposal.Origin.Should().Be(SiteOrigin.Operator, "precondition: the wrong true made it a proposal");
+        proposal.Status.Should().Be(proposalStatus, "precondition");
 
         (await Correction(Apply(), Services(unitOfWork, stores)).RunAsync(Ct))
             .Should()

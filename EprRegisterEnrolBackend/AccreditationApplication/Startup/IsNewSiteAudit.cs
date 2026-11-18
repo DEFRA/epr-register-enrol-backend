@@ -3,12 +3,12 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
-// epr-2uxy AC01: READ-ONLY diagnostic. Classifies every overseas site on the applications created
+// RA-794 AC01: READ-ONLY diagnostic. Classifies every overseas site on the applications created
 // before the RA-292 deploy (see IsNewSiteClassifier) and logs, per bucket, the count and the
 // application ids. Writes nothing.
 //
 // Off unless Diagnostics:Ra292IsNewSiteAudit is true; then Diagnostics:Ra292DeployedAt is required.
-// Enable, boot, read the log, turn it off: docs/diagnostics/epr-2uxy-isnewsite-correction.md.
+// Enable, boot, read the log, turn it off: docs/diagnostics/ra-794-isnewsite-correction.md.
 //
 // A BackgroundService like ChargeCorrectionMigration, so a Mongo or ReEx failure logs rather than
 // crash-looping the host. Nothing is resolved until it is enabled.
@@ -33,7 +33,7 @@ public sealed class IsNewSiteAudit(
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
-            logger.LogError(ex, "epr-2uxy isNewSite audit failed; nothing was written");
+            logger.LogError(ex, "RA-794 isNewSite audit failed; nothing was written");
         }
     }
 
@@ -75,7 +75,7 @@ public sealed class IsNewSiteAudit(
         // the structured-logging formatter.
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-                "epr-2uxy isNewSite audit (READ-ONLY, nothing written). Applications created before "
+                "RA-794 isNewSite audit (READ-ONLY, nothing written). Applications created before "
                 + "{DeployedAt:o} with overseas sites: {ApplicationsScanned}. Sites per bucket - "
                 + "PROVABLY-CORRUPT: {SitesProvablyCorrupt}; PROMOTED-CORRECTABLE: "
                 + "{SitesPromotedCorrectable}; AMBIGUOUS-REFUSED: {SitesAmbiguousRefused}; "
@@ -103,7 +103,7 @@ public sealed class IsNewSiteAudit(
         {
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation(
-                    "epr-2uxy isNewSite audit {Bucket}: {SiteCount} sites on {ApplicationCount} "
+                    "RA-794 isNewSite audit {Bucket}: {SiteCount} sites on {ApplicationCount} "
                     + "applications: {ApplicationIds}",
                     IsNewSiteClassifier.BucketName(verdict),
                     siteCounts[verdict],
@@ -114,7 +114,7 @@ public sealed class IsNewSiteAudit(
 
         if (siteCounts[IsNewSiteVerdict.AmbiguousRefused] > correctable)
             logger.LogWarning(
-                "epr-2uxy isNewSite audit: more sites were refused ({SitesAmbiguousRefused}) than "
+                "RA-794 isNewSite audit: more sites were refused ({SitesAmbiguousRefused}) than "
                     + "found correctable ({SitesCorrectable}). Question the classifier before "
                     + "concluding the data cannot be corrected: if the same refusedBecause reason "
                     + "recurs across many sites, the check is miscalibrated rather than the data "
@@ -128,7 +128,7 @@ public sealed class IsNewSiteAudit(
             foreach (var site in scan.Sites.Where(s => s.Classification.IsCorrectable))
                 if (logger.IsEnabled(LogLevel.Information))
                     logger.LogInformation(
-                        "epr-2uxy {Bucket} application {ApplicationId} ref={ApplicationReference} "
+                        "RA-794 {Bucket} application {ApplicationId} ref={ApplicationReference} "
                         + "site {SiteId} '{SiteName}'",
                         IsNewSiteClassifier.BucketName(site.Classification.Verdict),
                         scan.Id,
@@ -142,7 +142,7 @@ public sealed class IsNewSiteAudit(
                 )
             )
                 logger.LogWarning(
-                    "epr-2uxy AMBIGUOUS-REFUSED application {ApplicationId} "
+                    "RA-794 AMBIGUOUS-REFUSED application {ApplicationId} "
                         + "ref={ApplicationReference} site {SiteId} '{SiteName}': no OrsId and no "
                         + "proof it came from ReEx. Adjudicate by hand; never auto-corrected. "
                         + "refusedBecause: {RefusedBecause}",

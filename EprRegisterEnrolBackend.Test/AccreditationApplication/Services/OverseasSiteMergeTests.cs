@@ -86,13 +86,13 @@ public class OverseasSiteMergeTests
         result.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
     }
 
-    // --- epr-2uxy: the PATCH never creates an ORS site ---
+    // --- RA-794: the PATCH never creates an ORS site ---
 
     [Fact]
     public void Merge_UnknownSiteId_Throws()
     {
         // It used to be stored as a new site with whatever OrsId the client sent - possibly none,
-        // which is the shape the epr-2uxy correction reads as a wrongly-defaulted ReEx site.
+        // which is the shape the RA-794 correction reads as a wrongly-defaulted ReEx site.
         var incoming = Site(99, isNewSite: true);
 
         var act = () => OverseasSiteMerge.Merge([Site(1)], [incoming]);
