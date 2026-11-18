@@ -295,6 +295,91 @@ public class AccreditationNumberEndpointTests : IClassFixture<AccreditationAppli
         (await StoredApplication(app)).AccreditationReference.Should().BeNull();
     }
 
+    // RA-783 AC04: another approval at the same moment passed the same holder check and saved the
+    // same number. Once this save commits, the check finds it, and the number is drawn again.
+    [Fact]
+    public async Task A_number_another_approval_saved_at_the_same_moment_is_drawn_again()
+    {
+        Reset();
+        var app = SeedApplication();
+        SaveTheSameNumberElsewhere(_factory.FakePersistence, times: 1);
+        _factory.FakeSequenceRandom.Enqueue(583, 584);
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ReadApplication(response)).AccreditationReference.Should().Be("A26ER0001230584PL");
+        (await StoredApplication(app)).AccreditationReference.Should().Be("A26ER0001230584PL");
+    }
+
+    // A continuous renewal's number is fixed, so it is never drawn again; a clash is left to the
+    // domain model's unique accreditation number, which refuses the second approval.
+    [Fact]
+    public async Task A_renewal_number_another_approval_saved_at_the_same_moment_is_kept()
+    {
+        Reset();
+        var app = SeedApplication(configure: a =>
+        {
+            a.Year = 2027;
+            a.LastYearsAccreditationNumber = new AccreditationNumberForYearModel
+            {
+                Year = 2026,
+                AccreditationNumber = "A26ER0001230164PL",
+            };
+        });
+        SaveTheSameNumberElsewhere(_factory.FakePersistence, times: 1);
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await StoredApplication(app)).AccreditationReference.Should().Be("A27ER0001230164PL");
+    }
+
+    [Fact]
+    public async Task Gives_up_with_409_and_clears_the_number_when_every_number_saved_clashes()
+    {
+        Reset();
+        var app = SeedApplication();
+        SaveTheSameNumberElsewhere(_factory.FakePersistence, times: int.MaxValue);
+        _factory.FakeSequenceRandom.Enqueue(Enumerable.Range(100, 50).ToArray());
+
+        var response = await PostWithoutBody(app);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var message = await response.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken
+        );
+        message.Should().Contain("Try again");
+        (await StoredApplication(app)).AccreditationReference.Should().BeNull();
+    }
+
+    // Plays another approval saving the same accreditation number just after each of this
+    // application's saves, up to the given number of times.
+    internal static void SaveTheSameNumberElsewhere(
+        FakeAccreditationApplicationPersistence persistence,
+        int times
+    )
+    {
+        var left = times;
+        persistence.AfterUpdate = saved =>
+        {
+            if (saved.AccreditationReference is not { } number || left <= 0)
+                return;
+            left--;
+            persistence.Seed(
+                new AccreditationApplicationModel
+                {
+                    Id = ObjectId.GenerateNewId(),
+                    OrganisationId = "org-other",
+                    Year = saved.Year,
+                    MaterialType = saved.MaterialType,
+                    ApplicationStatus = ApplicationStatus.Submitted,
+                    AccreditationReference = number,
+                }
+            );
+        };
+    }
+
     // RA-783 AC04: another site of the same organisation holds last year's number 0164 for its
     // renewal, not yet issued. A first-time number here must not take 0164, or that renewal could
     // never be issued.
@@ -545,6 +630,78 @@ public class AccreditationNumberEndpointLoggingTests
     {
         _factory = factory;
         _client = factory.CreateClient();
+    }
+
+    // RA-783 AC04: each new number is logged once saved, and a clash with another approval's
+    // save is logged before it is drawn again.
+    [Fact]
+    public async Task Logs_each_saved_number_and_a_clash_found_when_checked_again()
+    {
+        _factory.FakePersistence.Clear();
+        _factory.FakeSequenceRandom.Clear();
+        _factory.LogCapture.Clear();
+        var app = BuildApplication(ApplicationStatus.Submitted);
+        _factory.FakePersistence.Seed(app);
+        AccreditationNumberEndpointTests.SaveTheSameNumberElsewhere(
+            _factory.FakePersistence,
+            times: 1
+        );
+        _factory.FakeSequenceRandom.Enqueue(583, 584);
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var messages = _factory.LogCapture.Entries.Select(e => e.Message).ToList();
+        messages
+            .Should()
+            .Contain(m =>
+                m.Contains("generated and saved accreditation number A26ER0001230583PL")
+                && m.Contains("round=1")
+            );
+        messages
+            .Should()
+            .Contain(m =>
+                m.Contains("A26ER0001230583PL was written")
+                && m.Contains("found it also held by")
+            );
+        messages
+            .Should()
+            .Contain(m =>
+                m.Contains("generated and saved accreditation number A26ER0001230584PL")
+                && m.Contains("round=2")
+            );
+    }
+
+    [Fact]
+    public async Task Logs_an_error_when_every_number_saved_clashes()
+    {
+        _factory.FakePersistence.Clear();
+        _factory.FakeSequenceRandom.Clear();
+        _factory.LogCapture.Clear();
+        var app = BuildApplication(ApplicationStatus.Submitted);
+        _factory.FakePersistence.Seed(app);
+        AccreditationNumberEndpointTests.SaveTheSameNumberElsewhere(
+            _factory.FakePersistence,
+            times: int.MaxValue
+        );
+        _factory.FakeSequenceRandom.Enqueue(Enumerable.Range(100, 50).ToArray());
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/{app.OrganisationId}/{app.ApplicationId}/accreditation-number",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        _factory
+            .LogCapture.Entries.Should()
+            .Contain(e =>
+                e.LogLevel == LogLevel.Error && e.Message.Contains("every accreditation number")
+            );
     }
 
     [Fact]

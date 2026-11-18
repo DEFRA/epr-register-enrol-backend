@@ -46,7 +46,14 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         FailNextOrsIdWrites = 0;
         FailNextInterimSiteNumberWrites = 0;
         OnLostRace = null;
+        AfterUpdate = null;
     }
+
+    /// <summary>
+    /// RA-783: runs after each successful <see cref="UpdateAsync"/> with the saved application, so
+    /// a test can play another approval committing the same accreditation number at that moment.
+    /// </summary>
+    public Action<AccreditationApplicationModel>? AfterUpdate { get; set; }
 
     /// <summary>
     /// When set, the next call to <see cref="UpdateAsync"/> returns null (as if the persisted
@@ -405,6 +412,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             return Task.FromResult<AccreditationApplicationModel?>(null);
         application.Version++;
         _store[idx] = application;
+        AfterUpdate?.Invoke(application);
         return Task.FromResult<AccreditationApplicationModel?>(application);
     }
 
