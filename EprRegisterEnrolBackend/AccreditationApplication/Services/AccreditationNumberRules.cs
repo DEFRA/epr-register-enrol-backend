@@ -88,19 +88,8 @@ public static partial class AccreditationNumberRules
 
         // A malformed earlier number fails visibly in every case, rather than being renewed or
         // silently left out of the sequences a new number must avoid.
-        if (latestAccreditation is { } prior)
-        {
-            if (prior.Year >= yearAppliedFor)
-                return AccreditationNumberResult.Invalid(
-                    $"{prior.Description} '{prior.AccreditationNumber}' is for {prior.Year}, "
-                        + $"which isn't before {yearAppliedFor}."
-                );
-            if (!IsReference(prior.AccreditationNumber, 'A'))
-                return AccreditationNumberResult.Invalid(
-                    $"{prior.Description} '{prior.AccreditationNumber}' is not a valid "
-                        + "A-prefixed 17-character reference."
-                );
-        }
+        if (latestAccreditation is { } prior && InvalidPrior(prior, yearAppliedFor) is { } error)
+            return AccreditationNumberResult.Invalid(error);
 
         var numberCase = CaseFor(yearAppliedFor, latestAccreditation?.Year);
         var year = $"{yearAppliedFor % 100:D2}";
@@ -121,14 +110,54 @@ public static partial class AccreditationNumberRules
                     + "R-prefixed 17-character reference."
             );
 
-        var excluded = new HashSet<string> { registrationNumber![Sequence] };
+        var excluded = ExcludedSequences(
+            registrationNumber!,
+            latestAccreditation,
+            organisationAccreditationNumbers
+        );
+        var sequence = DrawSequence(randomBelow1000, excluded);
+        return AccreditationNumberResult.Valid(
+            numberCase,
+            $"A{year}{registrationNumber![AgencyToOrg]}{sequence}{materialCode}"
+        );
+    }
+
+    // Why an earlier accreditation can't be used, or null when it can.
+    private static string? InvalidPrior(PriorAccreditation prior, int yearAppliedFor)
+    {
+        if (prior.Year >= yearAppliedFor)
+            return $"{prior.Description} '{prior.AccreditationNumber}' is for {prior.Year}, "
+                + $"which isn't before {yearAppliedFor}.";
+        if (!IsReference(prior.AccreditationNumber, 'A'))
+            return $"{prior.Description} '{prior.AccreditationNumber}' is not a valid "
+                + "A-prefixed 17-character reference.";
+        return null;
+    }
+
+    // The sequences a new number must avoid: the registration's, the earlier accreditation's, and
+    // every one the organisation's numbers use under the registration's agency, process type and
+    // OrgId.
+    private static HashSet<string> ExcludedSequences(
+        string registrationNumber,
+        PriorAccreditation? latestAccreditation,
+        IEnumerable<string>? organisationAccreditationNumbers
+    )
+    {
+        var excluded = new HashSet<string> { registrationNumber[Sequence] };
         if (latestAccreditation is { } earlier)
             excluded.Add(earlier.AccreditationNumber[Sequence]);
         var agencyToOrg = registrationNumber[AgencyToOrg];
-        foreach (var held in organisationAccreditationNumbers ?? [])
-            if (IsReference(held, 'A') && held[AgencyToOrg] == agencyToOrg)
-                excluded.Add(held[Sequence]);
+        excluded.UnionWith(
+            (organisationAccreditationNumbers ?? [])
+                .Where(held => IsReference(held, 'A') && held[AgencyToOrg] == agencyToOrg)
+                .Select(held => held[Sequence])
+        );
+        return excluded;
+    }
 
+    // 0 + 3 random digits, not one of the excluded sequences.
+    private static string DrawSequence(Func<int> randomBelow1000, HashSet<string> excluded)
+    {
         for (var attempt = 0; attempt < MaxSequenceAttempts; attempt++)
         {
             var draw = randomBelow1000();
@@ -138,13 +167,8 @@ public static partial class AccreditationNumberRules
                 );
 
             var sequence = $"0{draw:D3}";
-            if (excluded.Contains(sequence))
-                continue;
-
-            return AccreditationNumberResult.Valid(
-                numberCase,
-                $"A{year}{registrationNumber[AgencyToOrg]}{sequence}{materialCode}"
-            );
+            if (!excluded.Contains(sequence))
+                return sequence;
         }
 
         throw new InvalidOperationException(

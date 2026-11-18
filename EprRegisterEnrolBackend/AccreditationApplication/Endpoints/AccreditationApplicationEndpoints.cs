@@ -591,29 +591,17 @@ public static class AccreditationApplicationEndpoints
         // RA-783: ReEx should always say whether a glass registration is remelt or other. When it
         // didn't, the number is issued as other (GO), the only glass codes case management accepts
         // being GR and GO, and an error is logged so someone can confirm the process.
-        var glassProcessMissing =
-            application.MaterialType == MaterialType.Glass
-            && application.GlassRecyclingProcess is null;
+        var glassProcessMissing = IsGlassWithNoProcess(application);
         var materialCode = RegulatoryReferenceCodes.MaterialCodeFor(
             application.MaterialType,
             glassProcessMissing ? GlassRecyclingProcess.Other : application.GlassRecyclingProcess
         );
 
-        // RA-783 AC04: a new number's sequence avoids every accreditation number the organisation's
-        // applications hold here - issued, replaced, or last year's from ReEx - so a site can't take
-        // the number another site's renewal will need. Only data in Mongo is checked, so a 2026
-        // number is seen once it's held on one of the organisation's applications (at Seed, or by
-        // the RA-763/RA-784 backfills); until then, and for two sites approved at the same moment,
-        // a clash makes the renewal's approval a 409, rare enough to put right by hand.
-        // The case is checked here only to skip the read: Generate ignores these numbers for a
-        // continuous renewal anyway, as its number is fixed.
-        var organisationAccreditationNumbers =
-            AccreditationNumberRules.CaseFor(application.Year, latest?.Year)
-            == AccreditationNumberCase.ContinuousRenewal
-                ? []
-                : (await persistence.GetByOrganisationAsync(application.OrganisationId))
-                    .SelectMany(HeldAccreditationNumbers)
-                    .ToList();
+        var organisationAccreditationNumbers = await OrganisationAccreditationNumbersAsync(
+            persistence,
+            application,
+            latest
+        );
 
         var (unheld, failure) = await BuildUnheldAccreditationNumberAsync(
             persistence,
@@ -676,6 +664,29 @@ public static class AccreditationApplicationEndpoints
 
     private const string GlassProcessMissingTemplate =
         "GenerateOrUpdateAccreditationNumber: no glass recycling process held, so the accreditation number was issued as other (GO); confirm the process. applicationReference={ApplicationReference} applicationId={ApplicationId} organisationId={OrganisationId} orgId={OrgId} registrationReference={RegistrationReference} accreditationReference={AccreditationReference}";
+
+    // RA-783 AC04: a new number's sequence avoids every accreditation number the organisation's
+    // applications hold here - issued, replaced, or last year's from ReEx - so a site can't take
+    // the number another site's renewal will need. Only data in Mongo is checked, so a 2026
+    // number is seen once it's held on one of the organisation's applications (at Seed, or by
+    // the RA-763/RA-784 backfills); until then, and for two sites approved at the same moment,
+    // a clash makes the renewal's approval a 409, rare enough to put right by hand.
+    // The case is checked here only to skip the read: Generate ignores these numbers for a
+    // continuous renewal anyway, as its number is fixed.
+    private static async Task<IReadOnlyList<string>> OrganisationAccreditationNumbersAsync(
+        IAccreditationApplicationPersistence persistence,
+        AccreditationApplicationModel application,
+        PriorAccreditation? latest
+    ) =>
+        AccreditationNumberRules.CaseFor(application.Year, latest?.Year)
+        == AccreditationNumberCase.ContinuousRenewal
+            ? []
+            : (await persistence.GetByOrganisationAsync(application.OrganisationId))
+                .SelectMany(HeldAccreditationNumbers)
+                .ToList();
+
+    private static bool IsGlassWithNoProcess(AccreditationApplicationModel application) =>
+        application.MaterialType == MaterialType.Glass && application.GlassRecyclingProcess is null;
 
     // The operator's latest accreditation before this year: the later of the approval held here
     // and last year's number from ReEx, the one held here on the same year. Last year's number
