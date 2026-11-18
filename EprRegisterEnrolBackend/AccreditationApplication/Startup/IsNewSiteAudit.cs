@@ -91,17 +91,16 @@ public sealed class IsNewSiteAudit(
                 correctable
             );
 
-        foreach (
-            var verdict in new[]
-            {
-                IsNewSiteVerdict.ProvablyCorrupt,
-                IsNewSiteVerdict.PromotedCorrectable,
-                IsNewSiteVerdict.AmbiguousRefused,
-                IsNewSiteVerdict.AlreadyCorrect,
-            }
-        )
-        {
-            if (logger.IsEnabled(LogLevel.Information))
+        if (logger.IsEnabled(LogLevel.Information))
+            foreach (
+                var verdict in new[]
+                {
+                    IsNewSiteVerdict.ProvablyCorrupt,
+                    IsNewSiteVerdict.PromotedCorrectable,
+                    IsNewSiteVerdict.AmbiguousRefused,
+                    IsNewSiteVerdict.AlreadyCorrect,
+                }
+            )
                 logger.LogInformation(
                     "RA-794 isNewSite audit {Bucket}: {SiteCount} sites on {ApplicationCount} "
                     + "applications: {ApplicationIds}",
@@ -110,7 +109,6 @@ public sealed class IsNewSiteAudit(
                     idsByBucket[verdict].Count,
                     string.Join(", ", idsByBucket[verdict])
                 );
-        }
 
         if (siteCounts[IsNewSiteVerdict.AmbiguousRefused] > correctable)
             logger.LogWarning(
@@ -125,8 +123,8 @@ public sealed class IsNewSiteAudit(
 
         foreach (var scan in scans)
         {
-            foreach (var site in scan.Sites.Where(s => s.Classification.IsCorrectable))
-                if (logger.IsEnabled(LogLevel.Information))
+            if (logger.IsEnabled(LogLevel.Information))
+                foreach (var site in scan.Sites.Where(s => s.Classification.IsCorrectable))
                     logger.LogInformation(
                         "RA-794 {Bucket} application {ApplicationId} ref={ApplicationReference} "
                         + "site {SiteId} '{SiteName}'",

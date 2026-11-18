@@ -129,19 +129,10 @@ public sealed class IsNewSiteScanner(
     // previous year). A failure refuses this application's unproven sites, never corrects them.
     private async Task<ReExSiteLookup> LookUpReExAsync(AccreditationApplicationModel application)
     {
-        var missing = string.IsNullOrWhiteSpace(application.OrganisationId) ? "organisationId"
-            : string.IsNullOrWhiteSpace(application.RegistrationId) ? "registrationId"
-            : null;
-        if (missing is not null)
-        {
-            logger.LogError(
-                "RA-794: application {ApplicationId} has no ReEx {MissingValue}, so its overseas "
-                    + "sites cannot be checked against ReEx and will be refused",
-                application.Id,
-                missing
-            );
-            return ReExSiteLookup.Failed($"no {missing} on the application");
-        }
+        if (string.IsNullOrWhiteSpace(application.OrganisationId))
+            return MissingReExId(application, "organisationId");
+        if (string.IsNullOrWhiteSpace(application.RegistrationId))
+            return MissingReExId(application, "registrationId");
 
         var result = await reEx.GetAccreditationAsync(
             application.OrganisationId,
@@ -159,5 +150,16 @@ public sealed class IsNewSiteScanner(
             result.StatusCode
         );
         return ReExSiteLookup.Failed($"status {result.StatusCode?.ToString() ?? "none"}");
+    }
+
+    private ReExSiteLookup MissingReExId(AccreditationApplicationModel application, string missing)
+    {
+        logger.LogError(
+            "RA-794: application {ApplicationId} has no ReEx {MissingValue}, so its overseas "
+                + "sites cannot be checked against ReEx and will be refused",
+            application.Id,
+            missing
+        );
+        return ReExSiteLookup.Failed($"no {missing} on the application");
     }
 }
