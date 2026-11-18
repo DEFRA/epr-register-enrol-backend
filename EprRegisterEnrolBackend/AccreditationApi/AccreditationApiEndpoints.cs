@@ -24,7 +24,7 @@ public static partial class AccreditationApiEndpoints
 
     // The statuses an accreditation can have. Only approved is served until case management can send
     // the others, but asking for them is valid, and finds none.
-    private static readonly string[] SearchStatuses = ["approved", "suspended", "cancelled"];
+    private static readonly string[] SearchStatuses = ["approved", "suspended", "cancelled", "withdrawn"];
 
     public static void UseAccreditationApiEndpoints(this IEndpointRouteBuilder app)
     {

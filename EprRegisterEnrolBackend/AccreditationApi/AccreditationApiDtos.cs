@@ -33,8 +33,8 @@ public record AccreditationSummaryDto
     public required string WasteProcessingType { get; init; }
 
     /// <summary>
-    /// <c>approved</c>, <c>suspended</c> or <c>cancelled</c>: the latest status history entry
-    /// whose effective date is on or before today.
+    /// <c>approved</c>, <c>suspended</c>, <c>cancelled</c> or <c>withdrawn</c>: the latest status
+    /// history entry whose <c>effectiveFromDate</c> is on or before today.
     /// </summary>
     public required string Status { get; init; }
 
@@ -79,8 +79,17 @@ public sealed record StatusHistoryEntryDto
 {
     public required string Status { get; init; }
 
-    /// <summary>When the status takes effect (UK date), serialised as <c>yyyy-MM-dd</c>.</summary>
-    public required DateOnly EffectiveDate { get; init; }
+    /// <summary>
+    /// The first day the status applies (UK date, <c>yyyy-MM-dd</c>): the later of 1 January of the
+    /// accreditation year and the UK date the change was recorded. May be in the future.
+    /// </summary>
+    public required DateOnly EffectiveFromDate { get; init; }
+
+    /// <summary>
+    /// The last day the status applies: the day before the next entry's
+    /// <c>effectiveFromDate</c>. Always present in the response, and <c>null</c> on the latest entry.
+    /// </summary>
+    public required DateOnly? EffectiveToDate { get; init; }
 
     public required DateTime RecordedAt { get; init; }
 }
@@ -187,10 +196,6 @@ public sealed record AccreditedOverseasSiteDto
     public required bool IsEu { get; init; }
 
     public required bool IsOecd { get; init; }
-
-    /// <summary>The date the site was approved onto the accreditation (ReEx ORS-A approval).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public DateTime? ValidFrom { get; init; }
 
     public required string Status { get; init; }
 

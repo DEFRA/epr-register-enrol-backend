@@ -92,7 +92,7 @@ Accreditations for 2027 onwards are served.
 
 | Route | Returns |
 | --- | --- |
-| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100). `year`, `organisationNumber`, `registrationNumber` and `status` (`approved`, `suspended` or `cancelled`) are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404. Results are ordered by accreditation number |
+| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100). `year`, `organisationNumber`, `registrationNumber` and `status` (`approved`, `suspended`, `cancelled` or `withdrawn`) are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404. Results are ordered by accreditation number |
 | `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}?includeWithdrawn=false` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20&includeWithdrawn=false` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}?includeWithdrawn=false` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
@@ -126,13 +126,13 @@ are left out. The order of fields is not significant. **Ignore fields you do not
 
 | Field | Meaning |
 | --- | --- |
-| `statusHistory` | every status change, oldest first: `status`, `effectiveDate`, `recordedAt` |
+| `statusHistory` | every status change, oldest first: `status`, `effectiveFromDate`, `effectiveToDate`, `recordedAt` |
 | `tonnageBandHistory` | the band over time: `tonnageBand`, `recordedAt` |
 | `signatories` | the PRN signatories: `fullName`, `email` |
 | `overseasSites` | **exporters only**: the accredited overseas sites, ordered by `orsId` (see below) |
 
 An overseas site has `siteId`, `orsId`, `siteName`, `formattedAddress`, `address`, `contact`,
-`operationCodes`, `isEu`, `isOecd`, `validFrom`, `status`, `statusHistory` and `interimSites`. An
+`operationCodes`, `isEu`, `isOecd`, `status`, `statusHistory` and `interimSites`. An
 interim site has `siteId`, `siteNumber`, `siteName`, `address`, `contact`, `operationCodes`,
 `createdAt` and, if it was withdrawn, `removedAt`.
 
@@ -141,15 +141,22 @@ and phone number. Treat them as personal data.
 
 ### Status and dates
 
-- `status` is the latest `statusHistory` entry whose `effectiveDate` is on or before today. Today
-  every accreditation has the one status `approved`. The API is built to carry `suspended` and
-  `cancelled`, which will appear when case management can send them. **Handle a status value you do
+- `status` is the latest `statusHistory` entry whose `effectiveFromDate` is on or before today.
+  Today every accreditation has the one status `approved`. The API is built to carry `suspended`,
+  `cancelled` and `withdrawn`, which will appear when case management can send them. Overseas
+  sites use the same list of statuses. **Handle a status value you do
   not know.** The same goes for `tonnageBand`.
 - If no entry is effective yet (for example the only entry is effective in the future), `status`
   is still `approved`: an accreditation that is served has been granted. In that case `status` and
   `statusHistory` disagree, so use `statusHistory` for "what was it on date X".
-- `effectiveDate` is a UK calendar date (`yyyy-MM-dd`, Europe/London). `recordedAt`, `validFrom`
-  and `createdAt` are UTC times.
+- `effectiveFromDate` is the first day a status applies, and `effectiveToDate` the last. Both are UK
+  calendar dates (`yyyy-MM-dd`, Europe/London). `effectiveFromDate` is the later of 1 January of the
+  accreditation year and the UK date the change was recorded, so a status recorded before the year
+  starts with the year, and one recorded during the year starts on the day it was recorded. It may be
+  in the future. `effectiveToDate` is the day before the next entry's `effectiveFromDate`, and is
+  `null` on the latest entry. Where two entries have the same `effectiveFromDate`, the one with the
+  later `recordedAt` takes precedence, and the earlier one ends on that same date
+  (`effectiveToDate` equals `effectiveFromDate`). `recordedAt` and `createdAt` are UTC times.
 - Until effective-dated history is recorded, each history has one `approved` entry. For an
   accreditation approved before that, its date is when case management last changed it, or the last
   edit, so treat an older approval date as approximate.
@@ -170,7 +177,7 @@ grouped for reading:
   "status": "approved",
   "tonnageBand": "up_to_5000",
   "statusHistory": [
-    { "status": "approved", "effectiveDate": "2026-10-01", "recordedAt": "2026-10-01T00:00:00Z" }
+    { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" }
   ],
   "tonnageBandHistory": [
     { "tonnageBand": "up_to_5000", "recordedAt": "2026-10-01T00:00:00Z" }
@@ -193,10 +200,9 @@ grouped for reading:
       "operationCodes": ["R3"],
       "isEu": true,
       "isOecd": true,
-      "validFrom": "2027-01-01T00:00:00Z",
       "status": "approved",
       "statusHistory": [
-        { "status": "approved", "effectiveDate": "2027-01-01", "recordedAt": "2026-10-01T00:00:00Z" }
+        { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" }
       ],
       "interimSites": [
         {
@@ -232,23 +238,25 @@ A reprocessor's detail is the same without `overseasSites`
 
 1. Fetch the accreditation (the detail route above).
 2. Read `statusHistory`, which is oldest first.
-3. Take the latest entry whose `effectiveDate` is on or before X. Its `status` is the answer.
+3. Take the latest entry whose `effectiveFromDate` is on or before X. Its `status` is the answer.
+   (The entry also ends on its `effectiveToDate`, which is the day before the next entry starts, so
+   the latest entry that has started is the one that applies.)
 4. If no entry is on or before X, the history has no status for that date. The accreditation's
-   current `status` still reads `approved` if its only entry starts later, as the example's overseas
-   site does (effective `2027-01-01`), so treat `null` as "not yet effective on X".
+   current `status` still reads `approved` if its only entry starts later, so treat `null` as "not
+   yet effective on X".
 
 ```js
 // history: the accreditation's statusHistory. date: 'yyyy-MM-dd', a UK calendar date.
 // ISO dates compare correctly as strings. Returns null if no entry is effective on that date,
 // even when the response's current `status` says approved (see Status and dates).
 function statusOn(history, date) {
-  const applicable = history.filter((entry) => entry.effectiveDate <= date)
+  const applicable = history.filter((entry) => entry.effectiveFromDate <= date)
   return applicable.length ? applicable[applicable.length - 1].status : null
 }
 ```
 
-For the exporter above, whose history is one `approved` entry effective `2026-10-01`:
-`statusOn(history, '2026-12-01')` is `approved`, and `statusOn(history, '2026-09-30')` is `null`.
+For the exporter above, whose history is one `approved` entry effective from `2027-01-01`:
+`statusOn(history, '2027-03-01')` is `approved`, and `statusOn(history, '2026-12-31')` is `null`.
 To compare an instant (a UTC time), convert it to the UK calendar date first.
 
 ### What accreditations does an organisation hold?
@@ -313,7 +321,7 @@ each.
 Only accreditation years from 2027 are served. A search for an earlier year (`year=2026`) is an
 empty page, even if one was granted, and getting one for an earlier year is a `404`
 (`accreditation_not_found`). Only `approved` accreditations are served today, so a search with
-`status=suspended` or `status=cancelled` is valid and finds none.
+`status=suspended`, `status=cancelled` or `status=withdrawn` is valid and finds none.
 
 **Limits.** Each client may make 600 requests a minute; past that, a request is answered `429`
 (`rate_limited`) with a `Retry-After` in seconds. A query the database stops for taking too long is
@@ -375,8 +383,15 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
 
 ## What's new
 
+- Each `statusHistory` entry now has `effectiveFromDate` and `effectiveToDate` (replacing
+  `effectiveDate`), so you can see the period a status applies. `effectiveFromDate` is the later
+  of 1 January of the accreditation year and the UK date the change was recorded;
+  `effectiveToDate` is the day before the next entry starts, and `null` on the latest. Where two
+  entries start on the same date, the one recorded later takes precedence. `withdrawn` is a new
+  status value, and an overseas site's `validFrom` is removed. **Breaking for clients that read
+  `effectiveDate` or `validFrom`.**
 - `GET /v1/accreditations` can be filtered by `status`. Only `approved` is served today, so
-  `suspended` and `cancelled` return an empty page until they can be sent. Results are in a stable
+  `suspended`, `cancelled` and `withdrawn` return an empty page until they can be sent. Results are in a stable
   order (accreditation number), and the search is indexed.
 - A request limit for each client (`429`, `rate_limited`, with `Retry-After`) and a time limit on
   queries (`503`, `query_timeout`).
