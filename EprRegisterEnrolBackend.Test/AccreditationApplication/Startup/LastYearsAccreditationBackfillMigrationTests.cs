@@ -2,6 +2,10 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.DomainModel;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Migration;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
@@ -9,13 +13,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Diagnostics.Metrics;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Migration = EprRegisterEnrolBackend.AccreditationApplication.Startup.LastYearsAccreditationBackfillMigration;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
-// RA-763: runs against the real ephemeral mongod, with rows from the real public register, so the
+// RA-784: runs against the real ephemeral mongod, with rows from the real public register, so the
 // guarded updates and the matching are exercised exactly as production runs them.
 public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 {
@@ -30,14 +35,19 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     private const string GapRegistration = "R26WX5003080015PL";
     private const string GapAccreditation = "A26WX5003080014PL";
 
-    // Clearfield Envirotech: issued a number derived from its registration.
+    // Clearfield Envirotech: issued a number derived from its registration (corrected by RA-785, not here).
     private const string ClearfieldRegistration = "R26ER5003240079PL";
     private const string ClearfieldAccreditation = "A26ER5003240164PL";
-    private const string ClearfieldIncorrect = "A27ER5003240079PL";
-    private const string ClearfieldCorrected = "A27ER5003240164PL";
+    private const string ClearfieldIssued = "A27ER5003240079PL";
 
-    // Held back: the published accreditation number names another org.
+    // Published rows that look wrong but are used as published.
     private const string JpRecyclingRegistration = "R26WR5003020027PL";
+    private const string JpRecyclingAccreditation = "A26WR5005320025PL";
+    private const string ComhairleRegistration = "R26SR5005410022GO";
+    private const string ComhairleAccreditation = "A26SR5005410022GL";
+    private const string EncircRegistration = "R26ER5002260055GR";
+    private const string EncircAccreditation = "A26ER5002260023GR";
+    private const string JAndAYoungRegistration = "R26WR5000950025PL";
 
     private readonly string _databaseName;
     private readonly TestMongoDbClientFactory _factory;
@@ -85,7 +95,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     private static AccreditationApplicationModel Egger() =>
         Application(EggerRegistration, 500027, MaterialType.Wood);
 
-    private static AccreditationApplicationModel Clearfield(string? issued = ClearfieldIncorrect) =>
+    private static AccreditationApplicationModel Clearfield(string? issued = ClearfieldIssued) =>
         Application(
             ClearfieldRegistration,
             500324,
@@ -104,13 +114,13 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         bool apply = false,
         string? confirmedBy = "A Reviewer",
         bool registerPersistence = true,
-        bool dualWrite = false
+        IDualWriteUnitOfWork? unitOfWork = null
     )
     {
         var services = new ServiceCollection();
         if (registerPersistence)
             services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
-        services.AddSingleton(Options.Create(new DomainModelConfig { DualWrite = dualWrite }));
+        services.AddSingleton(unitOfWork ?? new LegacyOnlyUnitOfWork());
         return new Migration(
             services.BuildServiceProvider(),
             Options.Create(
@@ -174,11 +184,11 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         (await SnapshotAsync()).Should().Equal(before);
         Logged(LogLevel.Information)
             .Should()
-            .Contain(m => m.Contains("DRY RUN") && m.Contains(EggerAccreditation))
-            .And.Contain(m =>
-                m.Contains("DRY RUN")
-                && m.Contains($"issued {ClearfieldIncorrect} is corrected to {ClearfieldCorrected}")
-            );
+            .Contain(m => m.Contains("DRY RUN") && m.Contains(EggerAccreditation));
+        // Clearfield's issued number doesn't fit the register, so its line is a warning.
+        Logged(LogLevel.Warning)
+            .Should()
+            .Contain(m => m.Contains("DRY RUN") && m.Contains(ClearfieldAccreditation));
         Logged(LogLevel.Information).Should().NotContain(m => m.Contains("APPLIED"));
         Logged(LogLevel.Error).Should().BeEmpty();
     }
@@ -196,17 +206,56 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         Logged(LogLevel.Error).Should().ContainSingle(m => m.Contains("SpotCheckConfirmedBy"));
     }
 
+    // With DomainModel:DualWrite on, the write goes through the unit of work: the application is migrated if it isn't
+    // already, and the domain model's Application and Registration take last year's number in the same transaction.
     [Fact]
-    public async Task Apply_with_dual_write_on_runs_as_a_dry_run()
+    public async Task Apply_with_dual_write_on_writes_the_domain_model_too()
     {
-        await SeedAsync(Egger());
-        var before = await SnapshotAsync();
+        var clock = new TestClock(new DateTime(2027, 1, 1, 9, 0, 0, DateTimeKind.Utc));
+        var logs = NullLoggerFactory.Instance;
+        var stores = new ApplicationGroupStores(
+            new OrganisationPersistence(_factory, logs),
+            new RegistrationPersistence(_factory, logs, clock),
+            new OverseasSitePersistence(_factory, logs, clock),
+            new ApplicationVersionPersistence(_factory, logs, clock),
+            new AccreditationPersistence(_factory, logs, clock),
+            new MigrationConflictPersistence(_factory, logs)
+        );
+        var meters = new ServiceCollection()
+            .AddMetrics()
+            .BuildServiceProvider()
+            .GetRequiredService<IMeterFactory>();
+        var unitOfWork = new DualWriteUnitOfWork(
+            _factory,
+            new ApplicationGroupMigrator(_persistence, stores, clock),
+            new ApplicationModelSync(_persistence, stores, clock, NullLogger<ApplicationModelSync>.Instance),
+            new DualWriteMetrics(meters),
+            NullLogger<DualWriteUnitOfWork>.Instance
+        );
+        var egger = Egger();
+        egger.OrganisationId = "6512a0f0c0ffee0000000001";
+        egger.RegistrationId = "6512a0f0c0ffee0000000002";
+        egger.Nation = Nation.England;
+        var id = await SeedAsync(egger);
 
-        var result = await CreateMigration(apply: true, dualWrite: true).RunAsync(Ct);
+        var result = await CreateMigration(apply: true, unitOfWork: unitOfWork).RunAsync(Ct);
 
-        result.Should().Be(Migration.RunResult.DryRun);
-        (await SnapshotAsync()).Should().Equal(before);
-        Logged(LogLevel.Error).Should().ContainSingle(m => m.Contains("DualWrite"));
+        result.Should().Be(Migration.RunResult.Applied);
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(EggerAccreditation);
+        var application = await _factory
+            .GetCollection<ApplicationEntity>(DomainModelCollections.ApplicationVersions)
+            .Find(a => a.IsCurrent && a.EntityId == id)
+            .SingleAsync(Ct);
+        application.AsAccreditation().LastYearsAccreditationNumber!.AccreditationNumber
+            .Should()
+            .Be(EggerAccreditation);
+        var registration = await _factory
+            .GetCollection<RegistrationEntity>(DomainModelCollections.RegistrationVersions)
+            .Find(r => r.IsCurrent && r.EntityId == application.RegistrationId!.Value)
+            .SingleAsync(Ct);
+        registration.AccreditationNumbers.Should()
+            .ContainSingle(n => n.Year == 2026 && n.AccreditationNumber == EggerAccreditation);
+        Logged(LogLevel.Error).Should().BeEmpty();
     }
 
     // --- last year's accreditation ----------------------------------------------------------------------------------
@@ -218,9 +267,6 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         var egger = Egger();
         egger.OrganisationName = "Egger (UK) Limited";
         var id = await SeedAsync(egger);
-        var clearfield = Clearfield();
-        clearfield.OrganisationName = "Clearfield Envirotech Ltd";
-        await SeedAsync(clearfield);
 
         await ApplyAsync();
 
@@ -229,12 +275,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         Logged(LogLevel.Information)
             .Should()
             .Contain(m =>
-                m.StartsWith("RA-763 APPLIED") && m.Contains("org 500027 Egger (UK) Limited")
-            )
-            .And.Contain(m =>
-                m.StartsWith("RA-763 APPLIED")
-                && m.Contains("org 500324 Clearfield Envirotech Ltd")
-                && m.Contains("->")
+                m.StartsWith("RA-784 APPLIED") && m.Contains("org 500027 Egger (UK) Limited")
             );
     }
 
@@ -378,15 +419,80 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             );
     }
 
+    // Agreed 19 November 2026: the register is used as published, even where a row looks wrong.
     [Fact]
-    public async Task A_held_back_register_row_is_not_used()
+    public async Task A_row_whose_accreditation_names_another_org_is_used_as_published()
     {
         var id = await SeedAsync(Application(JpRecyclingRegistration, 500302));
 
         await ApplyAsync();
 
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber
+            .Should()
+            .Be(JpRecyclingAccreditation);
+    }
+
+    [Fact]
+    public async Task A_glass_number_ending_GL_is_used_as_published()
+    {
+        var application = Application(ComhairleRegistration, 500541, MaterialType.Glass);
+        application.GlassRecyclingProcess = GlassRecyclingProcess.Other;
+        var id = await SeedAsync(application);
+
+        await ApplyAsync();
+
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber
+            .Should()
+            .Be(ComhairleAccreditation);
+    }
+
+    // Encirc: org 500069 holds a registration carrying 500226 (RA-764), as the register's Org ID column says.
+    [Theory]
+    [InlineData(500069)]
+    [InlineData(500226)]
+    public async Task The_org_is_matched_on_the_registration_number_or_the_registers_Org_ID(int orgId)
+    {
+        var id = await SeedAsync(Application(EncircRegistration, orgId, MaterialType.Glass));
+
+        await ApplyAsync();
+
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber
+            .Should()
+            .Be(EncircAccreditation);
+    }
+
+    // J. and A. Young: the register prints the number without its last letter. An application still holding that
+    // can't be issued a 2027 number, so it is reported, not corrected.
+    [Fact]
+    public async Task J_and_A_Youngs_registration_number_missing_its_last_letter_is_reported()
+    {
+        var id = await SeedAsync(
+            Application(PublicRegister2026.JAndAYoungPublishedRegistrationNumber, 500095)
+        );
+        var before = await SnapshotAsync();
+
+        await ApplyAsync();
+
+        (await SnapshotAsync()).Should().Equal(before);
+        _logger
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Warning
+                && e.Message.Contains(id.ToString())
+                && e.Message.Contains(nameof(Migration.Outcome.RegistrationNumberIncomplete))
+                && e.Message.Contains("must end PL")
+            );
+    }
+
+    [Fact]
+    public async Task J_and_A_Young_with_the_full_registration_number_is_registered_only()
+    {
+        var id = await SeedAsync(Application(JAndAYoungRegistration, 500095));
+
+        await ApplyAsync();
+
         (await ReadAsync(id)).LastYearsAccreditationNumber.Should().BeNull();
-        LoggedFor(id).Should().Contain(nameof(Migration.Outcome.HeldBack));
+        LoggedFor(id).Should().Contain(nameof(Migration.Outcome.RegisteredOnly));
     }
 
     [Fact]
@@ -423,75 +529,30 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
     // --- issued numbers ---------------------------------------------------------------------------------------------
 
+    // RA-785 corrects wrongly issued numbers; this only reports them.
     [Fact]
-    public async Task Apply_corrects_Clearfields_issued_number_and_keeps_the_old_one()
+    public async Task A_wrongly_issued_renewal_number_is_reported_and_left_alone()
     {
         var id = await SeedAsync(Clearfield());
 
         await ApplyAsync();
 
         var application = await ReadAsync(id);
-        application.AccreditationReference.Should().Be(ClearfieldCorrected);
-        application.PreviousAccreditationNumbers.Should().Equal(ClearfieldIncorrect);
-        application.LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(ClearfieldAccreditation);
-        application.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
-        Logged(LogLevel.Information)
-            .Should()
-            .ContainSingle(m =>
-                m.Contains("APPLIED")
-                && m.Contains($"{ClearfieldIncorrect} -> {ClearfieldCorrected}")
-                && m.Contains("A Reviewer")
-            );
-    }
-
-    [Fact]
-    public async Task Clearfield_already_corrected_is_skipped()
-    {
-        var id = await SeedAsync(Clearfield(ClearfieldCorrected));
-
-        await ApplyAsync();
-
-        var application = await ReadAsync(id);
-        application.AccreditationReference.Should().Be(ClearfieldCorrected);
+        application.AccreditationReference.Should().Be(ClearfieldIssued);
         application.PreviousAccreditationNumbers.Should().BeEmpty();
-        LoggedFor(id).Should().Contain(nameof(Migration.IssuedNumber.AlreadyCorrected));
-        Logged(LogLevel.Warning).Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Clearfields_correction_is_blocked_when_another_application_holds_the_corrected_number()
-    {
-        var id = await SeedAsync(Clearfield());
-        await SeedAsync(Application("R26ER5009990001PL", 500999, accreditationReference: ClearfieldCorrected));
-
-        await ApplyAsync();
-
-        (await ReadAsync(id)).AccreditationReference.Should().Be(ClearfieldIncorrect);
-        LoggedFor(id).Should().Contain(nameof(Migration.IssuedNumber.CorrectionBlocked));
-    }
-
-    [Fact]
-    public async Task Another_wrongly_issued_number_is_reported_and_left_alone()
-    {
-        var application = Egger();
-        application.AccreditationReference = "A27ER5000270036WO";
-        var id = await SeedAsync(application);
-
-        await ApplyAsync();
-
-        (await ReadAsync(id)).AccreditationReference.Should().Be("A27ER5000270036WO");
+        application.LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(ClearfieldAccreditation);
         _logger
             .Entries.Should()
             .ContainSingle(e =>
                 e.LogLevel == LogLevel.Warning
                 && e.Message.Contains(id.ToString())
-                && e.Message.Contains(nameof(Migration.IssuedNumber.WrongReportedOnly))
-                && e.Message.Contains("A27ER5000270063WO")
+                && e.Message.Contains(nameof(Migration.IssuedNumber.DoesNotFitTheRegister))
+                && e.Message.Contains(ClearfieldAccreditation)
             );
     }
 
     [Fact]
-    public async Task A_correctly_issued_number_is_reported_as_correct()
+    public async Task A_renewal_number_keeping_last_years_sequence_fits_the_register()
     {
         var application = Egger();
         application.AccreditationReference = "A27ER5000270063WO";
@@ -499,31 +560,44 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         await ApplyAsync();
 
-        LoggedFor(id).Should().Contain(nameof(Migration.IssuedNumber.Correct));
+        LoggedFor(id).Should().Contain(nameof(Migration.IssuedNumber.FitsTheRegister));
     }
 
+    // RA-783: the material code is the application's, so a glass renewal of a GL number ends GO or GR.
     [Fact]
-    public async Task A_registered_only_operators_number_is_checked_against_its_registration()
+    public async Task A_glass_renewal_of_a_GL_number_fits_the_register()
+    {
+        var application = Application(
+            ComhairleRegistration,
+            500541,
+            MaterialType.Glass,
+            accreditationReference: "A27SR5005410022GO",
+            status: ApplicationStatus.Approved
+        );
+        application.GlassRecyclingProcess = GlassRecyclingProcess.Other;
+        var id = await SeedAsync(application);
+
+        await ApplyAsync();
+
+        LoggedFor(id).Should().Contain(nameof(Migration.IssuedNumber.FitsTheRegister));
+    }
+
+    // RA-783: a first-time number keeps the registration's agency, process type and org, with a random sequence.
+    [Theory]
+    [InlineData("A27ER5002370042PL", nameof(Migration.IssuedNumber.FitsTheRegister))]
+    [InlineData("A27ER5002380042PL", nameof(Migration.IssuedNumber.DoesNotFitTheRegister))]
+    public async Task A_registered_only_operators_number_is_checked_against_its_registration(
+        string issued,
+        string expected
+    )
     {
         var id = await SeedAsync(
-            Application(DtsRegistration, 500237, accreditationReference: "A27ER5002370119PL")
+            Application(DtsRegistration, 500237, accreditationReference: issued)
         );
 
         await ApplyAsync();
 
-        LoggedFor(id).Should().Contain(nameof(Migration.IssuedNumber.Correct));
-    }
-
-    [Fact]
-    public async Task A_correction_that_matches_nothing_is_reported()
-    {
-        await SeedAsync(Egger());
-
-        await CreateMigration().RunAsync(Ct);
-
-        Logged(LogLevel.Warning)
-            .Should()
-            .ContainSingle(m => m.Contains("CLEARFIELD ENVIROTECH LIMITED") && m.Contains("nothing to correct"));
+        LoggedFor(id).Should().Contain(expected);
     }
 
     [Fact]
@@ -542,7 +616,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 && m.Contains("applications=3")
                 && m.Contains("Added=2")
                 && m.Contains("RegisteredOnly=1")
-                && m.Contains("Corrected=1")
+                && m.Contains("DoesNotFitTheRegister=1")
             );
     }
 }

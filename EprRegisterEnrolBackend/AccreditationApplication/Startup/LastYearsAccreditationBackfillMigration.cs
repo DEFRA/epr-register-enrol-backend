@@ -1,13 +1,13 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
-using EprRegisterEnrolBackend.DomainModel;
+using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
-// RA-763: bound from Migrations:Ra763LastYearsAccreditationBackfill. Every flag defaults off, so the
+// RA-784: bound from Migrations:Ra763LastYearsAccreditationBackfill. Every flag defaults off, so the
 // migration is a no-op in every environment until deliberately switched on.
 public sealed class LastYearsAccreditationBackfillOptions
 {
@@ -16,8 +16,7 @@ public sealed class LastYearsAccreditationBackfillOptions
     // Off: the migration does nothing at all (not even a read).
     public bool Enabled { get; set; }
 
-    // Off (with Enabled on): dry run - logs what it would add and correct for every 2027 application,
-    // writes nothing.
+    // Off (with Enabled on): dry run - logs what it would add for every 2027 application, writes nothing.
     public bool Apply { get; set; }
 
     // Who reviewed the dry-run output against the live records. Required before Apply takes
@@ -25,39 +24,42 @@ public sealed class LastYearsAccreditationBackfillOptions
     public string? SpotCheckConfirmedBy { get; set; }
 }
 
-// RA-763: 2027 accreditation numbers are derived from last year's accreditation number, which the
-// seed now keeps on the application (LastYearsAccreditationNumber). Applications seeded before that hold
-// none, so their numbers would be derived from the registration number instead. This one-off gives
-// every existing 2027 application its 2026 accreditation number from the 5 November 2026 public
-// register (PublicRegister2026), and corrects the one 2027 number already issued from the wrong
-// source (Corrections). It never creates an application.
+// RA-784: a 2027 renewal's accreditation number is last year's accreditation number with the year
+// changed (RA-783), and the seed now keeps last year's number on the application
+// (LastYearsAccreditationNumber, RA-763). Applications seeded before that hold none, so they would be
+// issued a first-time number instead. This one-off gives every existing 2027 application its 2026
+// accreditation number from the 5 November 2026 public register (PublicRegister2026). It never
+// creates an application and never changes an issued number: numbers issued wrongly are corrected
+// separately (RA-785).
 //
 // For each 2027 application, oldest first:
-//   1. Find its register row by RegistrationReference, else by one of its
-//      PreviousRegistrationNumbers (case management can regenerate the number). A row in
-//      PublicRegister2026.HeldBack is a register error awaiting confirmation: reported, not used.
-//   2. Check the row is this application's registration: the org digits in the registration number
-//      (not the register's Org ID column, which is wrong on some rows), the material code and
-//      reprocessor or exporter. A mismatch is reported and the application skipped.
-//   3. Last year's number: added where the application holds none; left alone where it holds the
+//   1. An application holding J. and A. Young's registration number as the register prints it,
+//      missing its last letter, is reported: a 2027 number can't be issued until its registration
+//      number ends PL. It is not corrected here.
+//   2. Find its register row by RegistrationReference, else by one of its
+//      PreviousRegistrationNumbers (case management can regenerate the number).
+//   3. Check the row is this application's registration: its org (either the org digits in the
+//      registration number or the register's Org ID column, as some organisations hold a
+//      registration carrying another org's digits, such as Encirc's 500069 holding
+//      R26ER5002260055GR), the material code and reprocessor or exporter. A mismatch is reported
+//      and the application skipped.
+//   4. Last year's number: added where the application holds none; left alone where it holds the
 //      same; reported, never overwritten, where it holds a different one. A row with no accreditation
-//      means the operator was registered only in 2026: nothing to add, and issuance rightly falls back
-//      to the registration number.
-//   4. An issued 2027 number is compared with the one derived from the register. A mismatch named in
-//      Corrections is corrected; any other is reported only.
-// Applications with no register row are reported: their numbers would be derived from the
-// registration number, so someone should confirm each was registered only.
+//      means the operator was registered only in 2026: nothing to add, and the 2027 number is a
+//      first-time one.
+//   5. An issued 2027 number is checked against the register and reported if it doesn't fit: a
+//      renewal must keep last year's agency, process type, org and sequence; a first-time number
+//      must keep the registration's agency, process type and org. Only reported, never corrected.
+// Applications with no register row are reported: their numbers would be first-time ones, so
+// someone should confirm each was registered only.
 //
 // Every application is planned before anything is written. Each write is a single targeted update
-// guarded on the application still holding what was planned from, so a re-run is a no-op and a
-// concurrent write is never clobbered. A correction puts the old number onto
-// PreviousAccreditationNumbers via $addToSet (the RA-448 regenerate audit trail), as RA-691 did.
-// Case management keeps its own copy and audit entries, which management-be writes.
-//
-// Writes the legacy applications only, so it runs before DomainModel:DualWrite is turned on; with it
-// on, Apply drops back to a dry run (as RA-691). The domain model migration carries the field
-// across later: LegacyApplicationMapper onto the Application, ApplicationGroupMigrator onto the
-// Registration.
+// guarded on the application still holding no number, so a re-run is a no-op and a concurrent
+// write is never clobbered. Each write goes through the dual-write unit of work, so with
+// DomainModel:DualWrite on the domain model's Application and Registration take the number in the
+// same transaction (ApplicationModelSync), and with it off only the legacy application is written,
+// for the domain model migration to carry across later. Case management keeps its own copy, which
+// management-be writes.
 //
 // A BackgroundService, so a Mongo failure here logs rather than crash-looping the host. The
 // persistence is resolved only once the migration is enabled.
@@ -70,24 +72,8 @@ public class LastYearsAccreditationBackfillMigration(
     internal const int AccreditationYear = 2027;
     internal const int LastYear = AccreditationYear - 1;
 
-    internal sealed record Correction(
-        string OrganisationName,
-        string RegistrationNumber,
-        string Incorrect,
-        string Corrected
-    );
-
-    // Issued 2027 numbers to correct, each confirmed against the register by a person. Any other issued
-    // number that differs from the register is reported, not corrected.
-    internal static readonly IReadOnlyList<Correction> Corrections =
-    [
-        new(
-            "CLEARFIELD ENVIROTECH LIMITED",
-            "R26ER5003240079PL",
-            "A27ER5003240079PL",
-            "A27ER5003240164PL"
-        ),
-    ];
+    // The unit of work's name for this write, for its log line and metric.
+    internal const string Operation = "Ra784LastYearsAccreditationBackfill";
 
     internal enum RunResult
     {
@@ -103,18 +89,16 @@ public class LastYearsAccreditationBackfillMigration(
         RegisteredOnly,
         HoldsADifferentNumber,
         IdentityMismatch,
-        HeldBack,
+        RegistrationNumberIncomplete,
         NotOnTheRegister,
     }
 
     internal enum IssuedNumber
     {
         NotIssued,
-        Correct,
-        Corrected,
-        AlreadyCorrected,
-        WrongReportedOnly,
-        CorrectionBlocked,
+        FitsTheRegister,
+        DoesNotFitTheRegister,
+        NotChecked,
     }
 
     private sealed record Plan(
@@ -123,7 +107,6 @@ public class LastYearsAccreditationBackfillMigration(
         Outcome Outcome,
         string? RegisterAccreditationNumber,
         IssuedNumber Issued,
-        string? ExpectedReference,
         string Detail
     );
 
@@ -139,7 +122,7 @@ public class LastYearsAccreditationBackfillMigration(
         {
             // Every plan runs before any write, and each write is independently guarded, so a
             // failure part-way leaves a state the next run re-plans from safely.
-            logger.LogError(ex, "RA-763 last year's accreditation backfill failed");
+            logger.LogError(ex, "RA-784 last year's accreditation backfill failed");
         }
     }
 
@@ -154,31 +137,37 @@ public class LastYearsAccreditationBackfillMigration(
         var mode = confirmedBy is null ? "DRY RUN (nothing will be written)" : "APPLY";
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
-                "RA-763 last year's accreditation backfill starting. Mode={Mode}",
+                "RA-784 last year's accreditation backfill starting. Mode={Mode}",
                 mode
             );
 
         var persistence =
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
+        var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
         var applications = await persistence.GetByYearAsync(AccreditationYear, cancellationToken);
 
-        var plans = new List<Plan>();
-        foreach (var application in applications)
-        {
-            if (application.Id is { } id)
-                plans.Add(await PlanAsync(persistence, application, id, cancellationToken));
-        }
+        var plans = applications
+            .Where(a => a.Id is not null)
+            .Select(a => PlanFor(a, a.Id!.Value))
+            .ToList();
 
         foreach (var plan in plans)
-            await ReportAndApplyAsync(persistence, plan, mode, confirmedBy, cancellationToken);
+        {
+            await ReportAndApplyAsync(
+                persistence,
+                unitOfWork,
+                plan,
+                mode,
+                confirmedBy,
+                cancellationToken
+            );
+        }
 
-        ReportUnusedCorrections(plans);
         ReportSummary(plans, mode);
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
 
-    // Apply takes effect only with a named reviewer, and only with dual-write off; otherwise the run
-    // stays a dry run.
+    // Apply takes effect only with a named reviewer; otherwise the run stays a dry run.
     private string? AuthorisedReviewer(LastYearsAccreditationBackfillOptions settings)
     {
         if (!settings.Apply)
@@ -187,19 +176,9 @@ public class LastYearsAccreditationBackfillMigration(
         if (string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy))
         {
             logger.LogError(
-                "RA-763 last year's accreditation backfill: Apply is set but SpotCheckConfirmedBy is "
+                "RA-784 last year's accreditation backfill: Apply is set but SpotCheckConfirmedBy is "
                     + "not, so running as a DRY RUN. Set it to whoever reviewed the dry-run output "
                     + "against the live records."
-            );
-            return null;
-        }
-
-        if (serviceProvider.GetService<IOptions<DomainModelConfig>>()?.Value.DualWrite == true)
-        {
-            logger.LogError(
-                "RA-763 last year's accreditation backfill: DomainModel:DualWrite is on, and this "
-                    + "backfill writes the legacy application without the domain model, so running as "
-                    + "a DRY RUN. Apply it with DualWrite off."
             );
             return null;
         }
@@ -209,12 +188,7 @@ public class LastYearsAccreditationBackfillMigration(
 
     // --- planning ---------------------------------------------------------------------------------------------------
 
-    private async Task<Plan> PlanAsync(
-        IAccreditationApplicationPersistence persistence,
-        AccreditationApplicationModel application,
-        ObjectId id,
-        CancellationToken cancellationToken
-    )
+    private static Plan PlanFor(AccreditationApplicationModel application, ObjectId id)
     {
         var numbers = new[] { application.RegistrationReference }
             .Concat(application.PreviousRegistrationNumbers)
@@ -222,13 +196,14 @@ public class LastYearsAccreditationBackfillMigration(
             .Select(n => n!)
             .ToList();
 
-        if (numbers.Find(PublicRegister2026.HeldBack.ContainsKey) is { } heldBack)
+        if (application.RegistrationReference == PublicRegister2026.JAndAYoungPublishedRegistrationNumber)
         {
             return NotPlanned(
                 application,
                 id,
-                Outcome.HeldBack,
-                $"register row {heldBack} is held back as a register error until it is confirmed"
+                Outcome.RegistrationNumberIncomplete,
+                $"registration number {application.RegistrationReference} is missing its last letter, "
+                    + "as the register prints it; it must end PL before a 2027 number can be issued"
             );
         }
 
@@ -245,10 +220,10 @@ public class LastYearsAccreditationBackfillMigration(
             );
         }
 
-        if (IdentityMismatch(application, registrationNumber) is { } mismatch)
+        var row = PublicRegister2026.ByRegistrationNumber[registrationNumber];
+        if (IdentityMismatch(application, registrationNumber, row) is { } mismatch)
             return NotPlanned(application, id, Outcome.IdentityMismatch, mismatch);
 
-        var row = PublicRegister2026.ByRegistrationNumber[registrationNumber];
         var held = application.LastYearsAccreditationNumber;
         var (outcome, detail) = row.AccreditationNumber switch
         {
@@ -271,12 +246,10 @@ public class LastYearsAccreditationBackfillMigration(
             ),
         };
 
-        var (issued, expected, issuedDetail) = await PlanIssuedNumberAsync(
-            persistence,
-            application,
+        var (issued, issuedDetail) = CheckIssuedNumber(
+            application.AccreditationReference,
             registrationNumber,
-            row.AccreditationNumber,
-            cancellationToken
+            row.AccreditationNumber
         );
         return new Plan(
             application,
@@ -284,7 +257,6 @@ public class LastYearsAccreditationBackfillMigration(
             outcome,
             row.AccreditationNumber,
             issued,
-            expected,
             issuedDetail is null ? detail : $"{detail}; {issuedDetail}"
         );
     }
@@ -302,24 +274,33 @@ public class LastYearsAccreditationBackfillMigration(
             null,
             application.AccreditationReference is null
                 ? IssuedNumber.NotIssued
-                : IssuedNumber.WrongReportedOnly,
-            null,
+                : IssuedNumber.NotChecked,
             application.AccreditationReference is null
                 ? detail
                 : $"{detail}; issued {application.AccreditationReference} could not be checked"
         );
 
     // The registration number carries its own identity: R + YY + agency + R|X + org (6) + sequence (4) + material.
-    // The register's Org ID column is not used: it is wrong on some rows.
+    // The org is accepted from either the registration number or the register's Org ID column: an
+    // organisation can hold a registration carrying another org's digits.
     internal static string? IdentityMismatch(
         AccreditationApplicationModel application,
-        string registrationNumber
+        string registrationNumber,
+        PublicRegister2026Entry row
     )
     {
         var problems = new List<string>();
         var orgDigits = registrationNumber[5..11];
-        if (application.OrgId is { } orgId && orgId.ToString("D6") != orgDigits)
-            problems.Add($"its org is {orgId} but the registration number's is {orgDigits}");
+        if (
+            application.OrgId is { } orgId
+            && orgId.ToString("D6") != orgDigits
+            && orgId != row.OrgId
+        )
+        {
+            problems.Add(
+                $"its org is {orgId} but the registration number's is {orgDigits} and the register's is {row.OrgId}"
+            );
+        }
 
         var processType = RegulatoryReferenceCodes.ProcessTypeLetterFor(application.IsExporter);
         if (registrationNumber[4] != processType)
@@ -356,76 +337,39 @@ public class LastYearsAccreditationBackfillMigration(
                 ),
             ];
 
-    private async Task<(IssuedNumber, string?, string?)> PlanIssuedNumberAsync(
-        IAccreditationApplicationPersistence persistence,
-        AccreditationApplicationModel application,
+    // RA-783's rules, for an issued number: a renewal keeps everything of last year's number but the
+    // year and material code; a first-time number keeps the registration's agency, process type and
+    // org, with a random sequence. The material code is the application's, so it isn't compared (a
+    // 2026 glass number ends GL).
+    private static (IssuedNumber, string?) CheckIssuedNumber(
+        string? issued,
         string registrationNumber,
-        string? lastYearsAccreditationNumber,
-        CancellationToken cancellationToken
+        string? lastYearsAccreditationNumber
     )
     {
-        var issued = application.AccreditationReference;
         if (issued is null)
-            return (IssuedNumber.NotIssued, null, null);
+            return (IssuedNumber.NotIssued, null);
 
-        var expected = (
-            lastYearsAccreditationNumber is null
-                ? AccreditationReferenceDerivation.Derive(
-                    registrationNumber,
-                    AccreditationReferenceSourceKind.Registration,
-                    AccreditationYear
-                )
-                : AccreditationReferenceDerivation.Derive(
-                    lastYearsAccreditationNumber,
-                    AccreditationReferenceSourceKind.PreviousAccreditation,
-                    AccreditationYear
-                )
-        ).Reference;
+        var year = $"{AccreditationYear % 100:D2}";
+        var (source, kept, rule) = lastYearsAccreditationNumber is { } lastYears
+            ? (lastYears, lastYears[3..^2], "a renewal of")
+            : (registrationNumber, registrationNumber[3..11], "a first-time number from");
 
-        var correction = Corrections.FirstOrDefault(c =>
-            c.RegistrationNumber == registrationNumber
-        );
-        if (issued == expected)
-        {
-            return correction is not null && issued == correction.Corrected
-                ? (IssuedNumber.AlreadyCorrected, expected, $"issued {issued} is already corrected")
-                : (IssuedNumber.Correct, expected, $"issued {issued} matches the register");
-        }
-
-        if (correction is null || correction.Incorrect != issued || correction.Corrected != expected)
-        {
-            return (
-                IssuedNumber.WrongReportedOnly,
-                expected,
-                $"issued {issued}, but the register gives {expected ?? "no valid number"}; reported only"
+        var fits =
+            issued.Length == 17 && issued[0] == 'A' && issued[1..3] == year && issued[3..].StartsWith(kept, StringComparison.Ordinal);
+        return fits
+            ? (IssuedNumber.FitsTheRegister, $"issued {issued} fits the register")
+            : (
+                IssuedNumber.DoesNotFitTheRegister,
+                $"issued {issued} is not {rule} {source}; reported only (RA-785 corrects numbers)"
             );
-        }
-
-        var holders = await persistence.GetByAccreditationReferenceAsync(
-            correction.Corrected,
-            cancellationToken
-        );
-        if (holders.Count > 0)
-        {
-            return (
-                IssuedNumber.CorrectionBlocked,
-                expected,
-                $"issued {issued} should be {correction.Corrected}, but application "
-                    + $"{holders[0].Id} already holds that; not corrected"
-            );
-        }
-
-        return (
-            IssuedNumber.Corrected,
-            expected,
-            $"issued {issued} is corrected to {correction.Corrected}"
-        );
     }
 
     // --- reporting and writing --------------------------------------------------------------------------------------
 
     private async Task ReportAndApplyAsync(
         IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
         Plan plan,
         string mode,
         string? confirmedBy,
@@ -437,7 +381,7 @@ public class LastYearsAccreditationBackfillMigration(
         {
             logger.Log(
                 level,
-                "RA-763 {Mode}: application {ApplicationId} ({ApplicationReference}, org {OrgId} "
+                "RA-784 {Mode}: application {ApplicationId} ({ApplicationReference}, org {OrgId} "
                     + "{OrganisationName}, {MaterialType}, registration {RegistrationReference}): "
                     + "{Outcome}, issued number {IssuedNumber}. {Detail}",
                 mode,
@@ -453,146 +397,96 @@ public class LastYearsAccreditationBackfillMigration(
             );
         }
 
-        if (confirmedBy is null)
-            return;
-
-        if (plan.Outcome == Outcome.Added)
-            await AddLastYearsAccreditationNumberAsync(persistence, plan, confirmedBy, cancellationToken);
-
-        if (plan.Issued == IssuedNumber.Corrected)
-            await CorrectIssuedNumberAsync(persistence, plan, confirmedBy, cancellationToken);
+        if (confirmedBy is not null && plan.Outcome == Outcome.Added)
+        {
+            await AddLastYearsAccreditationNumberAsync(
+                persistence,
+                unitOfWork,
+                plan,
+                confirmedBy,
+                cancellationToken
+            );
+        }
     }
 
     private static bool NeedsAPerson(Plan plan) =>
         plan.Outcome
             is Outcome.HoldsADifferentNumber
                 or Outcome.IdentityMismatch
-                or Outcome.HeldBack
+                or Outcome.RegistrationNumberIncomplete
                 or Outcome.NotOnTheRegister
-        || plan.Issued is IssuedNumber.WrongReportedOnly or IssuedNumber.CorrectionBlocked;
+        || plan.Issued is IssuedNumber.DoesNotFitTheRegister or IssuedNumber.NotChecked;
 
     private async Task AddLastYearsAccreditationNumberAsync(
         IAccreditationApplicationPersistence persistence,
+        IDualWriteUnitOfWork unitOfWork,
         Plan plan,
         string confirmedBy,
         CancellationToken cancellationToken
     )
     {
-        var updated = await persistence.UpdateFieldsAsync(
-            plan.Id,
-            Builders<AccreditationApplicationModel>.Filter.Eq(a => a.LastYearsAccreditationNumber, null),
-            Builders<AccreditationApplicationModel>.Update.Set(
-                a => a.LastYearsAccreditationNumber,
-                new AccreditationNumberForYearModel
-                {
-                    Year = LastYear,
-                    AccreditationNumber = plan.RegisterAccreditationNumber!,
-                }
-            ),
-            cancellationToken: cancellationToken
-        );
-
-        if (updated is null)
-        {
-            logger.LogError(
-                "RA-763 application {ApplicationId} gained last year's accreditation after planning, so "
-                    + "nothing was written to it. Re-run the dry run to see its current state.",
-                plan.Id
-            );
-            return;
-        }
-
-        if (logger.IsEnabled(LogLevel.Information))
-        {
-            logger.LogInformation(
-                "RA-763 APPLIED: application {ApplicationId} ({ApplicationReference}, org {OrgId} "
-                    + "{OrganisationName}) now holds {Year} accreditation {AccreditationNumber}. Spot "
-                    + "check confirmed by {ConfirmedBy}",
-                plan.Id,
-                plan.Application.ApplicationReference,
-                plan.Application.OrgId,
-                plan.Application.OrganisationName,
-                LastYear,
-                plan.RegisterAccreditationNumber,
-                confirmedBy
-            );
-        }
-    }
-
-    private async Task CorrectIssuedNumberAsync(
-        IAccreditationApplicationPersistence persistence,
-        Plan plan,
-        string confirmedBy,
-        CancellationToken cancellationToken
-    )
-    {
-        var incorrect = plan.Application.AccreditationReference!;
-        var corrected = plan.ExpectedReference!;
-        var updated = await persistence.UpdateFieldsAsync(
-            plan.Id,
-            Builders<AccreditationApplicationModel>.Filter.Eq(
-                a => a.AccreditationReference,
-                incorrect
-            ),
-            Builders<AccreditationApplicationModel>
-                .Update.Set(a => a.AccreditationReference, corrected)
-                .AddToSet(a => a.PreviousAccreditationNumbers, incorrect),
-            cancellationToken: cancellationToken
-        );
-
-        if (updated is null)
-        {
-            logger.LogError(
-                "RA-763 application {ApplicationId} no longer holds {Incorrect}; it changed after "
-                    + "planning, so nothing was written to it. Re-run the dry run to see its current state.",
-                plan.Id,
-                incorrect
-            );
-            return;
-        }
-
-        if (logger.IsEnabled(LogLevel.Information))
-        {
-            logger.LogInformation(
-                "RA-763 APPLIED: application {ApplicationId} ({ApplicationReference}, org {OrgId} "
-                    + "{OrganisationName}) accreditation number {Incorrect} -> {Corrected}. Spot check "
-                    + "confirmed by {ConfirmedBy}",
-                plan.Id,
-                plan.Application.ApplicationReference,
-                plan.Application.OrgId,
-                plan.Application.OrganisationName,
-                incorrect,
-                corrected,
-                confirmedBy
-            );
-        }
-    }
-
-    // A correction that matched no application is worth knowing: the record may have changed shape since it
-    // was listed.
-    private void ReportUnusedCorrections(IReadOnlyList<Plan> plans)
-    {
-        foreach (var correction in Corrections)
-        {
-            var used = plans.Any(p =>
-                p.Issued
-                    is IssuedNumber.Corrected
-                        or IssuedNumber.AlreadyCorrected
-                        or IssuedNumber.CorrectionBlocked
-                && p.Application.AccreditationReference is { } issued
-                && (issued == correction.Incorrect || issued == correction.Corrected)
-            );
-            if (!used)
+        var result = await unitOfWork.RunAsync(
+            Operation,
+            plan.Id.ToString(),
+            async (session, token) =>
             {
-                logger.LogWarning(
-                    "RA-763 {OrganisationName}: no 2027 application on registration {RegistrationNumber} "
-                        + "holds {Incorrect} or {Corrected}; nothing to correct",
-                    correction.OrganisationName,
-                    correction.RegistrationNumber,
-                    correction.Incorrect,
-                    correction.Corrected
+                var updated = await persistence.UpdateFieldsAsync(
+                    plan.Id,
+                    Builders<AccreditationApplicationModel>.Filter.Eq(
+                        a => a.LastYearsAccreditationNumber,
+                        null
+                    ),
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.LastYearsAccreditationNumber,
+                        new AccreditationNumberForYearModel
+                        {
+                            Year = LastYear,
+                            AccreditationNumber = plan.RegisterAccreditationNumber!,
+                        }
+                    ),
+                    session,
+                    token
                 );
-            }
+                // No content: the guard didn't match, so nothing was written and nothing needs rolling back.
+                return updated is null ? Results.NoContent() : Results.Ok();
+            },
+            cancellationToken
+        );
+
+        switch (result)
+        {
+            case IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK }:
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "RA-784 APPLIED: application {ApplicationId} ({ApplicationReference}, org {OrgId} "
+                            + "{OrganisationName}) now holds {Year} accreditation {AccreditationNumber}. Spot "
+                            + "check confirmed by {ConfirmedBy}",
+                        plan.Id,
+                        plan.Application.ApplicationReference,
+                        plan.Application.OrgId,
+                        plan.Application.OrganisationName,
+                        LastYear,
+                        plan.RegisterAccreditationNumber,
+                        confirmedBy
+                    );
+                }
+                break;
+            case IStatusCodeHttpResult { StatusCode: StatusCodes.Status204NoContent }:
+                logger.LogError(
+                    "RA-784 application {ApplicationId} gained last year's accreditation after planning, so "
+                        + "nothing was written to it. Re-run the dry run to see its current state.",
+                    plan.Id
+                );
+                break;
+            default:
+                // The unit of work has logged why and rolled back.
+                logger.LogError(
+                    "RA-784 application {ApplicationId}: the write failed and was rolled back, so nothing "
+                        + "was written to it. Re-run the dry run to see its current state.",
+                    plan.Id
+                );
+                break;
         }
     }
 
@@ -610,7 +504,7 @@ public class LastYearsAccreditationBackfillMigration(
             Enum.GetValues<IssuedNumber>().Select(i => $"{i}={plans.Count(p => p.Issued == i)}")
         );
         logger.LogInformation(
-            "RA-763 last year's accreditation backfill complete. Mode={Mode}, applications={Count}. "
+            "RA-784 last year's accreditation backfill complete. Mode={Mode}, applications={Count}. "
                 + "Last year's accreditation: {Outcomes}. Issued numbers: {Issued}",
             mode,
             plans.Count,
