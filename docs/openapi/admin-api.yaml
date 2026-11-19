@@ -92,7 +92,8 @@ components:
         `accreditationReference`, `registrationReference`, `orgId` (as text) and
         `organisationName`. An application matches when any of them contains it. Leading and trailing spaces are trimmed, and `q` is matched as text, never as a
         pattern: characters such as `.` and `*` match themselves. An empty `q` is the same as
-        none. Invalid (`invalid_q`) when longer than 100 characters.
+        none. Invalid (`invalid_q`) when longer than 100 characters or when it holds a control
+        character, such as a line break.
       schema: { type: string, maxLength: 100 }
     SearchFields:
       name: searchFields

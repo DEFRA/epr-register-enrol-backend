@@ -67,6 +67,9 @@ public static class AdminApiEndpoints
         var q = text.ToString().Trim();
         if (q.Length > MaxSearchLength)
             return Bad("invalid_q", $"q must be at most {MaxSearchLength} characters.");
+        // A Mongo regex can't hold a NUL, and no number or name holds a control character.
+        if (q.Any(char.IsControl))
+            return Bad("invalid_q", "q must not contain control characters.");
 
         var fields = new List<LegacyApplicationSearchField>();
         foreach (var value in query["searchFields"])

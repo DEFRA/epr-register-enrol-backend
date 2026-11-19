@@ -264,6 +264,8 @@ public class AdminApiEndpointTests : IDisposable
         {
             { $"q={new string('a', 101)}", "invalid_q" },
             { "q=a&q=b", "invalid_q" },
+            { "q=a%00b", "invalid_q" },
+            { "q=a%0Ab", "invalid_q" },
             { "searchFields=postcode", "invalid_search_fields" },
             { "searchFields=OrganisationName", "invalid_search_fields" },
             { "searchFields=", "invalid_search_fields" },
