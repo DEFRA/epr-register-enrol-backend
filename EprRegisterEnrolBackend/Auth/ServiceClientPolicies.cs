@@ -11,19 +11,39 @@ public static class ServiceClientPolicies
     /// </summary>
     public const string Read = "ServiceClientRead";
 
-    public static void AddServiceClientPolicies(this AuthorizationOptions options) =>
+    /// <summary>
+    /// RA-740: <see cref="Read"/>, and the client must be the admin service client: the one whose
+    /// configured <see cref="ServiceClientDefinition.Name"/> is <see cref="AdminClientName"/>. Guards
+    /// the <c>/admin</c> API. Any other known client, such as ReEx, is answered 403.
+    /// </summary>
+    public const string Admin = "ServiceClientAdmin";
+
+    /// <summary>The configured name of the admin service client (<c>ServiceClients__Clients__N__Name</c>).</summary>
+    public const string AdminClientName = "admin";
+
+    public static void AddServiceClientPolicies(this AuthorizationOptions options)
+    {
+        options.AddPolicy(Read, policy => RequireReadingClient(policy));
         options.AddPolicy(
-            Read,
+            Admin,
             policy =>
-                policy
-                    .AddAuthenticationSchemes(ServiceClientAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
+                RequireReadingClient(policy)
                     .RequireClaim(
-                        ServiceClientAuthenticationHandler.ScopeClaimType,
-                        ServiceClientAuthenticationHandler.ReadScope
+                        ServiceClientAuthenticationHandler.ClientNameClaimType,
+                        AdminClientName
                     )
-                    .AddRequirements(new ReadOnlyMethodRequirement())
         );
+    }
+
+    private static AuthorizationPolicyBuilder RequireReadingClient(AuthorizationPolicyBuilder policy) =>
+        policy
+            .AddAuthenticationSchemes(ServiceClientAuthenticationHandler.SchemeName)
+            .RequireAuthenticatedUser()
+            .RequireClaim(
+                ServiceClientAuthenticationHandler.ScopeClaimType,
+                ServiceClientAuthenticationHandler.ReadScope
+            )
+            .AddRequirements(new ReadOnlyMethodRequirement());
 }
 
 /// <summary>

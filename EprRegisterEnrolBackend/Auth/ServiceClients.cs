@@ -33,6 +33,10 @@ public class ServiceClientsConfig
     /// 0 means no limit.
     /// </summary>
     public int QueryTimeoutSeconds { get; set; } = 5;
+
+    /// <summary><see cref="QueryTimeoutSeconds"/> as a query's MaxTime: null for no limit.</summary>
+    public TimeSpan? QueryTimeout =>
+        QueryTimeoutSeconds > 0 ? TimeSpan.FromSeconds(QueryTimeoutSeconds) : null;
 }
 
 public class ServiceClientDefinition

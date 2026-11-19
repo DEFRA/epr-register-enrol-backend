@@ -9,8 +9,7 @@ info:
     apart from the `/v1` accreditation API (`registration-accreditation-api.v2.yaml`), so either
     can change without affecting the other.
 
-    * **Every path is under `/admin`.** This document is served at `/admin/openapi.yaml`, without
-      authentication, for the CDP API Hub.
+    * **Every path is under `/admin`.**
     * **Only the admin service client may call it.** Requests are signed exactly as for `/v1`
       (client ID plus HMAC-SHA256, `ServiceClientAuthenticationHandler`). The admin client's ID
       is configured in `ServiceClients`, and its secret is `AUTH_SHARED_SECRET__ADMIN`. Any other

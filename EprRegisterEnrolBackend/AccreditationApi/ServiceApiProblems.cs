@@ -8,11 +8,12 @@ namespace EprRegisterEnrolBackend.AccreditationApi;
 /// RA-702: one error format across the service API. The routes already answer 400, 401, 403, 404
 /// and 429 as problem details with a stable <c>code</c> and the <c>traceId</c>. ASP.NET Core itself
 /// answers a path that matches no route (404) and a method a route does not take (405) with an empty
-/// body, so under <c>/v1</c> those are written the same way here.
+/// body, so under <c>/v1</c> those are written the same way here. RA-740: the same for the admin API
+/// under <c>/admin</c>.
 /// </summary>
 public static class ServiceApiProblems
 {
-    private const string ApiPrefix = "/v1";
+    private static readonly PathString[] ApiPrefixes = ["/v1", "/admin"];
 
     public static IApplicationBuilder UseServiceApiProblems(this IApplicationBuilder app) =>
         app.Use(
@@ -20,7 +21,7 @@ public static class ServiceApiProblems
             {
                 await next();
 
-                if (!context.Request.Path.StartsWithSegments(ApiPrefix))
+                if (!ApiPrefixes.Any(prefix => context.Request.Path.StartsWithSegments(prefix)))
                     return;
 
                 var response = context.Response;

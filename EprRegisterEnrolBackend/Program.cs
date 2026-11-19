@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApi;
+using EprRegisterEnrolBackend.AdminApi;
 using EprRegisterEnrolBackend.TestData;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
@@ -169,6 +170,15 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IAccreditationApplicationPersistence,
         AccreditationApplicationPersistence
     >();
+    // RA-740: the admin API always searches the Legacy collection. Until the cut that is the same
+    // persistence as above; once the cut replaces it with the model-backed one, a Legacy one of its own.
+    builder.Services.AddSingleton<ILegacyApplicationSearch>(sp =>
+        sp.GetRequiredService<IAccreditationApplicationPersistence>() as ILegacyApplicationSearch
+        ?? new AccreditationApplicationPersistence(
+            sp.GetRequiredService<IMongoDbClientFactory>(),
+            sp.GetRequiredService<ILoggerFactory>()
+        )
+    );
 
     // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a
     // DomainModel:* flag, off by default; phase 1 "Expand" adds the domain-model-schema readiness check.
@@ -489,7 +499,7 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
-    // RA-702: a 404 or 405 under /v1 in the service API's problem format, like its other errors.
+    // RA-702: a 404 or 405 under /v1 (and RA-740 /admin) in the service API's problem format, like its other errors.
     app.UseServiceApiProblems();
     // No app.UseAuthentication(): CaseManagement is the only scheme registered, so ASP.NET Core
     // treats it as the implicit default and this middleware would eagerly run
@@ -526,6 +536,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseAccreditationApplicationEndpoints();
     // Service client (ReEx) read-only endpoints: accreditations by year, and their overseas sites
     app.UseAccreditationApiEndpoints();
+    // RA-740: the admin service client's read-only API, under /admin
+    app.UseAdminApiEndpoints();
     // The in-year changes journey, behind a flag, off by default, until it ships (unmapped, its routes
     // return 404): RA-425's current registration status, for the frontend's material dashboard pages,
     // and RA-492's change requests against a granted accreditation.
