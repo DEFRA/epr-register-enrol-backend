@@ -269,7 +269,7 @@ public class FakeOrganisationPersistenceTests
         result.Should().ContainSingle(o => o.OrgId == 2);
     }
 
-    // RA-690: approval derives the accreditation reference from a registration reference, so the
+    // RA-690/RA-783: approval builds a new accreditation number on a registration reference, so the
     // seeded data must only ever hold valid, distinct 17-character registration references.
     [Fact]
     public async Task SeededOrganisations_AllHoldValidDistinctRegistrationReferences()

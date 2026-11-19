@@ -254,7 +254,9 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
     NotFound:
-      description: No such resource, or no such route (`code` `not_found`).
+      description: |
+        No such resource, or no such route (`code` `not_found`). An unknown route, like a method other
+        than GET, is answered before authentication, because it reveals nothing beyond this published API.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -454,7 +456,13 @@ components:
         withdrawn sites are retained for reporting and only included with `includeWithdrawn=true`.
       required: [siteId, siteNumber, siteName, address, contact]
       properties:
-        siteId: { type: integer, format: int32 }
+        siteId:
+          type: integer
+          format: int32
+          description: >-
+            Identifies the site within its accreditation: unique there, across overseas and interim
+            sites, and never reused after a site is removed. Not unique across accreditations, and
+            not a database id.
         siteNumber: { type: string }
         siteName: { type: string }
         address:
@@ -484,7 +492,13 @@ components:
         `AccreditationSummary.latestStatus`.
       required: [siteId, siteName, latestStatus, statusHistory, interimSites]
       properties:
-        siteId: { type: integer, format: int32 }
+        siteId:
+          type: integer
+          format: int32
+          description: >-
+            Identifies the site within its accreditation: unique there, across overseas and interim
+            sites, and never reused after a site is removed. Not unique across accreditations, and
+            not a database id.
         orsId: { type: string, nullable: true, example: '001' }
         siteName: { type: string }
         formattedAddress: { type: string, nullable: true, description: Pre-formatted single-line address. }
