@@ -125,8 +125,13 @@ what is proven, and record the rest on `RA-794`.
 
 ## Configuration
 
-The keys match management-be's, so both services are run the same way. Use the `Diagnostics__...`
-form for environment variables.
+management-be reads the same five keys with the same meanings, so both services are run the same
+way. Use the `Diagnostics__...` form for environment variables.
+
+The gates are not numbered the same on both sides. This side's gates 1, 2 and 3 are management-be's
+gates 1, 2 and 4, and this side's per-site gate 4 is management-be's gate 5. management-be also has a gate this side does not have: its gate 3,
+`Diagnostics:Ra292OperatorRefusedSites`, which takes the sites this side refuses (see *Handing the
+refused sites to management-be*).
 
 | Key | Effect |
 | --- | --- |

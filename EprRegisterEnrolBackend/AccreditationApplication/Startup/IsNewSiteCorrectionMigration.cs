@@ -16,7 +16,10 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // and management-be replaces payload.overseasSites.sites[] with them, so an uncorrected true here
 // undoes the management-be correction (docs/diagnostics/ra-794-isnewsite-correction.md).
 //
-// Gates, as management-be's:
+// Gates. 1, 2 and 3 use the same keys as management-be's gates 1, 2 and 4, and 4 is its per-site
+// gate 5. management-be also has
+// a refused-sites gate (its 3, Diagnostics:Ra292OperatorRefusedSites), which takes the sites this
+// correction refuses; this side has no such gate.
 //   1. Diagnostics:Ra292CorrectIsNewSite        off (absent) -> does nothing at all.
 //   2. Diagnostics:Ra292SpotCheckConfirmedBy    must name whoever spot-checked the audit output.
 //   3. Diagnostics:Ra292CorrectIsNewSiteApply   absent/false -> dry run: logs, writes nothing.

@@ -132,6 +132,53 @@ public class AccreditationApplicationEndpointsPatchOverseasSitesUnknownSiteTests
             .Equal(before);
     }
 
+    // A known id listed twice would be merged as two sites, the copy inheriting site 2's OrsId and
+    // isNewSite with the client's details: a site created through the PATCH.
+    [Fact]
+    public async Task Patch_KnownSiteIdRepeatedWithOtherDetails_Returns400ProblemAndLogsErrorAndWritesNothing()
+    {
+        var application = SeedApplication();
+        var applicationId = application.Id!.Value.ToString();
+
+        var response = await PatchAsync(
+            applicationId,
+            new
+            {
+                sites = new object[]
+                {
+                    new { siteId = 1, siteName = "Site 1" },
+                    new { siteId = 2, siteName = "Site 2" },
+                    new
+                    {
+                        siteId = 2,
+                        siteName = "Copied in",
+                        country = "France",
+                        addressLine1 = "1 Rue Inconnue",
+                    },
+                },
+            }
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(
+            TestContext.Current.CancellationToken
+        );
+        problem.GetProperty("detail").GetString().Should().Be("Overseas site 2 appears more than once.");
+
+        var error = _factory
+            .LogCapture.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error)
+            .Subject;
+        error.Properties["ApplicationId"].Should().Be(applicationId);
+        error.Properties["SiteId"].Should().Be(2);
+
+        var stored = (await _factory.FakePersistence.GetByIdAsync("org-123", applicationId))!
+            .OverseasSites!.Sites;
+        stored.Select(s => s.SiteId).Should().Equal(1, 2);
+        stored.Single(s => s.SiteId == 2).SiteName.Should().Be("Site 2");
+    }
+
     [Fact]
     public async Task Patch_FrontendShapeDeselectingAKnownSite_Succeeds()
     {

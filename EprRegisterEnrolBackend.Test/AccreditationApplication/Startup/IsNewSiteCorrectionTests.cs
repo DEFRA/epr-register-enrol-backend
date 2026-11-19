@@ -668,7 +668,7 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
         _correctionLog.Entries.Should().NotContain(e => e.Message.Contains("APPLIED"));
     }
 
-    // --- AC04: a query-resubmit after the correction ---------------------------------------------
+    // --- AC03: a query-resubmit after the correction ---------------------------------------------
 
     [Theory]
     [InlineData("overseas-reprocessing-sites", "OverseasSites")]
@@ -704,7 +704,7 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
             );
     }
 
-    // --- AC03: the dual-write domain model ---------------------------------------------------
+    // --- the dual-write domain model (no AC) ---------------------------------------------------
 
     // The wrong true made the site an operator proposal: Proposed while the application is in flight,
     // Discarded once it is closed (ApplicationGroupMigrator.StatusFor). Either way the correction gives it
@@ -716,6 +716,34 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
         ApplicationStatus applicationStatus,
         OverseasSiteStatus proposalStatus
     )
+    {
+        var (stores, unitOfWork, application) = await MigratedWithDualWriteAsync(applicationStatus);
+        var proposal = await OrsForSiteAsync(stores, application, 1);
+        proposal.Origin.Should().Be(SiteOrigin.Operator, "precondition: the wrong true made it a proposal");
+        proposal.Status.Should().Be(proposalStatus, "precondition");
+
+        (await Correction(Apply(), Services(unitOfWork, stores)).RunAsync(Ct))
+            .Should()
+            .Be(RunResult.Applied);
+
+        Flags(await StoredAsync(application))[1].Should().BeFalse();
+        var entry = (await CurrentApplicationVersionAsync(stores, application))
+            .AsAccreditation()
+            .ApplicationOverseasSites.Single(e => e.SiteId == 1);
+        entry.IsNewSite.Should().BeFalse();
+        var ors = await OrsForSiteAsync(stores, application, 1);
+        ors.Origin.Should().Be(SiteOrigin.ReEx);
+        ors.Status.Should().Be(OverseasSiteStatus.Active);
+        ors.ProposedByApplicationId.Should().BeNull();
+    }
+
+    // A dual-write unit of work over the real stores, and an application holding one
+    // wrongly-defaulted site (1) already migrated into the model.
+    private async Task<(
+        ApplicationGroupStores Stores,
+        DualWriteUnitOfWork UnitOfWork,
+        AccreditationApplicationModel Application
+    )> MigratedWithDualWriteAsync(ApplicationStatus applicationStatus = ApplicationStatus.Queried)
     {
         var clock = new TestClock(new DateTime(2026, 11, 18, 9, 0, 0, DateTimeKind.Utc));
         var logs = NullLoggerFactory.Instance;
@@ -746,23 +774,47 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
             _ => { },
             Ct
         );
-        var proposal = await OrsForSiteAsync(stores, application, 1);
-        proposal.Origin.Should().Be(SiteOrigin.Operator, "precondition: the wrong true made it a proposal");
-        proposal.Status.Should().Be(proposalStatus, "precondition");
+        return (stores, unitOfWork, application);
+    }
+
+    // The model out of line with legacy: the planned site's entry is gone from the current
+    // Application version, or the ORS that entry points at has no versions.
+    [Theory]
+    [InlineData("site entry")]
+    [InlineData("ORS")]
+    public async Task Correction_WithDualWrite_ModelMissingThePlannedSite_RollsBackAndLogsAnError(string missing)
+    {
+        var (stores, unitOfWork, application) = await MigratedWithDualWriteAsync();
+        var database = _factory.GetClient().GetDatabase(_databaseName);
+        if (missing == "site entry")
+            await database
+                .GetCollection<BsonDocument>(DomainModelCollections.ApplicationVersions)
+                .UpdateManyAsync(
+                    Builders<BsonDocument>.Filter.Eq("entityId", application.Id!.Value),
+                    Builders<BsonDocument>.Update.Set("details.applicationOverseasSites", new BsonArray()),
+                    cancellationToken: Ct
+                );
+        else
+        {
+            var orsEntityId = (await CurrentApplicationVersionAsync(stores, application))
+                .AsAccreditation()
+                .ApplicationOverseasSites.Single(e => e.SiteId == 1)
+                .OverseasSiteId!.Value;
+            await database
+                .GetCollection<BsonDocument>(DomainModelCollections.OverseasSiteVersions)
+                .DeleteManyAsync(Builders<BsonDocument>.Filter.Eq("entityId", orsEntityId), Ct);
+        }
+        var versionBefore = (await StoredAsync(application)).Version;
 
         (await Correction(Apply(), Services(unitOfWork, stores)).RunAsync(Ct))
             .Should()
             .Be(RunResult.Applied);
 
-        Flags(await StoredAsync(application))[1].Should().BeFalse();
-        var entry = (await CurrentApplicationVersionAsync(stores, application))
-            .AsAccreditation()
-            .ApplicationOverseasSites.Single(e => e.SiteId == 1);
-        entry.IsNewSite.Should().BeFalse();
-        var ors = await OrsForSiteAsync(stores, application, 1);
-        ors.Origin.Should().Be(SiteOrigin.ReEx);
-        ors.Status.Should().Be(OverseasSiteStatus.Active);
-        ors.ProposedByApplicationId.Should().BeNull();
+        var stored = await StoredAsync(application);
+        Flags(stored)[1].Should().BeTrue("the transaction rolled the legacy write back");
+        stored.Version.Should().Be(versionBefore);
+        ShouldLogOneConflictError(application);
+        _correctionLog.Entries.Should().NotContain(e => e.Message.Contains("APPLIED"));
     }
 
     private static async Task<ApplicationEntity> CurrentApplicationVersionAsync(

@@ -1766,6 +1766,27 @@ public static class AccreditationApplicationEndpoints
             return Results.BadRequest(reason);
         }
 
+        // RA-794: a known site id listed twice would be stored twice by OverseasSiteMerge.Merge, the
+        // copy inheriting the original's OrsId, isNewSite, registeredNowAccredited and history with
+        // the client's details. That creates a site through this PATCH, so it is refused like an
+        // unknown id.
+        if (FindRepeatedSite(request.Sites) is { } repeatedSiteId)
+        {
+            loggerFactory
+                .CreateLogger("AccreditationApplicationEndpoints")
+                .LogError(
+                    "PatchOverseasSites rejected for application {ApplicationId}: overseas site id "
+                        + "{SiteId} appears more than once in the body",
+                    applicationId,
+                    repeatedSiteId
+                );
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Repeated overseas site",
+                detail: $"Overseas site {repeatedSiteId} appears more than once."
+            );
+        }
+
         // RA-794: this PATCH edits, selects and drops the sites the application already holds; it
         // never creates one (the Registration & Accreditation frontend only ever sends back a filtered or mapped copy of the
         // application's own list). A new site goes through POST .../overseas-sites, which validates
@@ -2084,6 +2105,14 @@ public static class AccreditationApplicationEndpoints
             .SelectMany(site => InterimSiteSync.All(site).Select(interim => interim.SiteId))
             .Where(interimId => interimId > 0)
             .GroupBy(interimId => interimId)
+            .Where(group => group.Skip(1).Any())
+            .Select(group => (int?)group.Key)
+            .FirstOrDefault();
+
+    // RA-794: the first overseas site id the PATCH body lists more than once, if any.
+    private static int? FindRepeatedSite(List<OverseasSiteModel>? sites) =>
+        (sites ?? [])
+            .GroupBy(site => site.SiteId)
             .Where(group => group.Skip(1).Any())
             .Select(group => (int?)group.Key)
             .FirstOrDefault();
