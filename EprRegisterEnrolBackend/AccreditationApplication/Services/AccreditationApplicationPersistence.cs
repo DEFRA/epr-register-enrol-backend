@@ -597,13 +597,13 @@ public class AccreditationApplicationPersistence(
     }
 
     // Shared by ReplaceIfMatchAsync above (its own expectedVersion is always the version it just
-    // read) and available to any UpdateFieldsAsync caller that wants the same RA-516 optimistic-
-    // concurrency semantics as a guard filter. Every AccreditationApplicationModel document
+    // read) and by any UpdateFieldsAsync caller that wants the same RA-516 optimistic-concurrency
+    // semantics as a guard filter (RA-794's IsNewSiteCorrectionMigration does). Every AccreditationApplicationModel document
     // written before RA-516 shipped has no "version" field in storage at all (Mongo's equality
     // filter never matches a genuinely absent field), so an expected version of 0 - the in-memory
     // default for both a brand-new document and one read back from before this deploy - also
     // accepts a document where the field is missing entirely.
-    private static FilterDefinition<AccreditationApplicationModel> VersionFilter(
+    internal static FilterDefinition<AccreditationApplicationModel> VersionFilter(
         long expectedVersion
     ) =>
         expectedVersion == 0

@@ -189,8 +189,10 @@ The correction is idempotent: a corrected site reads `false` and is not flagged 
 
 - Each application is re-read inside its write, and the planned sites must still be `true`, have no
   `orsId` and have the name ReEx matched. The site list is then set with a targeted `$set` guarded on
-  the `version` it read. If anything changed in between, nothing is written to that application and
-  the run logs an error. Re-run the dry run to see its current state.
+  the `version` it read. An application last saved before RA-516 has no stored `version` and reads
+  as `0`, so the guard also accepts a missing field, as every other versioned write does. If anything
+  changed in between, nothing is written to that application and the run logs an error. Re-run the
+  dry run to see its current state.
 - The write increases `version`, so an operator's stale whole-document save cannot write the old
   `true` back.
 - Nothing on the site changes except `isNewSite`. History snapshots (`overseasSites.versions`) are

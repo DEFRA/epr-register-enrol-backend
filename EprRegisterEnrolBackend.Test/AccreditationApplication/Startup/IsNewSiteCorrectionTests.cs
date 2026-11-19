@@ -341,7 +341,36 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
         _auditLog
             .Entries.Should()
             .Contain(e => e.Message.Contains("PROVABLY-CORRUPT: 1 sites on 1 applications"))
-            .And.Contain(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("notInReEx"));
+            .And.Contain(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("notInReEx"))
+            .And.NotContain(e => e.Message.Contains("more sites were refused"));
+    }
+
+    [Fact]
+    public async Task Audit_MoreRefusedThanCorrectable_WarnsOnce()
+    {
+        // One correctable site (1) against two the classifier refuses (98, 99).
+        await SeedAsync(
+            BeforeDeploy,
+            [
+                IsNewSiteClassifierTests.Site(1, "Carried Over Ltd"),
+                IsNewSiteClassifierTests.Site(98, "Unproven A"),
+                IsNewSiteClassifierTests.Site(99, "Unproven B"),
+            ]
+        );
+
+        var result = await Audit(
+                Config((IsNewSiteConfig.AuditKey, "true"), (IsNewSiteConfig.DeployedAtKey, DeployedAt))
+            )
+            .RunAsync(Ct);
+
+        result!.SiteCounts[IsNewSiteVerdict.AmbiguousRefused].Should().Be(2);
+        var warning = _auditLog
+            .Entries.Where(e => e.Message.Contains("more sites were refused"))
+            .Should()
+            .ContainSingle()
+            .Subject;
+        warning.LogLevel.Should().Be(LogLevel.Warning);
+        warning.Message.Should().Contain("refused (2) than found correctable (1)");
     }
 
     [Fact]
@@ -486,6 +515,28 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
         (await Correction(Apply()).RunAsync(Ct)).Should().Be(RunResult.Applied);
         (await StoredAsync(application)).Version.Should().Be(stored.Version);
         _correctionLog.Entries.Should().NotContain(e => e.Message.Contains("APPLIED"));
+    }
+
+    [Fact]
+    public async Task Correction_Apply_CorrectsAnApplicationSavedBeforeVersioning()
+    {
+        // Saved before RA-516 and not since: the stored document has no version field at all.
+        var application = await SeedAsync(BeforeDeploy);
+        var raw = _factory.GetCollection<BsonDocument>("accreditationApplications");
+        (
+            await raw.UpdateOneAsync(
+                Builders<BsonDocument>.Filter.Eq("_id", application.Id),
+                Builders<BsonDocument>.Update.Unset("version"),
+                cancellationToken: Ct
+            )
+        ).ModifiedCount.Should().Be(1, "precondition: the version field is removed");
+
+        (await Correction(Apply()).RunAsync(Ct)).Should().Be(RunResult.Applied);
+
+        var stored = await StoredAsync(application);
+        Flags(stored).Should().Contain(new Dictionary<int, bool> { [1] = false, [2] = false });
+        stored.Version.Should().Be(1);
+        _correctionLog.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 
     [Fact]

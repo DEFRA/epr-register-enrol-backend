@@ -253,10 +253,9 @@ public sealed class IsNewSiteCorrectionMigration(
 
                 var written = await persistence.UpdateFieldsAsync(
                     scan.Id,
-                    Builders<AccreditationApplicationModel>.Filter.Eq(
-                        a => a.Version,
-                        application.Version
-                    ),
+                    // Not a plain Eq: an application last saved before RA-516 has no stored
+                    // version, and those are exactly the oldest in-window applications.
+                    AccreditationApplicationPersistence.VersionFilter(application.Version),
                     Builders<AccreditationApplicationModel>.Update.Set(
                         a => a.OverseasSites!.Sites,
                         sites
