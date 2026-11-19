@@ -23,6 +23,7 @@ public class StatusHistoryProjectionTests
         new()
         {
             Version = version,
+            Year = 2026,
             ValidFrom = validFrom,
             Status = status,
             AccreditationOverseasSites = [.. sites],
@@ -46,7 +47,35 @@ public class StatusHistoryProjectionTests
         var entry = Assert.Single(history);
         Assert.Equal("approved", entry.Status);
         Assert.Equal(recorded, entry.RecordedAt);
-        Assert.Equal(new DateOnly(2026, 1, 15), entry.EffectiveDate);
+        Assert.Equal(new DateOnly(2026, 1, 15), entry.EffectiveFromDate);
+        Assert.Null(entry.EffectiveToDate);
+    }
+
+    [Fact]
+    public void ForAccreditation_EachEntryApplies_UntilTheDayBeforeTheNext()
+    {
+        var history = StatusHistoryProjection.ForAccreditation([
+            Version(1, new DateTime(2026, 2, 1, 10, 0, 0, DateTimeKind.Utc), AccreditationStatus.Approved),
+            Version(2, new DateTime(2026, 4, 10, 10, 0, 0, DateTimeKind.Utc), AccreditationStatus.Suspended),
+            Version(3, new DateTime(2026, 6, 1, 10, 0, 0, DateTimeKind.Utc), AccreditationStatus.Approved),
+        ]);
+
+        Assert.Equal(
+            [new DateOnly(2026, 4, 9), new DateOnly(2026, 5, 31), (DateOnly?)null],
+            history.Select(e => e.EffectiveToDate)
+        );
+    }
+
+    [Fact]
+    public void ForAccreditation_RecordedBeforeTheYear_AppliesFromThe1stOfJanuary()
+    {
+        var entry = Assert.Single(
+            StatusHistoryProjection.ForAccreditation([
+                Version(1, new DateTime(2025, 11, 20, 10, 0, 0, DateTimeKind.Utc), AccreditationStatus.Approved),
+            ])
+        );
+
+        Assert.Equal(new DateOnly(2026, 1, 1), entry.EffectiveFromDate);
     }
 
     [Fact]
@@ -81,7 +110,7 @@ public class StatusHistoryProjectionTests
     [Theory]
     [InlineData("2026-06-30T23:30:00Z", "2026-07-01")] // BST: already the next day in the UK
     [InlineData("2026-01-31T23:30:00Z", "2026-01-31")] // GMT
-    public void ForAccreditation_EffectiveDate_IsTheUkDateItWasRecorded(
+    public void ForAccreditation_EffectiveFromDate_IsTheUkDateItWasRecorded(
         string recorded,
         string expected
     )
@@ -98,7 +127,7 @@ public class StatusHistoryProjectionTests
             ])
         );
 
-        Assert.Equal(DateOnly.Parse(expected), entry.EffectiveDate);
+        Assert.Equal(DateOnly.Parse(expected), entry.EffectiveFromDate);
     }
 
     [Fact]

@@ -43,6 +43,24 @@ public class DomainModelConfig
     public bool ReconcileEnabled { get; set; }
 
     /// <summary>
+    /// Phase 5, "Switch reads": the read routes and the ReEx accreditation API are served from the domain model
+    /// through the ApplicationReadModel facade instead of the legacy accreditationApplications document.
+    /// Its prerequisites are listed once, in
+    /// <see cref="EprRegisterEnrolBackend.Config.FeatureFlags.EnsureReadFromModelHasItsPrerequisites"/>.
+    /// Turning it off is the rollback: reads return to legacy.
+    /// </summary>
+    public bool ReadFromModel { get; set; }
+
+    /// <summary>
+    /// Phase 6, "Cut legacy writes": legacy accreditationApplications collection stops being written and
+    /// the domain model is the only source of truth. On (true, the default) keeps writing the legacy collection;
+    /// off is the cut; turning it back on is a safe rollback only until a write has been made with it off,
+    /// because those writes exist only in the model. Prerequisites listed once in
+    /// <see cref="EprRegisterEnrolBackend.Config.FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites"/>.
+    /// </summary>
+    public bool LegacyWrites { get; set; } = true;
+
+    /// <summary>
     /// Run the B0 transaction smoke test and the B1 legacy-data survey once at startup. Only for test
     /// environments, where the data is test data (R15).
     /// </summary>

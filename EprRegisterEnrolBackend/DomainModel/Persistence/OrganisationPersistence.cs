@@ -148,6 +148,23 @@ public class OrganisationPersistence(
         return result.ModifiedCount == 1;
     }
 
+    /// <summary>RA-706: after the cut the accreditation API and number lookups find an organisation by its number.</summary>
+    public async Task<OrganisationEntity?> FindByOrganisationNumberAsync(
+        int organisationNumber,
+        IClientSessionHandle? session = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var filter = Builders<OrganisationEntity>.Filter.Eq(
+            x => x.OrganisationNumber,
+            organisationNumber
+        );
+
+        return session == null
+            ? await Collection.Find(filter).FirstOrDefaultAsync(cancellationToken)
+            : await Collection.Find(session, filter).FirstOrDefaultAsync(cancellationToken);
+    }
+
     /// <summary>The organisation with <paramref name="reExOrganisationId"/>, or null.</summary>
     public async Task<OrganisationEntity?> FindByReExOrganisationIdAsync(
         string reExOrganisationId,

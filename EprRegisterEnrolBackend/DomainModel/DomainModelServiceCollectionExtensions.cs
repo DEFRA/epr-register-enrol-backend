@@ -1,3 +1,5 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.DomainModel.Cut;
 using EprRegisterEnrolBackend.DomainModel.Diagnostics;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.Entities;
@@ -25,10 +27,51 @@ public static class DomainModelServiceCollectionExtensions
     {
         var section = configuration.GetSection(DomainModelConfig.SectionName);
         var config = section.Get<DomainModelConfig>() ?? new DomainModelConfig();
-        RequireExpand(config.DualWriteSeed, "DualWriteSeed", config);
-        RequireExpand(config.DualWrite, "DualWrite", config);
-        RequireDualWrite(config.MigrateEnabled, "MigrateEnabled", config);
-        RequireDualWrite(config.ReconcileEnabled, "ReconcileEnabled", config);
+        const string NoCollections = "without it there are no collections to write to.";
+        const string GoesStale = "without it a migrated application goes stale.";
+        const string ReadsFrozenLegacy = "it reads legacy, which is frozen after the cut.";
+        Require(
+            config.DualWriteSeed,
+            nameof(DomainModelConfig.DualWriteSeed),
+            config.ExpandEnabled,
+            nameof(DomainModelConfig.ExpandEnabled),
+            NoCollections
+        );
+        Require(
+            config.DualWrite,
+            nameof(DomainModelConfig.DualWrite),
+            config.ExpandEnabled,
+            nameof(DomainModelConfig.ExpandEnabled),
+            NoCollections
+        );
+        Require(
+            config.MigrateEnabled,
+            nameof(DomainModelConfig.MigrateEnabled),
+            config.DualWrite,
+            nameof(DomainModelConfig.DualWrite),
+            GoesStale
+        );
+        Require(
+            config.ReconcileEnabled,
+            nameof(DomainModelConfig.ReconcileEnabled),
+            config.DualWrite,
+            nameof(DomainModelConfig.DualWrite),
+            GoesStale
+        );
+        Require(
+            config.MigrateEnabled,
+            nameof(DomainModelConfig.MigrateEnabled),
+            config.LegacyWrites,
+            nameof(DomainModelConfig.LegacyWrites),
+            ReadsFrozenLegacy
+        );
+        Require(
+            config.ReconcileEnabled,
+            nameof(DomainModelConfig.ReconcileEnabled),
+            config.LegacyWrites,
+            nameof(DomainModelConfig.LegacyWrites),
+            ReadsFrozenLegacy
+        );
 
         services.Configure<DomainModelConfig>(section);
         services.AddHostedService<DomainModelDiagnosticsService>();
@@ -42,6 +85,8 @@ public static class DomainModelServiceCollectionExtensions
         AddDualWrite(services, config.DualWrite);
         AddMigration(services, config.MigrateEnabled);
         AddReconciliation(services, config.ReconcileEnabled);
+        AddReadFromModel(services, config.ReadFromModel);
+        AddCut(services, config.LegacyWrites);
 
         return services;
     }
@@ -82,6 +127,9 @@ public static class DomainModelServiceCollectionExtensions
 
         services.AddSingleton<SeedModelStores>();
         services.AddSingleton<SeedDualWriteMetrics>();
+        // The seed writes the initial Application version through the migrator, RA-705.
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
         services.AddSingleton<ISeedDualWriter, SeedDualWriter>();
     }
 
@@ -98,8 +146,8 @@ public static class DomainModelServiceCollectionExtensions
         }
 
         services.AddSingleton<DualWriteMetrics>();
-        services.AddSingleton<ApplicationGroupStores>();
-        services.AddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<IApplicationGroupMigrator, ApplicationGroupMigrator>();
         services.AddSingleton<IApplicationModelSync, ApplicationModelSync>();
         services.AddSingleton<IModelInterimSiteNumbers, ModelInterimSiteNumbers>();
         services.AddSingleton<IRegistrationNumberRules, RegistrationNumberRules>();
@@ -120,6 +168,9 @@ public static class DomainModelServiceCollectionExtensions
             .AddHealthChecks()
             .AddCheck<DomainModelMigrationHealthCheck>("domain-model-migration", tags: ["ready"]);
         services.AddHostedService<DomainModelMigrationService>();
+        // RA-706: backfill application.createdAt from legacy documents
+        services.AddSingleton<ApplicationCreatedAtBackfill>();
+        services.AddHostedService<ApplicationCreatedAtBackfillService>();
     }
 
     // Phase 4: the projection the reads will switch to, and the report comparing it with the legacy documents.
@@ -130,27 +181,59 @@ public static class DomainModelServiceCollectionExtensions
             return;
         }
 
-        services.AddSingleton<ApplicationReadModel>();
+        services.TryAddSingleton<ApplicationReadModel>();
         services.AddSingleton<ApplicationReconciler>();
         services.AddHostedService<DomainModelReconciliationService>();
     }
 
-    private static void RequireDualWrite(bool flag, string name, DomainModelConfig config)
+    // Phase 5, "Switch reads": switches the IApplicationReader implementation based on the configuration.
+    private static void AddReadFromModel(IServiceCollection services, bool enabled)
     {
-        if (flag && !config.DualWrite)
+        if (!enabled)
         {
-            throw new InvalidOperationException(
-                $"DomainModel:{name} needs DomainModel:DualWrite: without it a migrated application goes stale."
-            );
+            services.AddSingleton<IApplicationReader, LegacyApplicationReader>();
+            return;
         }
+
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<ApplicationReadModel>();
+        services.AddSingleton<IApplicationReader, ModelApplicationReader>();
     }
 
-    private static void RequireExpand(bool flag, string name, DomainModelConfig config)
+    // Phase 6, "Cut": replaces legacy persistence with model-backed persistence and registers the flush mechanism.
+    // The cut serves every application read and write from the model; the unit of work picks up CutFlush through its optional constructor parameter.
+    private static void AddCut(IServiceCollection services, bool legacyWrites)
     {
-        if (flag && !config.ExpandEnabled)
+        if (legacyWrites)
+        {
+            return;
+        }
+
+        services.TryAddSingleton<ApplicationGroupStores>();
+        services.TryAddSingleton<ApplicationReadModel>();
+        services.AddSingleton<CutStagingPersistence>();
+        services.AddSingleton<CutFlush>();
+        services.AddSingleton<Func<CutFlush>>(sp => () => sp.GetRequiredService<CutFlush>());
+
+        services.Replace(
+            ServiceDescriptor.Singleton<
+                IAccreditationApplicationPersistence,
+                ModelBackedApplicationPersistence
+            >()
+        );
+        // The persistence now projects from the model itself; write responses are read back from it after the commit.
+        services.Replace(
+            ServiceDescriptor.Singleton<IApplicationReader, CutApplicationReader>()
+        );
+    }
+
+    // A flag that is on needs its prerequisite on too.
+    private static void Require(bool flag, string name, bool prerequisite, string prerequisiteName, string reason)
+    {
+        if (flag && !prerequisite)
         {
             throw new InvalidOperationException(
-                $"DomainModel:{name} needs DomainModel:ExpandEnabled: without it there are no collections to write to."
+                $"DomainModel:{name} needs DomainModel:{prerequisiteName}: {reason}"
             );
         }
     }

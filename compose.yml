@@ -76,7 +76,7 @@ services:
       REEX_API_BASIC_AUTH_PASSWORD: ""
       # Domain model phase 1 ("Expand"): build the empty versioned collections locally. Off by default elsewhere.
       DomainModel__ExpandEnabled: 'true'
-      # RA-492: keep off until management-be registers the add-overseas-site work-item type.
+      # Off: this stack runs no management-be to submit to. The monorepo root compose turns it on (RA-739).
       AccreditationChanges__SubmitToCaseManagement: 'false'
     networks:
       - cdp-tenant

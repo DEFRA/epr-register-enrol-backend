@@ -124,7 +124,7 @@ public class FakeOrganisationPersistenceTests
         org.CompanyDetails.RegistrationNumber.Should().Be("R26EX0500190001PL");
         var registration = org.Registrations!.Should().ContainSingle().Subject;
         registration.Id.ToString().Should().Be("aaa000000000000000050019");
-        registration.OverseasSites.Should().Equal("901901", "901910", "901911", "901912");
+        registration.OverseasSites.Should().Equal("901901", "901910", "901914", "901911", "901912");
     }
 
     [Fact]
@@ -269,7 +269,7 @@ public class FakeOrganisationPersistenceTests
         result.Should().ContainSingle(o => o.OrgId == 2);
     }
 
-    // RA-690: approval derives the accreditation reference from a registration reference, so the
+    // RA-690/RA-783: approval builds a new accreditation number on a registration reference, so the
     // seeded data must only ever hold valid, distinct 17-character registration references.
     [Fact]
     public async Task SeededOrganisations_AllHoldValidDistinctRegistrationReferences()

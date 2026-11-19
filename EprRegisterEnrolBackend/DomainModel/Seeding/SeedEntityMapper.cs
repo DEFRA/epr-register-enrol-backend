@@ -98,7 +98,7 @@ public static class SeedEntityMapper
         target.Coordinates = site.Coordinates;
         if (SiteApprovalDate.Parse(site.ValidFrom) is { } approved)
         {
-            target.RecordFirstApproval(approved, FirstApprovalSource.ReEx);
+            target.RecordFirstApproval(approved, FirstApprovalSource.ReEx, site.ValidFrom);
         }
 
         target.BaselOecdCodes = new[] { site.Code1, site.Code2, site.Code3 }
@@ -145,7 +145,11 @@ public static class SeedEntityMapper
     {
         if (!string.IsNullOrWhiteSpace(accreditationNumber))
         {
-            target.SetAccreditationNumber(year, accreditationNumber, HeldAccreditationNumber.Replace);
+            target.SetAccreditationNumber(
+                year,
+                accreditationNumber,
+                HeldAccreditationNumber.Replace
+            );
         }
     }
 

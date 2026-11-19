@@ -1,6 +1,126 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.10, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06, v6.9 2026-11-06
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.14, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06, v6.9 2026-11-06, v6.10 2026-11-09, v6.12 2026-11-14, v6.13 2026-11-16, v6.14 2026-11-16
+
+**Changes in v6.14 (2026-11-16): phase 6, the cut (RA-706)**
+
+- **Writes keep going through the existing handlers** (decided 2026-11-15). With `DomainModel:LegacyWrites` off, a
+  second `IAccreditationApplicationPersistence` is registered: the model-backed persistence. Reads project the model
+  through `ApplicationReadModel`; lookups query `applicationVersions`, narrowed by indexed fields. A write copies the
+  application from the model into a staging collection, `accreditationApplicationsCutStaging`, inside the write's
+  transaction, and runs the unchanged legacy persistence against that copy, so its version check, guard filters and
+  update operators behave exactly as before. Before the commit, the cut's flush runs the migration's ensure-migrated
+  step and the sync for every staged application, then deletes the copies. Legacy is never written and nothing stays
+  staged. Handlers, seed and the API are unchanged. Phase 7 may replace this with model-native writes.
+- **The unit of work flushes every staged application, not only the one it ran for**, so a write that touches
+  several applications (the registration number copied to the others in flight) reaches the model for all of them.
+  Writes outside a unit of work (seed's insert, the dev seeds, a write with no session) run in their own transaction
+  and flush themselves.
+- **`version`, `createdAt` and `updatedAt` now come from the model** (settles the v6.12 item). `version` is the model's
+  version, so response version numbers change: they start at migration and skip writes that change nothing. No
+  consumer reads the application's `version` (checked 2026-11-15: the operator frontend, management-be's submit
+  payload and the ReEx accreditation API). `createdAt` is a new Application field; a backfill, run with the migration,
+  writes one new version (reason `CreatedAtBackfilled`) for each current version without it, copying legacy's.
+  `updatedAt` is the current version's `validFrom`. A current version the backfill missed serves its `validFrom` as
+  `createdAt` (the legacy shape needs a time) and logs a warning naming the application, since that moves it in the
+  GET list's order, but a write to it is refused, so a made-up time is never stored (the sync would keep it for good).
+  Readiness check A lists such applications before the cut and is a hard stop, because nothing in the service fills
+  `createdAt` after it. After the cut the reader serves the
+  model-backed persistence's reads as they are, and reads a write's response back from the model once the write has
+  committed, so the response carries the model's content, `version` and `updatedAt`, as the next read does.
+- **Startup refuses `LegacyWrites` off** without `ReadFromModel`, `DualWrite`, `DualWriteSeed` and `ExpandEnabled`, in
+  every environment including Development; while `FeatureFlags:InYearChangesEnabled` is on (in-year reads still come
+  from legacy and move to the model with the in-year work); and while `MigrateEnabled` or `ReconcileEnabled` is on (both
+  read legacy, which is frozen after the cut).
+- **The soak is a runbook item, not a code check** (decided 2026-11-15; R11 updated). See
+  `tools/domain-model/cut-readiness.md`.
+- **Deleting an application after the cut hard-deletes its versions** (decided 2026-11-16). Only RA-646's test-data
+  teardown deletes applications. It removes every version of the Application and of the Accreditation it owns;
+  Organisation and Registration stay, and a reset that seeds the same ids links back to them.
+- **Evidence:** every write route, run through a host with the flag off over migrated data, changes the model and
+  leaves the legacy document's version and `updatedAt` as they were, with nothing left staged; switching legacy writes
+  back on makes those tests fail. Seed after the cut writes the same model as before it and no legacy document. The cut
+  readiness checks (`tools/domain-model/cut-readiness-checks.js`, with their fixture test and acceptance criteria) run
+  in CI under Jint against Mongo.
+- **Lookups are narrowed by current-version indexes on `applicationVersions`:** `reExOrganisationId_current` and
+  `reExRegistrationId_current` (each with `applicationType`), `caseManagementWorkItemId_current`, and, for the
+  accreditation-number lookup, one per branch of its `$or`: `reservedAccreditationNumber_current` and
+  `accreditationId_current`. The organisation's list orders by `createdAt` in memory: an organisation holds a handful
+  of applications, so a `createdAt` index would add a write cost for no read gain.
+- **Follow-up before going live:** model-backed reads project each application separately, and the unfiltered API
+  search projects every approved application; both need batching.
+
+**Changes in v6.13 (2026-11-16): phase 5 review of PR #263 (RA-705)**
+
+- **An application legacy holds but the model doesn't is migrated before it is served, not answered 404 for good**
+  (decided 2026-11-16; refines the v6.12 404 rule). GET by id and a write's whole-application response (the seed's
+  `201 Created`, and a repeat seed's `200` for the application it already holds) run the dual-write unit of work for
+  it, which ensures it is migrated and syncs it, then serve it from the model. Before this, a seed whose model write
+  failed left an application nothing could reach: only a write migrates it, and the operator can't reach a write
+  without a successful read. One no write can migrate either (a registration group over the size limit) still answers
+  404. GET list still leaves out an application the model doesn't hold.
+- **Write bodies the filter doesn't re-serve are named** (decided 2026-11-16). The filter re-serves application, site
+  and interim-site bodies. Two other bodies stay on legacy until phase 6, which dual-write keeps current: the BES
+  evidence object answered by a site's BES evidence file add, and the file record answered by a file add. Submit's
+  receipt and the upload-initiate responses aren't built from the application. A test lists every non-GET route in the
+  group with how its response is served, so a new route fails until someone decides.
+- **The ORS keeps ReEx's `validFrom` string as received** (decided 2026-11-16). ReEx sends it in several shapes
+  (`"2026-01-01"`, `"2026-03-14T00:00:00.000Z"`, `"...T00:00:00Z"`); the model held only `firstApprovedAt` and served one
+  form, so with the flag on a site's `validFrom` string could differ from legacy's. `reExValidFrom` is written with a
+  ReEx `firstApprovedAt` (seed, migration, and the sync's rebuild of the ORS) and served as `validFrom`; an ORS recorded
+  before it existed serves `firstApprovedAt` in the one form. Reconciliation compares the date on both sides. Phase 6
+  must keep it, because the raw string is lost once legacy writes stop.
+- **A failed or lost GetById backfill save answers with what ReEx resolved and persists nothing** (decided 2026-11-16;
+  supersedes the 2026-11-14 decision to answer with the stored values). That is what `main` did; answering with the
+  stored values changed the flag-off response and, with a dual-write sync failure, served no nation on every GET, so
+  the frontend would show the wrong nation's bank details (RA-526). The next read retries the save.
+
+**Changes in v6.12 (2026-11-14): phase 5, reads switch to the model behind one flag (RA-705)**
+
+- **One flag, `DomainModel:ReadFromModel`, for every read** (decided 2026-11-13). It replaces the per-route-group
+  `ReadFromModel` and the separate `AccreditationApiEnabled`. It switches GET by id and GET list, the PATCH and POST
+  response bodies, and the service-client accreditation API. Off by default; turning it off is the rollback, and every
+  read, the accreditation API included, returns to legacy, which dual-write keeps current.
+- **The accreditation API is already live, so with the flag off it reads legacy, not 404.** It went live before this
+  phase with no flag. With the flag on, its lookups stay as they are (which granted application, and the search) and
+  the content found is served from the model, so its DTOs and responses are unchanged. Reading **only** the version
+  collections, as the phase 5 row first said, is left as a follow-up.
+- **`version`, `createdAt` and `updatedAt` come from legacy until the cut** (decided 2026-11-13; this settles the
+  "decide before phase 5" item in v6.10). `version` is the concurrency token every save and Submit check against
+  legacy, and `createdAt` orders the GET list. Phase 6 must move all three before legacy writes stop.
+- **An application missing from the model answers 404, with no legacy fallback** (decided 2026-11-13): after the
+  migration everything is in the model, and one that isn't should exist in neither. GET list and the API search leave
+  such an application out. Before the flag goes on in an environment, nothing may be missing: readiness check A in
+  `tools/domain-model/read-switch-readiness-checks.js` (with its fixture test and acceptance criteria alongside).
+- **The read seam is `IApplicationReader`.** The legacy reader is today's behaviour. The model reader serves
+  `ApplicationReadModel`'s projection with the three fields above from legacy. GetById still backfills the legacy
+  document it read, then serves it through the reader. A write builds its response inside the dual-write transaction,
+  before the sync reaches the model, so an endpoint filter serves it again once the handler has finished, including
+  the seed's `201 Created` and the site and interim-site bodies (ORS add, update, promote, revert and recycling
+  operations; interim add, update and restore), which it takes from the model's copy of the application. The filter is
+  registered only with the flag on. Write responses are strict like reads: if the model doesn't hold the application the
+  answer is 404 (decided 2026-11-14).
+- **A seed writes the initial Application version** (decided 2026-11-14). A seed happens when a user starts an
+  application, so seed dual-write now also runs the migration's ensure-migrated step for the new application in the
+  seed's own transaction: the seeded version is built by the same mapping as a migrated one, reusing the Organisation,
+  Registration and sites the seed has just written. It does so even with `DualWrite` off, because seed dual-write and
+  full dual-write are only ever enabled together. As before, a failure rolls back the model write and does not fail the
+  seed; with the read switch on, that seed's response is then a 404 (for example a registration group over the
+  migration's size limit, which no write can migrate either).
+- **Startup refuses `ReadFromModel` without `DualWrite`, `DualWriteSeed` and `ExpandEnabled`**, outside Development.
+- **The GetById backfills of `orgId` and `nation` now write through the unit of work** (corrects §6.2, which said
+  neither field is mapped; both are). The sync already filled a missing organisation number; it now also fills a missing
+  Registration nation, as a new version (reason `ReExRefresh`), never overwriting one the model holds. Without this the
+  model would keep no nation, and with the flag on the frontend would show the wrong nation's bank details.
+- **`wasteProcessingType` is served from the Registration, which always holds one.** A legacy application without one
+  would be served with one when the flag is on. Seed always sets it, so none is expected, but neither reconciliation nor
+  the survey compares this field, so readiness check E lists any such application.
+- **Evidence:** every route in scope, and each accreditation API route, answers the same JSON with the flag off and on
+  over the same data (two apps sharing one database, on a replica set); captured golden JSON files, one per status and
+  kind, are produced by legacy and by the model alike; the readiness scripts run in CI under Jint against Mongo;
+  per-path dual-write tests check the model's content, not just its version.
+- **Follow-up:** GET list and the API search read each projection separately (about five reads per application), in
+  one session.
 
 **Changes in v6.10 (2026-11-09): the migration service, and where reconciliation reports run (RA-704)**
 
@@ -991,7 +1111,8 @@ it** (2026-10-22): fixed decision 6 stands, so a status takes effect **when it i
 - **No future-dated changes.** A planned suspension is recorded on the day it should take effect,
   manually (Q14).
 - **Consequence for the v2 YAML:** remove `StatusHistoryEntry.effectiveDate`, and replace "the latest
-  entry whose `effectiveDate` is on or before today" with "the current status". Your colleague building
+  entry whose `effectiveDate` is on or before today" with `latestStatus`: the latest entry of the
+  status history (RA-773). Your colleague building
   the endpoints needs to know.
 
 **Tonnage band** works the same way (v4, D2). It is a stored field on the Accreditation, recorded
@@ -1248,11 +1369,11 @@ Dual-write exists for exactly that: rollback without losing data (v5, D9).
 | --- | --- | --- | --- | --- | --- |
 | 0 | **Prepare** | (a) a read-only data survey per environment (§7 R1), packaged as a script that someone with production access can run and return aggregate, PII-free counts ([Q34](#q34)) (built: `tools/domain-model/legacy-data-survey.js`, for `mongosh`; test environments also run it at startup); (b) compose single-node replica set; (c) `VersionedMongoRepository<T>` and tests | Legacy, unchanged | Transaction tests green on EphemeralMongo. Survey report reviewed before phase 4 (R1), which doesn't hold up this release | No runtime effect |
 | 1 | **Expand** | New `*Versions` collections and their (partial) indexes via `DefineIndexes` / `MongoIndexReconciler`; domain models and repositories; no callers | Legacy | Indexes present in each environment; `/health/ready` green | Turn `DomainModel:ExpandEnabled` off and redeploy, which also removes the readiness check. Leave or drop the empty collections |
-| 2 | **Seed dual-write** (`DualWriteSeed`) | Seed also upserts Organisation, Registration and ORS from the same ReEx response, and stamps `registrationEntityId` on the new application with targeted `$set`. It creates no Accreditation: none exists before an approval here (A11 refuted) | Legacy | A failure does **not** fail the seed. The model write rolls back and is logged and counted, and the application is returned. The legacy insert has already committed, so failing the request would report an error for an application that exists. First touch (§6.2) fills in the model later | Flag off. Stamped fields are ignored by legacy code (`IgnoreExtraElements`) |
+| 2 | **Seed dual-write** (`DualWriteSeed`) | Seed also upserts Organisation, Registration and ORS from the same ReEx response, and stamps `registrationEntityId` on the new application with targeted `$set`. It creates no Accreditation: none exists before an approval here (A11 refuted). Since v6.12 it also writes the initial Application version (the application is started at seed), through the migration's ensure-migrated step | Legacy | A failure does **not** fail the seed. The model write rolls back and is logged and counted, and the application is returned. The legacy insert has already committed, so failing the request would report an error for an application that exists. First touch (§6.2) fills in the model later | Flag off. Stamped fields are ignored by legacy code (`IgnoreExtraElements`) |
 | 3 | **Full dual-write** (`DualWrite`) | Every write path also writes the entities, **in one transaction** with the legacy write: ORS add, update, promote and revert; interim add, update, withdraw and restore (each a new ORS version, v4); recycling-operations; registration-number; accreditation-number; approved, rejected and withdrawn transitions (§6.2). A failed model write **fails the whole request** and rolls back the legacy write (v5, D9). This phase comes **before** the migration, so no legacy write can slip between the two. A write to an application the migration has not reached yet first **ensures it is migrated** in the same transaction (§6.2) | Legacy | Per-path unit tests for every dual-write; integration tests on a replica set, including concurrent operator PATCH against a CM push (RA-519); fe-tests e2e green in each test environment | Flag off. The model is then stale until it is truncated and the migration (phase 4) re-run, because a re-run skips what is already migrated. Legacy is untouched |
 | 4 | **Migrate and reconcile** | **The migration of our 2027 data:** `DomainModelMigrationService` reshapes the applications we hold into Registration, ORS, interim-site and Application versions, with no ReEx calls (§6.1). It is an in-app `BackgroundService` (the `RegulatoryNumberSequenceBackfillService` pattern), idempotent, leased and checkpointed; failures are short Error-level log lines with no personal data. Then the **reconciliation job** (B10) projects every application from the entities **through the same `ApplicationReadModel` facade that phase 5 serves**, and diffs it against the legacy document. Reports are generated on test environments only, never in live, and are PII-free ([Q34](#q34)) | Legacy | Readiness green; reconciliation report: every application linked, counts per status, conflict list in `migrationConflicts`; **zero diffs for 2 days per environment** | Entities are derived data: truncate and re-run. Stamped FKs are harmless |
-| 5 | **Go live: switch reads and the v2 API** (`ReadFromModel`, per route group; `AccreditationApiEnabled`) | The facade (`ApplicationReadModel`) serves GET list and GET by id, then the PATCH and status responses. The four v2 read endpoints (B13) go live in the same step, reading **only** `registrationVersions`, `overseasSiteVersions` and `accreditationVersions` (v4, D3). There is **no separate shadow-read phase** (v5, D9): the reconciliation job in phase 4 is the real-data check, and the golden-JSON, per-path unit and fe-tests suites are the code check. Dual-write stays on, so legacy stays current | Facade (existing endpoints); new model (v2 API) | Phase 4 reconciliation at zero diffs; **golden-JSON contract tests** from captured responses in each status, exporter and reprocessor; fe-tests e2e green against the environment; v2 contract tests on migrated data | Flag off per route group: reads return to legacy, which is still current. v2 flag off: routes return 404, and ReEx keeps using its own accreditation status (R13) |
-| 6 | **Cut** (`LegacyWrites` off) | After a **soak of at least 4 weeks** with reconciliation still at zero: stop writing the legacy collection. The entities become the only source of truth, and the legacy collection is frozen read-only. Lifecycle actions (B15) are enabled in production only from here, because legacy cannot represent them (R13) | Facade | Soak finished with reconciliation at zero; error budgets unchanged | **Rollback loses data after this point**: writes made after the cut exist only in the model, so going back needs a model-to-legacy projection run. This is why the soak comes before the cut, and why dual-write is fatal |
+| 5 | **Go live: switch reads** (`ReadFromModel`, one flag for every read, the accreditation API included, v6.12) | The facade (`ApplicationReadModel`) serves GET list and GET by id, then the PATCH and status responses. The service-client accreditation API (B13), already live on legacy, serves its content from the model in the same step; reading **only** `registrationVersions`, `overseasSiteVersions` and `accreditationVersions` (v4, D3) is a follow-up (v6.12). There is **no separate shadow-read phase** (v5, D9): the reconciliation job in phase 4 is the real-data check, and the golden-JSON, per-path unit and fe-tests suites are the code check. Dual-write stays on, so legacy stays current | Facade (existing endpoints and the accreditation API) | Phase 4 reconciliation at zero diffs; **golden-JSON contract tests** from captured responses in each status, exporter and reprocessor; every route in scope and each accreditation API route answering the same JSON with the flag off and on; read-switch readiness checks clear (`tools/domain-model/read-switch-readiness.md`); fe-tests e2e green against the environment | Flag off: every read returns to legacy, which is still current, the accreditation API included (v6.12) |
+| 6 | **Cut** (`LegacyWrites` off) | After a **soak of at least 4 weeks** with reconciliation still at zero: stop writing the legacy collection. The entities become the only source of truth, and the legacy collection is frozen read-only. Writes still run through the existing handlers, on a copy staged from the model and flushed to it in the same transaction (v6.14). The migration and reconciliation are switched off, because both read legacy. Lifecycle actions (B15) are enabled in production only from here, because legacy cannot represent them (R13) | Facade | Soak finished with reconciliation at zero, recorded in the runbook (v6.14: no code check); error budgets unchanged; cut readiness checks clear (`tools/domain-model/cut-readiness.md`) | **Rollback loses data after this point**: writes made after the cut exist only in the model, so going back needs a model-to-legacy projection run. This is why the soak comes before the cut, and why dual-write is fatal |
 | 7 | **Archive** | Rename the frozen `accreditationApplications` to `accreditationApplications_legacyArchive` (no copy needed). Delete the legacy write paths, the GetById lazy backfills and the flags. Drop the `interimSite` mirror **only after** MF2, the frontend fallback and the T1 tests have moved. Do not drop the archive until Q33 and the owners of management-be agree | Facade | Archive document count equals the pre-rename count; contract tests green | Rename the archive back and re-enable `LegacyWrites` (after a model-to-legacy projection run for anything written since the cut) |
 
 ### 6.1 Migration (phase 4)
@@ -1402,10 +1523,10 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
 - **Legacy-only writers outside the request paths.** The RA-691 accreditation reference correction
   (`AccreditationReferenceCorrectionMigration`, a one-off startup migration) writes the legacy application only.
   It refuses to apply while `DualWrite` is on and runs as a dry run instead, so it is applied with the flag off,
-  before phase 3. Any other writer that bypasses the unit of work must do the same, with one exception: the
-  GetById backfills of `orgId` and `nation` write the legacy document outside the unit of work by decision, so
-  a read never opens a transaction. Neither field is mapped onto the model, so they cause no drift. If either is
-  ever mapped, the backfill must move into the unit of work.
+  before phase 3. Any other writer that bypasses the unit of work must do the same, with one former exception: the
+  GetById backfills of `orgId` and `nation`. Both fields are mapped onto the model (the Organisation's number
+  and the Registration's nation), so since v6.12 the backfill's write goes through the unit of work; the ReEx
+  lookups stay outside it, and a read that has nothing to backfill still opens no transaction.
   The RA-764 organisation name correction (`OrganisationNameCorrectionMigration`, a one-off startup migration
   renaming organisation 500069 on its 2027 data) is a second exception: it writes the legacy `organisationName`
   and the Organisation `name` it maps onto, each with an update guarded on the old name, so it may run with
@@ -1521,11 +1642,11 @@ none exist when it runs (v4, D4).
 | R8 | **Reference confusion propagates** (F3, M2). New contracts reuse the wrong field | The new API uses unambiguous names. Fixing the frontend mapping and `SubmitResponse` naming is listed as a consumer change, not done here |
 | R9 | The management-be payload snapshot and migrations depend on the legacy shape (M3) | The legacy shape is kept for the whole programme. The submission payload is still built from the facade's legacy model, so it stays byte-compatible |
 | R10 | The missing operator identity makes `changedBy` weak | Recorded as the service identity until bead `b3n` lands |
-| R11 | Flag-combination complexity | Flags are ordered and validated at startup (for example `ReadFromModel` requires `DualWrite`, and `LegacyWrites` off requires the soak to be recorded) |
+| R11 | Flag-combination complexity | Flags are ordered and validated at startup (for example `ReadFromModel` requires `DualWrite`, and `LegacyWrites` off requires `ReadFromModel`, `DualWrite`, `DualWriteSeed` and `ExpandEnabled`, with the migration, reconciliation and in-year changes off). The soak is not checked in code: it is recorded in the cut runbook (v6.14) |
 | R12 | Seed idempotency is best-effort, so a race can create a duplicate live application (a defect) | The index now exists on the model (v6.8): `exclusivityKey_current_u`, a partial unique index over current versions that carry an `exclusivityKey`, with the key per type and its release rules in `ExclusivityKeys` (rejected and withdrawn release it; an approved accreditation application keeps it, because a cancelled Accreditation is reinstated as a new version of itself, [Q36](#q36)). **Nothing writes the key yet**, so the rule is not enforced: writing it is the follow-up, made easier once the survey shows the duplicates, and known duplicates hold no key until repaired (§6.3) |
 | R13 | **Two sources of accreditation status during the transition.** ReEx has its own status; we become the truth for PRN validity (Q2). A suspension recorded only here would not stop PRNs until ReEx calls our validity API | A sequenced cutover with the ReEx team ([Q19](#q19)). Until then, either regulator suspensions continue in ReEx, or we sync ours to ReEx. Don't expose our lifecycle actions in production before that is agreed |
 | R14 | **Reports expect non-status history from before the migration** (Q22) | History starts at migration time for every entity (§4.3). Earlier business dates are kept as attributes (`approvedAt`, `periodStart`) |
-| R15 | **Test-environment results do not prove production data shapes (accepted, Q34).** We have no access to production data because of data-protection rules. A clean survey, migration or reconciliation in test environments proves the code on test data only. This has caused production surprises before, and there is currently nothing we can do to remove it | Accepted, and reduced rather than removed: (1) dual-write is **fatal** (D9), so a surprising production document fails and rolls back that one write instead of silently corrupting the model; (2) phases 3 and 4 run in production with reads still on legacy, so the first production exposure costs a rolled-back write, not wrong data served; (3) the known legacy shapes are **required fixtures** in B7 and B10; (4) the reconciliation job reports any document it cannot project as a conflict and never skips it; (5) a data-shape surprise can reach users from phase 3 as a failed write, because first touch runs the migration routine (§6.2), and turning `DualWrite` off is the rollback; (6) phase 5, the first point where one could reach users as wrong data, goes live per route group with the flag-off rollback rehearsed |
+| R15 | **Test-environment results do not prove production data shapes (accepted, Q34).** We have no access to production data because of data-protection rules. A clean survey, migration or reconciliation in test environments proves the code on test data only. This has caused production surprises before, and there is currently nothing we can do to remove it | Accepted, and reduced rather than removed: (1) dual-write is **fatal** (D9), so a surprising production document fails and rolls back that one write instead of silently corrupting the model; (2) phases 3 and 4 run in production with reads still on legacy, so the first production exposure costs a rolled-back write, not wrong data served; (3) the known legacy shapes are **required fixtures** in B7 and B10; (4) the reconciliation job reports any document it cannot project as a conflict and never skips it; (5) a data-shape surprise can reach users from phase 3 as a failed write, because first touch runs the migration routine (§6.2), and turning `DualWrite` off is the rollback; (6) phase 5, the first point where one could reach users as wrong data, goes live behind one flag for every read (v6.12), so one flag-off returns every read to legacy at once; that rollback is rehearsed |
 | R16 | **Site volume is untested.** One Accreditation can have hundreds of ORSs. The seed and first touch write sites one at a time in one transaction, against MongoDB's default 60-second limit, and the 100-application cap doesn't count sites. A first touch that runs out of time fails the write, and the registration stays blocked until that is fixed; a seed only logs and counts it | Test both at 1,000 ORSs on one registration, then batch the writes or change the limits if the results need it |
 | R17 | **`proposedChanges` can be out of date.** An in-flight application's overlay is recalculated only on its own next write, so a seed or approval that changes the ORS leaves it calculated against the old details until then | Corrects itself on the next write, and nothing reads the overlay in production yet. Fix where the ORS changes, or settle this when deciding whether to keep the overlay |
 | R18 | **Limited visibility of production.** System access is highly restricted, so problems after go-live have to be seen without reading the database. Failed dual-writes and failed seed writes are logged at Error with ids, the error kind and the method that threw only. Each `migrationConflicts` row from first touch or a seed is logged at Warning once its transaction commits, with ids, ORS ids, site numbers and the conflict kind only. So is a seed changing an issued registration number, with both numbers | Monitor and alert through logs. A basic admin tool that can report on this is hoped for by the read cutover (phase 5), and this is still being discussed |
@@ -1809,12 +1930,12 @@ Priority runs from 0 (critical) to 4 (backlog).
 | B9 | Approval creates an Accreditation and activates or discards proposed sites, atomically and idempotently. Ships with the phase 3 dual-write | feature | 1 | B8 | Retried `approved` push creates nothing new; reject or withdraw discards Proposed sites |
 | B10 | Reconciliation job: projects each application through the **same `ApplicationReadModel` facade** that serves reads, and diffs it against the legacy document, with metrics. Runnable in test environments only, never in live, with a **PII-free report** (document ids, field paths and counts, never values) ([Q34](#q34)) | task | 2 | B7, B8, B9, B11 | Report in every test environment; zero diffs for 2 days per environment is the gate for phase 5; **the known legacy shapes as fixtures: int32 enums, singular `interimSite`-only documents, null `orsId`s, duplicate live applications for one key, legacy `SN-000N` interim numbers, approved applications with no `accreditationReference`, and conflicting registration numbers across one registration (R1, R15)**; a document the job cannot project appears in the report as a conflict and is never skipped (R15) |
 | B11 | `ApplicationReadModel` facade and golden-JSON contract tests (no shadow-read mode, D9) | feature | 2 | B4 | Golden fixtures for each status, exporter and reprocessor; unit tests for each read path; **contract test: after at least two writes to the same application, no version `_id` appears in any response body, URL or header, and the application id in every response equals its `entityId` (§3.1)** |
-| B12 | Switch reads to the facade, per route group (flag `ReadFromModel`), in the same step as the v2 API go-live (phase 5) | task | 2 | B10, B11 | Reconciliation at zero for 2 days; fe-tests e2e green against the environment; rollback rehearsed |
+| B12 | Switch reads to the facade behind one flag, `ReadFromModel`, for every read, the accreditation API included (phase 5, v6.12) | task | 2 | B10, B11 | Reconciliation at zero for 2 days; fe-tests e2e green against the environment; rollback rehearsed |
 | B13 | Implement the v2 Accreditation API's data access (four paths; **the endpoints are being built separately by another developer, with canned data, and are not live**) on the new collections only, and take it live at phase 5 (D3) | feature | 2 | B7, B8, B9, B10, B22, B23; the endpoint work | Responses come only from the entities, never `accreditationApplications`; `statusHistory[]` and `tonnageBandHistory[]` projected from versions (§4.4); interim sites from the ORS's embedded array; `baselOecdCodes` list (Q29); optional `asAt` on site paths (Q27); the endpoint tests pass against migrated data; go-live gated on phase 4 reconciliation at zero (v5: phase 5 is also the read switch) |
 | B24 | Seed from this service's own model (A22, A23): a new year's application is built from the Registration's Active ORSs and interim sites, keeping their `orsId`/`siteNumber`, with include/exclude and prefill taken from the **previous year's Accreditation**. ReEx is called only for registrations not yet held here | feature | 2 | B14; Q31 | Ids are identical across consecutive years for the same site; only operator-added sites get new numbers; suspended sites carried over flagged; no previous-year accreditation means nothing selected; no ReEx call when a prior-year accreditation exists. **A visible change for operators**, so the frontend and product should be told before release |
 | B22 | Status on Accreditation and accredited ORS: stored `status` (recorded time, Q21), transition checks against the current status (§3.4), and the API's `statusHistory[]` projected from version history (§4.4) | feature | 1 | B4 | Each status change is one version with its reason; the projection lists only status changes; illegal transitions rejected |
 | B23 | *(Repurposed in v4, D2.)* `tonnageBand` on the Accreditation (ReEx band values), with `tonnageBandHistory[]` projected from Accreditation versions, and set at approval from `prns.plannedTonnageBand` (int32 to ReEx string, D2) | feature | 2 | B3, B4 | Each band change is one version with reason `TonnageBandChanged`; the projection lists only band changes; int32 to string conversion tested |
-| B14 | Cut: stop writing the legacy collection and freeze it (flag `LegacyWrites` off), after the soak (phase 6) | task | 2 | B12 | Soak of at least 4 weeks at zero diffs; the loss of rollback after the cut is acknowledged by the owners |
+| B14 | Cut: stop writing the legacy collection and freeze it (flag `LegacyWrites` off), after the soak (phase 6) | task | 2 | B12 | Soak of at least 4 weeks at zero diffs, recorded in the runbook; the loss of rollback after the cut is acknowledged by the owners; every write route changes the model and leaves legacy unchanged with the flag off; cut readiness checks clear before and after (v6.14) |
 | B15 | Lifecycle actions for regulators: suspend, unsuspend, cancel and reinstate an Accreditation; suspend and unsuspend an ORS; withdraw and restore an interim site on its ORS; cancel and reinstate a Registration **with cascade** (ReEx rules, manual only) | feature | 2 | B9 | Transition tables match ReEx `status.js`; cascade (in-force accreditations only, Q16) in one transaction; history reasons; as-of tests. Not enabled in production before the R13 cutover is agreed; a cancelled Accreditation can't be reinstated once a new application is approved for that year; needs [Q36](#q36) answered |
 | B16 | Organisation and Registration sync: refresh from ReEx (Organisation in place, Registration as new versions with no-op suppression); later Account Management | feature | 3 | B6; blocked on Q15 | Re-running a refresh with no changes writes no Registration versions; `lastSyncedAt` recorded |
 | B19 | **Probably folded into B13 (v3).** A separate validity endpoint, only if ReEx still wants a yes/no call (§6.4) | feature | 3 | B13; Q19 | Served from current versions only; new caller auth; as-of tests across suspend and unsuspend |

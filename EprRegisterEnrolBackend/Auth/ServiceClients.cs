@@ -19,6 +19,20 @@ public class ServiceClientsConfig
     /// earlier years, so earlier applications are never served to a service client.
     /// </summary>
     public int FirstAccreditationYear { get; set; } = 2027;
+
+    /// <summary>
+    /// How many requests one client may make a minute before it is answered 429 (rate_limited).
+    /// ReEx reads on every page load, so the default is generous; it only stops a loop gone wrong.
+    /// 0 turns the limit off.
+    /// </summary>
+    public int RateLimitPermitsPerMinute { get; set; } = 600;
+
+    /// <summary>
+    /// How long a database query for a service client may run before it is stopped and the
+    /// request answered 503 (query_timeout), so a slow query cannot hold the database for others.
+    /// 0 means no limit.
+    /// </summary>
+    public int QueryTimeoutSeconds { get; set; } = 5;
 }
 
 public class ServiceClientDefinition

@@ -117,9 +117,9 @@ public class TestOrganisationJourneyTests(MongoIntegrationFixture fixture)
         read.GetProperty("orgId").GetInt32().Should().BeInRange(900_000, 999_999);
     }
 
-    // RA-690: approval derives the accreditation reference from the seeded registration
-    // reference, so a test organisation's must be valid, and unique per registration so repeated
-    // E2E runs never clash on the derived reference.
+    // RA-690/RA-783: approval builds a new accreditation number on the seeded registration
+    // reference's agency and OrgId, and keeps its sequence out of the new one, so a test
+    // organisation's must be valid, and unique per registration.
     [Fact]
     public async Task Seed_ForATestOrganisation_StoresAValidRegistrationReferenceUniquePerRegistration()
     {

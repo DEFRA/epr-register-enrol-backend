@@ -9,15 +9,27 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 
 public class AccreditationApplicationPersistence(
     IMongoDbClientFactory connectionFactory,
-    ILoggerFactory loggerFactory
+    ILoggerFactory loggerFactory,
+    string collectionName
 )
     : MongoService<AccreditationApplicationModel>(
         connectionFactory,
-        DomainModelCollections.LegacyApplications,
+        collectionName,
         loggerFactory
     ),
         IAccreditationApplicationPersistence
 {
+    /// <summary>
+    /// The container uses this constructor (the legacy collection).
+    /// The three-argument form is for RA-706's staging copies.
+    /// </summary>
+    public AccreditationApplicationPersistence(
+        IMongoDbClientFactory connectionFactory,
+        ILoggerFactory loggerFactory
+    ) : this(connectionFactory, loggerFactory, DomainModelCollections.LegacyApplications)
+    {
+    }
+
     public async Task<AccreditationApplicationModel?> CreateAsync(
         AccreditationApplicationModel application
     )
@@ -107,18 +119,14 @@ public class AccreditationApplicationPersistence(
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        GlassRecyclingProcess? glassRecyclingProcess,
         int beforeYear
     )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
-        // Eq on a null glass process also matches a document with no such field, which is how
-        // non-glass applications are stored.
         var filter = filters.And(
             filters.Eq(a => a.OrganisationId, organisationId),
             filters.Eq(a => a.RegistrationId, registrationId),
             filters.Eq(a => a.MaterialType, materialType),
-            filters.Eq(a => a.GlassRecyclingProcess, glassRecyclingProcess),
             filters.Lt(a => a.Year, beforeYear),
             filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Approved),
             filters.Ne(a => a.AccreditationReference, null),
@@ -133,10 +141,10 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
-    // RA-690: no index yet, so this scans the collection. It runs once per approval, not per
-    // read, so the scan is acceptable for now. The unique index on AccreditationReference that
-    // follows RA-691 (once the counter-era references are migrated) will back it and replace
-    // this check.
+    // RA-690: no index yet, so this scans the collection. It runs on approval only (RA-783: once
+    // per draw and once more after the save, almost always twice in all), not per read, so the
+    // scan is acceptable for now. There's no unique index on AccreditationReference: a withdrawn
+    // application keeps its number when its renewal is issued it again.
     public async Task<
         IReadOnlyList<AccreditationReferenceHolder>
     > GetOtherAccreditationReferenceHoldersAsync(
@@ -201,7 +209,8 @@ public class AccreditationApplicationPersistence(
         int orgId,
         string registrationNumber,
         int year,
-        int firstYear
+        int firstYear,
+        TimeSpan? maxTime = null
     )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
@@ -215,7 +224,7 @@ public class AccreditationApplicationPersistence(
         );
 
         return await Collection
-            .Find(filter)
+            .Find(filter, new FindOptions { MaxTime = maxTime })
             .SortByDescending(a => a.DateLastEdited)
             .FirstOrDefaultAsync();
     }
@@ -227,9 +236,16 @@ public class AccreditationApplicationPersistence(
         GrantedAccreditationFilter filter,
         int firstYear,
         int skip,
-        int limit
+        int limit,
+        TimeSpan? maxTime = null
     )
     {
+        // RA-702: every accreditation served today is approved, and nothing yet records a suspension
+        // or cancellation, so a search for any other status finds none. When a source for them lands,
+        // this is where the status filter becomes a real query.
+        if (filter.Status is not null && filter.Status != "approved")
+            return ([], 0);
+
         var filters = Builders<AccreditationApplicationModel>.Filter;
         var granted = filters.And(
             filters.Ne(a => a.OrgId, null),
@@ -252,9 +268,12 @@ public class AccreditationApplicationPersistence(
                 filters.Eq(a => a.RegistrationReference, filter.RegistrationNumber)
             );
 
-        var total = await Collection.CountDocumentsAsync(granted);
+        var total = await Collection.CountDocumentsAsync(
+            granted,
+            new CountOptions { MaxTime = maxTime }
+        );
         var items = await Collection
-            .Find(granted)
+            .Find(granted, new FindOptions { MaxTime = maxTime })
             .SortBy(a => a.AccreditationReference)
             .ThenBy(a => a.Id)
             .Skip(skip)
@@ -431,6 +450,23 @@ public class AccreditationApplicationPersistence(
     ) =>
         await Collection
             .Find(a => a.Year == year)
+            .SortBy(a => a.Id)
+            .ToListAsync(cancellationToken);
+
+    public async Task<
+        IReadOnlyList<AccreditationApplicationModel>
+    > GetByRegistrationReferencesAndYearAsync(
+        IReadOnlyCollection<string> registrationReferences,
+        int year,
+        CancellationToken cancellationToken = default
+    ) =>
+        await Collection
+            .Find(
+                Builders<AccreditationApplicationModel>.Filter.In(
+                    a => a.RegistrationReference,
+                    registrationReferences
+                ) & Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Year, year)
+            )
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);
 
@@ -724,6 +760,17 @@ public class AccreditationApplicationPersistence(
                     builder.Ascending(a => a.RegistrationReference),
                     builder.Ascending(a => a.Year)
                 )
+            ),
+            // RA-702: backs the service client search's sort (accreditation number, then id) for a
+            // search with no organisation, so the page is read in order from the index and not sorted
+            // in memory. An organisation's own search is small and uses the index above.
+            new CreateIndexModel<AccreditationApplicationModel>(
+                builder.Combine(
+                    builder.Ascending(a => a.ApplicationStatus),
+                    builder.Ascending(a => a.AccreditationReference),
+                    builder.Ascending(a => a.Id)
+                ),
+                new CreateIndexOptions { Name = "granted_search_sort" }
             ),
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Combine(

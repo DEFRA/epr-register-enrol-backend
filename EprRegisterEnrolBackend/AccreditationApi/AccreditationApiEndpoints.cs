@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
-using Microsoft.Extensions.Options;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
 
 namespace EprRegisterEnrolBackend.AccreditationApi;
 
@@ -22,11 +22,17 @@ public static partial class AccreditationApiEndpoints
     private const int MaxLimit = 100;
     private const int MinSearchYear = 2000;
 
+    // The statuses an accreditation can have. Only approved is served until case management can send
+    // the others, but asking for them is valid, and finds none.
+    private static readonly string[] SearchStatuses = ["approved", "suspended", "cancelled", "withdrawn"];
+
     public static void UseAccreditationApiEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup(string.Empty)
             .RequireAuthorization(ServiceClientPolicies.Read)
             .AddEndpointFilter<ServiceClientAccessLogFilter>()
+            .AddEndpointFilter<ServiceClientRateLimitFilter>()
+            .AddEndpointFilter<ServiceClientQueryTimeoutFilter>()
             .WithTags("Service clients");
 
         group.MapGet("/v1/accreditations", SearchAccreditations).WithName("SearchAccreditations");
@@ -41,9 +47,9 @@ public static partial class AccreditationApiEndpoints
 
     private static async Task<IResult> SearchAccreditations(
         HttpContext http,
-        IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config,
-        ILoggerFactory loggerFactory
+        GrantedAccreditations accreditations,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
     )
     {
         var query = http.Request.Query;
@@ -111,12 +117,25 @@ public static partial class AccreditationApiEndpoints
             }
         }
 
-        var now = DateTimeOffset.UtcNow;
-        var (items, total) = await persistence.SearchGrantedAccreditationsAsync(
-            new GrantedAccreditationFilter(year, organisationNumber, registrationNumber),
-            config.Value.FirstAccreditationYear,
+        string? status = null;
+        if (query.TryGetValue("status", out var statusValue))
+        {
+            status = statusValue.ToString();
+            if (!SearchStatuses.Contains(status, StringComparer.Ordinal))
+            {
+                return new ServiceProblemResult(
+                    StatusCodes.Status400BadRequest,
+                    "invalid_status",
+                    $"status must be one of {string.Join(", ", SearchStatuses)}."
+                );
+            }
+        }
+
+        var (items, total) = await accreditations.SearchAsync(
+            new GrantedAccreditationFilter(year, organisationNumber, registrationNumber, status),
             (paging.PageNumber - 1) * paging.Limit,
-            paging.Limit
+            paging.Limit,
+            cancellationToken
         );
 
         return Results.Ok(
@@ -124,10 +143,10 @@ public static partial class AccreditationApiEndpoints
             {
                 PageNumber = paging.PageNumber,
                 Limit = paging.Limit,
+                // After the migration the model holds every granted accreditation, so the two agree.
                 TotalItems = (int)total,
                 Items = AccreditationApiMapper.ToSummaries(
                     items,
-                    now,
                     loggerFactory.CreateLogger("EprRegisterEnrolBackend.AccreditationApi")
                 ),
             }
@@ -139,8 +158,8 @@ public static partial class AccreditationApiEndpoints
         string registrationNumber,
         string year,
         HttpContext http,
-        IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        GrantedAccreditations accreditations,
+        CancellationToken cancellationToken
     )
     {
         var withdrawn = ParseIncludeWithdrawn(http.Request.Query["includeWithdrawn"]);
@@ -151,16 +170,12 @@ public static partial class AccreditationApiEndpoints
             organisationNumber,
             registrationNumber,
             year,
-            persistence,
-            config
+            accreditations,
+            cancellationToken
         );
         return lookup.Problem
             ?? Results.Ok(
-                AccreditationApiMapper.ToAccreditation(
-                    lookup.Application!,
-                    DateTimeOffset.UtcNow,
-                    withdrawn.Include
-                )
+                AccreditationApiMapper.ToAccreditation(lookup.Application!, withdrawn.Include)
             );
     }
 
@@ -169,8 +184,8 @@ public static partial class AccreditationApiEndpoints
         string registrationNumber,
         string year,
         HttpContext http,
-        IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        GrantedAccreditations accreditations,
+        CancellationToken cancellationToken
     )
     {
         var query = http.Request.Query;
@@ -186,14 +201,13 @@ public static partial class AccreditationApiEndpoints
             organisationNumber,
             registrationNumber,
             year,
-            persistence,
-            config
+            accreditations,
+            cancellationToken
         );
         if (lookup.Problem is not null)
             return lookup.Problem;
 
         var application = lookup.Application!;
-        var now = DateTimeOffset.UtcNow;
         var sites = AccreditationApiMapper
             .AccreditedSites(application)
             .OrderBy(site => site.OrsId, StringComparer.Ordinal)
@@ -210,12 +224,7 @@ public static partial class AccreditationApiEndpoints
                     .Skip((paging.PageNumber - 1) * paging.Limit)
                     .Take(paging.Limit)
                     .Select(site =>
-                        AccreditationApiMapper.ToOverseasSite(
-                            application,
-                            site,
-                            withdrawn.Include,
-                            now
-                        )
+                        AccreditationApiMapper.ToOverseasSite(application, site, withdrawn.Include)
                     )
                     .ToList(),
             }
@@ -228,8 +237,8 @@ public static partial class AccreditationApiEndpoints
         string year,
         string orsId,
         HttpContext http,
-        IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        GrantedAccreditations accreditations,
+        CancellationToken cancellationToken
     )
     {
         if (!OrsIdPattern().IsMatch(orsId))
@@ -249,8 +258,8 @@ public static partial class AccreditationApiEndpoints
             organisationNumber,
             registrationNumber,
             year,
-            persistence,
-            config
+            accreditations,
+            cancellationToken
         );
         if (lookup.Problem is not null)
             return lookup.Problem;
@@ -267,12 +276,7 @@ public static partial class AccreditationApiEndpoints
                 $"No overseas site {orsId} was found on the {year} accreditation of registration {registrationNumber}."
             )
             : Results.Ok(
-                AccreditationApiMapper.ToOverseasSite(
-                    application,
-                    site,
-                    withdrawn.Include,
-                    DateTimeOffset.UtcNow
-                )
+                AccreditationApiMapper.ToOverseasSite(application, site, withdrawn.Include)
             );
     }
 
@@ -304,8 +308,8 @@ public static partial class AccreditationApiEndpoints
         string organisationNumber,
         string registrationNumber,
         string year,
-        IAccreditationApplicationPersistence persistence,
-        IOptions<ServiceClientsConfig> config
+        GrantedAccreditations accreditations,
+        CancellationToken cancellationToken
     )
     {
         if (
@@ -344,14 +348,14 @@ public static partial class AccreditationApiEndpoints
             return Bad("invalid_year", "year must be a four digit year, for example 2027.");
         }
 
-        var application = await persistence.GetGrantedAccreditationAsync(
+        var served = await accreditations.FindAsync(
             orgId,
             registrationNumber,
             accreditationYear,
-            config.Value.FirstAccreditationYear
+            cancellationToken
         );
 
-        return application is null
+        return served is null
             ? new Lookup(
                 null,
                 new ServiceProblemResult(
@@ -360,7 +364,7 @@ public static partial class AccreditationApiEndpoints
                     $"No granted accreditation was found for organisation {orgId}, registration {registrationNumber} in {accreditationYear}."
                 )
             )
-            : new Lookup(application, null);
+            : new Lookup(served, null);
     }
 
     private static Lookup Bad(string code, string detail) =>

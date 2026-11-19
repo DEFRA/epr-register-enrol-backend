@@ -142,6 +142,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddValidatorsFromAssemblyContaining<Program>();
     FeatureFlags.EnsureInYearChangesHasDualWrite(builder.Configuration, builder.Environment);
+    FeatureFlags.EnsureReadFromModelHasItsPrerequisites(builder.Configuration, builder.Environment);
+    FeatureFlags.EnsureLegacyWritesCutHasItsPrerequisites(builder.Configuration);
     // RA-492: in-year change requests (add registered ORS to a granted accreditation). Registered only
     // with the in-year changes flag, like the routes that use them, so with it off the change-request
     // collection and its indexes are never touched.
@@ -183,6 +185,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         RegulatoryNumberSequenceCounterPersistence
     >();
     builder.Services.AddSingleton<IRegulatoryNumberGenerator, RegulatoryNumberGenerator>();
+    builder.Services.AddSingleton<IAccreditationSequenceRandom, AccreditationSequenceRandom>();
+    builder.Services.AddScoped<AccreditationNumberIssuer>();
     builder.Services.AddSingleton<
         IRegulatoryNumberBackfillStatus,
         RegulatoryNumberBackfillStatus
@@ -236,6 +240,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.Configure<TestDataConfig>(
         builder.Configuration.GetSection(TestDataConfig.SectionName)
     );
+    builder.Services.AddSingleton<GrantedAccreditations>();
     builder.Services.AddSingleton<AccreditationApiTestDataSeeder>();
     builder.Services.AddHostedService<AccreditationApiTestDataSeedingService>();
 
@@ -325,6 +330,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Configuration.GetSection(ServiceClientsConfig.SectionName)
     );
     builder.Services.AddSingleton<IServiceClientRegistry, ServiceClientRegistry>();
+    builder.Services.AddSingleton<ServiceClientRateLimiter>();
     builder.Services.AddSingleton<IAuthorizationHandler, ReadOnlyMethodHandler>();
     builder.Services.AddAuthorization(options => options.AddServiceClientPolicies());
 
@@ -491,6 +497,8 @@ static WebApplication SetupApplication(WebApplication app)
     app.UseExceptionHandler();
     app.UseHeaderPropagation();
     app.UseRouting();
+    // RA-702: a 404 or 405 under /v1 in the service API's problem format, like its other errors.
+    app.UseServiceApiProblems();
     // No app.UseAuthentication(): CaseManagement is the only scheme registered, so ASP.NET Core
     // treats it as the implicit default and this middleware would eagerly run
     // CaseManagementAuthenticationHandler against every request — including /health — logging a

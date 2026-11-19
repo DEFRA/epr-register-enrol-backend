@@ -5,7 +5,7 @@ info:
   description: |
     DRAFT v2 read-only API over Register & Enrol **accreditations**. It is an internal Defra API
     (first consumer: Re-Ex), not a public one. It replaces the v0.1 draft
-    (`registration-accreditation-api.yaml`) after architecture review. The changes are:
+    (removed from the repository; see git history) after architecture review. The changes are:
 
     * **Accreditation is the only top-level resource.** An accreditation exists only once its
       application has been approved. Organisation is internal (we do not own it). Registration
@@ -15,9 +15,10 @@ info:
     * **Application-only data is not exposed.** That means application status, section statuses,
       uploaded files, sampling and inspection plans, `formSubmissionTime`, and
       the site flags `isNewSite` and `selected`.
-    * **Status is a history with effective dates.** `statusHistory[]` records each status with the
-      date it takes effect, which may be in the future or backdated (e.g. a suspension).
-      `status` is a projection: the latest entry whose `effectiveDate` is on or before today.
+    * **Status is a history with effective periods.** `statusHistory[]` records each status with
+      the period it applies: `effectiveFromDate` (which may be in the future) and `effectiveToDate`
+      (`null` on the latest entry). `latestStatus` is the latest entry of that history, whether or
+      not its `effectiveFromDate` has arrived, so it always matches the history.
     * **Accredited overseas sites have their own status history** on the same rules, because an
       individual site can be suspended without suspending the whole accreditation.
     * **Tonnage band** is held on the accreditation, and its history is the accreditation's own
@@ -44,8 +45,7 @@ info:
       signing, to be specified later.
     * ASSUMPTION: `accreditationNumber` is unique across all organisations, so it identifies an
       accreditation on its own.
-    * ASSUMPTION: a status takes effect at the start of its `effectiveDate` (UK time), and
-      "today" is evaluated when the request is served.
+    * ASSUMPTION: a status takes effect at the start of its `effectiveFromDate` (UK time).
     * ASSUMPTION: a tonnage band cannot be forward-dated or backdated; it takes effect when it
       is recorded.
 servers:
@@ -61,12 +61,19 @@ paths:
       operationId: searchAccreditations
       summary: Search accreditations across all organisations
       description: |
-        Returns `AccreditationSummary` items, which carry the current `status` and `tonnageBand`
-        but no history, so the response stays small.
+        Returns `AccreditationSummary` items, which carry the `latestStatus` and `tonnageBand`
+        but no history, so the response stays small. Results are ordered by accreditation number,
+        so the order is the same from one page to the next.
+
+        Only accreditation years from 2027 are served. A search for an earlier year, such as
+        `year=2026`, is a valid request and returns an empty page (`totalItems` 0), even where
+        an accreditation was granted for that year. Getting one accreditation for an earlier
+        year is a `404` (`accreditation_not_found`).
       parameters:
         - $ref: '#/components/parameters/Year'
         - $ref: '#/components/parameters/OrganisationNumberFilter'
         - $ref: '#/components/parameters/RegistrationNumberFilter'
+        - $ref: '#/components/parameters/StatusFilter'
         - $ref: '#/components/parameters/PageNumber'
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -84,6 +91,11 @@ paths:
                         type: array
                         items: { $ref: '#/components/schemas/AccreditationSummary' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}:
     get:
@@ -103,6 +115,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Accreditation' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}/overseas-sites:
     get:
@@ -135,6 +152,11 @@ paths:
                         items: { $ref: '#/components/schemas/AccreditedOverseasSite' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}/overseas-sites/{orsId}:
     get:
@@ -154,6 +176,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AccreditedOverseasSite' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
 components:
   parameters:
@@ -200,6 +227,15 @@ components:
       in: query
       description: Only accreditations of this organisation (the numeric ReEx organisation number), e.g. 500027.
       schema: { type: integer, format: int32, minimum: 1 }
+    StatusFilter:
+      name: status
+      in: query
+      description: |
+        Only accreditations with this status. It is matched against the status recorded for the
+        accreditation, which is expected to agree with `latestStatus.status`. Only `approved`
+        accreditations are served today, so `suspended`, `cancelled` and `withdrawn` are valid and
+        return an empty page until case management can send them.
+      schema: { type: string, enum: [approved, suspended, cancelled, withdrawn] }
     RegistrationNumberFilter:
       name: registrationNumber
       in: query
@@ -218,7 +254,42 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
     NotFound:
-      description: No such resource.
+      description: |
+        No such resource, or no such route (`code` `not_found`). An unknown route, like a method other
+        than GET, is answered before authentication, because it reveals nothing beyond this published API.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: The request is not signed correctly (`code` says why, for example `missing_header` or `invalid_signature`).
+      headers:
+        WWW-Authenticate: { schema: { type: string } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: The client is known but not allowed to make this request (`code` `forbidden`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    MethodNotAllowed:
+      description: The API is read-only. Any method other than GET is refused (`code` `method_not_allowed`).
+      headers:
+        Allow: { schema: { type: string } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooManyRequests:
+      description: The client made too many requests (`code` `rate_limited`). Wait for `Retry-After` seconds.
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ServiceUnavailable:
+      description: The database stopped a query for taking too long (`code` `query_timeout`). Retry, with a narrower search if you can.
+      headers:
+        Retry-After: { schema: { type: integer } }
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -240,6 +311,8 @@ components:
         title: { type: string }
         status: { type: integer }
         detail: { type: string }
+        code: { type: string, description: A stable code for the kind of error, for example `invalid_year`. }
+        traceId: { type: string, description: Quote this when asking for support. }
     MaterialType:
       type: string
       description: Mirrors the `MaterialType` enum.
@@ -269,12 +342,12 @@ components:
     AccreditationStatus:
       type: string
       description: |
-        Statuses an accreditation, or an overseas site on it, can hold. It starts as `approved`
-        when the application is approved. Allowed transitions (matching ReEx):
+        Statuses an accreditation, an overseas site on it, or an interim site can hold. It starts
+        as `approved` when the application is approved. Allowed transitions (matching ReEx):
         `approved → suspended`, `suspended → approved`, `suspended → cancelled`. Cancellation is
         only reachable from `suspended`. Application statuses (submitted, queried, rejected, ...)
         are not exposed.
-      enum: [approved, suspended, cancelled]
+      enum: [approved, suspended, cancelled, withdrawn]
     TonnageBand:
       type: string
       description: Planned PRN/PERN issuance band. Values match ReEx `TONNAGE_BAND`.
@@ -289,14 +362,21 @@ components:
         phone: { type: string, nullable: true }
     StatusHistoryEntry:
       type: object
-      description: Used by both accreditations and accredited overseas sites.
-      required: [status, effectiveDate, recordedAt]
+      description: Used by accreditations, accredited overseas sites and interim sites. Where two entries share an `effectiveFromDate`, the one with the later `recordedAt` takes precedence, and the earlier one is kept with its `effectiveToDate` equal to that same date.
+      required: [status, effectiveFromDate, effectiveToDate, recordedAt]
       properties:
         status: { $ref: '#/components/schemas/AccreditationStatus' }
-        effectiveDate:
+        effectiveFromDate:
           type: string
           format: date
-          description: When the status takes effect. May be in the future, or backdated (e.g. a suspension), so it is not necessarily the date it was recorded.
+          description: 'The first day the status applies: the later of 1 January of the accreditation year and the UK date the change was recorded. May be in the future.'
+          example: '2027-01-01'
+        effectiveToDate:
+          type: string
+          format: date
+          nullable: true
+          description: 'The last day the status applies: the day before the next entry''s `effectiveFromDate`. `null` on the latest entry.'
+          example: null
         recordedAt:
           type: string
           format: date-time
@@ -314,11 +394,13 @@ components:
     AccreditationSummary:
       type: object
       description: |
-        The accreditation without its history; returned by search. `status` is a projection for
-        today: the latest status history entry whose `effectiveDate` is on or before today, so a
-        forward-dated change does not show here until its date arrives. `tonnageBand` is the
-        latest tonnage band history entry.
-      required: [organisationNumber, registrationNumber, accreditationNumber, accreditationYear, material, wasteProcessingType, status]
+        The accreditation without its history; returned by search. `latestStatus` is the latest
+        status history entry, the same entry in the same shape, so it always matches the history.
+        It can be future-dated: a 2027 accreditation approved in November 2026 has a `latestStatus`
+        of `approved` with an `effectiveFromDate` of 2027-01-01, which has not arrived yet. Use its
+        effective dates to tell whether it is in effect. `tonnageBand` is the latest tonnage band
+        history entry.
+      required: [organisationNumber, registrationNumber, accreditationNumber, accreditationYear, material, wasteProcessingType, latestStatus]
       properties:
         organisationNumber: { type: integer, format: int32, description: ReEx numeric organisation number (`OrgId`). }
         registrationNumber: { type: string }
@@ -330,7 +412,9 @@ components:
           allOf: [{ $ref: '#/components/schemas/GlassRecyclingProcess' }]
           nullable: true
         wasteProcessingType: { type: string }
-        status: { $ref: '#/components/schemas/AccreditationStatus' }
+        latestStatus:
+          allOf: [{ $ref: '#/components/schemas/StatusHistoryEntry' }]
+          description: The latest entry in `statusHistory`: the latest `effectiveFromDate`, and the later `recordedAt` where two share one. It is the latest whether or not its `effectiveFromDate` has arrived.
         tonnageBand:
           type: string
           allOf: [{ $ref: '#/components/schemas/TonnageBand' }]
@@ -372,7 +456,13 @@ components:
         withdrawn sites are retained for reporting and only included with `includeWithdrawn=true`.
       required: [siteId, siteNumber, siteName, address, contact]
       properties:
-        siteId: { type: integer, format: int32 }
+        siteId:
+          type: integer
+          format: int32
+          description: >-
+            Identifies the site within its accreditation: unique there, across overseas and interim
+            sites, and never reused after a site is removed. Not unique across accreditations, and
+            not a database id.
         siteNumber: { type: string }
         siteName: { type: string }
         address:
@@ -398,10 +488,17 @@ components:
       description: |
         An overseas site included in an accreditation, with its interim sites. A site has its own
         status history because it can be suspended without suspending the whole accreditation.
-        `status` is projected for today on the same rule as `AccreditationSummary.status`.
-      required: [siteId, siteName, status, statusHistory, interimSites]
+        `latestStatus` is the latest entry of that history, on the same rule as
+        `AccreditationSummary.latestStatus`.
+      required: [siteId, siteName, latestStatus, statusHistory, interimSites]
       properties:
-        siteId: { type: integer, format: int32 }
+        siteId:
+          type: integer
+          format: int32
+          description: >-
+            Identifies the site within its accreditation: unique there, across overseas and interim
+            sites, and never reused after a site is removed. Not unique across accreditations, and
+            not a database id.
         orsId: { type: string, nullable: true, example: '001' }
         siteName: { type: string }
         formattedAddress: { type: string, nullable: true, description: Pre-formatted single-line address. }
@@ -419,12 +516,9 @@ components:
         conditionsOfExport: { type: boolean, nullable: true }
         isEu: { type: boolean }
         isOecd: { type: boolean }
-        validFrom:
-          type: string
-          format: date-time
-          nullable: true
-          description: Date the site was approved onto the accreditation (ReEx ORS-A approval date).
-        status: { $ref: '#/components/schemas/AccreditationStatus' }
+        latestStatus:
+          allOf: [{ $ref: '#/components/schemas/StatusHistoryEntry' }]
+          description: The latest entry in the site's `statusHistory`, the same entry in the same shape.
         statusHistory:
           type: array
           minItems: 1

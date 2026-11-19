@@ -8,7 +8,9 @@ using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Config;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Logging;
@@ -37,6 +39,17 @@ public static class AccreditationApplicationEndpoints
     public static void UseAccreditationApplicationEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("api/v1/accreditation-applications");
+        // RA-705: with DomainModel:ReadFromModel on, write responses are served again from the model once the
+        // write has committed (each handler builds its body from legacy inside the dual-write transaction).
+        // Registered only with the flag on.
+        if (
+            app
+                .ServiceProvider.GetRequiredService<IOptions<DomainModelConfig>>()
+                .Value.ReadFromModel
+        )
+        {
+            group.AddEndpointFilter<ApplicationResponseReaderFilter>();
+        }
 
         FrontendOnly(group.MapPost("{organisationId}/{registrationId}/{materialType}/seed", Seed));
         FrontendOnly(group.MapGet("{organisationId}", GetList));
@@ -168,7 +181,7 @@ public static class AccreditationApplicationEndpoints
         group
             .MapPost(
                 "{organisationId}/{applicationId}/accreditation-number",
-                GenerateOrUpdateAccreditationNumber
+                AccreditationNumberEndpoint.GenerateOrUpdateAccreditationNumber
             )
             .RequireAuthorization(policy =>
                 policy
@@ -232,7 +245,7 @@ public static class AccreditationApplicationEndpoints
                 )
         );
 
-    private static IResult? RejectIfTerminal(AccreditationApplicationModel application) =>
+    internal static IResult? RejectIfTerminal(AccreditationApplicationModel application) =>
         application.ApplicationStatus
             is ApplicationStatus.Withdrawn
                 or ApplicationStatus.Approved
@@ -460,233 +473,6 @@ public static class AccreditationApplicationEndpoints
             GlassRecyclingProcess = application.GlassRecyclingProcess,
             Year = year,
         };
-    }
-
-    // RA-690 (replaces RA-448's counter draw and "reapply" YY increment): the accreditation
-    // reference is DERIVED from the application's registration reference - leading R becomes A,
-    // YY becomes the application's own Year - and never drawn from a sequence counter. See
-    // AccreditationReferenceDerivation for the rule itself.
-    //
-    // Deliberately takes no request body. The nation, OrgId, year and regenerate an older
-    // management-be still sends are ignored: the application's stored Year is authoritative, and
-    // an issued reference is never regenerated. So this backend accepts an older management-be,
-    // but an older backend rejects the new body-less request (400): deploy this backend first.
-    private static async Task<IResult> GenerateOrUpdateAccreditationNumber(
-        string organisationId,
-        string applicationId,
-        IAccreditationApplicationPersistence persistence,
-        IDualWriteUnitOfWork unitOfWork,
-        ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken
-    )
-    {
-        // The work can re-run, so the issue is logged once, after the commit.
-        Action? logIssued = null;
-        var result = await unitOfWork.RunAsync(
-            nameof(GenerateOrUpdateAccreditationNumber),
-            applicationId,
-            async (session, _) =>
-            {
-                logIssued = null;
-                var (issueResult, log) = await IssueAccreditationNumberAsync(
-                    persistence,
-                    loggerFactory,
-                    organisationId,
-                    applicationId,
-                    session
-                );
-                logIssued = log;
-                return issueResult;
-            },
-            cancellationToken
-        );
-        if (Committed(result))
-            logIssued?.Invoke();
-        return result;
-    }
-
-    private static async Task<(IResult Result, Action? LogIssued)> IssueAccreditationNumberAsync(
-        IAccreditationApplicationPersistence persistence,
-        ILoggerFactory loggerFactory,
-        string organisationId,
-        string applicationId,
-        IClientSessionHandle? session
-    )
-    {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId, session);
-        if (application is null)
-            return (Results.NotFound(), null);
-        if (RejectIfTerminal(application) is { } conflict)
-            return (conflict, null);
-
-        // RA-448 AC9: registration precedes and is independent of accreditation - an
-        // accreditation number is never issued with nothing to accredit against.
-        if (application.RegistrationReference is not { } registrationReference)
-            return (
-                Results.Conflict(
-                    "Application has no registration number yet; an accreditation number cannot be issued."
-                ),
-                null
-            );
-
-        // Idempotent retry: an issued reference may already be quoted externally, so it is
-        // returned unchanged and never re-derived. This holds while the application is open
-        // (between approval steps 1 and 2); once Approved, RejectIfTerminal above returns 409.
-        if (application.AccreditationReference is not null)
-            return (Results.Ok(application), null);
-
-        // The source, in order:
-        // 1. The latest previous accreditation reference held in this backend, so a renewal of an
-        //    accreditation this service issued (2028 onwards) keeps it, even across a lapsed year.
-        //    Without a registration id there is nothing to match previous years on.
-        // 2. RA-763: last year's accreditation number, which Seed keeps from ReEx. 2026
-        //    accreditations were granted in ReEx, so this is the source for 2027 renewals.
-        // 3. The registration reference, when neither is held.
-        var previous = string.IsNullOrEmpty(application.RegistrationId)
-            ? null
-            : await persistence.GetLatestPreviousAccreditationAsync(
-                application.OrganisationId,
-                application.RegistrationId,
-                application.MaterialType,
-                application.GlassRecyclingProcess,
-                application.Year
-            );
-        var lastYears = application.LastYearsAccreditationNumber;
-        // Last year's number must be for the year before. Seed always stores that, so another
-        // year means the data was changed; it fails visibly rather than falling back to the
-        // registration reference, which is how RA-763's wrong numbers were issued.
-        if (previous is null && lastYears is not null && lastYears.Year != application.Year - 1)
-            return (
-                Results.UnprocessableEntity(
-                    $"Last year's accreditation number '{lastYears.AccreditationNumber}' is for "
-                        + $"{lastYears.Year}, not {application.Year - 1}, so no accreditation "
-                        + "reference can be derived from it."
-                ),
-                null
-            );
-
-        var (sourceKind, sourceReference) = (previous, lastYears) switch
-        {
-            ({ } held, _) => (
-                AccreditationReferenceSourceKind.PreviousAccreditation,
-                held.AccreditationReference!
-            ),
-            (null, { } number) => (
-                AccreditationReferenceSourceKind.LastYearsAccreditationNumber,
-                number.AccreditationNumber
-            ),
-            _ => (AccreditationReferenceSourceKind.Registration, registrationReference),
-        };
-
-        var derivation = AccreditationReferenceDerivation.Derive(
-            sourceReference,
-            sourceKind,
-            application.Year
-        );
-        // A malformed source must fail visibly rather than issue a wrong reference. A malformed
-        // accreditation number deliberately does not fall back to the registration reference.
-        if (!derivation.IsValid)
-            return (Results.UnprocessableEntity(derivation.Error), null);
-
-        // Duplicate live applications for the same registration, material and year are possible
-        // (Seed is best-effort, with no unique index) and would derive the same reference. A
-        // reference is never issued twice. Read-then-write: a unique index is a follow-up to RA-691.
-        // A withdrawn holder doesn't block: an operator who withdrew and started again derives
-        // the same reference, and the withdrawn record keeps its value for audit.
-        var holders = await persistence.GetOtherAccreditationReferenceHoldersAsync(
-            derivation.Reference!,
-            application.Id!.Value
-        );
-        if (holders.Any(h => h.BlocksIssuing))
-            return (
-                Results.Conflict(
-                    $"Accreditation reference {derivation.Reference} is already held by another application; it cannot be issued again."
-                ),
-                null
-            );
-
-        application.AccreditationReference = derivation.Reference;
-        application.DateLastEdited = DateTime.UtcNow;
-
-        var updated = await persistence.UpdateAsync(application, session);
-        if (updated is null)
-            return (Results.Problem("Failed to update accreditation number."), null);
-
-        var withdrawnHolderIds = holders.Where(h => !h.BlocksIssuing).Select(h => h.Id).ToList();
-        return (
-            Results.Ok(updated),
-            () =>
-                LogAccreditationReferenceIssued(
-                    loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
-                    updated,
-                    sourceKind,
-                    sourceReference,
-                    previous?.ApplicationId,
-                    withdrawnHolderIds
-                )
-        );
-    }
-
-    // RA-690: the source of each issued reference is logged, not stored, so support can explain
-    // any reference without a schema change. A previous-accreditation source also names the
-    // application it came from, and any withdrawn applications already holding the reference are
-    // named so support can see why two records share it.
-    private const string IssuedTemplate =
-        "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} from sourceKind={SourceKind} sourceReference={SourceReference}";
-    private const string SourceApplicationTemplate = " sourceApplicationId={SourceApplicationId}";
-    private const string WithdrawnHoldersTemplate = " withdrawnHolderIds={WithdrawnHolderIds}";
-
-    private static void LogAccreditationReferenceIssued(
-        ILogger logger,
-        AccreditationApplicationModel application,
-        AccreditationReferenceSourceKind sourceKind,
-        string sourceReference,
-        string? sourceApplicationId,
-        IReadOnlyList<ObjectId> withdrawnHolderIds
-    )
-    {
-        if (!logger.IsEnabled(LogLevel.Information))
-            return;
-
-        var (reference, id) = (application.AccreditationReference, application.Id);
-        var withdrawnIds = string.Join(",", withdrawnHolderIds);
-        switch (sourceApplicationId, withdrawnHolderIds.Count)
-        {
-            case (null, 0):
-                logger.LogInformation(IssuedTemplate, reference, id, sourceKind, sourceReference);
-                break;
-            case (null, _):
-                logger.LogInformation(
-                    IssuedTemplate + WithdrawnHoldersTemplate,
-                    reference,
-                    id,
-                    sourceKind,
-                    sourceReference,
-                    withdrawnIds
-                );
-                break;
-            case (_, 0):
-                logger.LogInformation(
-                    IssuedTemplate + SourceApplicationTemplate,
-                    reference,
-                    id,
-                    sourceKind,
-                    sourceReference,
-                    sourceApplicationId
-                );
-                break;
-            default:
-                logger.LogInformation(
-                    IssuedTemplate + SourceApplicationTemplate + WithdrawnHoldersTemplate,
-                    reference,
-                    id,
-                    sourceKind,
-                    sourceReference,
-                    sourceApplicationId,
-                    withdrawnIds
-                );
-                break;
-        }
     }
 
     // Bundles GenerateOrUpdateRegistrationNumber's DI-service/framework parameters under one
@@ -1028,7 +814,9 @@ public static class AccreditationApplicationEndpoints
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData.AccreditationId,
             SourceYear = request.Year - 1,
-            LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(priorYearData.AccreditationNumber)
+            LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(
+                priorYearData.AccreditationNumber
+            )
                 ? null
                 : new AccreditationNumberForYearModel
                 {
@@ -1097,7 +885,8 @@ public static class AccreditationApplicationEndpoints
 
     private static async Task<IResult> GetList(
         string organisationId,
-        IAccreditationApplicationPersistence persistence
+        IApplicationReader reader,
+        CancellationToken cancellationToken
     )
     {
         // RA-357: (organisationId, registrationId, materialType, year) is now one-to-many — a
@@ -1108,23 +897,121 @@ public static class AccreditationApplicationEndpoints
         // wins" client land on the newest record rather than an arbitrary one; FE #204 relies on
         // exactly that. Withdrawn records are deliberately NOT filtered out — consumers
         // legitimately need to display them; choosing the live one is the caller's decision.
-        var applications = await persistence.GetByOrganisationAsync(organisationId);
+        // RA-705 — the reader keeps that order whichever source it reads (legacy, or the model
+        // with ReadFromModel on).
+        var applications = await reader.GetByOrganisationAsync(organisationId, cancellationToken);
         return Results.Ok(applications);
     }
+
+    // Bundles GetById's DI services under one [AsParameters] argument so the handler stays under Sonar's
+    // 7-parameter limit (S107) - same reasoning, and the same positional-record shape, as SeedServices above.
+    private sealed record GetByIdServices(
+        IAccreditationApplicationPersistence Persistence,
+        ICaseWorkingApiAdapter CaseWorkingAdapter,
+        IReExApiAdapter ReExAdapter,
+        IDualWriteUnitOfWork UnitOfWork,
+        IApplicationReader Reader,
+        ILoggerFactory LoggerFactory
+    );
 
     private static async Task<IResult> GetById(
         string organisationId,
         string applicationId,
-        IAccreditationApplicationPersistence persistence,
-        ICaseWorkingApiAdapter caseWorkingAdapter,
-        IReExApiAdapter reExAdapter,
-        ILoggerFactory loggerFactory,
+        [AsParameters] GetByIdServices services,
         CancellationToken cancellationToken
     )
     {
-        var application = await persistence.GetByIdAsync(organisationId, applicationId);
+        var application = await services.Persistence.GetByIdAsync(organisationId, applicationId);
         if (application is null)
             return Results.NotFound();
+
+        application = await BackfillFromReExAsync(
+            application,
+            organisationId,
+            applicationId,
+            services,
+            cancellationToken
+        );
+
+        // The backfills work on the legacy document (the one that is saved); the response comes from
+        // the reader, which with ReadFromModel on is the model's projection with Version, CreatedAt
+        // and UpdatedAt from legacy, and after the cut (LegacyWrites off) the model's throughout.
+        // An application the model doesn't hold yet is migrated first, rather than answering 404 for good (self-heal,
+        // decided 2026-11-16).
+        var served = await services.Reader.ServeOrMigrateAsync(
+            application,
+            services.UnitOfWork,
+            cancellationToken
+        );
+        if (served is null)
+        {
+            return Results.NotFound();
+        }
+
+        // Served from the model, a failed backfill save holds neither value; the response still answers with what
+        // ReEx resolved (RA-526: no nation would show the wrong nation's bank details). A value the source holds wins.
+        served.OrgId ??= application.OrgId;
+        served.Nation ??= application.Nation;
+
+        await AddNotificationStatusAsync(served, applicationId, services, cancellationToken);
+
+        return Results.Ok(served);
+    }
+
+    // RA-503 (OrgId) and RA-526 (Nation) backfills for GetById. Write goes through the dual-write unit of work so the
+    // model's Organisation and Registration get the values too (RA-705). A failed or lost write still answers the
+    // read with the values ReEx resolved, as before RA-705: nothing is persisted, so the next read retries, but the
+    // frontend (which no longer falls back to postcode) still shows the right nation. With ReadFromModel on the
+    // response is served from the model, which the failed write left untouched.
+    private static async Task<AccreditationApplicationModel> BackfillFromReExAsync(
+        AccreditationApplicationModel application,
+        string organisationId,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        var resolved = await ResolveMissingFromReExAsync(
+            application,
+            organisationId,
+            services.ReExAdapter,
+            cancellationToken
+        );
+        if (!resolved)
+        {
+            return application;
+        }
+
+        var saved = await TrySaveBackfillAsync(
+            application,
+            applicationId,
+            services,
+            cancellationToken
+        );
+        if (saved is not null)
+        {
+            return saved;
+        }
+
+        services
+            .LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints))
+            .LogWarning(
+                "Failed to persist backfilled data for applicationId={ApplicationId}",
+                applicationId
+            );
+
+        return application;
+    }
+
+    // True when something was resolved and set on the application.
+    private static async Task<bool> ResolveMissingFromReExAsync(
+        AccreditationApplicationModel application,
+        string organisationId,
+        IReExApiAdapter reExAdapter,
+        CancellationToken cancellationToken
+    )
+    {
+        var resolved = false;
 
         // RA-503: backfill OrgId (ReEx's numeric organisation number) for any application read
         // before Submit's own resolution ran - older applications, or ones that never reached
@@ -1142,7 +1029,7 @@ public static class AccreditationApplicationEndpoints
             if (orgNumber is not null)
             {
                 application.OrgId = orgNumber;
-                application = await persistence.UpdateAsync(application) ?? application;
+                resolved = true;
             }
         }
 
@@ -1163,39 +1050,74 @@ public static class AccreditationApplicationEndpoints
             if (nationResult.IsSuccess)
             {
                 application.Nation = nationResult.Value;
-                application = await persistence.UpdateAsync(application) ?? application;
+                resolved = true;
             }
         }
 
-        // Skip the round-trip entirely when there is nothing to look up (e.g. older
-        // applications submitted before the work-item id was persisted, or applications
-        // never submitted at all). Defence in depth otherwise: GetNotificationStatusAsync
-        // already guarantees it never throws, but this lookup must never be able to fail
-        // the response regardless of adapter implementation (RA102-j7s).
-        if (application.CaseManagementWorkItemId is not null)
+        return resolved;
+    }
+
+    // The saved document, or null when the save failed or was lost. The box carries the saved document out of the
+    // unit of work's callback.
+    private static async Task<AccreditationApplicationModel?> TrySaveBackfillAsync(
+        AccreditationApplicationModel application,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        var savedBox = new StrongBox<AccreditationApplicationModel?>();
+        var result = await services.UnitOfWork.InTransactionAsync(
+            applicationId,
+            async session =>
+            {
+                savedBox.Value = await services.Persistence.UpdateAsync(application, session);
+                return Results.Ok();
+            },
+            cancellationToken
+        );
+
+        return result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 }
+            ? savedBox.Value
+            : null;
+    }
+
+    // Skip the round-trip entirely when there is nothing to look up (e.g. older
+    // applications submitted before the work-item id was persisted, or applications
+    // never submitted at all). Defence in depth otherwise: GetNotificationStatusAsync
+    // already guarantees it never throws, but this lookup must never be able to fail
+    // the response regardless of adapter implementation (RA102-j7s).
+    private static async Task AddNotificationStatusAsync(
+        AccreditationApplicationModel application,
+        string applicationId,
+        GetByIdServices services,
+        CancellationToken cancellationToken
+    )
+    {
+        if (application.CaseManagementWorkItemId is null)
         {
-            try
-            {
-                var notificationStatus = await caseWorkingAdapter.GetNotificationStatusAsync(
-                    application,
-                    cancellationToken
-                );
-                application.NotificationStatus = notificationStatus.NotificationStatus;
-                application.DueDate = notificationStatus.SlaDueDate;
-            }
-            catch (Exception ex)
-            {
-                loggerFactory
-                    .CreateLogger("AccreditationApplicationEndpoints")
-                    .LogWarning(
-                        ex,
-                        "Failed to resolve notification status for applicationId={ApplicationId}",
-                        applicationId
-                    );
-            }
+            return;
         }
 
-        return Results.Ok(application);
+        try
+        {
+            var notificationStatus = await services.CaseWorkingAdapter.GetNotificationStatusAsync(
+                application,
+                cancellationToken
+            );
+            application.NotificationStatus = notificationStatus.NotificationStatus;
+            application.DueDate = notificationStatus.SlaDueDate;
+        }
+        catch (Exception ex)
+        {
+            services
+                .LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints))
+                .LogWarning(
+                    ex,
+                    "Failed to resolve notification status for applicationId={ApplicationId}",
+                    applicationId
+                );
+        }
     }
 
     private static Task<IResult> PatchPrns(
@@ -1609,7 +1531,7 @@ public static class AccreditationApplicationEndpoints
         {
             var reason = $"Interim site {duplicateId} appears more than once.";
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(PatchOverseasSites),
                 applicationId,
                 reason
@@ -1666,7 +1588,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(AddOverseasSite),
                 applicationId,
                 validation
@@ -1772,7 +1694,7 @@ public static class AccreditationApplicationEndpoints
         catch (Exception ex)
         {
             services
-                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints))
                 .LogWarning(
                     ex,
                     "Failed to notify ManagementBe of new overseas site for applicationId={ApplicationId}",
@@ -1783,7 +1705,7 @@ public static class AccreditationApplicationEndpoints
 
     // RA-644 B8c: whether a unit-of-work result means the write committed, so a side effect that
     // must not run for a rolled-back write (a notification, an audit record) may now go out.
-    private static bool Committed(IResult result) =>
+    internal static bool Committed(IResult result) =>
         result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 };
 
     /// <summary>
@@ -2204,7 +2126,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                services.LoggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                services.LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(UpdateOverseasSite),
                 applicationId,
                 validation
@@ -2391,7 +2313,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(PromoteOverseasSite),
                 applicationId,
                 validation
@@ -2592,7 +2514,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(UpdateInterimSite),
                 applicationId,
                 validation
@@ -2828,7 +2750,7 @@ public static class AccreditationApplicationEndpoints
         if (!validation.IsValid)
         {
             ValidationFailureLog.LogValidationFailure(
-                loggerFactory.CreateLogger("AccreditationApplicationEndpoints"),
+                loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints)),
                 nameof(AddInterimSite),
                 applicationId,
                 validation
@@ -2917,7 +2839,7 @@ public static class AccreditationApplicationEndpoints
         catch (Exception ex)
         {
             services
-                .LoggerFactory.CreateLogger("AccreditationApplicationEndpoints")
+                .LoggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints))
                 .LogWarning(
                     ex,
                     "Failed to notify ManagementBe of new interim site for applicationId={ApplicationId}",
@@ -3951,7 +3873,7 @@ public static class AccreditationApplicationEndpoints
         ILoggerFactory loggerFactory
     )
     {
-        var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+        var logger = loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints));
         // The Case Management service BE's push hook sends this on every request for
         // cross-service tracing (RA-311). Purely a diagnostic aid — absence must never fail the
         // request.
@@ -4457,7 +4379,7 @@ public static class AccreditationApplicationEndpoints
         CancellationToken cancellationToken
     )
     {
-        var logger = loggerFactory.CreateLogger("AccreditationApplicationEndpoints");
+        var logger = loggerFactory.CreateLogger(nameof(AccreditationApplicationEndpoints));
         // The Case Management service BE's push hook sends this on every request for
         // cross-service tracing (RA-311/RA-368). Purely a diagnostic aid — absence must never
         // fail the request.
@@ -4769,7 +4691,7 @@ public static class AccreditationApplicationEndpoints
         )
         {
             loggerFactory
-                .CreateLogger("AccreditationApplicationEndpoints")
+                .CreateLogger(nameof(AccreditationApplicationEndpoints))
                 .LogWarning(
                     "{Operation}: applicationId={ApplicationId} changed in the case management service but the change was not recorded here; a retry completes it",
                     operation,
@@ -5041,10 +4963,7 @@ public static class AccreditationApplicationEndpoints
         // still trims surrounding whitespace, hence the length check. Only the re-formatted
         // canonical value is looked up and logged, so a caller on this unauthenticated route
         // cannot put text of its choosing into the Error log.
-        if (
-            fileUploadId.Length != 36
-            || !Guid.TryParseExact(fileUploadId, "D", out var uploadId)
-        )
+        if (fileUploadId.Length != 36 || !Guid.TryParseExact(fileUploadId, "D", out var uploadId))
             return Results.BadRequest("Invalid fileUploadId in callback metadata.");
 
         var file = payload.Form?.File;

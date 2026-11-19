@@ -152,9 +152,17 @@ public sealed class ApplicationReconciler(
     )
     {
         NormaliseSites(legacy, sources);
+        var projected = ApplicationProjection.ToLegacy(sources);
+        // The model serves ReEx's string as received, or its date in one form for an ORS recorded before the string was
+        // kept; both sides are compared as dates, so that is not a difference either.
+        foreach (var site in projected.OverseasSites?.Sites ?? [])
+        {
+            NormaliseApprovalDate(site);
+        }
+
         var differences = BsonDifferences.Compare(
             legacy.ToBsonDocument(),
-            ApplicationProjection.ToLegacy(sources).ToBsonDocument()
+            projected.ToBsonDocument()
         );
         differences.Paths.ExceptWith(s_ignored);
         differences.ModelOnly.IntersectWith(differences.Paths);
@@ -179,10 +187,7 @@ public sealed class ApplicationReconciler(
         foreach (var site in legacy.OverseasSites?.Sites ?? [])
         {
             InterimSiteSync.Normalise(site);
-            if (SiteApprovalDate.Parse(site.ValidFrom) is { } approved)
-            {
-                site.ValidFrom = SiteApprovalDate.Format(approved);
-            }
+            NormaliseApprovalDate(site);
 
             foreach (
                 var interim in site.InterimSites.Append(site.InterimSite).OfType<InterimSiteModel>()
@@ -193,6 +198,14 @@ public sealed class ApplicationReconciler(
                     interim.SiteNumber
                 );
             }
+        }
+    }
+
+    private static void NormaliseApprovalDate(OverseasSiteModel site)
+    {
+        if (SiteApprovalDate.Parse(site.ValidFrom) is { } approved)
+        {
+            site.ValidFrom = SiteApprovalDate.Format(approved);
         }
     }
 
