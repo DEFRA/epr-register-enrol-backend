@@ -54,6 +54,29 @@ public sealed class PiiRedactionEnricher : ILogEventEnricher
         }
 
         RedactUser(enrichments.User);
+        RedactAdminQuery(enrichments.Url);
+    }
+
+    // The Admin API's search terms (/admin/accreditation-applications?q=...)
+    // can be a person's name, and the ECS enricher puts the request's URL,
+    // query included, on every log event during the request. Keep the path,
+    // drop the query.
+    private static void RedactAdminQuery(Url? url)
+    {
+        if (url?.Path is null || !url.Path.StartsWith("/admin/", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        url.Query = null;
+        url.Full = WithoutQuery(url.Full);
+        url.Original = WithoutQuery(url.Original);
+    }
+
+    private static string? WithoutQuery(string? url)
+    {
+        var queryStart = url?.IndexOf('?') ?? -1;
+        return queryStart < 0 ? url : url![..queryStart];
     }
 
     // Id/Group/Domain are opaque identifiers, not PII, and are left as-is.

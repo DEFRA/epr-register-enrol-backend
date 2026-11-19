@@ -33,6 +33,59 @@ public class PiiRedactionEnricherTests
     }
 
     [Fact]
+    public void Enrich_DropsTheQuery_FromAnAdminApiRequestsUrl()
+    {
+        var enrichments = new SpecialProperties.HttpContextEnrichments
+        {
+            Url = new Url
+            {
+                Path = "/admin/accreditation-applications",
+                Query = "q=Jane%20Smith&searchFields=organisationName",
+                Full = "https://backend.test/admin/accreditation-applications?q=Jane%20Smith&searchFields=organisationName",
+                Original = "/admin/accreditation-applications?q=Jane%20Smith&searchFields=organisationName",
+            },
+        };
+        var logEvent = CreateLogEvent(
+            new LogEventProperty(
+                SpecialProperties.SpecialKeys.HttpContext,
+                new ScalarValue(enrichments)
+            )
+        );
+
+        new PiiRedactionEnricher().Enrich(logEvent, new TestPropertyFactory());
+
+        enrichments.Url!.Query.Should().BeNull();
+        enrichments.Url.Full.Should().Be("https://backend.test/admin/accreditation-applications");
+        enrichments.Url.Original.Should().Be("/admin/accreditation-applications");
+        enrichments.Url.Path.Should().Be("/admin/accreditation-applications");
+    }
+
+    [Fact]
+    public void Enrich_KeepsTheQuery_OnOtherRequests()
+    {
+        var enrichments = new SpecialProperties.HttpContextEnrichments
+        {
+            Url = new Url
+            {
+                Path = "/v1/accreditations",
+                Query = "year=2027",
+                Full = "https://backend.test/v1/accreditations?year=2027",
+            },
+        };
+        var logEvent = CreateLogEvent(
+            new LogEventProperty(
+                SpecialProperties.SpecialKeys.HttpContext,
+                new ScalarValue(enrichments)
+            )
+        );
+
+        new PiiRedactionEnricher().Enrich(logEvent, new TestPropertyFactory());
+
+        enrichments.Url!.Query.Should().Be("year=2027");
+        enrichments.Url.Full.Should().Be("https://backend.test/v1/accreditations?year=2027");
+    }
+
+    [Fact]
     public void Enrich_RedactsNameAndEmail_OnClientUserAndTopLevelUser()
     {
         var clientUser = new User
