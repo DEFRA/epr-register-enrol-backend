@@ -417,11 +417,47 @@ public class DevExporterAccreditationSeedService(
     }
 
     // RA-697 (org 50020): one accredited ORS and one registered only, for the change request pages' empty states.
+    // RA-495: the registered one already holds BES evidence on the accreditation, so adding it to the accreditation
+    // shows those files read-only beside the request's. No spec relies on it having none (org 50019's Delhi does).
+    // The files are records only: nothing is in S3 under their keys.
     private static List<OverseasSiteModel> NoChangeRequestsOverseasSites(int year) =>
         [
             Ors(902001, "001", "Gdansk Recykling Sp. z o.o.", "ul. Portowa 20", "Poland", $"{year}-01-01T00:00:00Z", []),
-            Ors(902002, "002", "Ghent Recycling NV", "Havenlaan 5", "Belgium", null, []),
+            WithBesEvidence(
+                Ors(902002, "002", "Ghent Recycling NV", "Havenlaan 5", "Belgium", null, []),
+                year,
+                ("0e000000-0000-4000-8000-000000902002", "ghent-bes-certificate.pdf"),
+                ("0e000000-0000-4000-8000-000000902003", "ghent-bes-audit-report.pdf")
+            ),
         ];
+
+    private static OverseasSiteModel WithBesEvidence(
+        OverseasSiteModel site,
+        int year,
+        params (string FileId, string Filename)[] files
+    )
+    {
+        site.BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                .. files.Select(file => new BesEvidenceFileModel
+                {
+                    FileId = file.FileId,
+                    Filename = file.Filename,
+                    ContentType = "application/pdf",
+                    ScanStatus = "Clean",
+                    BesEvidenceValidFromDate = $"{year}-01-01T00:00:00.000Z",
+                    BesEvidenceExpiryDate = $"{year + 2}-12-31T00:00:00.000Z",
+                    UploadedAt = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    UploadedBy = "dev-seed",
+                    S3Key = $"bes-evidence/accreditation/dev-seed/{site.SiteId}/{file.FileId}",
+                }),
+            ],
+            DoYouWantToUploadMoreEvidence = false,
+        };
+        return site;
+    }
 
     // validFrom null means registered on the registration but not accredited.
     private static OverseasSiteModel Ors(
