@@ -13,7 +13,6 @@ public class AccreditationApiMapperTests
 {
     private static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
 
-
     private static readonly DateTime ApprovedAt = new(2027, 1, 10, 9, 30, 0, DateTimeKind.Utc);
 
     private static AccreditationApplicationModel Application(
@@ -659,91 +658,6 @@ public class AccreditationApiMapperTests
             .Be("2027-01-10");
     }
 
-    // ---- latestStatus ----
-
-    private static void AssertLatestStatusIsTheLastHistoryEntry(JsonElement json)
-    {
-        json.TryGetProperty("status", out _).Should().BeFalse();
-        var latest = json.GetProperty("latestStatus");
-        foreach (var field in new[] { "status", "effectiveFromDate", "effectiveToDate", "recordedAt" })
-            latest.TryGetProperty(field, out _).Should().BeTrue($"latestStatus has {field}");
-        latest.GetRawText().Should().Be(json.GetProperty("statusHistory").EnumerateArray().Last().GetRawText());
-    }
-
-    [Fact]
-    public void Accreditation_HasALatestStatus_IdenticalToTheLatestHistoryEntry()
-    {
-        AssertLatestStatusIsTheLastHistoryEntry(Accreditation(Application()));
-    }
-
-    [Fact]
-    public void OverseasSite_HasALatestStatus_IdenticalToTheLatestHistoryEntry()
-    {
-        AssertLatestStatusIsTheLastHistoryEntry(OverseasSite(Site()));
-    }
-
-    [Fact]
-    public void Summary_HasALatestStatus_AndNoStatusString()
-    {
-        var json = Summary(Application());
-
-        json.TryGetProperty("status", out _).Should().BeFalse();
-        var latest = json.GetProperty("latestStatus");
-        latest.GetProperty("status").GetString().Should().Be("approved");
-        latest.GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-10");
-        latest.GetProperty("effectiveToDate").ValueKind.Should().Be(JsonValueKind.Null);
-        latest.GetProperty("recordedAt").GetDateTime().Should().Be(ApprovedAt);
-        json.TryGetProperty("statusHistory", out _).Should().BeFalse();
-    }
-
-    // A 2027 accreditation approved in November 2026: the status does not apply until 1 January 2027,
-    // but it is still the latest status. The effective dates are how a client tells.
-    [Fact]
-    public void LatestStatus_CanBeFutureDated_AndIsStillTheLatest()
-    {
-        var json = Accreditation(
-            Application(configure: a => a.CaseManagementStatusUpdatedAt = Nov2026)
-        );
-
-        var latest = json.GetProperty("latestStatus");
-        latest.GetProperty("status").GetString().Should().Be("approved");
-        latest.GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-01");
-        AssertLatestStatusIsTheLastHistoryEntry(json);
-    }
-
-    [Fact]
-    public void Latest_IsTheEntryThatAppliesFromLatest_WhateverTheOrderOrToday()
-    {
-        var history = StatusHistoryBuilder.Build(
-            [
-                ("suspended", new DateTime(2027, 3, 10, 12, 0, 0, DateTimeKind.Utc)),
-                ("approved", Nov2026),
-                ("approved", new DateTime(2099, 5, 1, 12, 0, 0, DateTimeKind.Utc)),
-            ],
-            2027
-        );
-
-        var latest = StatusHistoryBuilder.Latest(history);
-
-        latest.Should().BeSameAs(history[^1]);
-        latest.EffectiveFromDate.Should().Be(new DateOnly(2099, 5, 1));
-        latest.EffectiveToDate.Should().BeNull();
-    }
-
-    [Fact]
-    public void Latest_WhereTheTwoLatestShareAFromDate_IsTheLaterRecorded()
-    {
-        var history = StatusHistoryBuilder.Build(
-            [("suspended", Nov2026.AddDays(5)), ("approved", Nov2026)],
-            2027
-        );
-
-        var latest = StatusHistoryBuilder.Latest(history);
-
-        latest.Status.Should().Be("suspended");
-        latest.RecordedAt.Should().Be(Nov2026.AddDays(5));
-    }
-
     [Fact]
     public void OverseasSite_ListsOnlyItsActiveInterimSites_InFull()
     {
@@ -845,4 +759,96 @@ public class AccreditationApiMapperTests
             CreatedAt = InterimCreated,
             RemovedAt = removed ? InterimRemoved : null,
         };
+
+    // ---- latestStatus ----
+
+    private static void AssertLatestStatusIsTheLastHistoryEntry(JsonElement json)
+    {
+        json.TryGetProperty("status", out _).Should().BeFalse();
+        var latest = json.GetProperty("latestStatus");
+        foreach (var field in new[] { "status", "effectiveFromDate", "effectiveToDate", "recordedAt" })
+            latest.TryGetProperty(field, out _).Should().BeTrue($"latestStatus has {field}");
+        latest.GetRawText().Should().Be(json.GetProperty("statusHistory").EnumerateArray().Last().GetRawText());
+    }
+
+    [Fact]
+    public void Accreditation_HasALatestStatus_IdenticalToTheLatestHistoryEntry()
+    {
+        AssertLatestStatusIsTheLastHistoryEntry(Accreditation(Application()));
+    }
+
+    [Fact]
+    public void OverseasSite_HasALatestStatus_IdenticalToTheLatestHistoryEntry()
+    {
+        AssertLatestStatusIsTheLastHistoryEntry(OverseasSite(Site()));
+    }
+
+    [Fact]
+    public void Summary_HasALatestStatus_AndNoStatusString()
+    {
+        var json = Summary(Application());
+
+        json.TryGetProperty("status", out _).Should().BeFalse();
+        var latest = json.GetProperty("latestStatus");
+        latest.GetProperty("status").GetString().Should().Be("approved");
+        latest.GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-10");
+        latest.GetProperty("effectiveToDate").ValueKind.Should().Be(JsonValueKind.Null);
+        latest.GetProperty("recordedAt").GetDateTime().Should().Be(ApprovedAt);
+        json.TryGetProperty("statusHistory", out _).Should().BeFalse();
+    }
+
+    // A 2027 accreditation approved in November 2026: the status does not apply until 1 January 2027,
+    // but it is still the latest status. The effective dates are how a client tells.
+    [Fact]
+    public void LatestStatus_CanBeFutureDated_AndIsStillTheLatest()
+    {
+        var json = Accreditation(
+            Application(configure: a => a.CaseManagementStatusUpdatedAt = Nov2026)
+        );
+
+        var latest = json.GetProperty("latestStatus");
+        latest.GetProperty("status").GetString().Should().Be("approved");
+        latest.GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-01");
+        AssertLatestStatusIsTheLastHistoryEntry(json);
+    }
+
+    private static StatusHistoryEntryDto Entry(string status, string from, DateTime recordedAt) =>
+        new()
+        {
+            Status = status,
+            EffectiveFromDate = DateOnly.Parse(from),
+            EffectiveToDate = null,
+            RecordedAt = recordedAt,
+        };
+
+    // Not a history from Build: the latest entry is first, so a plain Last() would not find it.
+    [Fact]
+    public void Latest_IsTheLatestFromDate_WhateverTheInputOrder()
+    {
+        var latestFirst = Entry("approved", "2099-05-01", Nov2026);
+        var history = new List<StatusHistoryEntryDto>
+        {
+            latestFirst,
+            Entry("approved", "2027-01-01", Nov2026),
+            Entry("suspended", "2027-03-10", Nov2026.AddDays(5)),
+        };
+
+        StatusHistoryBuilder.Latest(history).Should().BeSameAs(latestFirst);
+    }
+
+    // The later-recorded entry is in the middle and the earlier-recorded one is last, so neither Last()
+    // nor a sort by effectiveFromDate alone finds it.
+    [Fact]
+    public void Latest_WhereTheTwoLatestShareAFromDate_IsTheLaterRecorded_WhateverTheInputOrder()
+    {
+        var laterRecorded = Entry("suspended", "2027-03-10", Nov2026.AddDays(5));
+        var history = new List<StatusHistoryEntryDto>
+        {
+            Entry("approved", "2027-01-01", Nov2026),
+            laterRecorded,
+            Entry("approved", "2027-03-10", Nov2026),
+        };
+
+        StatusHistoryBuilder.Latest(history).Should().BeSameAs(laterRecorded);
+    }
 }

@@ -1111,7 +1111,8 @@ it** (2026-10-22): fixed decision 6 stands, so a status takes effect **when it i
 - **No future-dated changes.** A planned suspension is recorded on the day it should take effect,
   manually (Q14).
 - **Consequence for the v2 YAML:** remove `StatusHistoryEntry.effectiveDate`, and replace "the latest
-  entry whose `effectiveDate` is on or before today" with "the current status". Your colleague building
+  entry whose `effectiveDate` is on or before today" with `latestStatus`: the latest entry of the
+  status history (RA-773). Your colleague building
   the endpoints needs to know.
 
 **Tonnage band** works the same way (v4, D2). It is a stored field on the Accreditation, recorded

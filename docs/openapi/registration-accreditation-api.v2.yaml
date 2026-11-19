@@ -45,8 +45,7 @@ info:
       signing, to be specified later.
     * ASSUMPTION: `accreditationNumber` is unique across all organisations, so it identifies an
       accreditation on its own.
-    * ASSUMPTION: a status takes effect at the start of its `effectiveFromDate` (UK time), and
-      "today" is evaluated when the request is served.
+    * ASSUMPTION: a status takes effect at the start of its `effectiveFromDate` (UK time).
     * ASSUMPTION: a tonnage band cannot be forward-dated or backdated; it takes effect when it
       is recorded.
 servers:
@@ -232,9 +231,10 @@ components:
       name: status
       in: query
       description: |
-        Only accreditations whose `latestStatus.status` is this. Only `approved` accreditations are served
-        today, so `suspended`, `cancelled` and `withdrawn` are valid and return an empty page
-        until case management can send them.
+        Only accreditations with this status. It is matched against the status recorded for the
+        accreditation, which is expected to agree with `latestStatus.status`. Only `approved`
+        accreditations are served today, so `suspended`, `cancelled` and `withdrawn` are valid and
+        return an empty page until case management can send them.
       schema: { type: string, enum: [approved, suspended, cancelled, withdrawn] }
     RegistrationNumberFilter:
       name: registrationNumber

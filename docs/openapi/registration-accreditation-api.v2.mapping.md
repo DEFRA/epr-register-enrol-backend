@@ -61,7 +61,7 @@ after the migration (domain model design, decision D3).
 `AccreditationSummary` is returned by search; `Accreditation` adds the two histories.
 
 Search (`GET /v1/accreditations`) filters on `year`, `organisationNumber`, `registrationNumber` and
-`status` (matched against `latestStatus.status`). They map to App `year`, `orgId`, `registrationReference` and `applicationStatus`, and
+`status`. They map to App `year`, `orgId`, `registrationReference` and `applicationStatus`, and
 combine with AND. A search that names an organisation or registration is covered by the
 `(orgId, registrationReference, year)` index.
 
