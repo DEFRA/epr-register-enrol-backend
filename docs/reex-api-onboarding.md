@@ -136,6 +136,10 @@ An overseas site has `siteId`, `orsId`, `siteName`, `formattedAddress`, `address
 interim site has `siteId`, `siteNumber`, `siteName`, `address`, `contact`, `operationCodes`,
 `createdAt` and, if it was withdrawn, `removedAt`.
 
+`siteId` identifies a site within its accreditation. It is unique there, across overseas and interim
+sites, and is never reused after a site is removed. It is not unique across accreditations, so
+identify a site by organisation, registration, year and `siteId` together. It is not a database id.
+
 **Personal data.** `signatories` hold a person's name and email, and every `contact` a name, email
 and phone number. Treat them as personal data.
 
@@ -349,6 +353,10 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 | 405 | `method_not_allowed` | any method other than GET |
 | 429 | `rate_limited` | too many requests: wait for the `Retry-After` seconds |
 | 503 | `query_timeout` | the database stopped a query for taking too long: retry, with a narrower search if you can |
+
+An unknown route (404 `not_found`) or a method other than GET (405) is answered before
+authentication, because it reveals nothing beyond the published API. Every route that returns
+data checks the signature first.
 
 401 troubleshooting: check clock skew first, then that the payload has exactly two empty lines
 and no trailing newline, then that you use the secret for this client and environment.
