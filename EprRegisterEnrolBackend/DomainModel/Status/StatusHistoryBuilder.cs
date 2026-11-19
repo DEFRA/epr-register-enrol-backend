@@ -47,5 +47,14 @@ public static class StatusHistoryBuilder
             .ToList();
     }
 
+    /// <summary>
+    /// The latest entry of a status history: the latest <c>effectiveFromDate</c>, and the later
+    /// <c>recordedAt</c> where two share one. Whether that date has arrived does not matter. It is the
+    /// entry itself, so its dates always match the history's. It orders the history itself, so it works on any
+    /// history, not only one from <see cref="Build"/>. The history must not be empty.
+    /// </summary>
+    public static StatusHistoryEntryDto Latest(IReadOnlyList<StatusHistoryEntryDto> history) =>
+        history.OrderBy(entry => entry.EffectiveFromDate).ThenBy(entry => entry.RecordedAt).Last();
+
     private static DateOnly Later(DateOnly a, DateOnly b) => a >= b ? a : b;
 }

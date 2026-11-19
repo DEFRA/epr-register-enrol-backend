@@ -158,22 +158,39 @@ public class DevAccreditationHistorySeedServiceTests
             DeltaGreen,
             FakeOrganisationPersistence.Reg50003.ToString(),
             MaterialType.Plastic,
-            null,
             2027
         );
 
         previous.Should().NotBeNull();
-        AccreditationReferenceDerivation
-            .Derive(
-                previous!.AccreditationReference,
-                AccreditationReferenceSourceKind.PreviousAccreditation,
-                2027
+        AccreditationNumberRules
+            .Generate(
+                new AccreditationNumberRequest(
+                    2027,
+                    "R26ER0500036908PL",
+                    new PriorAccreditation(
+                        2026,
+                        previous!.AccreditationReference!,
+                        AccreditationReferenceSourceKind.PreviousAccreditation
+                    ),
+                    "PL",
+                    []
+                ),
+                () => throw new InvalidOperationException("A renewal draws no random sequence.")
             )
-            .Reference.Should()
+            .AccreditationNumber.Should()
             .Be("A27ER0500030042PL");
-        AccreditationReferenceDerivation
-            .Derive("R26ER0500036908PL", AccreditationReferenceSourceKind.Registration, 2027)
-            .Reference.Should()
-            .Be("A27ER0500036908PL", because: "the registration source must give a different answer");
+        AccreditationNumberRules
+            .Generate(
+                new AccreditationNumberRequest(
+                    2027,
+                    "R26ER0500036908PL",
+                    null,
+                    "PL",
+                    []
+                ),
+                () => 583
+            )
+            .AccreditationNumber.Should()
+            .Be("A27ER0500030583PL", because: "without the 2026 accreditation it would be a new number");
     }
 }

@@ -33,10 +33,12 @@ public record AccreditationSummaryDto
     public required string WasteProcessingType { get; init; }
 
     /// <summary>
-    /// <c>approved</c>, <c>suspended</c>, <c>cancelled</c> or <c>withdrawn</c>: the latest status
-    /// history entry whose <c>effectiveFromDate</c> is on or before today.
+    /// The latest entry in the accreditation's <c>statusHistory</c>, the same entry and the same shape:
+    /// the latest <c>effectiveFromDate</c>, and the later <c>recordedAt</c> where two share one. It is
+    /// the latest whether or not its <c>effectiveFromDate</c> has arrived, so use its dates to tell
+    /// whether it is in effect.
     /// </summary>
-    public required string Status { get; init; }
+    public required StatusHistoryEntryDto LatestStatus { get; init; }
 
     /// <summary><c>up_to_500</c>, <c>up_to_5000</c>, <c>up_to_10000</c> or <c>over_10000</c>.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -197,7 +199,8 @@ public sealed record AccreditedOverseasSiteDto
 
     public required bool IsOecd { get; init; }
 
-    public required string Status { get; init; }
+    /// <summary>The latest entry in the site's <c>statusHistory</c>: see the accreditation's.</summary>
+    public required StatusHistoryEntryDto LatestStatus { get; init; }
 
     public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
 

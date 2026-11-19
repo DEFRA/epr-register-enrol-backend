@@ -119,7 +119,7 @@ are left out. The order of fields is not significant. **Ignore fields you do not
 | `material` | `Steel`, `Wood`, `Aluminium`, `Fibre`, `Glass`, `Paper` or `Plastic` |
 | `glassRecyclingProcess` | glass only: `glass_re_melt` or `glass_other` |
 | `wasteProcessingType` | `reprocessor` or `exporter` |
-| `status` | the status today (see below) |
+| `latestStatus` | the latest entry of `statusHistory`, in the same shape (`status`, `effectiveFromDate`, `effectiveToDate`, `recordedAt`). It can be in the future: see below |
 | `tonnageBand` | `up_to_500`, `up_to_5000`, `up_to_10000` or `over_10000` |
 
 ### Accreditation detail: extra fields
@@ -132,23 +132,30 @@ are left out. The order of fields is not significant. **Ignore fields you do not
 | `overseasSites` | **exporters only**: the accredited overseas sites, ordered by `orsId` (see below) |
 
 An overseas site has `siteId`, `orsId`, `siteName`, `formattedAddress`, `address`, `contact`,
-`operationCodes`, `isEu`, `isOecd`, `status`, `statusHistory` and `interimSites`. An
+`operationCodes`, `isEu`, `isOecd`, `latestStatus`, `statusHistory` and `interimSites`. An
 interim site has `siteId`, `siteNumber`, `siteName`, `address`, `contact`, `operationCodes`,
 `createdAt` and, if it was withdrawn, `removedAt`.
+
+`siteId` identifies a site within its accreditation. It is unique there, across overseas and interim
+sites, and is never reused after a site is removed. It is not unique across accreditations, so
+identify a site by organisation, registration, year and `siteId` together. It is not a database id.
 
 **Personal data.** `signatories` hold a person's name and email, and every `contact` a name, email
 and phone number. Treat them as personal data.
 
 ### Status and dates
 
-- `status` is the latest `statusHistory` entry whose `effectiveFromDate` is on or before today.
-  Today every accreditation has the one status `approved`. The API is built to carry `suspended`,
-  `cancelled` and `withdrawn`, which will appear when case management can send them. Overseas
-  sites use the same list of statuses. **Handle a status value you do
-  not know.** The same goes for `tonnageBand`.
-- If no entry is effective yet (for example the only entry is effective in the future), `status`
-  is still `approved`: an accreditation that is served has been granted. In that case `status` and
-  `statusHistory` disagree, so use `statusHistory` for "what was it on date X".
+- `latestStatus` is the latest entry of the record's `statusHistory`: the latest
+  `effectiveFromDate`, and the later `recordedAt` where two share one. It is the same entry as in the
+  history, so its dates always match. Today every accreditation has the one status `approved`. The
+  API is built to carry `suspended`, `cancelled` and `withdrawn`, which will appear when case
+  management can send them. Overseas sites use the same list of statuses. **Handle a status value
+  you do not know.** The same goes for `tonnageBand`.
+- `latestStatus` can be in the future. A 2027 accreditation approved in November 2026 has a
+  `latestStatus` of `approved` with an `effectiveFromDate` of `2027-01-01`: it has been granted, but
+  the status does not apply until that date. **Use the effective dates to tell whether it is in
+  effect today.** For the status on a given day, use `statusHistory` (see "Was this accreditation
+  approved on date X?").
 - `effectiveFromDate` is the first day a status applies, and `effectiveToDate` the last. Both are UK
   calendar dates (`yyyy-MM-dd`, Europe/London). `effectiveFromDate` is the later of 1 January of the
   accreditation year and the UK date the change was recorded, so a status recorded before the year
@@ -174,7 +181,7 @@ grouped for reading:
   "accreditationYear": 2027,
   "material": "Paper",
   "wasteProcessingType": "exporter",
-  "status": "approved",
+  "latestStatus": { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" },
   "tonnageBand": "up_to_5000",
   "statusHistory": [
     { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" }
@@ -200,7 +207,7 @@ grouped for reading:
       "operationCodes": ["R3"],
       "isEu": true,
       "isOecd": true,
-      "status": "approved",
+      "latestStatus": { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" },
       "statusHistory": [
         { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" }
       ],
@@ -241,14 +248,14 @@ A reprocessor's detail is the same without `overseasSites`
 3. Take the latest entry whose `effectiveFromDate` is on or before X. Its `status` is the answer.
    (The entry also ends on its `effectiveToDate`, which is the day before the next entry starts, so
    the latest entry that has started is the one that applies.)
-4. If no entry is on or before X, the history has no status for that date. The accreditation's
-   current `status` still reads `approved` if its only entry starts later, so treat `null` as "not
-   yet effective on X".
+4. If no entry is on or before X, the history has no status for that date, so treat `null` as "not
+   yet effective on X". `latestStatus` is still that later entry: it is the latest, not necessarily
+   the one in effect on X.
 
 ```js
 // history: the accreditation's statusHistory. date: 'yyyy-MM-dd', a UK calendar date.
 // ISO dates compare correctly as strings. Returns null if no entry is effective on that date,
-// even when the response's current `status` says approved (see Status and dates).
+// even when `latestStatus` is a later entry (see Status and dates).
 function statusOn(history, date) {
   const applicable = history.filter((entry) => entry.effectiveFromDate <= date)
   return applicable.length ? applicable[applicable.length - 1].status : null
@@ -277,7 +284,7 @@ for one registration:
       "accreditationYear": 2027,
       "material": "Aluminium",
       "wasteProcessingType": "reprocessor",
-      "status": "approved",
+      "latestStatus": { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" },
       "tonnageBand": "up_to_5000"
     },
     {
@@ -287,7 +294,7 @@ for one registration:
       "accreditationYear": 2028,
       "material": "Aluminium",
       "wasteProcessingType": "reprocessor",
-      "status": "approved",
+      "latestStatus": { "status": "approved", "effectiveFromDate": "2028-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" },
       "tonnageBand": "up_to_5000"
     }
   ]
@@ -350,6 +357,10 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 | 429 | `rate_limited` | too many requests: wait for the `Retry-After` seconds |
 | 503 | `query_timeout` | the database stopped a query for taking too long: retry, with a narrower search if you can |
 
+An unknown route (404 `not_found`) or a method other than GET (405) is answered before
+authentication, because it reveals nothing beyond the published API. Every route that returns
+data checks the signature first.
+
 401 troubleshooting: check clock skew first, then that the payload has exactly two empty lines
 and no trailing newline, then that you use the secret for this client and environment.
 
@@ -383,6 +394,11 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
 
 ## What's new
 
+- `status` (a string) on an accreditation, in search results, and on each overseas site is replaced
+  by `latestStatus`: the latest entry of that record's `statusHistory`, in the same shape
+  (`status`, `effectiveFromDate`, `effectiveToDate`, `recordedAt`). It always matches the history,
+  and it can be in the future, so use its effective dates to tell whether it is in effect.
+  **Breaking for clients that read `status`.**
 - Each `statusHistory` entry now has `effectiveFromDate` and `effectiveToDate` (replacing
   `effectiveDate`), so you can see the period a status applies. `effectiveFromDate` is the later
   of 1 January of the accreditation year and the UK date the change was recorded;

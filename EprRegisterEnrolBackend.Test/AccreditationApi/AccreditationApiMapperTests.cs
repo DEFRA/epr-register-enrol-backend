@@ -13,8 +13,6 @@ public class AccreditationApiMapperTests
 {
     private static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
 
-    private static readonly DateTimeOffset Now = new(2027, 6, 15, 12, 0, 0, TimeSpan.Zero);
-
     private static readonly DateTime ApprovedAt = new(2027, 1, 10, 9, 30, 0, DateTimeKind.Utc);
 
     private static AccreditationApplicationModel Application(
@@ -46,12 +44,12 @@ public class AccreditationApiMapperTests
 
     private static JsonElement Accreditation(AccreditationApplicationModel application) =>
         JsonSerializer.SerializeToElement(
-            AccreditationApiMapper.ToAccreditation(application, Now),
+            AccreditationApiMapper.ToAccreditation(application),
             Web
         );
 
     private static JsonElement Summary(AccreditationApplicationModel application) =>
-        JsonSerializer.SerializeToElement(AccreditationApiMapper.ToSummary(application, Now), Web);
+        JsonSerializer.SerializeToElement(AccreditationApiMapper.ToSummary(application), Web);
 
     [Fact]
     public void Reprocessor_CarriesItsIdentifyingFields()
@@ -62,7 +60,8 @@ public class AccreditationApiMapperTests
         json.GetProperty("accreditationNumber").GetString().Should().Be("A27ER5000270063PL");
         json.GetProperty("registrationNumber").GetString().Should().Be("R27ER5000270036PL");
         json.GetProperty("accreditationYear").GetInt32().Should().Be(2027);
-        json.GetProperty("status").GetString().Should().Be("approved");
+        json.TryGetProperty("status", out _).Should().BeFalse();
+        json.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
         json.GetProperty("material").GetString().Should().Be("Plastic");
         json.GetProperty("wasteProcessingType").GetString().Should().Be("reprocessor");
     }
@@ -129,7 +128,6 @@ public class AccreditationApiMapperTests
 
         var summaries = AccreditationApiMapper.ToSummaries(
             [noRegistration, good, noAccreditation, noOrganisation],
-            DateTimeOffset.UtcNow,
             logger
         );
 
@@ -156,7 +154,6 @@ public class AccreditationApiMapperTests
 
         AccreditationApiMapper.ToSummaries(
             [malformed],
-            DateTimeOffset.UtcNow,
             logs.CreateLogger("EprRegisterEnrolBackend.AccreditationApi")
         );
 
@@ -174,11 +171,7 @@ public class AccreditationApiMapperTests
     {
         var logger = new CapturingLogger<AccreditationApiMapperTests>();
 
-        var summaries = AccreditationApiMapper.ToSummaries(
-            [Application()],
-            DateTimeOffset.UtcNow,
-            logger
-        );
+        var summaries = AccreditationApiMapper.ToSummaries([Application()], logger);
 
         summaries.Should().HaveCount(1);
         logger.Entries.Should().BeEmpty();
@@ -473,7 +466,7 @@ public class AccreditationApiMapperTests
     public void Accreditation_CarriesNoInternalIds_OrCaseManagementDetails()
     {
         var text = JsonSerializer.Serialize(
-            AccreditationApiMapper.ToAccreditation(Application(), Now),
+            AccreditationApiMapper.ToAccreditation(Application()),
             Web
         );
 
@@ -529,15 +522,13 @@ public class AccreditationApiMapperTests
 
     private static JsonElement OverseasSite(
         OverseasSiteModel site,
-        bool includeWithdrawn = false,
-        DateTimeOffset? now = null
+        bool includeWithdrawn = false
     ) =>
         JsonSerializer.SerializeToElement(
             AccreditationApiMapper.ToOverseasSite(
                 Application(exporter: true),
                 site,
-                includeWithdrawn,
-                now ?? Now
+                includeWithdrawn
             ),
             Web
         );
@@ -600,7 +591,7 @@ public class AccreditationApiMapperTests
     public void OverseasSite_DropsApplicationOnlyFlagsLegacyCodesAndEvidence()
     {
         var text = JsonSerializer.Serialize(
-            AccreditationApiMapper.ToOverseasSite(Application(exporter: true), Site(), false, Now),
+            AccreditationApiMapper.ToOverseasSite(Application(exporter: true), Site(), false),
             Web
         );
 
@@ -633,7 +624,7 @@ public class AccreditationApiMapperTests
         // The site's stored validFrom (14 March 2026) is not served, and does not date the status.
         var json = OverseasSite(Site());
 
-        json.GetProperty("status").GetString().Should().Be("approved");
+        json.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
         var entry = json.GetProperty("statusHistory").EnumerateArray().Single();
         entry.GetProperty("status").GetString().Should().Be("approved");
         entry.GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-10");
@@ -665,14 +656,6 @@ public class AccreditationApiMapperTests
             .GetString()
             .Should()
             .Be("2027-01-10");
-    }
-
-    [Fact]
-    public void OverseasSite_NotYetEffective_StillProjectsAsApproved()
-    {
-        var json = OverseasSite(Site(s => s.ValidFrom = "2028-01-01T00:00:00.000Z"));
-
-        json.GetProperty("status").GetString().Should().Be("approved");
     }
 
     [Fact]
@@ -776,4 +759,96 @@ public class AccreditationApiMapperTests
             CreatedAt = InterimCreated,
             RemovedAt = removed ? InterimRemoved : null,
         };
+
+    // ---- latestStatus ----
+
+    private static void AssertLatestStatusIsTheLastHistoryEntry(JsonElement json)
+    {
+        json.TryGetProperty("status", out _).Should().BeFalse();
+        var latest = json.GetProperty("latestStatus");
+        foreach (var field in new[] { "status", "effectiveFromDate", "effectiveToDate", "recordedAt" })
+            latest.TryGetProperty(field, out _).Should().BeTrue($"latestStatus has {field}");
+        latest.GetRawText().Should().Be(json.GetProperty("statusHistory").EnumerateArray().Last().GetRawText());
+    }
+
+    [Fact]
+    public void Accreditation_HasALatestStatus_IdenticalToTheLatestHistoryEntry()
+    {
+        AssertLatestStatusIsTheLastHistoryEntry(Accreditation(Application()));
+    }
+
+    [Fact]
+    public void OverseasSite_HasALatestStatus_IdenticalToTheLatestHistoryEntry()
+    {
+        AssertLatestStatusIsTheLastHistoryEntry(OverseasSite(Site()));
+    }
+
+    [Fact]
+    public void Summary_HasALatestStatus_AndNoStatusString()
+    {
+        var json = Summary(Application());
+
+        json.TryGetProperty("status", out _).Should().BeFalse();
+        var latest = json.GetProperty("latestStatus");
+        latest.GetProperty("status").GetString().Should().Be("approved");
+        latest.GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-10");
+        latest.GetProperty("effectiveToDate").ValueKind.Should().Be(JsonValueKind.Null);
+        latest.GetProperty("recordedAt").GetDateTime().Should().Be(ApprovedAt);
+        json.TryGetProperty("statusHistory", out _).Should().BeFalse();
+    }
+
+    // A 2027 accreditation approved in November 2026: the status does not apply until 1 January 2027,
+    // but it is still the latest status. The effective dates are how a client tells.
+    [Fact]
+    public void LatestStatus_CanBeFutureDated_AndIsStillTheLatest()
+    {
+        var json = Accreditation(
+            Application(configure: a => a.CaseManagementStatusUpdatedAt = Nov2026)
+        );
+
+        var latest = json.GetProperty("latestStatus");
+        latest.GetProperty("status").GetString().Should().Be("approved");
+        latest.GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-01");
+        AssertLatestStatusIsTheLastHistoryEntry(json);
+    }
+
+    private static StatusHistoryEntryDto Entry(string status, string from, DateTime recordedAt) =>
+        new()
+        {
+            Status = status,
+            EffectiveFromDate = DateOnly.Parse(from),
+            EffectiveToDate = null,
+            RecordedAt = recordedAt,
+        };
+
+    // Not a history from Build: the latest entry is first, so a plain Last() would not find it.
+    [Fact]
+    public void Latest_IsTheLatestFromDate_WhateverTheInputOrder()
+    {
+        var latestFirst = Entry("approved", "2099-05-01", Nov2026);
+        var history = new List<StatusHistoryEntryDto>
+        {
+            latestFirst,
+            Entry("approved", "2027-01-01", Nov2026),
+            Entry("suspended", "2027-03-10", Nov2026.AddDays(5)),
+        };
+
+        StatusHistoryBuilder.Latest(history).Should().BeSameAs(latestFirst);
+    }
+
+    // The later-recorded entry is in the middle and the earlier-recorded one is last, so neither Last()
+    // nor a sort by effectiveFromDate alone finds it.
+    [Fact]
+    public void Latest_WhereTheTwoLatestShareAFromDate_IsTheLaterRecorded_WhateverTheInputOrder()
+    {
+        var laterRecorded = Entry("suspended", "2027-03-10", Nov2026.AddDays(5));
+        var history = new List<StatusHistoryEntryDto>
+        {
+            Entry("approved", "2027-01-01", Nov2026),
+            laterRecorded,
+            Entry("approved", "2027-03-10", Nov2026),
+        };
+
+        StatusHistoryBuilder.Latest(history).Should().BeSameAs(laterRecorded);
+    }
 }

@@ -159,11 +159,10 @@ internal sealed class DevExporterOrg
             )
             .RegistrationNumber(sequence: 1);
 
-    // Derived from the registration number, as a real accreditation number is, e.g. A26EX0500180001PL.
+    // As ReEx issued the 2026 numbers, the registration's sequence, e.g. A26EX0500180001PL. Every
+    // year keeps it, as a continuous renewal would.
     internal string AccreditationNumberFor(int year) =>
-        AccreditationReferenceDerivation
-            .Derive(RegistrationNumberFor(year), AccreditationReferenceSourceKind.Registration, year)
-            .Reference!;
+        DevAccreditationNumber.For(year, RegistrationNumberFor(year));
 }
 
 /// <summary>
@@ -202,9 +201,20 @@ internal sealed class DevReprocessorRegistration
             )
             .RegistrationNumber(Sequence);
 
-    // e.g. A26ER0500180002GR.
+    // e.g. A26ER0500180002GR, built as the exporter registration's is.
     internal string AccreditationNumberFor(int year) =>
-        AccreditationReferenceDerivation
-            .Derive(RegistrationNumberFor(year), AccreditationReferenceSourceKind.Registration, year)
-            .Reference!;
+        DevAccreditationNumber.For(year, RegistrationNumberFor(year));
+}
+
+/// <summary>
+/// A dev seed's accreditation number: <c>A</c>, the year, then the registration number from its
+/// fourth character, so the sequence is the registration's. That is how many 2026 numbers ReEx
+/// issued looked, and the operator E2E tests expect these exact numbers. It stands for an
+/// accreditation that already exists, not one this service issues: approval issues a new number
+/// with <see cref="AccreditationNumberRules"/>, which never reuses the registration's sequence.
+/// </summary>
+internal static class DevAccreditationNumber
+{
+    internal static string For(int year, string registrationNumber) =>
+        $"A{year % 100:D2}{registrationNumber[3..]}";
 }
