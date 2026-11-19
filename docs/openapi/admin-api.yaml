@@ -1,0 +1,366 @@
+openapi: 3.0.3
+info:
+  title: Admin API (read)
+  version: 0.1.0-draft
+  description: |
+    DRAFT read-only API for internal Defra support tooling: the RREPW Reg-Accred admin service
+    (`epr-register-enrol-admin`), used by the delivery team to support the live service without
+    direct database access. It is not for operators, regulators or other services, and is kept
+    apart from the `/v1` accreditation API (`registration-accreditation-api.v2.yaml`), so either
+    can change without affecting the other.
+
+    * **Every path is under `/admin`.** This document is served at `/admin/openapi.yaml`, without
+      authentication, for the CDP API Hub.
+    * **Only the admin service client may call it.** Requests are signed exactly as for `/v1`
+      (client ID plus HMAC-SHA256, `ServiceClientAuthenticationHandler`). The admin client's ID
+      is configured in `ServiceClients`, and its secret is `AUTH_SHARED_SECRET__ADMIN`. Any other
+      known client, such as ReEx, is refused with `403`.
+    * **Records are returned as stored, with little mapping.** Support staff need to see the
+      data as the service holds it. That includes **personal data** (names, email addresses,
+      phone numbers and addresses) and **commercially sensitive data** (the business plan).
+      Fields holding either are marked `x-personal-data` or `x-commercially-sensitive`. The admin
+      service masks personal data on screen, and neither may be logged by the caller.
+    * **Legacy data.** `/admin/accreditation-applications` reads the Legacy
+      `accreditationApplications` collection, which stays the source of truth until RA-677 moves
+      it to the new domain model. It is then retired or repointed; the new collections get their
+      own endpoints (RA-753, RA-754).
+
+    Assumptions are marked `ASSUMPTION`:
+
+    * ASSUMPTION: a partial, case-insensitive search across the Legacy collection is fast enough
+      within the service-client query timeout. A search that is stopped returns `503`.
+servers:
+  - url: /
+tags:
+  - name: Legacy accreditation applications
+
+paths:
+  /admin/accreditation-applications:
+    get:
+      tags: [Legacy accreditation applications]
+      operationId: searchLegacyAccreditationApplications
+      summary: Search Legacy accreditation applications
+      description: |
+        **Legacy.** Searches every application in the Legacy `accreditationApplications`
+        collection: any status, any year, granted or not. Each item is the stored application.
+
+        `q` searches the fields named in `searchFields`: by default all four, the accreditation
+        number, registration number, organisation number and organisation name. An application
+        matches when any searched field contains `q`, ignoring case. `status` and `year` narrow
+        the results (AND); the values of a repeated `status` combine with OR. With no `q` and no
+        filters, every application is returned, a page at a time.
+
+        **Order.** Most recently changed first: `updatedAt` descending (any change, including a
+        status sent by Case Management), then `applicationId`, so the order is the same from one
+        page to the next.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/SearchFields'
+        - $ref: '#/components/parameters/ApplicationStatusFilter'
+        - $ref: '#/components/parameters/Year'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of Legacy accreditation applications. A search that matches nothing is an empty page, not a 404.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/LegacyAccreditationApplication' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+components:
+  parameters:
+    Search:
+      name: q
+      in: query
+      description: |
+        All or part of an accreditation number, registration number, organisation number or
+        organisation name, for example `5000390044`, `R25EX`, `500039` or `harbourside`.
+        Matched, ignoring case, against the fields in `searchFields` (all four by default):
+        `accreditationReference`, `registrationReference`, `orgId` (as text) and
+        `organisationName`. An application matches when any of them contains it. Leading and trailing spaces are trimmed, and `q` is matched as text, never as a
+        pattern: characters such as `.` and `*` match themselves. An empty `q` is the same as
+        none. Invalid (`invalid_q`) when longer than 100 characters.
+      schema: { type: string, maxLength: 100 }
+    SearchFields:
+      name: searchFields
+      in: query
+      description: |
+        Which fields `q` searches. Repeat the parameter for more than one, for example
+        `searchFields=registrationNumber&searchFields=organisationName`. Leave it out to search
+        all four. Has no effect without `q`. Invalid (`invalid_search_fields`) for a value not in
+        the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: '#/components/schemas/SearchField' }
+    ApplicationStatusFilter:
+      name: status
+      in: query
+      description: |
+        Only applications with one of these Legacy statuses. Repeat the parameter for more than
+        one, for example `status=Approved&status=Withdrawn`. Invalid (`invalid_status`) for a
+        value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: '#/components/schemas/ApplicationStatus' }
+    Year:
+      name: year
+      in: query
+      description: Only applications for this accreditation year. Invalid (`invalid_year`) unless a whole number from 2000.
+      schema: { type: integer, format: int32, minimum: 2000 }
+    PageNumber:
+      name: pageNumber
+      in: query
+      description: Invalid (`invalid_page_number`) unless a whole number from 1. A page past the last is an empty page.
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      description: Invalid (`invalid_limit`) unless a whole number from 1 to 100.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+
+  responses:
+    BadRequest:
+      description: Invalid query parameter (`code` says which, for example `invalid_q`, `invalid_search_fields` or `invalid_status`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: The request is not signed correctly (`code` says why, for example `missing_header` or `invalid_signature`).
+      headers:
+        WWW-Authenticate: { schema: { type: string } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: The client is known but is not the admin client (`code` `forbidden`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    MethodNotAllowed:
+      description: The API is read-only. Any method other than GET is refused (`code` `method_not_allowed`).
+      headers:
+        Allow: { schema: { type: string } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooManyRequests:
+      description: The client made too many requests (`code` `rate_limited`). Wait for `Retry-After` seconds.
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ServiceUnavailable:
+      description: The database stopped a query for taking too long (`code` `query_timeout`). Retry, with a narrower search if you can.
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    # ---- shared ---------------------------------------------------------------------------
+    PageMeta:
+      type: object
+      required: [pageNumber, limit, totalItems]
+      properties:
+        pageNumber: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1 }
+        totalItems: { type: integer, minimum: 0 }
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code: { type: string, description: A stable code for the kind of error, for example `invalid_status`. }
+        traceId: { type: string, description: Quote this when asking for support. }
+
+    # ---- Search ----------------------------------------------------------------------------
+    SearchField:
+      type: string
+      description: |
+        A field `q` can search: `accreditationNumber` (`accreditationReference`),
+        `registrationNumber` (`registrationReference`), `organisationNumber` (`orgId`, as text) or
+        `organisationName`.
+      enum: [accreditationNumber, registrationNumber, organisationNumber, organisationName]
+
+    # ---- Legacy accreditation application ---------------------------------------------------
+    ApplicationStatus:
+      type: string
+      description: Mirrors the Legacy `ApplicationStatus` enum, as stored.
+      enum: [Saved, Started, Submitted, DulyMade, Queried, Updated, AwaitingDecision, Approved, Rejected, Withdrawn]
+    MaterialType:
+      type: string
+      description: Mirrors the `MaterialType` enum.
+      enum: [Steel, Wood, Aluminium, Fibre, Glass, Paper, Plastic]
+    GlassRecyclingProcess:
+      type: string
+      description: Mirrors `GlassRecyclingProcess` (serialised member names).
+      enum: [glass_re_melt, glass_other]
+    Nation:
+      type: string
+      description: The regulator's nation, from the source registration. Mirrors the `Nation` enum.
+      enum: [England, Scotland, Wales, NorthernIreland]
+    StoredSection:
+      type: object
+      additionalProperties: true
+      description: |
+        A section of the application exactly as stored, in camelCase. Its shape is the model
+        class named in each property's description; it is not restated here, so it can't drift.
+
+    LegacyAccreditationApplication:
+      type: object
+      description: |
+        **Legacy.** One document from the `accreditationApplications` collection, as stored, in
+        camelCase. Values derived when an operator reads an application (`notificationStatus`,
+        `dueDate`) are not stored, so are not returned.
+      required: [applicationId, organisationId, year, materialType, applicationStatus]
+      properties:
+        applicationId:
+          type: string
+          description: The document's Mongo `_id`.
+          example: 1c3e5a7b9d0f4b2c8e4a6c8e
+        organisationId:
+          type: string
+          description: ReEx's internal organisation ID. Not the organisation number.
+        orgId:
+          type: integer
+          format: int32
+          nullable: true
+          description: The organisation number (ReEx's numeric org ID), for example 500112.
+        organisationName: { type: string, nullable: true }
+        year: { type: integer, format: int32, description: Accreditation year. }
+        registrationId: { type: string, nullable: true, description: ReEx's registration ID. }
+        registrationEntityId:
+          type: string
+          nullable: true
+          description: The new domain model's Registration this application belongs to, once linked by the migration (RA-677).
+        accreditationEntityId:
+          type: string
+          nullable: true
+          description: The new domain model's Accreditation created when this application was approved, once linked.
+        isExporter: { type: boolean }
+        nation:
+          allOf: [{ $ref: '#/components/schemas/Nation' }]
+          nullable: true
+        siteAddress:
+          type: string
+          nullable: true
+          x-personal-data: true
+        companyRegisterAddressPostcode:
+          type: string
+          nullable: true
+          x-personal-data: true
+        companyRegisteredAddress:
+          type: string
+          nullable: true
+          x-personal-data: true
+        isUkRegisteredAddress: { type: boolean }
+        companiesHouseNumber: { type: string, nullable: true }
+        permitNumbers:
+          type: array
+          items: { type: string }
+        wasteProcessingType:
+          type: string
+          nullable: true
+          description: Reprocessor or exporter, as stored.
+        materialType: { $ref: '#/components/schemas/MaterialType' }
+        glassRecyclingProcess:
+          allOf: [{ $ref: '#/components/schemas/GlassRecyclingProcess' }]
+          nullable: true
+        applicationStatus: { $ref: '#/components/schemas/ApplicationStatus' }
+        sourceReExAccreditationId: { type: string, nullable: true }
+        sourceYear: { type: integer, format: int32, nullable: true }
+        applicationReference: { type: string, nullable: true }
+        paymentReference: { type: string, nullable: true }
+        caseManagementReference: { type: string, nullable: true }
+        caseManagementWorkItemId: { type: string, format: uuid, nullable: true }
+        registrationReference:
+          type: string
+          nullable: true
+          description: The registration number, for example R25ER5001120018PL.
+        previousRegistrationNumbers:
+          type: array
+          items: { type: string }
+        accreditationReference:
+          type: string
+          nullable: true
+          description: The accreditation number, for example A27ER5001120018PL. Reserved before approval.
+        lastYearsAccreditationNumber:
+          type: object
+          nullable: true
+          properties:
+            year: { type: integer, format: int32 }
+            accreditationNumber: { type: string }
+        previousAccreditationNumbers:
+          type: array
+          items: { type: string }
+        submittedBy:
+          type: object
+          nullable: true
+          x-personal-data: true
+          properties:
+            fullName: { type: string }
+            jobTitle: { type: string }
+            email: { type: string, nullable: true }
+        submitterContactDetails:
+          type: object
+          nullable: true
+          x-personal-data: true
+          properties:
+            fullName: { type: string, nullable: true }
+            email: { type: string, nullable: true }
+            phone: { type: string, nullable: true }
+            jobTitle: { type: string, nullable: true }
+        withdrawalReason: { type: string, nullable: true }
+        dateSent: { type: string, format: date-time, nullable: true }
+        caseManagementStatusUpdatedAt: { type: string, format: date-time, nullable: true }
+        dateLastEdited: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
+        prns:
+          allOf: [{ $ref: '#/components/schemas/StoredSection' }]
+          description: '`AccreditationApplicationPrns`. Holds PRN signatories.'
+          x-personal-data: true
+        businessPlan:
+          allOf: [{ $ref: '#/components/schemas/StoredSection' }]
+          description: '`AccreditationApplicationBusinessPlan`.'
+          x-commercially-sensitive: true
+        samplingPlan:
+          allOf: [{ $ref: '#/components/schemas/StoredSection' }]
+          description: '`AccreditationApplicationSamplingPlan`.'
+        overseasSites:
+          allOf: [{ $ref: '#/components/schemas/StoredSection' }]
+          nullable: true
+          description: '`AccreditationApplicationOverseasSites`. Exporters only.'
+        besEvidence:
+          allOf: [{ $ref: '#/components/schemas/StoredSection' }]
+          nullable: true
+          description: '`AccreditationApplicationBesEvidence`.'
+        query:
+          allOf: [{ $ref: '#/components/schemas/StoredSection' }]
+          nullable: true
+          description: '`AccreditationApplicationQuery`. Holds query responder contact details.'
+          x-personal-data: true
