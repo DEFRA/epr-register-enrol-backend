@@ -37,6 +37,10 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
     private static readonly DateTime SubmittedAt = new(2026, 4, 30, 9, 15, 0, DateTimeKind.Utc);
     private static readonly DateTime Watermark = new(2026, 5, 1, 9, 0, 0, DateTimeKind.Utc);
 
+    // AC6: the date the caseworker entered, deliberately not the submission date.
+    private static readonly DateOnly EffectiveDate = new(2026, 5, 20);
+    private static readonly DateTime AccreditedFrom = new(2026, 5, 20, 0, 0, 0, DateTimeKind.Utc);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private readonly WebApplicationFactory<Program> _factory;
@@ -212,6 +216,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
                 actionId = toStateId,
                 actionDisplayName = toStateId,
                 occurredAt,
+                effectiveDate = toStateId == "approved" ? EffectiveDate : (DateOnly?)null,
             },
             Ct
         );
@@ -276,12 +281,12 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var item = await ItemAsync();
         Assert.Equal(ChangeItemStatus.Approved, item.Status);
-        Assert.Equal(SubmittedAt, item.ValidFrom);
+        Assert.Equal(AccreditedFrom, item.ValidFrom);
         Assert.Equal(occurredAt, item.CaseManagementStatusUpdatedAt);
 
         var site = await LegacySiteAsync(application, 2);
         Assert.True(site.Selected);
-        Assert.Equal(SiteApprovalDate.Format(SubmittedAt), site.ValidFrom);
+        Assert.Equal(SiteApprovalDate.Format(AccreditedFrom), site.ValidFrom);
         Assert.Equal(2, (await Applications.GetByIdAsync(OrganisationId, application.Id.ToString()!))!.OverseasSites!.Sites.Count);
 
         var ors = await OrsAsync(GrantedOrsId);
@@ -290,11 +295,11 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         var entry = accreditation.AccreditationOverseasSites.Single(e => e.OrsId == GrantedOrsId);
         Assert.Equal(ors.EntityId, entry.OverseasSiteId);
         Assert.Equal(AccreditedSiteStatus.Approved, entry.Status);
-        Assert.Equal(SubmittedAt, entry.AccreditedFrom);
+        Assert.Equal(AccreditedFrom, entry.AccreditedFrom);
         Assert.Equal(ChangeReason.ChangeRequestGranted, accreditation.LastChange.Reason);
         Assert.True(accreditation.Version > 1, "the grant is a new version of the existing Accreditation");
 
-        Assert.Equal(SubmittedAt, ors.FirstApprovedAt);
+        Assert.Equal(AccreditedFrom, ors.FirstApprovedAt);
         Assert.Equal(FirstApprovalSource.ChangeRequest, ors.FirstApprovalSource);
         Assert.Equal(OverseasSiteStatus.Active, ors.Status);
 
@@ -493,7 +498,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         var entry = (await AccreditationEntityAsync(application)).AccreditationOverseasSites.Single(e =>
             e.OrsId == GrantedOrsId
         );
-        Assert.Equal(SubmittedAt, entry.AccreditedFrom);
+        Assert.Equal(AccreditedFrom, entry.AccreditedFrom);
         Assert.Empty(await ReconciliationDifferencesAsync());
     }
 
@@ -527,7 +532,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
 
         Assert.Equal(HttpStatusCode.OK, (await PushAsync("approved", Watermark.AddMinutes(5))).StatusCode);
 
-        Assert.Equal(SubmittedAt, (await OrsAsync(GrantedOrsId)).FirstApprovedAt);
+        Assert.Equal(AccreditedFrom, (await OrsAsync(GrantedOrsId)).FirstApprovedAt);
         Assert.Empty(await ReconciliationDifferencesAsync(applications: 2));
     }
 

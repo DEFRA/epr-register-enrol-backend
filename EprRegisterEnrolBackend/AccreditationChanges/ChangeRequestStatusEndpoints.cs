@@ -12,6 +12,8 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 /// route (<c>AccreditationApplicationEndpoints.StatusChangedFromCaseManagement</c>), applied to one item rather than
 /// a whole application. RA-495 task 007: every push runs in the dual-write unit of work, and <c>approved</c> grants the
 /// site there (<see cref="ChangeRequestGrant"/>), so the item and the accreditation commit together or not at all.
+/// AC6: <c>approved</c> must carry the <c>effectiveDate</c> the caseworker entered, which the site is accredited from;
+/// without it the push is a 400 and nothing is read or written.
 /// </summary>
 public static class ChangeRequestStatusEndpoints
 {
@@ -80,6 +82,21 @@ public static class ChangeRequestStatusEndpoints
             ? values.ToString()
             : "(absent)";
         var push = new Push(workItemId, request, MapState(request.ToStateId), correlationId);
+
+        // AC6: a grant is accredited from the date the caseworker entered, which only Case Management knows.
+        if (push.MappedStatus == ChangeItemStatus.Approved && request.EffectiveDate is null)
+        {
+            logger.LogWarning(
+                "Change request status push: approved without an effectiveDate for workItemId={WorkItemId} correlationId={CorrelationId}",
+                workItemId,
+                correlationId
+            );
+            return Results.Problem(
+                detail: "An approved push must name the effectiveDate the site is accredited from.",
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
         var stores = new PushStores(persistence, applications, httpContext.RequestServices);
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
@@ -154,9 +171,11 @@ public static class ChangeRequestStatusEndpoints
 
         if (push.MappedStatus == ChangeItemStatus.Approved)
         {
+            var accreditedFrom = push.Request.EffectiveDate!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
             var refused = await ChangeRequestGrant.ApplyAsync(
                 changeRequest,
                 item,
+                accreditedFrom,
                 stores.Applications,
                 stores.Services,
                 session,
@@ -171,7 +190,7 @@ public static class ChangeRequestStatusEndpoints
                 );
                 return refused;
             }
-            item.ValidFrom = changeRequest.SubmittedAt;
+            item.ValidFrom = accreditedFrom;
         }
 
         if (push.MappedStatus is { } status)

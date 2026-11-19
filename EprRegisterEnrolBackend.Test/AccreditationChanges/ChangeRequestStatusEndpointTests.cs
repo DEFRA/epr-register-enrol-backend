@@ -29,6 +29,10 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
     private static readonly DateTime Watermark = new(2026, 5, 1, 9, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime SubmittedAt = Watermark.AddDays(-1);
 
+    // AC6: the date the caseworker entered, deliberately not the submission date.
+    private static readonly DateOnly EffectiveDate = new(2026, 5, 20);
+    private static readonly DateTime AccreditedFrom = new(2026, 5, 20, 0, 0, 0, DateTimeKind.Utc);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private readonly AccreditationChangeTestFactory _factory;
@@ -95,7 +99,16 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         return request;
     }
 
+    // Case Management sends the effective date on an approval only.
     private Task<HttpResponseMessage> Push(string toStateId, DateTime occurredAt, Guid? workItemId = null) =>
+        Push(toStateId, occurredAt, toStateId == "approved" ? EffectiveDate : null, workItemId);
+
+    private Task<HttpResponseMessage> Push(
+        string toStateId,
+        DateTime occurredAt,
+        DateOnly? effectiveDate,
+        Guid? workItemId = null
+    ) =>
         _client.PostAsJsonAsync(
             StatusUrl(workItemId ?? _workItemId),
             new
@@ -105,6 +118,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
                 actionId = "some-action",
                 actionDisplayName = "Some action",
                 occurredAt,
+                effectiveDate,
             },
             Ct
         );
@@ -303,7 +317,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
     [InlineData(ChangeItemStatus.Submitted)]
     [InlineData(ChangeItemStatus.DulyMade)]
     [InlineData(ChangeItemStatus.Updated)]
-    public async Task Approved_GrantsTheItemFromTheSubmissionDate(ChangeItemStatus status)
+    public async Task Approved_GrantsTheItemFromTheEffectiveDate(ChangeItemStatus status)
     {
         SeedSubmittedRequest(status, Watermark);
         var occurredAt = Watermark.AddMinutes(5);
@@ -312,16 +326,33 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         Item().Status.Should().Be(ChangeItemStatus.Approved);
-        Item().ValidFrom.Should().Be(SubmittedAt);
+        Item().ValidFrom.Should().Be(AccreditedFrom);
         Item().CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
         Item(_siblingWorkItemId).Status.Should().Be(ChangeItemStatus.Submitted);
         Item(_siblingWorkItemId).ValidFrom.Should().BeNull();
     }
 
-    // The registered site is already on the legacy accreditation application, unselected: the grant selects it,
-    // accredited from the submission date, and adds no site.
+    // AC6: only Case Management knows the date the caseworker entered, so an approval without it grants nothing.
     [Fact]
-    public async Task Approved_SelectsTheSiteOnTheAccreditationFromTheSubmissionDate()
+    public async Task Approved_WithoutAnEffectiveDate_Returns400AndWritesNothing()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+
+        var response = await Push("approved", Watermark.AddMinutes(5), effectiveDate: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync(Ct)).Should().Contain("effectiveDate");
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        Item().ValidFrom.Should().BeNull();
+        Item().CaseManagementStatusUpdatedAt.Should().Be(Watermark);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+        LegacySite(SiteId).Selected.Should().BeFalse();
+    }
+
+    // The registered site is already on the legacy accreditation application, unselected: the grant selects it,
+    // accredited from the effective date Case Management sent, and adds no site.
+    [Fact]
+    public async Task Approved_SelectsTheSiteOnTheAccreditationFromTheEffectiveDate()
     {
         SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
         var sitesBefore = Legacy().OverseasSites!.Sites.Count;
@@ -330,14 +361,14 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
 
         LegacySite(SiteId).Selected.Should().BeTrue();
-        LegacySite(SiteId).ValidFrom.Should().Be(SiteApprovalDate.Format(SubmittedAt));
+        LegacySite(SiteId).ValidFrom.Should().Be(SiteApprovalDate.Format(AccreditedFrom));
         Legacy().OverseasSites!.Sites.Should().HaveCount(sitesBefore);
         // Only the granted site: its sibling item is still being assessed.
         LegacySite(901914).Selected.Should().BeFalse();
         LegacySite(901914).ValidFrom.Should().BeNull();
     }
 
-    // AC: the site is on the Accredited tab, the request shows the item granted from its submission date, and the
+    // AC: the site is on the Accredited tab, the request shows the item granted from its effective date, and the
     // site is no longer held by the request (the add-site check now refuses it as accredited, not as pending).
     [Fact]
     public async Task Approved_SiteIsAccreditedAndNoLongerPending()
@@ -363,7 +394,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
             .SelectMany(r => r.GetProperty("sites").EnumerateArray())
             .Single(s => s.GetProperty("siteId").GetInt32() == SiteId);
         item.GetProperty("status").GetString().Should().Be("Approved");
-        item.GetProperty("validFrom").GetDateTime().ToUniversalTime().Should().Be(SubmittedAt);
+        item.GetProperty("validFrom").GetDateTime().ToUniversalTime().Should().Be(AccreditedFrom);
 
         var again = await _client.PostAsJsonAsync(Sites, new { siteId = SiteId }, Ct);
         again.StatusCode.Should().Be(HttpStatusCode.Conflict);

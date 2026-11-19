@@ -189,7 +189,7 @@ public static class AccreditationApiMapper
     // single `approved` entry the v2 mapping document prescribes for records that predate it.
     // It is recorded when the application was approved (the last case management status push,
     // else the last edit). A site takes effect on its approval date when it has one: ReEx's, or a
-    // granted change request's submission date (RA-495).
+    // granted change request's effective date (RA-495 AC6).
     private static List<StatusHistoryEntryDto> StatusHistory(
         AccreditationApplicationModel application,
         OverseasSiteModel? site

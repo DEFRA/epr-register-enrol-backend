@@ -9,7 +9,8 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolBackend.AccreditationChanges;
 
 /// <summary>
-/// RA-495: grants an add-ORS change request item, accredited from the request's submission date: the legacy
+/// RA-495: grants an add-ORS change request item, accredited from the effective date Case Management sent (AC6: the
+/// date the caseworker entered on approval): the legacy
 /// accreditation application's existing (unselected) site is selected, and in the domain model the operator's
 /// Accreditation gains an entry for the ORS in a new version and the ORS gets its first approved date if it has none.
 /// 3bb.29: the answers and BES evidence the operator supplied on the item are written as the operator's own
@@ -35,6 +36,7 @@ internal static class ChangeRequestGrant
     public static async Task<IResult?> ApplyAsync(
         AccreditationChangeRequest changeRequest,
         ChangeRequestSite item,
+        DateTime accreditedFrom,
         IAccreditationApplicationPersistence applications,
         IServiceProvider services,
         IClientSessionHandle? session,
@@ -45,7 +47,7 @@ internal static class ChangeRequestGrant
         if (item.ChangeType != AccreditationChangeRequest.AddOverseasSiteChangeType)
             return Results.Conflict($"A '{item.ChangeType}' change request item cannot be granted.");
 
-        if (changeRequest.SubmittedAt is not { } submittedAt || changeRequest.ApplicationId is null)
+        if (changeRequest.SubmittedAt is null || changeRequest.ApplicationId is null)
             return Results.Conflict("The change request has no submission date or accreditation to grant it on.");
 
         var application = await applications.GetByIdAsync(
@@ -61,7 +63,7 @@ internal static class ChangeRequestGrant
 
         // A selected site is this grant's own earlier write only when it carries this grant's date; selected any other
         // way, it is already accredited and granting it would leave its date, answers and BES evidence half-applied.
-        var validFrom = SiteApprovalDate.Format(submittedAt);
+        var validFrom = SiteApprovalDate.Format(accreditedFrom);
         if (site.Selected && site.ValidFrom != validFrom)
             return Results.Conflict("The overseas site is already accredited on the accreditation, so it cannot be granted.");
 
@@ -85,7 +87,7 @@ internal static class ChangeRequestGrant
                 application,
                 site,
                 item.Answers,
-                submittedAt,
+                accreditedFrom,
                 session,
                 cancellationToken
             );
@@ -172,7 +174,7 @@ internal static class ChangeRequestGrant
         AccreditationApplicationModel application,
         OverseasSiteModel site,
         ChangeRequestSiteAnswers answers,
-        DateTime submittedAt,
+        DateTime accreditedFrom,
         IClientSessionHandle session,
         CancellationToken cancellationToken
     )
@@ -207,7 +209,7 @@ internal static class ChangeRequestGrant
         // the site is served as validFrom: that is the Accreditation entry's, below (3bb.43).
         ApplySuppliedAnswers(ors, answers, site);
         if (ors.FirstApprovedAt is null)
-            ors.RecordFirstApproval(submittedAt, FirstApprovalSource.ChangeRequest);
+            ors.RecordFirstApproval(accreditedFrom, FirstApprovalSource.ChangeRequest);
         await stores.OverseasSites.Versions.UpdateAsync(ors, ors.Version, change, session, cancellationToken);
 
         // The entry records the date legacy writes as this accreditation's site validFrom, so it is served to this
@@ -216,7 +218,7 @@ internal static class ChangeRequestGrant
         if (!accreditation.AccreditationOverseasSites.Exists(e => e.OverseasSiteId == ors.EntityId))
         {
             var entry = AccreditationFromApplication.SiteEntry(site, ors.EntityId);
-            entry.AccreditedFrom = submittedAt;
+            entry.AccreditedFrom = accreditedFrom;
             accreditation.AccreditationOverseasSites.Add(entry);
             await stores.Accreditations.Versions.UpdateAsync(
                 accreditation,

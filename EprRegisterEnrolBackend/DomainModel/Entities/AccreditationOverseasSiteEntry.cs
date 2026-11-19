@@ -17,7 +17,7 @@ public class AccreditationOverseasSiteEntry
 
     /// <summary>
     /// When the site is accredited on this Accreditation from, when that is not when the Accreditation was approved:
-    /// a granted in-year change request's submission date (RA-495). The legacy application holds it as the site's
+    /// a granted in-year change request's effective date (RA-495 AC6). The legacy application holds it as the site's
     /// <c>validFrom</c>, so the read model serves it as that for this Accreditation's application only (3bb.43,
     /// 3bb.44). Null for a site accredited with the Accreditation, which serves its ORS's ReEx date if it has one.
     /// Not the ORS's <c>firstApprovedAt</c> (first approved ever) nor the versioning <c>validFrom</c>.
