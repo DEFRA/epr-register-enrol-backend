@@ -50,8 +50,17 @@ management-be refuses every site listed there.
   id, which is the work item's `payload.operatorApplicationId`. `SiteId` is the integer site id, which
   is the work item's `payload.overseasSites.sites[].siteId`.
 - The number of pairs must equal `Sites refused as ambiguous (adjudicate by hand): {SitesRefused}` on
-  that run's `RA-794 isNewSite correction complete` line. If that number is 0, set the value to `none`.
-  management-be refuses to run when the value is empty or absent, or when any entry is malformed.
+  that run's `RA-794 isNewSite correction complete` line, less any pair removed under management-be's
+  unmatched-pair rule (recorded on RA-794). Set the value to `none` when that number is 0, or when every
+  pair was removed under that rule. management-be refuses to run when the value is empty or absent, or
+  when any entry is malformed.
+- management-be's APPLY refuses, and writes nothing, while any listed pair matches no site on an
+  in-window work item. Its spot-check confirmer may remove a pair only after checking that the
+  application's in-window work items hold no site with that `siteId`, and must record the pair and the
+  finding on RA-794. A site can be missing because the application has no work item in the window, or
+  because the site is unselected here: this side's scan covers every site, but only selected sites are
+  sent to Case Management. See management-be's runbook,
+  [*The operator-side refusals*](https://github.com/DEFRA/epr-register-enrol-management-be/blob/main/docs/diagnostics/ra292-isnewsite-audit.md#the-operator-side-refusals).
 - The audit's `RA-794 AMBIGUOUS-REFUSED application {ApplicationId} ...` lines name the same sites. Use
   them to cross-check the list, not as its source.
 - Whoever confirms management-be's spot check (its `Diagnostics:Ra292SpotCheckConfirmedBy`) confirms
