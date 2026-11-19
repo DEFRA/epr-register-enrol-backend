@@ -131,7 +131,6 @@ public static partial class AccreditationApiEndpoints
             }
         }
 
-        var now = DateTimeOffset.UtcNow;
         var (items, total) = await accreditations.SearchAsync(
             new GrantedAccreditationFilter(year, organisationNumber, registrationNumber, status),
             (paging.PageNumber - 1) * paging.Limit,
@@ -148,7 +147,6 @@ public static partial class AccreditationApiEndpoints
                 TotalItems = (int)total,
                 Items = AccreditationApiMapper.ToSummaries(
                     items,
-                    now,
                     loggerFactory.CreateLogger("EprRegisterEnrolBackend.AccreditationApi")
                 ),
             }
@@ -177,11 +175,7 @@ public static partial class AccreditationApiEndpoints
         );
         return lookup.Problem
             ?? Results.Ok(
-                AccreditationApiMapper.ToAccreditation(
-                    lookup.Application!,
-                    DateTimeOffset.UtcNow,
-                    withdrawn.Include
-                )
+                AccreditationApiMapper.ToAccreditation(lookup.Application!, withdrawn.Include)
             );
     }
 
@@ -214,7 +208,6 @@ public static partial class AccreditationApiEndpoints
             return lookup.Problem;
 
         var application = lookup.Application!;
-        var now = DateTimeOffset.UtcNow;
         var sites = AccreditationApiMapper
             .AccreditedSites(application)
             .OrderBy(site => site.OrsId, StringComparer.Ordinal)
@@ -231,12 +224,7 @@ public static partial class AccreditationApiEndpoints
                     .Skip((paging.PageNumber - 1) * paging.Limit)
                     .Take(paging.Limit)
                     .Select(site =>
-                        AccreditationApiMapper.ToOverseasSite(
-                            application,
-                            site,
-                            withdrawn.Include,
-                            now
-                        )
+                        AccreditationApiMapper.ToOverseasSite(application, site, withdrawn.Include)
                     )
                     .ToList(),
             }
@@ -288,12 +276,7 @@ public static partial class AccreditationApiEndpoints
                 $"No overseas site {orsId} was found on the {year} accreditation of registration {registrationNumber}."
             )
             : Results.Ok(
-                AccreditationApiMapper.ToOverseasSite(
-                    application,
-                    site,
-                    withdrawn.Include,
-                    DateTimeOffset.UtcNow
-                )
+                AccreditationApiMapper.ToOverseasSite(application, site, withdrawn.Include)
             );
     }
 
