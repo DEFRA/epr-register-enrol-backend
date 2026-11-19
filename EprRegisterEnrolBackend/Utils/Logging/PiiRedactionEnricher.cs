@@ -63,7 +63,7 @@ public sealed class PiiRedactionEnricher : ILogEventEnricher
     // drop the query.
     private static void RedactAdminQuery(Url? url)
     {
-        if (url?.Path is null || !url.Path.StartsWith("/admin/", StringComparison.Ordinal))
+        if (url?.Path is null || !url.Path.StartsWith("/admin/", StringComparison.OrdinalIgnoreCase))
         {
             return;
         }

@@ -170,14 +170,9 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         IAccreditationApplicationPersistence,
         AccreditationApplicationPersistence
     >();
-    // RA-740: the admin API always searches the Legacy collection. Until the cut that is the same
-    // persistence as above; once the cut replaces it with the model-backed one, a Legacy one of its own.
+    // RA-740: the admin API searches the Legacy collection, which the persistence above reads.
     builder.Services.AddSingleton<ILegacyApplicationSearch>(sp =>
-        sp.GetRequiredService<IAccreditationApplicationPersistence>() as ILegacyApplicationSearch
-        ?? new AccreditationApplicationPersistence(
-            sp.GetRequiredService<IMongoDbClientFactory>(),
-            sp.GetRequiredService<ILoggerFactory>()
-        )
+        (ILegacyApplicationSearch)sp.GetRequiredService<IAccreditationApplicationPersistence>()
     );
 
     // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a

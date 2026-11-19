@@ -386,7 +386,7 @@ public class AccreditationApplicationPersistence(
                                     )
                                 )
                             ),
-                        _ => throw new ArgumentOutOfRangeException(nameof(fields), field, null),
+                        _ => throw new ArgumentOutOfRangeException(nameof(field), field, null),
                     }
                 )
         );

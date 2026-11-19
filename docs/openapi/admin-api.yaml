@@ -50,8 +50,8 @@ paths:
         filters, every application is returned, a page at a time.
 
         **Order.** Most recently changed first: `updatedAt` descending (any change, including a
-        status sent by Case Management), then `applicationId`, so the order is the same from one
-        page to the next.
+        status sent by Case Management), then `applicationId`. An application updated between two page requests moves to the top,
+        so a row can repeat or be skipped across pages.
       parameters:
         - $ref: '#/components/parameters/Search'
         - $ref: '#/components/parameters/SearchFields'
@@ -226,8 +226,10 @@ components:
       type: object
       additionalProperties: true
       description: |
-        A section of the application exactly as stored, in camelCase. Its shape is the model
-        class named in each property's description; it is not restated here, so it can't drift.
+        A section of the application as stored, in camelCase, less the members the model marks
+        `[JsonIgnore]` (such as a section's `versions`, and an overseas site's `previousSites` and
+        `overseasSiteEntityId`). Its shape is the model class named in each property's description;
+        it is not restated here, so it can't drift.
 
     LegacyAccreditationApplication:
       type: object
@@ -249,7 +251,11 @@ components:
           format: int32
           nullable: true
           description: The organisation number (ReEx's numeric org ID), for example 500112.
-        organisationName: { type: string, nullable: true }
+        organisationName:
+          type: string
+          nullable: true
+          description: Can be a person's name, for a sole trader.
+          x-personal-data: true
         year: { type: integer, format: int32, description: Accreditation year. }
         registrationId: { type: string, nullable: true, description: ReEx's registration ID. }
         registrationEntityId:
@@ -354,11 +360,13 @@ components:
         overseasSites:
           allOf: [{ $ref: '#/components/schemas/StoredSection' }]
           nullable: true
-          description: '`AccreditationApplicationOverseasSites`. Exporters only.'
+          description: '`AccreditationApplicationOverseasSites`. Exporters only. Holds site contacts.'
+          x-personal-data: true
         besEvidence:
           allOf: [{ $ref: '#/components/schemas/StoredSection' }]
           nullable: true
-          description: '`AccreditationApplicationBesEvidence`.'
+          description: '`AccreditationApplicationBesEvidence`. Holds uploaded file names.'
+          x-personal-data: true
         query:
           allOf: [{ $ref: '#/components/schemas/StoredSection' }]
           nullable: true

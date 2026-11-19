@@ -40,7 +40,7 @@ public interface ILegacyApplicationSearch
 {
     /// <summary>
     /// A page of the applications matching <paramref name="search"/>, most recently updated first
-    /// (<c>UpdatedAt</c> descending, then <c>_id</c> descending, so paging is stable), and the total
+    /// (<c>UpdatedAt</c> descending, then <c>_id</c> descending; an application updated between pages moves), and the total
     /// across all pages. Read-only.
     /// </summary>
     Task<(IReadOnlyList<AccreditationApplicationModel> Items, long Total)> SearchLegacyApplicationsAsync(
