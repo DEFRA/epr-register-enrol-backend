@@ -79,14 +79,23 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
         ApplicationStatus status = ApplicationStatus.Saved,
         int? orgId = null,
         string registrationId = Migration.RegistrationId,
-        int year = Migration.AccreditationYear
-    ) => Application(Migration.TargetId, status, orgId, registrationId, year);
+        int year = Migration.AccreditationYear,
+        MaterialType material = Migration.Material
+    ) => Application(Migration.TargetId, status, orgId, registrationId, year, material);
 
     private static AccreditationApplicationModel Keeper(
         ApplicationStatus status = ApplicationStatus.Updated,
         int? orgId = Migration.OrgId,
-        string organisationId = ReExOrganisationId
-    ) => Application(Migration.KeeperId, status, orgId, organisationId: organisationId);
+        string organisationId = ReExOrganisationId,
+        MaterialType material = Migration.Material
+    ) =>
+        Application(
+            Migration.KeeperId,
+            status,
+            orgId,
+            material: material,
+            organisationId: organisationId
+        );
 
     private async Task SeedAsync(params AccreditationApplicationModel[] applications)
     {
@@ -124,7 +133,9 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
         );
     }
 
-    private Migration Applying() => CreateMigration(true, apply: true, confirmedBy: "A Reviewer");
+    private const string Reviewer = "A Reviewer";
+
+    private Migration Applying() => CreateMigration(true, apply: true, confirmedBy: Reviewer);
 
     private async Task<bool> ExistsAsync(ObjectId id) =>
         await _applications.CountDocumentsAsync(a => a.Id == id, cancellationToken: Ct) == 1;
@@ -202,7 +213,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             .Should()
             .ContainSingle(m => m.StartsWith("RA-788 APPLIED"))
             .Which.Should()
-            .Contain("A Reviewer");
+            .NotContain(Reviewer);
 
         var second = await Applying().RunAsync(Ct);
 
@@ -232,8 +243,9 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
         new()
         {
             { "status", "status=Submitted" },
-            { "registration", "registration=68da9750c020f0e3dff99999" },
+            { "registration", "registrationMatches=False" },
             { "year", "year=2026" },
+            { "material", "material=Glass" },
             { "orgId", "orgId=500999" },
         };
 
@@ -247,12 +259,15 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                 "status" => Target(status: ApplicationStatus.Submitted),
                 "registration" => Target(registrationId: "68da9750c020f0e3dff99999"),
                 "year" => Target(year: 2026),
+                "material" => Target(material: MaterialType.Glass),
                 _ => Target(orgId: 500999),
             },
             Keeper()
         );
 
         await AssertAbortedAsync(Applying(), $"target {Migration.TargetId} is ", reason);
+        // The registration read from the database is never logged, only whether it matches.
+        Messages.Should().NotContain(m => m.Contains("68da9750c020f0e3dff99999"));
     }
 
     public static TheoryData<string, string> KeeperMismatches =>
@@ -261,6 +276,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             { "missing", $"keeper {Migration.KeeperId} not found" },
             { "status", "status=Saved" },
             { "organisation", "sameReExOrganisation=False" },
+            { "material", "material=Glass" },
             { "orgId", "orgId=500999" },
         };
 
@@ -276,6 +292,9 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                 break;
             case "organisation":
                 await SeedAsync(Keeper(organisationId: "reex-other"));
+                break;
+            case "material":
+                await SeedAsync(Keeper(material: MaterialType.Glass));
                 break;
             case "orgId":
                 await SeedAsync(Keeper(orgId: 500999));
@@ -357,6 +376,74 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
         result.Should().Be(RunResult.RolledBack);
         (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
         Messages.Should().Contain(m => m.Contains("target changed after the checks"));
+    }
+
+    // Another instance deleting the target between this one's checks and its delete is not a
+    // rollback: the work is done.
+    [Fact]
+    public async Task A_target_deleted_by_another_run_after_the_checks_is_already_done()
+    {
+        await SeedProductionShapeAsync();
+        var migration = Applying();
+        migration.BeforeDeleteForTest = async token =>
+            await _applications.DeleteOneAsync(a => a.Id == Migration.TargetId, token);
+
+        var result = await migration.RunAsync(Ct);
+
+        result.Should().Be(RunResult.AlreadyDone);
+        (await ExistsAsync(Migration.KeeperId)).Should().BeTrue();
+        Messages.Should().Contain(m => m.Contains("already deleted by another run"));
+        Messages.Should().NotContain(m => m.Contains("rolled back"));
+        Messages.Should().NotContain(m => m.StartsWith("RA-788 APPLIED"));
+    }
+
+    // An error that is not a failed check, then a failed re-read: what happened is unknown, so it
+    // is neither reported as rolled back nor as applied.
+    [Fact]
+    public async Task An_error_with_a_failed_re_read_reports_the_outcome_unknown()
+    {
+        await SeedProductionShapeAsync();
+        var migration = Applying();
+        migration.AfterDeleteForTest = (_, _) => throw new InvalidOperationException("injected");
+        migration.BeforeVerifyForTest = _ => throw new TimeoutException("injected re-read");
+
+        var result = await migration.RunAsync(Ct);
+
+        result.Should().Be(RunResult.OutcomeUnknown);
+        _logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("outcome unknown"))
+            .Which.Message.Should()
+            .Contain(nameof(InvalidOperationException))
+            .And.Contain(nameof(TimeoutException))
+            .And.Contain($"Check whether application {Migration.TargetId} still exists");
+        Messages.Should().NotContain(m => m.Contains("rolled back"));
+        Messages.Should().NotContain(m => m.StartsWith("RA-788 APPLIED"));
+        Messages.Should().NotContain(m => m.Contains("injected"));
+    }
+
+    // Stopping part-way through the delete is logged, not lost, and still stops the run.
+    [Fact]
+    public async Task Cancellation_during_the_delete_reports_the_outcome_unknown()
+    {
+        await SeedProductionShapeAsync();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var migration = Applying();
+        migration.AfterDeleteForTest = (_, _) =>
+        {
+            cts.Cancel();
+            return Task.CompletedTask;
+        };
+
+        var run = () => migration.RunAsync(cts.Token);
+
+        await run.Should().ThrowAsync<OperationCanceledException>();
+        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
+        _logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("outcome unknown"))
+            .Which.Message.Should()
+            .Contain("the run was cancelled during the delete");
     }
 
     [Fact]
@@ -460,7 +547,16 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                 || m.StartsWith("RA-788 APPLY:")
                 || m.StartsWith("RA-788 APPLIED:")
             );
-        foreach (var personal in new[] { PersonalName, PersonalEmail, OrganisationName, ReExOrganisationId })
+        foreach (
+            var personal in new[]
+            {
+                PersonalName,
+                PersonalEmail,
+                OrganisationName,
+                ReExOrganisationId,
+                Reviewer,
+            }
+        )
             Messages.Should().NotContain(m => m.Contains(personal));
     }
 
@@ -468,7 +564,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     [Theory]
     [InlineData(false, null, "RA-788 DRY RUN (nothing will be written): duplicate application deletion failed")]
     [InlineData(true, null, "RA-788 DRY RUN (nothing will be written): duplicate application deletion failed")]
-    [InlineData(true, "A Reviewer", "RA-788 APPLY: duplicate application deletion failed")]
+    [InlineData(true, Reviewer, "RA-788 APPLY: duplicate application deletion failed")]
     public async Task ExecuteAsync_logs_a_failure_with_its_mode_instead_of_throwing(
         bool apply,
         string? confirmedBy,

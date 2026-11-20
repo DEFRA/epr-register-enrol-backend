@@ -21,8 +21,9 @@ public sealed class DuplicateApplicationDeletionOptions
     // Off (with Enabled on): dry run - logs what it would delete, writes nothing.
     public bool Apply { get; set; }
 
-    // Who spot-checked the record against the dry-run output. Required before Apply takes effect;
-    // logged with the deletion so the authorisation outlives the env var.
+    // Who spot-checked the record against the dry-run output. Required before Apply takes effect.
+    // It is a person's name, so it is never logged: the authorisation is recorded where it is set,
+    // in cdp-app-config's history.
     public string? SpotCheckConfirmedBy { get; set; }
 }
 
@@ -52,10 +53,16 @@ public sealed class DuplicateApplicationDeletionOptions
 // Delete, in one transaction: DeleteOne on the target guarded on that Version, Saved and every
 // identity value, which must delete exactly 1; then the keeper must still be live and the group
 // must hold exactly 1 live application. Any failure rolls the transaction back, so nothing is
-// deleted. Each step is guarded, so a retry or a second instance does nothing further.
+// deleted. Each step is guarded, so a retry or a second instance does nothing further: if another
+// instance deleted the target first, this one reports it already deleted.
 //
-// Logging: every line starts RA-788 and states the mode. Only ids, statuses and counts are logged,
-// and an exception is logged by its type only, as its message could carry personal data.
+// After an error that was not a failed check (a commit can fail with an unknown result), the
+// target is re-read: gone means the delete committed, present means it rolled back, and a failed
+// re-read or a cancellation part-way means the outcome is unknown and the record must be checked.
+//
+// Logging: every line starts RA-788 and states the mode. Only ids, statuses, years, materials and
+// counts are logged - not the reviewer's name, nor any string read from the database - and an
+// exception is logged by its type only, as its message could carry personal data.
 //
 // A BackgroundService, so a failure here logs rather than crash-looping the host. The Mongo client
 // is resolved only once the migration is enabled.
@@ -86,15 +93,20 @@ public class DuplicateApplicationDeletionMigration(
         Applied,
         Aborted,
         RolledBack,
+        OutcomeUnknown,
     }
 
-    // Test seams: run between the checks and the transaction, and inside the transaction straight
-    // after the delete (given its session, so a write can be made inside it), so a concurrent edit,
-    // a failed in-transaction check and a fault part-way can be simulated.
+    // Test seams, in production code because the outcomes they simulate cannot otherwise be
+    // reached against a real mongod; acceptable only because this class is temporary and goes with
+    // its tests. They run between the checks and the transaction; inside the transaction straight
+    // after the delete (given its session, so a write can be made inside it); and before the
+    // re-read that verifies an errored transaction. So a concurrent edit or delete, a failed
+    // in-transaction check, a fault part-way and a failed re-read can each be simulated.
     internal Func<CancellationToken, Task>? BeforeDeleteForTest { get; set; }
     internal Func<IClientSessionHandle, CancellationToken, Task>? AfterDeleteForTest { get; set; }
+    internal Func<CancellationToken, Task>? BeforeVerifyForTest { get; set; }
 
-    private static FilterDefinitionBuilder<AccreditationApplicationModel> Filter =>
+    private static FilterDefinitionBuilder<AccreditationApplicationModel> Filters =>
         Builders<AccreditationApplicationModel>.Filter;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -119,12 +131,14 @@ public class DuplicateApplicationDeletionMigration(
         }
     }
 
-    // The same rule AuthorisedReviewer applies, without its log line: Apply takes effect only with a
-    // named reviewer.
-    private static string ModeOf(DuplicateApplicationDeletionOptions settings) =>
+    // Apply takes effect only with a named reviewer: the reviewer, or null for a dry run.
+    private static string? ReviewerOf(DuplicateApplicationDeletionOptions settings) =>
         settings.Apply && !string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy)
-            ? ApplyMode
-            : DryRunMode;
+            ? settings.SpotCheckConfirmedBy
+            : null;
+
+    private static string ModeOf(DuplicateApplicationDeletionOptions settings) =>
+        ReviewerOf(settings) is null ? DryRunMode : ApplyMode;
 
     // Extracted so tests can await the run deterministically - BackgroundService's StartAsync only
     // kicks ExecuteAsync off as a background task.
@@ -173,23 +187,20 @@ public class DuplicateApplicationDeletionMigration(
             return RunResult.DryRun;
         }
 
-        return await DeleteAsync(factory, collection, target, confirmedBy, cancellationToken);
+        return await DeleteAsync(factory, collection, target, cancellationToken);
     }
 
-    // Apply takes effect only with a named reviewer; without one the run stays a dry run.
+    // ReviewerOf, plus an error when Apply is set without a reviewer (the run stays a dry run).
     private string? AuthorisedReviewer(DuplicateApplicationDeletionOptions settings)
     {
-        if (!settings.Apply)
-            return null;
-        if (!string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy))
-            return settings.SpotCheckConfirmedBy;
-
-        logger.LogError(
-            "RA-788 {Mode:l}: Apply is set but SpotCheckConfirmedBy is not, so running as a dry run. "
-                + "Set it to whoever spot-checked the record.",
-            DryRunMode
-        );
-        return null;
+        var reviewer = ReviewerOf(settings);
+        if (settings.Apply && reviewer is null)
+            logger.LogError(
+                "RA-788 {Mode:l}: Apply is set but SpotCheckConfirmedBy is not, so running as a dry "
+                    + "run. Set it to whoever spot-checked the record.",
+                DryRunMode
+            );
+        return reviewer;
     }
 
     private sealed record CheckOutcome(RunResult? Result, AccreditationApplicationModel? Target);
@@ -234,7 +245,7 @@ public class DuplicateApplicationDeletionMigration(
                 mode,
                 Invariant(
                     $"target {TargetId} is year={target.Year} material={target.MaterialType} ",
-                    $"registration={target.RegistrationId ?? "null"} ",
+                    $"registrationMatches={target.RegistrationId == RegistrationId} ",
                     $"orgId={OrgIdText(target.OrgId)} status={target.ApplicationStatus}; ",
                     $"expected year={AccreditationYear} material={Material} ",
                     $"registration={RegistrationId} orgId=null or {OrgId} status=Saved"
@@ -249,7 +260,7 @@ public class DuplicateApplicationDeletionMigration(
                 mode,
                 Invariant(
                     $"keeper {KeeperId} is year={keeper.Year} material={keeper.MaterialType} ",
-                    $"registration={keeper.RegistrationId ?? "null"} ",
+                    $"registrationMatches={keeper.RegistrationId == RegistrationId} ",
                     $"orgId={OrgIdText(keeper.OrgId)} status={keeper.ApplicationStatus} ",
                     $"sameReExOrganisation={keeper.OrganisationId == target.OrganisationId}; ",
                     $"expected the target's group, orgId={OrgId} and status=Updated"
@@ -283,7 +294,8 @@ public class DuplicateApplicationDeletionMigration(
         return new CheckOutcome(null, target);
     }
 
-    // The reason holds only ids, statuses, years, materials and counts (see the class comment).
+    // The reason holds only ids, statuses, years, materials, counts and booleans - nothing read
+    // from the database as free text - so it is safe to render as a literal (see the class comment).
     private CheckOutcome Abort(string mode, string reason)
     {
         logger.LogError(
@@ -301,7 +313,6 @@ public class DuplicateApplicationDeletionMigration(
         IMongoDbClientFactory factory,
         IMongoCollection<AccreditationApplicationModel> collection,
         AccreditationApplicationModel target,
-        string confirmedBy,
         CancellationToken cancellationToken
     )
     {
@@ -312,6 +323,9 @@ public class DuplicateApplicationDeletionMigration(
         // Set when an in-transaction check fails; throwing then aborts the transaction, and the
         // reason (ids and counts only) is what is logged rather than an exception's message.
         string? rollbackReason = null;
+        // Set when the guarded delete matched nothing because the target is already gone: another
+        // instance deleted it after this one's checks.
+        var deletedElsewhere = false;
         void FailCheck(string reason)
         {
             rollbackReason = reason;
@@ -328,6 +342,7 @@ public class DuplicateApplicationDeletionMigration(
                 {
                     // The driver re-runs this on a transient error, so start each attempt clean.
                     rollbackReason = null;
+                    deletedElsewhere = false;
 
                     // 1. Exactly the record checked, unchanged since.
                     var deleted = await collection.DeleteOneAsync(
@@ -336,11 +351,21 @@ public class DuplicateApplicationDeletionMigration(
                         cancellationToken: token
                     );
                     if (deleted.DeletedCount != 1)
+                    {
+                        deletedElsewhere =
+                            await collection.CountDocumentsAsync(
+                                s,
+                                Filters.Eq(a => a.Id, TargetId),
+                                cancellationToken: token
+                            ) == 0;
                         FailCheck(
-                            Invariant(
-                                $"deleted {deleted.DeletedCount} records; the target changed after the checks"
-                            )
+                            deletedElsewhere
+                                ? "the target was deleted by another run after the checks"
+                                : Invariant(
+                                    $"deleted {deleted.DeletedCount} records; the target changed after the checks"
+                                )
                         );
+                    }
 
                     if (AfterDeleteForTest is { } after)
                         await after(s, token);
@@ -348,9 +373,9 @@ public class DuplicateApplicationDeletionMigration(
                     // 2. The keeper is still live.
                     var keeperLive = await collection.CountDocumentsAsync(
                         s,
-                        Filter.And(
-                            Filter.Eq(a => a.Id, KeeperId),
-                            Filter.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
+                        Filters.And(
+                            Filters.Eq(a => a.Id, KeeperId),
+                            Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
                         ),
                         cancellationToken: token
                     );
@@ -373,36 +398,64 @@ public class DuplicateApplicationDeletionMigration(
                 cancellationToken
             );
         }
-        catch (Exception ex)
-            when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // A failed check always rolls back. Any other error may have come from the commit
-            // itself (an unknown commit result), so what is actually in the collection is
-            // reported rather than assumed.
-            if (rollbackReason is null && !await TargetStillExistsAsync(collection, ex, cancellationToken))
+            // Stopping part-way: the commit may or may not have happened, and a re-read now would be
+            // cancelled too.
+            LogOutcomeUnknown("the run was cancelled during the delete");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Nothing for this run to do: the other run's transaction made the same checks.
+            if (deletedElsewhere)
             {
-                LogApplied(version, confirmedBy);
-                return RunResult.Applied;
+                if (logger.IsEnabled(LogLevel.Information))
+                    logger.LogInformation(
+                        "RA-788 {Mode:l}: application {TargetId} already deleted by another run "
+                            + "after the checks; skipped",
+                        ApplyMode,
+                        TargetId
+                    );
+                return RunResult.AlreadyDone;
             }
 
-            logger.LogError(
-                "RA-788 {Mode:l}: rolled back, nothing has been deleted. target={TargetId} "
-                    + "reason={Reason:l}",
-                ApplyMode,
-                TargetId,
-                rollbackReason ?? ex.GetType().Name
-            );
-            return RunResult.RolledBack;
+            // A failed check always rolls back.
+            if (rollbackReason is not null)
+            {
+                LogRolledBack(rollbackReason);
+                return RunResult.RolledBack;
+            }
+
+            // Any other error may have come from the commit itself (an unknown commit result), so
+            // what is actually in the collection is reported rather than assumed.
+            switch (await VerifyAsync(collection, ex, cancellationToken))
+            {
+                case Verified.Deleted:
+                    LogApplied(version);
+                    return RunResult.Applied;
+                case Verified.NotDeleted:
+                    LogRolledBack(ex.GetType().Name);
+                    return RunResult.RolledBack;
+                default:
+                    return RunResult.OutcomeUnknown;
+            }
         }
 
-        LogApplied(version, confirmedBy);
+        LogApplied(version);
         return RunResult.Applied;
     }
 
-    // After an error that was not a failed check: whether the target is still there. If that read
-    // fails too, the outcome is logged as unverified and treated as not deleted; a re-run reports
-    // the real state (it logs "already deleted" if the delete did commit).
-    private async Task<bool> TargetStillExistsAsync(
+    private enum Verified
+    {
+        Deleted,
+        NotDeleted,
+        Unknown,
+    }
+
+    // After an error that was not a failed check: whether the delete committed, judged by whether
+    // the target is still there. If the re-read fails too, the outcome is unknown.
+    private async Task<Verified> VerifyAsync(
         IMongoCollection<AccreditationApplicationModel> collection,
         Exception error,
         CancellationToken cancellationToken
@@ -410,42 +463,71 @@ public class DuplicateApplicationDeletionMigration(
     {
         try
         {
-            var exists = await FindByIdAsync(collection, TargetId, cancellationToken) is not null;
-            if (!exists)
-                logger.LogError(
-                    "RA-788 {Mode:l}: the transaction reported error={Error}, but target "
-                        + "{TargetId} is gone, so the delete committed",
-                    ApplyMode,
-                    error.GetType().Name,
-                    TargetId
-                );
-            return exists;
-        }
-        catch (Exception readError)
-            when (readError is not OperationCanceledException
-                || !cancellationToken.IsCancellationRequested)
-        {
+            if (BeforeVerifyForTest is { } beforeVerify)
+                await beforeVerify(cancellationToken);
+            if (await FindByIdAsync(collection, TargetId, cancellationToken) is not null)
+                return Verified.NotDeleted;
+
             logger.LogError(
-                "RA-788 {Mode:l}: the transaction reported error={Error} and the target could not "
-                    + "be re-read (error={ReadError}); outcome unverified. Re-run to see the state.",
+                "RA-788 {Mode:l}: the transaction reported error={Error}, but target "
+                    + "{TargetId} is gone, so the delete committed",
                 ApplyMode,
                 error.GetType().Name,
-                readError.GetType().Name
+                TargetId
             );
-            return true;
+            return Verified.Deleted;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            LogOutcomeUnknown(
+                Invariant(
+                    $"the transaction reported error={error.GetType().Name} and the run was cancelled before the target could be re-read"
+                )
+            );
+            throw;
+        }
+        catch (Exception readError)
+        {
+            LogOutcomeUnknown(
+                Invariant(
+                    $"the transaction reported error={error.GetType().Name} and the target could not be re-read (error={readError.GetType().Name})"
+                )
+            );
+            return Verified.Unknown;
         }
     }
 
-    private void LogApplied(long version, string confirmedBy)
+    // The reason holds only exception type names and fixed text.
+    private void LogOutcomeUnknown(string reason) =>
+        logger.LogError(
+            "RA-788 {Mode:l}: outcome unknown, the delete may or may not have committed: {Reason:l}. "
+                + "Check whether application {TargetId} still exists; a re-run reports the real "
+                + "state (it logs \"already deleted\" if the delete committed).",
+            ApplyMode,
+            reason,
+            TargetId
+        );
+
+    // The reason holds only ids, counts, exception type names and fixed text.
+    private void LogRolledBack(string reason) =>
+        logger.LogError(
+            "RA-788 {Mode:l}: rolled back, nothing has been deleted. target={TargetId} "
+                + "reason={Reason:l}",
+            ApplyMode,
+            TargetId,
+            reason
+        );
+
+    // The reviewer is not logged (see SpotCheckConfirmedBy).
+    private void LogApplied(long version)
     {
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
                 "RA-788 APPLIED: deleted application {TargetId} (version={Version}); kept "
-                    + "{KeeperId}. Spot check confirmed by {ConfirmedBy}",
+                    + "{KeeperId}. Spot check confirmed",
                 TargetId,
                 version,
-                KeeperId,
-                confirmedBy
+                KeeperId
             );
     }
 
@@ -455,13 +537,27 @@ public class DuplicateApplicationDeletionMigration(
         CancellationToken cancellationToken
     ) =>
         await collection
-            .Find(Filter.Eq(a => a.Id, id))
+            .Find(Filters.Eq(a => a.Id, id))
             .FirstOrDefaultAsync(cancellationToken);
 
+    // The identity the target, the keeper and the group share. One definition each for the
+    // in-memory checks and the Mongo filters, so the predicates cannot drift apart.
+    private static bool HasGroupIdentity(AccreditationApplicationModel application) =>
+        application.RegistrationId == RegistrationId
+        && application.Year == AccreditationYear
+        && application.MaterialType == Material;
+
+    // The seed endpoint's grouping: HasGroupIdentity plus the ReEx organisation.
+    private static FilterDefinition<AccreditationApplicationModel> InGroup(string organisationId) =>
+        Filters.And(
+            Filters.Eq(a => a.OrganisationId, organisationId),
+            Filters.Eq(a => a.RegistrationId, RegistrationId),
+            Filters.Eq(a => a.MaterialType, Material),
+            Filters.Eq(a => a.Year, AccreditationYear)
+        );
+
     private static bool IsTarget(AccreditationApplicationModel target) =>
-        target.RegistrationId == RegistrationId
-        && target.Year == AccreditationYear
-        && target.MaterialType == Material
+        HasGroupIdentity(target)
         && target.OrgId is null or OrgId
         && target.ApplicationStatus == ApplicationStatus.Saved;
 
@@ -469,9 +565,7 @@ public class DuplicateApplicationDeletionMigration(
         AccreditationApplicationModel keeper,
         AccreditationApplicationModel target
     ) =>
-        keeper.RegistrationId == RegistrationId
-        && keeper.Year == AccreditationYear
-        && keeper.MaterialType == Material
+        HasGroupIdentity(keeper)
         && keeper.OrganisationId == target.OrganisationId
         && keeper.OrgId == OrgId
         && keeper.ApplicationStatus == ApplicationStatus.Updated;
@@ -479,27 +573,21 @@ public class DuplicateApplicationDeletionMigration(
     private static FilterDefinition<AccreditationApplicationModel> LiveInGroup(
         string organisationId
     ) =>
-        Filter.And(
-            Filter.Eq(a => a.OrganisationId, organisationId),
-            Filter.Eq(a => a.RegistrationId, RegistrationId),
-            Filter.Eq(a => a.MaterialType, Material),
-            Filter.Eq(a => a.Year, AccreditationYear),
-            Filter.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
+        Filters.And(
+            InGroup(organisationId),
+            Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
         );
 
     private static FilterDefinition<AccreditationApplicationModel> GuardedTarget(
         string organisationId,
         long version
     ) =>
-        Filter.And(
-            Filter.Eq(a => a.Id, TargetId),
-            Filter.Eq(a => a.Version, version),
-            Filter.Eq(a => a.ApplicationStatus, ApplicationStatus.Saved),
-            Filter.Eq(a => a.OrganisationId, organisationId),
-            Filter.Eq(a => a.RegistrationId, RegistrationId),
-            Filter.Eq(a => a.MaterialType, Material),
-            Filter.Eq(a => a.Year, AccreditationYear),
-            Filter.In(a => a.OrgId, [null, OrgId])
+        Filters.And(
+            Filters.Eq(a => a.Id, TargetId),
+            Filters.Eq(a => a.Version, version),
+            Filters.Eq(a => a.ApplicationStatus, ApplicationStatus.Saved),
+            InGroup(organisationId),
+            Filters.In(a => a.OrgId, [null, OrgId])
         );
 
     private static string OrgIdText(int? orgId) =>
