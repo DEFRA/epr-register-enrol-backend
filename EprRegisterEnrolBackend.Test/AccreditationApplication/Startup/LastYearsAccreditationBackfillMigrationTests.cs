@@ -392,31 +392,22 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             );
     }
 
+    // The registration number is the only key: the org, material and process type aren't compared.
     [Theory]
     [InlineData(500028, MaterialType.Wood, false)]
     [InlineData(500027, MaterialType.Plastic, false)]
     [InlineData(500027, MaterialType.Wood, true)]
-    public async Task A_register_row_that_is_not_the_applications_registration_is_skipped_and_reported(
+    public async Task An_application_is_matched_on_its_registration_number_alone(
         int orgId,
         MaterialType material,
         bool isExporter
     )
     {
         var id = await SeedAsync(Application(EggerRegistration, orgId, material, isExporter));
-        var other = await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
 
-        var result = await ApplyAsync();
+        await ApplyAsync();
 
-        result.Should().Be(Migration.RunResult.Applied);
-        (await ReadAsync(id)).LastYearsAccreditationNumber.Should().BeNull();
-        (await ReadAsync(other)).LastYearsAccreditationNumber.Should().NotBeNull();
-        _logger
-            .Entries.Should()
-            .ContainSingle(e =>
-                e.LogLevel == LogLevel.Warning
-                && e.Message.Contains(id.ToString())
-                && e.Message.Contains(nameof(Migration.Outcome.IdentityMismatch))
-            );
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(EggerAccreditation);
     }
 
     // Agreed 19 November 2026: the register is used as published, even where a row looks wrong.
@@ -446,13 +437,11 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             .Be(ComhairleAccreditation);
     }
 
-    // Encirc: org 500069 holds a registration carrying 500226 (RA-764), as the register's Org ID column says.
-    [Theory]
-    [InlineData(500069)]
-    [InlineData(500226)]
-    public async Task The_org_is_matched_on_the_registration_number_or_the_registers_Org_ID(int orgId)
+    // Encirc: org 500069 holds a registration carrying 500226 (RA-764).
+    [Fact]
+    public async Task An_org_holding_a_registration_carrying_another_orgs_digits_is_matched()
     {
-        var id = await SeedAsync(Application(EncircRegistration, orgId, MaterialType.Glass));
+        var id = await SeedAsync(Application(EncircRegistration, 500069, MaterialType.Glass));
 
         await ApplyAsync();
 
@@ -598,6 +587,63 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         await ApplyAsync();
 
         LoggedFor(id).Should().Contain(expected);
+    }
+
+    // --- the end-of-run report --------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_report_lists_each_application_not_on_the_register_with_its_org_and_registration()
+    {
+        var application = Application("R26ER5009990001PL", 500999);
+        application.OrganisationName = "Not Registered Ltd";
+        var id = await SeedAsync(application);
+        await SeedAsync(Egger());
+
+        await CreateMigration().RunAsync(Ct);
+
+        Logged(LogLevel.Warning)
+            .Should()
+            .Contain(m => m.Contains("report") && m.Contains("1 2027 applications"))
+            .And.ContainSingle(m =>
+                m.Contains("not on the register: org 500999 Not Registered Ltd, registration R26ER5009990001PL")
+                && m.Contains(id.ToString())
+            );
+    }
+
+    [Fact]
+    public async Task The_report_lists_every_register_row_no_application_used()
+    {
+        await SeedAsync(Egger());
+        await SeedAsync(Application(DtsRegistration, 500237));
+
+        await CreateMigration().RunAsync(Ct);
+
+        var total = PublicRegister2026.ByRegistrationNumber.Count;
+        var unusedLines = Logged(LogLevel.Information).Where(m => m.Contains("register row not used")).ToList();
+        unusedLines.Should().HaveCount(total - 2);
+        unusedLines.Should().NotContain(m => m.Contains(EggerRegistration) || m.Contains(DtsRegistration));
+        unusedLines
+            .Should()
+            .Contain(m => m.Contains(ClearfieldRegistration) && m.Contains(ClearfieldAccreditation))
+            .And.Contain(m => m.Contains(JAndAYoungRegistration) && m.Contains("none (registered only)"));
+        Logged(LogLevel.Information)
+            .Should()
+            .ContainSingle(m => m.Contains($"{total - 2} of {total} register rows matched no 2027 application"));
+    }
+
+    // Organisation by organisation, so the log reads one organisation at a time.
+    [Fact]
+    public async Task Applications_are_reported_organisation_by_organisation()
+    {
+        var gap = await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+        var egger = await SeedAsync(Egger());
+
+        await CreateMigration().RunAsync(Ct);
+
+        var lines = _logger.Entries.Select(e => e.Message).ToList();
+        lines.FindIndex(m => m.Contains(egger.ToString()))
+            .Should()
+            .BeLessThan(lines.FindIndex(m => m.Contains(gap.ToString())));
     }
 
     [Fact]

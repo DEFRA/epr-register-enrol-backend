@@ -32,26 +32,24 @@ public sealed class LastYearsAccreditationBackfillOptions
 // creates an application and never changes an issued number: numbers issued wrongly are corrected
 // separately (RA-785).
 //
-// For each 2027 application, oldest first:
+// Organisation by organisation, and within one by registration number, for each 2027 application:
 //   1. An application holding J. and A. Young's registration number as the register prints it,
 //      missing its last letter, is reported: a 2027 number can't be issued until its registration
 //      number ends PL. It is not corrected here.
-//   2. Find its register row by RegistrationReference, else by one of its
-//      PreviousRegistrationNumbers (case management can regenerate the number).
-//   3. Check the row is this application's registration: its org (either the org digits in the
-//      registration number or the register's Org ID column, as some organisations hold a
-//      registration carrying another org's digits, such as Encirc's 500069 holding
-//      R26ER5002260055GR), the material code and reprocessor or exporter. A mismatch is reported
-//      and the application skipped.
-//   4. Last year's number: added where the application holds none; left alone where it holds the
+//   2. Find its register row by its 2026 registration number: RegistrationReference, else one of
+//      its PreviousRegistrationNumbers (case management can regenerate the number). The
+//      registration number is the only key: the org digits in it don't always match the org that
+//      holds it (Encirc, 500069, holds R26ER5002260055GR), so nothing else is compared. An
+//      application whose registration number isn't on the register is reported with its org.
+//   3. Last year's number: added where the application holds none; left alone where it holds the
 //      same; reported, never overwritten, where it holds a different one. A row with no accreditation
 //      means the operator was registered only in 2026: nothing to add, and the 2027 number is a
 //      first-time one.
-//   5. An issued 2027 number is checked against the register and reported if it doesn't fit: a
+//   4. An issued 2027 number is checked against the register and reported if it doesn't fit: a
 //      renewal must keep last year's agency, process type, org and sequence; a first-time number
 //      must keep the registration's agency, process type and org. Only reported, never corrected.
-// Applications with no register row are reported: their numbers would be first-time ones, so
-// someone should confirm each was registered only.
+// The run ends with a report: every application whose registration number isn't on the register
+// (its org and registration number), and every register row no 2027 application used.
 //
 // Every application is planned before anything is written. Each write is a single targeted update
 // guarded on the application still holding no number, so a re-run is a no-op and a concurrent
@@ -88,7 +86,6 @@ public class LastYearsAccreditationBackfillMigration(
         AlreadyHeld,
         RegisteredOnly,
         HoldsADifferentNumber,
-        IdentityMismatch,
         RegistrationNumberIncomplete,
         NotOnTheRegister,
     }
@@ -105,6 +102,7 @@ public class LastYearsAccreditationBackfillMigration(
         AccreditationApplicationModel Application,
         ObjectId Id,
         Outcome Outcome,
+        string? RegisterRegistrationNumber,
         string? RegisterAccreditationNumber,
         IssuedNumber Issued,
         string Detail
@@ -146,8 +144,13 @@ public class LastYearsAccreditationBackfillMigration(
         var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
         var applications = await persistence.GetByYearAsync(AccreditationYear, cancellationToken);
 
+        // Organisation by organisation; a draft without its OrgId yet sorts by its ReEx id after the rest.
         var plans = applications
             .Where(a => a.Id is not null)
+            .OrderBy(a => a.OrgId ?? int.MaxValue)
+            .ThenBy(a => a.OrganisationId, StringComparer.Ordinal)
+            .ThenBy(a => a.RegistrationReference, StringComparer.Ordinal)
+            .ThenBy(a => a.Id)
             .Select(a => PlanFor(a, a.Id!.Value))
             .ToList();
 
@@ -163,6 +166,8 @@ public class LastYearsAccreditationBackfillMigration(
             );
         }
 
+        ReportNotOnTheRegister(plans, mode);
+        ReportUnusedRegisterRows(plans, mode);
         ReportSummary(plans, mode);
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
@@ -221,8 +226,6 @@ public class LastYearsAccreditationBackfillMigration(
         }
 
         var row = PublicRegister2026.ByRegistrationNumber[registrationNumber];
-        if (IdentityMismatch(application, registrationNumber, row) is { } mismatch)
-            return NotPlanned(application, id, Outcome.IdentityMismatch, mismatch);
 
         var held = application.LastYearsAccreditationNumber;
         var (outcome, detail) = row.AccreditationNumber switch
@@ -255,6 +258,7 @@ public class LastYearsAccreditationBackfillMigration(
             application,
             id,
             outcome,
+            registrationNumber,
             row.AccreditationNumber,
             issued,
             issuedDetail is null ? detail : $"{detail}; {issuedDetail}"
@@ -272,6 +276,7 @@ public class LastYearsAccreditationBackfillMigration(
             id,
             outcome,
             null,
+            null,
             application.AccreditationReference is null
                 ? IssuedNumber.NotIssued
                 : IssuedNumber.NotChecked,
@@ -279,63 +284,6 @@ public class LastYearsAccreditationBackfillMigration(
                 ? detail
                 : $"{detail}; issued {application.AccreditationReference} could not be checked"
         );
-
-    // The registration number carries its own identity: R + YY + agency + R|X + org (6) + sequence (4) + material.
-    // The org is accepted from either the registration number or the register's Org ID column: an
-    // organisation can hold a registration carrying another org's digits.
-    internal static string? IdentityMismatch(
-        AccreditationApplicationModel application,
-        string registrationNumber,
-        PublicRegister2026Entry row
-    )
-    {
-        var problems = new List<string>();
-        var orgDigits = registrationNumber[5..11];
-        if (
-            application.OrgId is { } orgId
-            && orgId.ToString("D6") != orgDigits
-            && orgId != row.OrgId
-        )
-        {
-            problems.Add(
-                $"its org is {orgId} but the registration number's is {orgDigits} and the register's is {row.OrgId}"
-            );
-        }
-
-        var processType = RegulatoryReferenceCodes.ProcessTypeLetterFor(application.IsExporter);
-        if (registrationNumber[4] != processType)
-        {
-            problems.Add(
-                $"it is {(application.IsExporter ? "an exporter" : "a reprocessor")} but the "
-                    + $"registration number is {registrationNumber[4]}"
-            );
-        }
-
-        var materialCode = registrationNumber[^2..];
-        if (!MaterialCodesFor(application).Contains(materialCode))
-        {
-            problems.Add(
-                $"its material is {application.MaterialType} but the registration number's is {materialCode}"
-            );
-        }
-
-        return problems.Count == 0
-            ? null
-            : $"register row {registrationNumber} is not this application's registration: "
-                + string.Join("; ", problems);
-    }
-
-    // Glass splits into GR and GO by recycling process; an application that never recorded the process
-    // can be either.
-    private static string[] MaterialCodesFor(AccreditationApplicationModel application) =>
-        application.MaterialType == MaterialType.Glass && application.GlassRecyclingProcess is null
-            ? ["GR", "GO"]
-            : [
-                RegulatoryReferenceCodes.MaterialCodeFor(
-                    application.MaterialType,
-                    application.GlassRecyclingProcess
-                ),
-            ];
 
     // RA-783's rules, for an issued number: a renewal keeps everything of last year's number but the
     // year and material code; a first-time number keeps the registration's agency, process type and
@@ -412,7 +360,6 @@ public class LastYearsAccreditationBackfillMigration(
     private static bool NeedsAPerson(Plan plan) =>
         plan.Outcome
             is Outcome.HoldsADifferentNumber
-                or Outcome.IdentityMismatch
                 or Outcome.RegistrationNumberIncomplete
                 or Outcome.NotOnTheRegister
         || plan.Issued is IssuedNumber.DoesNotFitTheRegister or IssuedNumber.NotChecked;
@@ -487,6 +434,77 @@ public class LastYearsAccreditationBackfillMigration(
                     plan.Id
                 );
                 break;
+        }
+    }
+
+    // The end-of-run report, part 1: every application whose registration number isn't on the register, with the org
+    // and registration number it holds, so each can be checked by hand.
+    private void ReportNotOnTheRegister(IReadOnlyList<Plan> plans, string mode)
+    {
+        var missing = plans
+            .Where(p => p.Outcome is Outcome.NotOnTheRegister or Outcome.RegistrationNumberIncomplete)
+            .ToList();
+        if (!logger.IsEnabled(LogLevel.Warning))
+            return;
+
+        logger.LogWarning(
+            "RA-784 {Mode} report: {Count} 2027 applications whose registration number is not on the register",
+            mode,
+            missing.Count
+        );
+        foreach (var plan in missing)
+        {
+            logger.LogWarning(
+                "RA-784 {Mode} report: not on the register: org {OrgId} {OrganisationName}, registration "
+                    + "{RegistrationReference} (previous {PreviousRegistrationNumbers}), application "
+                    + "{ApplicationId} ({ApplicationReference})",
+                mode,
+                plan.Application.OrgId,
+                plan.Application.OrganisationName,
+                plan.Application.RegistrationReference,
+                string.Join(", ", plan.Application.PreviousRegistrationNumbers),
+                plan.Id,
+                plan.Application.ApplicationReference
+            );
+        }
+    }
+
+    // The end-of-run report, part 2: every register row no 2027 application matched, so whoever reviews the run can
+    // see which 2026 registrations haven't applied for 2027 (or hold a registration number that doesn't match).
+    private void ReportUnusedRegisterRows(IReadOnlyList<Plan> plans, string mode)
+    {
+        var used = plans
+            .Select(p => p.RegisterRegistrationNumber)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+        var unused = PublicRegister2026
+            .ByRegistrationNumber.Where(r => !used.Contains(r.Key))
+            .OrderBy(r => r.Value.OrgId)
+            .ThenBy(r => r.Key, StringComparer.Ordinal)
+            .ToList();
+        if (!logger.IsEnabled(LogLevel.Information))
+            return;
+
+        logger.LogInformation(
+            "RA-784 {Mode} report: {Count} of {Total} register rows matched no 2027 application "
+                + "({Accredited} accredited, {RegisteredOnly} registered only)",
+            mode,
+            unused.Count,
+            PublicRegister2026.ByRegistrationNumber.Count,
+            unused.Count(r => r.Value.AccreditationNumber is not null),
+            unused.Count(r => r.Value.AccreditationNumber is null)
+        );
+        foreach (var (registrationNumber, row) in unused)
+        {
+            logger.LogInformation(
+                "RA-784 {Mode} report: register row not used: org {OrgId} {OrganisationName}, registration "
+                    + "{RegistrationNumber}, 2026 accreditation {AccreditationNumber}",
+                mode,
+                row.OrgId,
+                row.OrganisationName,
+                registrationNumber,
+                row.AccreditationNumber ?? "none (registered only)"
+            );
         }
     }
 
