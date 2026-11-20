@@ -98,6 +98,14 @@ public class LastYearsAccreditationBackfillMigration(
         NotChecked,
     }
 
+    // What happened to an Added plan's write. A dry run attempts none.
+    internal enum Write
+    {
+        Written,
+        LostTheRace,
+        Failed,
+    }
+
     private sealed record Plan(
         AccreditationApplicationModel Application,
         ObjectId Id,
@@ -154,21 +162,26 @@ public class LastYearsAccreditationBackfillMigration(
             .Select(a => PlanFor(a, a.Id!.Value))
             .ToList();
 
+        var writes = new List<Write>();
         foreach (var plan in plans)
         {
-            await ReportAndApplyAsync(
-                persistence,
-                unitOfWork,
-                plan,
-                mode,
-                confirmedBy,
-                cancellationToken
-            );
+            if (
+                await ReportAndApplyAsync(
+                    persistence,
+                    unitOfWork,
+                    plan,
+                    mode,
+                    confirmedBy,
+                    cancellationToken
+                )
+                is { } write
+            )
+                writes.Add(write);
         }
 
         ReportNotOnTheRegister(plans, mode);
         ReportUnusedRegisterRows(plans, mode);
-        ReportSummary(plans, mode);
+        ReportSummary(plans, writes, mode);
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
 
@@ -315,7 +328,8 @@ public class LastYearsAccreditationBackfillMigration(
 
     // --- reporting and writing --------------------------------------------------------------------------------------
 
-    private async Task ReportAndApplyAsync(
+    // Null when no write was attempted: a dry run, or a plan that isn't Added.
+    private async Task<Write?> ReportAndApplyAsync(
         IAccreditationApplicationPersistence persistence,
         IDualWriteUnitOfWork unitOfWork,
         Plan plan,
@@ -345,16 +359,16 @@ public class LastYearsAccreditationBackfillMigration(
             );
         }
 
-        if (confirmedBy is not null && plan.Outcome == Outcome.Added)
-        {
-            await AddLastYearsAccreditationNumberAsync(
-                persistence,
-                unitOfWork,
-                plan,
-                confirmedBy,
-                cancellationToken
-            );
-        }
+        if (confirmedBy is null || plan.Outcome != Outcome.Added)
+            return null;
+
+        return await AddLastYearsAccreditationNumberAsync(
+            persistence,
+            unitOfWork,
+            plan,
+            confirmedBy,
+            cancellationToken
+        );
     }
 
     private static bool NeedsAPerson(Plan plan) =>
@@ -364,7 +378,7 @@ public class LastYearsAccreditationBackfillMigration(
                 or Outcome.NotOnTheRegister
         || plan.Issued is IssuedNumber.DoesNotFitTheRegister or IssuedNumber.NotChecked;
 
-    private async Task AddLastYearsAccreditationNumberAsync(
+    private async Task<Write> AddLastYearsAccreditationNumberAsync(
         IAccreditationApplicationPersistence persistence,
         IDualWriteUnitOfWork unitOfWork,
         Plan plan,
@@ -418,22 +432,23 @@ public class LastYearsAccreditationBackfillMigration(
                         confirmedBy
                     );
                 }
-                break;
+                return Write.Written;
             case IStatusCodeHttpResult { StatusCode: StatusCodes.Status204NoContent }:
                 logger.LogError(
                     "RA-784 application {ApplicationId} gained last year's accreditation after planning, so "
                         + "nothing was written to it. Re-run the dry run to see its current state.",
                     plan.Id
                 );
-                break;
+                return Write.LostTheRace;
             default:
-                // The unit of work has logged why and rolled back.
+                // DomainModel:DualWrite is on in every environment, so the unit of work catches a failed write,
+                // logs why, rolls it back and answers a problem, and the run carries on with the next application.
                 logger.LogError(
                     "RA-784 application {ApplicationId}: the write failed and was rolled back, so nothing "
                         + "was written to it. Re-run the dry run to see its current state.",
                     plan.Id
                 );
-                break;
+                return Write.Failed;
         }
     }
 
@@ -508,11 +523,17 @@ public class LastYearsAccreditationBackfillMigration(
         }
     }
 
-    private void ReportSummary(IReadOnlyList<Plan> plans, string mode)
+    // Planned against actual: the outcomes are what the plan found; the writes are what an APPLY run did with the
+    // Added ones (a dry run writes nothing).
+    private void ReportSummary(IReadOnlyList<Plan> plans, IReadOnlyList<Write> writes, string mode)
     {
         if (!logger.IsEnabled(LogLevel.Information))
             return;
 
+        var written = string.Join(
+            ", ",
+            Enum.GetValues<Write>().Select(w => $"{w}={writes.Count(x => x == w)}")
+        );
         var outcomes = string.Join(
             ", ",
             Enum.GetValues<Outcome>().Select(o => $"{o}={plans.Count(p => p.Outcome == o)}")
@@ -523,10 +544,11 @@ public class LastYearsAccreditationBackfillMigration(
         );
         logger.LogInformation(
             "RA-784 last year's accreditation backfill complete. Mode={Mode}, applications={Count}. "
-                + "Last year's accreditation: {Outcomes}. Issued numbers: {Issued}",
+                + "Last year's accreditation planned: {Outcomes}. Written: {Written}. Issued numbers: {Issued}",
             mode,
             plans.Count,
             outcomes,
+            written,
             issued
         );
     }

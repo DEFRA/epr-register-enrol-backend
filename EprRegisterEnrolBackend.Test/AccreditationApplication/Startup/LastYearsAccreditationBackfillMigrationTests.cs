@@ -703,6 +703,9 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 m.Contains(id.ToString()) && m.Contains("gained last year's accreditation after planning")
             );
         Logged(LogLevel.Information).Should().NotContain(m => m.Contains("APPLIED"));
+        Logged(LogLevel.Information)
+            .Should()
+            .ContainSingle(m => m.Contains("planned: Added=1") && m.Contains("Written: Written=0, LostTheRace=1, Failed=0"));
     }
 
     // The unit of work rolls a failed write back and answers a problem: the run logs it and carries on.
@@ -721,6 +724,9 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         Logged(LogLevel.Error)
             .Should()
             .ContainSingle(m => m.Contains(failed.ToString()) && m.Contains("write failed and was rolled back"));
+        Logged(LogLevel.Information)
+            .Should()
+            .ContainSingle(m => m.Contains("planned: Added=2") && m.Contains("Written: Written=1, LostTheRace=0, Failed=1"));
     }
 
     private sealed class BeforeTheWriteUnitOfWork(Func<Task> beforeTheWrite) : IDualWriteUnitOfWork
@@ -764,9 +770,28 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             .ContainSingle(m =>
                 m.Contains("complete")
                 && m.Contains("applications=3")
-                && m.Contains("Added=2")
+                && m.Contains("planned: Added=2")
                 && m.Contains("RegisteredOnly=1")
+                && m.Contains("Written: Written=0, LostTheRace=0, Failed=0")
                 && m.Contains("DoesNotFitTheRegister=1")
+            );
+    }
+
+    // Planned against actual: an APPLY run's summary says how many of the planned writes happened.
+    [Fact]
+    public async Task The_summary_says_how_many_planned_writes_were_written()
+    {
+        await SeedAsync(Egger());
+        await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+
+        await ApplyAsync();
+
+        Logged(LogLevel.Information)
+            .Should()
+            .ContainSingle(m =>
+                m.Contains("complete")
+                && m.Contains("planned: Added=2")
+                && m.Contains("Written: Written=2, LostTheRace=0, Failed=0")
             );
     }
 }
