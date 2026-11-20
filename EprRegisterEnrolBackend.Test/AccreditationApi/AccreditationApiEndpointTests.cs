@@ -9,6 +9,7 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using static EprRegisterEnrolBackend.Test.TestSupport.ProblemAssertions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApi;
 
@@ -125,20 +126,6 @@ public class AccreditationApiEndpointTests : IDisposable
     private static async Task<JsonElement> Json(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct)).RootElement.Clone();
 
-    private static async Task AssertProblem(
-        HttpResponseMessage response,
-        HttpStatusCode status,
-        string code
-    )
-    {
-        response.StatusCode.Should().Be(status);
-        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
-        var body = await Json(response);
-        body.GetProperty("status").GetInt32().Should().Be((int)status);
-        body.GetProperty("code").GetString().Should().Be(code);
-        body.GetProperty("detail").GetString().Should().NotBeNullOrWhiteSpace();
-        body.GetProperty("traceId").GetString().Should().NotBeNullOrWhiteSpace();
-    }
 
     // ---- GET accreditation by year ----
 
@@ -217,7 +204,7 @@ public class AccreditationApiEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task Accreditation_HonoursIncludeWithdrawnForItsInterimSites()
+    public async Task Accreditation_ServesWithdrawnInterimSites_WithTheirStatus()
     {
         await Seed(
             configure: a =>
@@ -228,23 +215,35 @@ public class AccreditationApiEndpointTests : IDisposable
                 ]
         );
 
-        var hidden = await Json(await Get(AccreditationPath));
-        var shown = await Json(await Get($"{AccreditationPath}?includeWithdrawn=true"));
+        var body = await Json(await Get(AccreditationPath));
 
-        hidden.GetProperty("overseasSites")[0].GetProperty("interimSites").GetArrayLength()
-            .Should().Be(1);
-        shown.GetProperty("overseasSites")[0].GetProperty("interimSites").GetArrayLength()
-            .Should().Be(2);
+        var interims = body.GetProperty("overseasSites")[0].GetProperty("interimSites")
+            .EnumerateArray().ToList();
+        interims.Select(i => i.GetProperty("latestStatus").GetProperty("status").GetString())
+            .Should().Equal("approved", "withdrawn");
     }
 
-    [Fact]
-    public async Task Accreditation_WithAnInvalidIncludeWithdrawn_Is400()
+    // RA-781: includeWithdrawn is gone. A client that still sends it gets the same answer.
+    [Theory]
+    [InlineData("true")]
+    [InlineData("false")]
+    [InlineData("maybe")]
+    public async Task Accreditation_IgnoresIncludeWithdrawn(string value)
     {
-        await Seed();
+        await Seed(
+            configure: a =>
+                a.OverseasSites!.Sites[0].InterimSites =
+                [
+                    Interim(11, removed: false),
+                    Interim(12, removed: true),
+                ]
+        );
 
-        var response = await Get($"{AccreditationPath}?includeWithdrawn=maybe");
+        var response = await Get($"{AccreditationPath}?includeWithdrawn={value}");
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(response)).GetProperty("overseasSites")[0].GetProperty("interimSites")
+            .GetArrayLength().Should().Be(2);
     }
 
     [Fact]
@@ -402,7 +401,7 @@ public class AccreditationApiEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task OverseasSites_ServeInterimSitesInline_WithdrawnOnlyWhenAskedFor()
+    public async Task OverseasSites_ServeEveryInterimSiteInline_WithdrawnOnesToo()
     {
         await Seed(
             configure: a =>
@@ -413,32 +412,30 @@ public class AccreditationApiEndpointTests : IDisposable
                 ]
         );
 
-        var defaults = await Json(await Get($"{AccreditationPath}/overseas-sites/001"));
-        var all = await Json(
-            await Get($"{AccreditationPath}/overseas-sites/001?includeWithdrawn=true")
-        );
+        var all = await Json(await Get($"{AccreditationPath}/overseas-sites/001"));
 
-        defaults.GetProperty("interimSites").EnumerateArray()
-            .Select(i => i.GetProperty("siteId").GetInt32()).Should().Equal(11);
         var interims = all.GetProperty("interimSites").EnumerateArray().ToList();
         interims.Select(i => i.GetProperty("siteId").GetInt32()).Should().Equal(11, 12);
         interims[0].GetProperty("siteNumber").GetString().Should().Be("011");
         interims[0].GetProperty("address").GetProperty("line1").GetString().Should().Be("Line 1");
         interims[0].GetProperty("contact").GetProperty("email").GetString().Should().Be("e@example.com");
-        interims[0].TryGetProperty("removedAt", out _).Should().BeFalse();
-        interims[1].GetProperty("removedAt").GetDateTime().Should().BeAfter(DateTime.MinValue);
+        interims.ForEach(i => i.TryGetProperty("removedAt", out _).Should().BeFalse());
+        interims.Select(i => i.GetProperty("latestStatus").GetProperty("status").GetString())
+            .Should().Equal("approved", "withdrawn");
+        interims.ForEach(i =>
+            i.GetProperty("latestStatus").GetRawText()
+                .Should().Be(i.GetProperty("statusHistory").EnumerateArray().Last().GetRawText())
+        );
     }
 
     [Fact]
-    public async Task OverseasSites_ListHonoursIncludeWithdrawn()
+    public async Task OverseasSites_ListServesWithdrawnInterimSites()
     {
         await Seed(configure: a => a.OverseasSites!.Sites[1].InterimSites = [Interim(21, removed: true)]);
 
-        var hidden = await Json(await Get($"{AccreditationPath}/overseas-sites"));
-        var shown = await Json(await Get($"{AccreditationPath}/overseas-sites?includeWithdrawn=true"));
+        var list = await Json(await Get($"{AccreditationPath}/overseas-sites"));
 
-        hidden.GetProperty("items")[1].GetProperty("interimSites").GetArrayLength().Should().Be(0);
-        shown.GetProperty("items")[1].GetProperty("interimSites").GetArrayLength().Should().Be(1);
+        list.GetProperty("items")[1].GetProperty("interimSites").GetArrayLength().Should().Be(1);
     }
 
     private static InterimSiteModel Interim(int id, bool removed) =>
@@ -480,7 +477,6 @@ public class AccreditationApiEndpointTests : IDisposable
     [InlineData("pageNumber=x", "invalid_paging")]
     [InlineData("limit=0", "invalid_paging")]
     [InlineData("limit=101", "invalid_paging")]
-    [InlineData("includeWithdrawn=maybe", "invalid_include_withdrawn")]
     public async Task OverseasSites_InvalidQuery_Is400(string query, string code)
     {
         await Seed();
@@ -524,13 +520,13 @@ public class AccreditationApiEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task OverseasSite_WithABadIncludeWithdrawn_Is400()
+    public async Task OverseasSite_IgnoresIncludeWithdrawn()
     {
         await Seed();
 
         var response = await Get($"{AccreditationPath}/overseas-sites/001?includeWithdrawn=maybe");
 
-        await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_include_withdrawn");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Theory]

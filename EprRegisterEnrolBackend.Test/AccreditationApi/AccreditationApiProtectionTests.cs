@@ -14,6 +14,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
+using static EprRegisterEnrolBackend.Test.TestSupport.ProblemAssertions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApi;
 
@@ -74,20 +75,6 @@ public class AccreditationApiProtectionTests : IDisposable
             Ct
         );
 
-    private static async Task AssertProblem(
-        HttpResponseMessage response,
-        HttpStatusCode status,
-        string code
-    )
-    {
-        response.StatusCode.Should().Be(status);
-        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
-        var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct)).RootElement;
-        body.GetProperty("status").GetInt32().Should().Be((int)status);
-        body.GetProperty("code").GetString().Should().Be(code);
-        body.GetProperty("detail").GetString().Should().NotBeNullOrWhiteSpace();
-        body.GetProperty("traceId").GetString().Should().NotBeNullOrWhiteSpace();
-    }
 
     // ---- request limit ----
 

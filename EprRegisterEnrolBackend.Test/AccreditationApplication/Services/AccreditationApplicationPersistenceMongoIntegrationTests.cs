@@ -33,7 +33,7 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
     public void Dispose() => _factory.GetClient().DropDatabase(_databaseName);
 
     [Fact]
-    public async Task Constructor_creates_the_eleven_declared_indexes()
+    public async Task Constructor_creates_the_twelve_declared_indexes()
     {
         _ = new AccreditationApplicationPersistence(_factory, NullLoggerFactory.Instance);
 
@@ -44,7 +44,7 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
             .Select(i => i["key"].AsBsonDocument.ToString())
             .ToList();
 
-        Assert.Equal(11, keyDocs.Count);
+        Assert.Equal(12, keyDocs.Count);
 
         Assert.Contains(keyDocs, k => k == "{ \"organisationId\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"applicationStatus\" : 1 }");
@@ -86,6 +86,8 @@ public sealed class AccreditationApplicationPersistenceMongoIntegrationTests : I
                 && k.Contains("\"accreditationReference\" : 1")
                 && k.Contains("\"_id\" : 1")
         );
+        // RA-740: backs the admin search's sort (most recently updated first, then id).
+        Assert.Contains(keyDocs, k => k == "{ \"updatedAt\" : -1, \"_id\" : -1 }");
         Assert.Contains(keyDocs, k => k == "{ \"applicationReference\" : 1 }");
         Assert.Contains(keyDocs, k => k == "{ \"caseManagementWorkItemId\" : 1 }");
 

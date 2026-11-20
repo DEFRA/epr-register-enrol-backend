@@ -197,8 +197,31 @@ public sealed class ApplicationReconciler(
                     interim.SiteNumber,
                     interim.SiteNumber
                 );
+                // RA-781: an interim site's status history is stored on the legacy document only. The model does not
+                // hold it yet, so the accreditation API builds it from CreatedAt and RemovedAt there. Where that gives
+                // the same history, the model is not missing anything. Where the stored history holds more (a
+                // withdrawal followed by a restore), it stays, so the gap shows as a difference.
+                if (FallbackRebuildsHistory(interim))
+                {
+                    interim.StatusHistory = [];
+                }
             }
         }
+    }
+
+    // The mapper's own fallback for a site with no stored history: approved, then withdrawn from RemovedAt if it
+    // is withdrawn now. The first stored entry is the site being added, which the API takes from the approval.
+    private static bool FallbackRebuildsHistory(InterimSiteModel interim)
+    {
+        if (interim.StatusHistory.Count == 0)
+        {
+            return true;
+        }
+
+        var changes = interim.StatusHistory.Skip(1).ToList();
+        return interim.RemovedAt is { } removed
+            ? changes is [{ Status: InterimSiteStatusHistory.Withdrawn } only] && only.RecordedAt == removed
+            : changes.Count == 0;
     }
 
     private static void NormaliseApprovalDate(OverseasSiteModel site)

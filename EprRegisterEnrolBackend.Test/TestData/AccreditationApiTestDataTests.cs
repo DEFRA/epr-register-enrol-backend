@@ -330,21 +330,20 @@ public class AccreditationApiTestDataApiTests : IDisposable
     }
 
     [Fact]
-    public async Task ExporterWithdrawnAndUnaccredited_ServesOnlyAccreditedSites_AndWithdrawnOnRequest()
+    public async Task ExporterWithdrawnAndUnaccredited_ServesOnlyAccreditedSites_AndTheirWithdrawnInterimSites()
     {
         await Seeder.SeedAsync();
         var path = AccreditationPath(AccreditationApiTestData.ExporterWithdrawnAndUnaccredited);
 
         var accreditation = await GetJson(path);
-        var withWithdrawn = await GetJson($"{path}?includeWithdrawn=true");
         await GetJson($"{path}/overseas-sites/003", HttpStatusCode.NotFound);
 
         accreditation.GetProperty("overseasSites").EnumerateArray()
             .Select(s => s.GetProperty("orsId").GetString()).Should().Equal("001", "002");
-        accreditation.GetProperty("overseasSites")[0].GetProperty("interimSites").GetArrayLength()
-            .Should().Be(1);
-        withWithdrawn.GetProperty("overseasSites")[0].GetProperty("interimSites").GetArrayLength()
-            .Should().Be(2);
+        var interims = accreditation.GetProperty("overseasSites")[0].GetProperty("interimSites");
+        interims.EnumerateArray()
+            .Select(i => i.GetProperty("latestStatus").GetProperty("status").GetString())
+            .Should().Equal("approved", "withdrawn");
     }
 
     [Fact]

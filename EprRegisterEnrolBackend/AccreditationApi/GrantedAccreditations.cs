@@ -17,10 +17,7 @@ public sealed class GrantedAccreditations(
 )
 {
     // RA-702: the database stops a query that runs past this, and the API answers 503.
-    private TimeSpan? QueryTimeout =>
-        config.Value.QueryTimeoutSeconds > 0
-            ? TimeSpan.FromSeconds(config.Value.QueryTimeoutSeconds)
-            : null;
+    private TimeSpan? QueryTimeout => config.Value.QueryTimeout;
 
     public async Task<AccreditationApplicationModel?> FindAsync(
         int organisationNumber,

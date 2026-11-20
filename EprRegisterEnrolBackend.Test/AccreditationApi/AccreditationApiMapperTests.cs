@@ -520,16 +520,9 @@ public class AccreditationApiMapperTests
         return site;
     }
 
-    private static JsonElement OverseasSite(
-        OverseasSiteModel site,
-        bool includeWithdrawn = false
-    ) =>
+    private static JsonElement OverseasSite(OverseasSiteModel site) =>
         JsonSerializer.SerializeToElement(
-            AccreditationApiMapper.ToOverseasSite(
-                Application(exporter: true),
-                site,
-                includeWithdrawn
-            ),
+            AccreditationApiMapper.ToOverseasSite(Application(exporter: true), site),
             Web
         );
 
@@ -591,7 +584,7 @@ public class AccreditationApiMapperTests
     public void OverseasSite_DropsApplicationOnlyFlagsLegacyCodesAndEvidence()
     {
         var text = JsonSerializer.Serialize(
-            AccreditationApiMapper.ToOverseasSite(Application(exporter: true), Site(), false),
+            AccreditationApiMapper.ToOverseasSite(Application(exporter: true), Site()),
             Web
         );
 
@@ -659,7 +652,7 @@ public class AccreditationApiMapperTests
     }
 
     [Fact]
-    public void OverseasSite_ListsOnlyItsActiveInterimSites_InFull()
+    public void OverseasSite_ListsEveryInterimSite_WithdrawnOnesToo_InFull()
     {
         var json = OverseasSite(
             Site(s =>
@@ -672,7 +665,7 @@ public class AccreditationApiMapperTests
         );
 
         var interims = json.GetProperty("interimSites").EnumerateArray().ToList();
-        interims.Select(i => i.GetProperty("siteId").GetInt32()).Should().Equal(10, 11);
+        interims.Select(i => i.GetProperty("siteId").GetInt32()).Should().Equal(10, 11, 12);
         interims[0].GetProperty("siteNumber").GetString().Should().Be("010");
         interims[0].GetProperty("siteName").GetString().Should().Be("Interim 10");
         interims[0]
@@ -686,20 +679,114 @@ public class AccreditationApiMapperTests
         interims[0].TryGetProperty("isNewSite", out _).Should().BeFalse();
     }
 
+    // ---- interim site status (RA-781) ----
+
+    private static JsonElement InterimOf(InterimSiteModel interim) =>
+        OverseasSite(Site(s => s.InterimSites = [interim])).GetProperty("interimSites")[0];
+
+    private static string?[] Statuses(JsonElement history) =>
+        history.EnumerateArray().Select(e => e.GetProperty("status").GetString()).ToArray();
+
+    private static string?[] Field(JsonElement history, string name) =>
+        history
+            .EnumerateArray()
+            .Select(e =>
+                e.GetProperty(name).ValueKind == JsonValueKind.Null ? null : e.GetProperty(name).ToString()
+            )
+            .ToArray();
+
+    private static void AssertLatestIsTheLastEntry(JsonElement interim) =>
+        interim
+            .GetProperty("latestStatus")
+            .GetRawText()
+            .Should()
+            .Be(interim.GetProperty("statusHistory").EnumerateArray().Last().GetRawText());
+
+    // Approved from when its ORS was approved, not from CreatedAt (1 February).
     [Fact]
-    public void OverseasSite_IncludesWithdrawnInterimSites_WhenAskedFor()
+    public void InterimSite_NeverWithdrawn_IsApprovedFromTheApproval()
+    {
+        var interim = InterimOf(InterimSite(11, removed: false));
+
+        interim.TryGetProperty("removedAt", out _).Should().BeFalse();
+        var history = interim.GetProperty("statusHistory");
+        Statuses(history).Should().Equal("approved");
+        Field(history, "effectiveFromDate").Should().Equal("2027-01-10");
+        Field(history, "effectiveToDate").Should().Equal((string?)null);
+        history[0].GetProperty("recordedAt").GetDateTime().Should().Be(ApprovedAt);
+        interim.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
+        AssertLatestIsTheLastEntry(interim);
+    }
+
+    // No stored history: approved, then withdrawn from RemovedAt.
+    [Fact]
+    public void InterimSite_Withdrawn_WithNoStoredHistory_IsApprovedThenWithdrawn()
+    {
+        var interim = InterimOf(InterimSite(12, removed: true));
+
+        var history = interim.GetProperty("statusHistory");
+        Statuses(history).Should().Equal("approved", "withdrawn");
+        Field(history, "effectiveFromDate").Should().Equal("2027-01-10", "2027-04-01");
+        Field(history, "effectiveToDate").Should().Equal("2027-03-31", null);
+        history[1].GetProperty("recordedAt").GetDateTime().Should().Be(InterimRemoved);
+        interim.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("withdrawn");
+        AssertLatestIsTheLastEntry(interim);
+    }
+
+    // A restored site is one interim site: approved, withdrawn, approved.
+    [Fact]
+    public void InterimSite_Restored_IsApprovedWithdrawnApproved_FromItsStoredHistory()
+    {
+        var interim = InterimOf(
+            InterimSite(
+                13,
+                removed: false,
+                history:
+                [
+                    ("approved", InterimCreated),
+                    ("withdrawn", InterimRemoved),
+                    ("approved", InterimRemoved.AddMonths(2)),
+                ]
+            )
+        );
+
+        var history = interim.GetProperty("statusHistory");
+        Statuses(history).Should().Equal("approved", "withdrawn", "approved");
+        Field(history, "effectiveFromDate").Should().Equal("2027-01-10", "2027-04-01", "2027-06-01");
+        Field(history, "effectiveToDate").Should().Equal("2027-03-31", "2027-05-31", null);
+        // The first entry is the approval of the ORS, not when the site was added.
+        history[0].GetProperty("recordedAt").GetDateTime().Should().Be(ApprovedAt);
+        interim.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
+        AssertLatestIsTheLastEntry(interim);
+    }
+
+    // A site cannot be in the accreditation before it is approved, so a change recorded earlier applies
+    // from the approval, and still wins as the later change.
+    [Fact]
+    public void InterimSite_WithdrawnBeforeTheApproval_IsWithdrawnFromTheApproval()
+    {
+        var interim = InterimOf(
+            InterimSite(14, removed: true, removedAt: new DateTime(2026, 12, 1, 9, 0, 0, DateTimeKind.Utc))
+        );
+
+        var history = interim.GetProperty("statusHistory");
+        Statuses(history).Should().Equal("approved", "withdrawn");
+        Field(history, "effectiveFromDate").Should().Equal("2027-01-10", "2027-01-10");
+        interim.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("withdrawn");
+        AssertLatestIsTheLastEntry(interim);
+    }
+
+    // Two interim sites on one ORS (one withdrawn, one added in its place) are separate, each with its own history.
+    [Fact]
+    public void InterimSites_AddedInPlaceOfAWithdrawnOne_HaveTheirOwnHistories()
     {
         var json = OverseasSite(
-            Site(s =>
-                s.InterimSites = [InterimSite(11, removed: false), InterimSite(12, removed: true)]
-            ),
-            includeWithdrawn: true
+            Site(s => s.InterimSites = [InterimSite(11, removed: true), InterimSite(12, removed: false)])
         );
 
         var interims = json.GetProperty("interimSites").EnumerateArray().ToList();
-        interims.Select(i => i.GetProperty("siteId").GetInt32()).Should().Equal(11, 12);
-        interims[0].TryGetProperty("removedAt", out _).Should().BeFalse();
-        interims[1].GetProperty("removedAt").GetDateTime().Should().Be(InterimRemoved);
+        Statuses(interims[0].GetProperty("statusHistory")).Should().Equal("approved", "withdrawn");
+        Statuses(interims[1].GetProperty("statusHistory")).Should().Equal("approved");
     }
 
     [Fact]
@@ -740,7 +827,12 @@ public class AccreditationApiMapperTests
     private static readonly DateTime InterimCreated = new(2027, 2, 1, 10, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime InterimRemoved = new(2027, 4, 1, 10, 0, 0, DateTimeKind.Utc);
 
-    private static InterimSiteModel InterimSite(int id, bool removed) =>
+    private static InterimSiteModel InterimSite(
+        int id,
+        bool removed,
+        DateTime? removedAt = null,
+        (string Status, DateTime RecordedAt)[]? history = null
+    ) =>
         new()
         {
             SiteId = id,
@@ -757,7 +849,11 @@ public class AccreditationApiMapperTests
             ContactPhone = "+49 1",
             OperationCodes = ["R12"],
             CreatedAt = InterimCreated,
-            RemovedAt = removed ? InterimRemoved : null,
+            RemovedAt = removed ? removedAt ?? InterimRemoved : null,
+            StatusHistory =
+                history
+                    ?.Select(h => new InterimSiteStatusChange { Status = h.Status, RecordedAt = h.RecordedAt })
+                    .ToList() ?? [],
         };
 
     // ---- latestStatus ----
