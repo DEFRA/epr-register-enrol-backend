@@ -262,6 +262,83 @@ public class AdminApiEndpointTests : IDisposable
         body.GetProperty("items").GetArrayLength().Should().Be(0);
     }
 
+    // AC02, AC03, AC05: a whole number, typed in full, finds its application.
+    [Theory]
+    [InlineData("A27ER5001120018PL", "accreditationNumber")]
+    [InlineData("R25ER5001120018PL", "registrationNumber")]
+    [InlineData("500112", "organisationNumber")]
+    public async Task AWholeNumber_FindsItsApplication_InThatFieldOrAll(string number, string field)
+    {
+        var match = await Seed();
+        await Seed(a =>
+        {
+            a.OrgId = 600212;
+            a.OrganisationName = "Inland Metals Ltd";
+            a.RegistrationReference = "R25ER6002120018ST";
+            a.AccreditationReference = "A27ER6002120018ST";
+        });
+
+        foreach (var query in new[] { $"q={number}&searchFields={field}", $"q={number}" })
+        {
+            var body = await Json(await Get($"{SearchPath}?{query}"));
+
+            body.GetProperty("totalItems").GetInt32().Should().Be(1, query);
+            body.GetProperty("items")[0]
+                .GetProperty("applicationId")
+                .GetString()
+                .Should()
+                .Be(match.Id.ToString(), query);
+        }
+    }
+
+    // AC13: 50 a page by default, and the total counts every match.
+    [Fact]
+    public async Task MoreThan50Matches_Are50APage_WithTheTotal()
+    {
+        for (var i = 0; i < 51; i++)
+            await Seed();
+
+        var page1 = await Json(await Get(SearchPath));
+        var page2 = await Json(await Get($"{SearchPath}?pageNumber=2"));
+
+        page1.GetProperty("limit").GetInt32().Should().Be(50);
+        page1.GetProperty("totalItems").GetInt32().Should().Be(51);
+        page1.GetProperty("items").GetArrayLength().Should().Be(50);
+        page2.GetProperty("totalItems").GetInt32().Should().Be(51);
+        page2.GetProperty("items").GetArrayLength().Should().Be(1);
+    }
+
+    // A draft (Saved or Started) has no references yet, and an application that has never been
+    // submitted can have no organisation number. Every one is still listed, with those fields null.
+    [Fact]
+    public async Task Drafts_WithNoReferencesOrOrganisationNumber_AreListed()
+    {
+        await Seed();
+        foreach (var status in new[] { ApplicationStatus.Saved, ApplicationStatus.Started })
+            await Seed(a =>
+            {
+                a.ApplicationStatus = status;
+                a.AccreditationReference = null;
+                a.RegistrationReference = null;
+                a.OrgId = null;
+            });
+
+        var body = await Json(await Get(SearchPath));
+
+        body.GetProperty("totalItems").GetInt32().Should().Be(3);
+        var drafts = body.GetProperty("items")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("applicationStatus").GetString() is "Saved" or "Started")
+            .ToList();
+        drafts.Should().HaveCount(2);
+        foreach (var draft in drafts)
+        {
+            draft.GetProperty("accreditationReference").ValueKind.Should().Be(JsonValueKind.Null);
+            draft.GetProperty("registrationReference").ValueKind.Should().Be(JsonValueKind.Null);
+            draft.GetProperty("orgId").ValueKind.Should().Be(JsonValueKind.Null);
+        }
+    }
+
     // ---- 400 ----
 
     public static TheoryData<string, string> InvalidQueries() =>

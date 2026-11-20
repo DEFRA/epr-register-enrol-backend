@@ -118,6 +118,43 @@ public sealed class LegacyApplicationSearchTests : IDisposable
         found.Select(a => a.Id).Should().Equal(match.Id);
     }
 
+    // orgId is only resolved when an application is first submitted (or when an operator reads it),
+    // so a draft can have none. It is still found by everything else, just not by organisation
+    // number.
+    [Fact]
+    public async Task NoOrganisationNumber_IsFoundByEverythingElse_ButNotByOrganisationNumber()
+    {
+        var noOrgId = await Seed(
+            accreditation: "A27ER7003330018AL",
+            registration: "R25ER7003330018AL",
+            orgId: null,
+            name: "Quayside Metals"
+        );
+        var other = await Seed(orgId: 500112, name: "Harbourside Plastics Ltd");
+
+        (await Search(new())).Select(a => a.Id).Should().BeEquivalentTo([noOrgId.Id, other.Id]);
+        (await Search(Text("quayside", LegacyApplicationSearchField.OrganisationName)))
+            .Select(a => a.Id)
+            .Should()
+            .Equal(noOrgId.Id);
+        (await Search(Text("7003330", LegacyApplicationSearchField.AccreditationNumber)))
+            .Select(a => a.Id)
+            .Should()
+            .Equal(noOrgId.Id);
+        (await Search(Text("R25ER7003330018AL", LegacyApplicationSearchField.RegistrationNumber)))
+            .Select(a => a.Id)
+            .Should()
+            .Equal(noOrgId.Id);
+        (await Search(Text("700333")))
+            .Select(a => a.Id)
+            .Should()
+            .Equal(noOrgId.Id);
+        (await Search(Text("5", LegacyApplicationSearchField.OrganisationNumber)))
+            .Select(a => a.Id)
+            .Should()
+            .Equal(other.Id);
+    }
+
     [Fact]
     public async Task OrganisationName_MatchesPartOfTheName_IgnoringCase()
     {
