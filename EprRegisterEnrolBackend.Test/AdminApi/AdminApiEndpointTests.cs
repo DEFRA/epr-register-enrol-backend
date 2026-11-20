@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using static EprRegisterEnrolBackend.Test.TestSupport.ProblemAssertions;
 
 namespace EprRegisterEnrolBackend.Test.AdminApi;
 
@@ -96,20 +97,6 @@ public class AdminApiEndpointTests : IDisposable
     private static async Task<JsonElement> Json(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct)).RootElement.Clone();
 
-    private static async Task AssertProblem(
-        HttpResponseMessage response,
-        HttpStatusCode status,
-        string code
-    )
-    {
-        response.StatusCode.Should().Be(status);
-        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
-        var body = await Json(response);
-        body.GetProperty("status").GetInt32().Should().Be((int)status);
-        body.GetProperty("code").GetString().Should().Be(code);
-        body.GetProperty("detail").GetString().Should().NotBeNullOrWhiteSpace();
-        body.GetProperty("traceId").GetString().Should().NotBeNullOrWhiteSpace();
-    }
 
     // ---- the search ----
 

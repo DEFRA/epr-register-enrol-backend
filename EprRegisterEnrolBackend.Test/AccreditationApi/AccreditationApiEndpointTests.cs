@@ -9,6 +9,7 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using static EprRegisterEnrolBackend.Test.TestSupport.ProblemAssertions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApi;
 
@@ -125,20 +126,6 @@ public class AccreditationApiEndpointTests : IDisposable
     private static async Task<JsonElement> Json(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct)).RootElement.Clone();
 
-    private static async Task AssertProblem(
-        HttpResponseMessage response,
-        HttpStatusCode status,
-        string code
-    )
-    {
-        response.StatusCode.Should().Be(status);
-        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
-        var body = await Json(response);
-        body.GetProperty("status").GetInt32().Should().Be((int)status);
-        body.GetProperty("code").GetString().Should().Be(code);
-        body.GetProperty("detail").GetString().Should().NotBeNullOrWhiteSpace();
-        body.GetProperty("traceId").GetString().Should().NotBeNullOrWhiteSpace();
-    }
 
     // ---- GET accreditation by year ----
 
