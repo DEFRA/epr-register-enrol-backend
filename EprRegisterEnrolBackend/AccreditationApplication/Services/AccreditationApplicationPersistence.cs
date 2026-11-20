@@ -1,8 +1,10 @@
 using System.Linq.Expressions;
+using System.Text.RegularExpressions;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
@@ -17,7 +19,8 @@ public class AccreditationApplicationPersistence(
         collectionName,
         loggerFactory
     ),
-        IAccreditationApplicationPersistence
+        IAccreditationApplicationPersistence,
+        ILegacyApplicationSearch
 {
     /// <summary>
     /// The container uses this constructor (the legacy collection).
@@ -280,6 +283,113 @@ public class AccreditationApplicationPersistence(
             .Limit(limit)
             .ToListAsync();
         return (items, total);
+    }
+
+    public async Task<(
+        IReadOnlyList<AccreditationApplicationModel> Items,
+        long Total
+    )> SearchLegacyApplicationsAsync(
+        LegacyApplicationSearchCriteria search,
+        long skip,
+        int limit,
+        TimeSpan? maxTime = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        var filter = filters.Empty;
+
+        if (!string.IsNullOrEmpty(search.Text))
+            filter &= TextMatches(search.Text, search.Fields);
+        if (search.Statuses is { Count: > 0 })
+            filter &= filters.In(a => a.ApplicationStatus, search.Statuses);
+        if (search.Year is not null)
+            filter &= filters.Eq(a => a.Year, search.Year.Value);
+
+        var total = await Collection.CountDocumentsAsync(
+            filter,
+            new CountOptions { MaxTime = maxTime },
+            cancellationToken
+        );
+        // A page beyond what Mongo can skip is past the last page, so it is empty.
+        if (skip > int.MaxValue)
+            return ([], total);
+
+        var items = await Collection
+            .Find(filter, new FindOptions { MaxTime = maxTime })
+            .SortByDescending(a => a.UpdatedAt)
+            .ThenByDescending(a => a.Id)
+            .Skip((int)skip)
+            .Limit(limit)
+            .ToListAsync(cancellationToken);
+        return (items, total);
+    }
+
+    // The text as a literal (every regex metacharacter escaped), anywhere in the field, ignoring
+    // case. OrgId is stored as a number, so it is turned into text on the server to be matched.
+    private static FilterDefinition<AccreditationApplicationModel> TextMatches(
+        string text,
+        IReadOnlyCollection<LegacyApplicationSearchField>? fields
+    )
+    {
+        // The element OrgId is stored under, from the class map, so the $expr follows the naming
+        // convention the typed filters follow. Looked up here, not in a static field, so it can never
+        // run (and freeze the class map) before the convention is registered.
+        var orgIdElement = BsonClassMap
+            .LookupClassMap(typeof(AccreditationApplicationModel))
+            .GetMemberMap(nameof(AccreditationApplicationModel.OrgId))
+            .ElementName;
+        var pattern = Regex.Escape(text);
+        var regex = new BsonRegularExpression(pattern, "i");
+        var searched = fields is { Count: > 0 } ? fields : Enum.GetValues<LegacyApplicationSearchField>();
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+
+        return filters.Or(
+            searched
+                .Distinct()
+                .Select(field =>
+                    field switch
+                    {
+                        LegacyApplicationSearchField.AccreditationNumber => filters.Regex(
+                            a => a.AccreditationReference,
+                            regex
+                        ),
+                        LegacyApplicationSearchField.RegistrationNumber => filters.Regex(
+                            a => a.RegistrationReference,
+                            regex
+                        ),
+                        LegacyApplicationSearchField.OrganisationName => filters.Regex(
+                            a => a.OrganisationName,
+                            regex
+                        ),
+                        LegacyApplicationSearchField.OrganisationNumber =>
+                            new BsonDocumentFilterDefinition<AccreditationApplicationModel>(
+                                new BsonDocument(
+                                    "$expr",
+                                    new BsonDocument(
+                                        "$regexMatch",
+                                        new BsonDocument
+                                        {
+                                            {
+                                                "input",
+                                                new BsonDocument(
+                                                    "$toString",
+                                                    new BsonDocument(
+                                                        "$ifNull",
+                                                        new BsonArray { $"${orgIdElement}", "" }
+                                                    )
+                                                )
+                                            },
+                                            { "regex", pattern },
+                                            { "options", "i" },
+                                        }
+                                    )
+                                )
+                            ),
+                        _ => throw new ArgumentOutOfRangeException(nameof(field), field, null),
+                    }
+                )
+        );
     }
 
     public async Task<UnservableApprovedCounts> CountUnservableApprovedAsync(
@@ -788,6 +898,15 @@ public class AccreditationApplicationPersistence(
                     builder.Ascending(a => a.Id)
                 ),
                 new CreateIndexOptions { Name = "granted_search_sort" }
+            ),
+            // RA-740: backs the admin search's sort (most recently updated first, then id), so a
+            // page of every application is read in order from the index, not sorted in memory.
+            new CreateIndexModel<AccreditationApplicationModel>(
+                builder.Combine(
+                    builder.Descending(a => a.UpdatedAt),
+                    builder.Descending(a => a.Id)
+                ),
+                new CreateIndexOptions { Name = "admin_search_sort" }
             ),
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Combine(

@@ -106,7 +106,6 @@ paths:
         - $ref: '#/components/parameters/OrganisationNumber'
         - $ref: '#/components/parameters/RegistrationNumber'
         - $ref: '#/components/parameters/AccreditationYear'
-        - $ref: '#/components/parameters/IncludeWithdrawn'
       responses:
         '400': { $ref: '#/components/responses/BadRequest' }
         '200':
@@ -133,7 +132,6 @@ paths:
         - $ref: '#/components/parameters/OrganisationNumber'
         - $ref: '#/components/parameters/RegistrationNumber'
         - $ref: '#/components/parameters/AccreditationYear'
-        - $ref: '#/components/parameters/IncludeWithdrawn'
         - $ref: '#/components/parameters/PageNumber'
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -168,7 +166,6 @@ paths:
         - $ref: '#/components/parameters/RegistrationNumber'
         - $ref: '#/components/parameters/AccreditationYear'
         - $ref: '#/components/parameters/OrsId'
-        - $ref: '#/components/parameters/IncludeWithdrawn'
       responses:
         '200':
           description: The accredited overseas site.
@@ -241,11 +238,6 @@ components:
       in: query
       description: Only accreditations of this registration, e.g. `R27ER5000270036PL`.
       schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,40}$' }
-    IncludeWithdrawn:
-      name: includeWithdrawn
-      in: query
-      description: Include withdrawn interim sites (`removedAt` set) in each overseas site's `interimSites`. They are retained for reporting.
-      schema: { type: boolean, default: false }
 
   responses:
     BadRequest:
@@ -362,7 +354,7 @@ components:
         phone: { type: string, nullable: true }
     StatusHistoryEntry:
       type: object
-      description: Used by accreditations, accredited overseas sites and interim sites. Where two entries share an `effectiveFromDate`, the one with the later `recordedAt` takes precedence, and the earlier one is kept with its `effectiveToDate` equal to that same date.
+      description: Used by accreditations, accredited overseas sites and interim sites. Where two entries share an `effectiveFromDate`, the one with the later `recordedAt` takes precedence, and the earlier one is kept with its `effectiveToDate` equal to that same date. If they also share a `recordedAt` (an interim site withdrawn before its overseas site was approved has both entries at the approval), the entry later in the array takes precedence.
       required: [status, effectiveFromDate, effectiveToDate, recordedAt]
       properties:
         status: { $ref: '#/components/schemas/AccreditationStatus' }
@@ -414,7 +406,10 @@ components:
         wasteProcessingType: { type: string }
         latestStatus:
           allOf: [{ $ref: '#/components/schemas/StatusHistoryEntry' }]
-          description: The latest entry in `statusHistory`: the latest `effectiveFromDate`, and the later `recordedAt` where two share one. It is the latest whether or not its `effectiveFromDate` has arrived.
+          description: >-
+            The latest entry in `statusHistory`: the latest `effectiveFromDate`, and the later
+            `recordedAt` where two share one. It is the latest whether or not its
+            `effectiveFromDate` has arrived.
         tonnageBand:
           type: string
           allOf: [{ $ref: '#/components/schemas/TonnageBand' }]
@@ -434,8 +429,8 @@ components:
               type: array
               description: |
                 Exporters only, ordered by `orsId`, and unpaged. Omitted for a reprocessor, which
-                has a site, not overseas sites. Withdrawn interim sites are left out unless
-                `includeWithdrawn=true`.
+                has a site, not overseas sites. Each site's `interimSites` includes the withdrawn
+                ones.
               items: { $ref: '#/components/schemas/AccreditedOverseasSite' }
             signatories:
               type: array
@@ -452,9 +447,14 @@ components:
     InterimSite:
       type: object
       description: |
-        `InterimSiteModel`, returned inside its overseas site. `removedAt` set means withdrawn;
-        withdrawn sites are retained for reporting and only included with `includeWithdrawn=true`.
-      required: [siteId, siteNumber, siteName, address, contact]
+        `InterimSiteModel`, returned inside its overseas site, withdrawn ones included. An interim
+        site is not approved as such: it is `approved` from when its overseas site was approved, and
+        `withdrawn` from when it was withdrawn, as its `statusHistory` shows. A withdrawn interim
+        site that is restored is the same interim site, so its history reads approved, withdrawn,
+        approved. A new interim site added in place of a withdrawn one is a separate interim site,
+        with its own history. `latestStatus` and `statusHistory` have the shape and the date rules of
+        an accreditation's.
+      required: [siteId, siteNumber, siteName, address, contact, latestStatus, statusHistory]
       properties:
         siteId:
           type: integer
@@ -482,7 +482,14 @@ components:
           description: At least one of R12/R13 is required; R3/R4/R5 optional.
           items: { type: string }
         createdAt: { type: string, format: date-time, nullable: true }
-        removedAt: { type: string, format: date-time, nullable: true }
+        latestStatus:
+          allOf: [{ $ref: '#/components/schemas/StatusHistoryEntry' }]
+          description: The latest entry in the interim site's `statusHistory`, the same entry in the same shape.
+        statusHistory:
+          type: array
+          minItems: 1
+          description: Oldest first.
+          items: { $ref: '#/components/schemas/StatusHistoryEntry' }
     AccreditedOverseasSite:
       type: object
       description: |
@@ -526,5 +533,5 @@ components:
           items: { $ref: '#/components/schemas/StatusHistoryEntry' }
         interimSites:
           type: array
-          description: Active interim sites; withdrawn ones too when `includeWithdrawn=true`.
+          description: Every interim site on the overseas site, withdrawn ones included.
           items: { $ref: '#/components/schemas/InterimSite' }

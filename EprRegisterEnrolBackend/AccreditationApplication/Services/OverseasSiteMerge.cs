@@ -10,7 +10,7 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 /// <see cref="OverseasSiteModel.OrsId"/>, <see cref="OverseasSiteModel.IsNewSite"/>,
 /// <see cref="OverseasSiteModel.RegisteredNowAccredited"/> and
 /// <see cref="OverseasSiteModel.PreviousSites"/>; and on each interim site, IsNewSite, CreatedAt,
-/// RemovedAt and (when the client sends none) OperationCodes. Same approach as
+/// RemovedAt, StatusHistory and (when the client sends none) OperationCodes. Same approach as
 /// <see cref="PrnsAuthoriserMerge"/>.
 /// </summary>
 public static class OverseasSiteMerge
@@ -136,10 +136,19 @@ public static class OverseasSiteMerge
 
             // AC05: RemovedAt IS the withdrawal, so accepting it from a client would let a bulk
             // PATCH un-withdraw an interim site and bypass the restore endpoint.
+            // RA-781: the status history is server-owned for the same reason, and a merge that did
+            // not copy it would wipe it. A site the client adds starts a history of its own.
             if (hasPersistedInterim)
             {
                 interim.CreatedAt = persistedInterim!.CreatedAt;
                 interim.RemovedAt = persistedInterim.RemovedAt;
+                interim.StatusHistory = persistedInterim.StatusHistory;
+            }
+            else
+            {
+                interim.StatusHistory = InterimSiteStatusHistory.Added(
+                    interim.CreatedAt ?? DateTime.UtcNow
+                );
             }
         }
     }
@@ -168,7 +177,7 @@ public static class OverseasSiteMerge
             if (sentIds.Contains(omitted.SiteId))
                 continue;
 
-            omitted.RemovedAt ??= DateTime.UtcNow;
+            InterimSiteStatusHistory.Withdraw(omitted, DateTime.UtcNow);
             site.InterimSites.Add(omitted);
         }
     }
