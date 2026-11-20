@@ -226,6 +226,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<OrganisationNameCorrectionMigration>();
 
+    // RA-784: one-off backfill of last year's accreditation number onto 2027 applications that don't
+    // hold one, from the 2026 public register. It never replaces a number already held.
+    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+    builder.Services.Configure<LastYearsAccreditationBackfillOptions>(
+        builder.Configuration.GetSection(LastYearsAccreditationBackfillOptions.SectionName)
+    );
+    builder.Services.AddHostedService<LastYearsAccreditationBackfillMigration>();
+
     // RA-766: one-off correction of the charge held by the Case Management service after a query.
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
     builder.Services.Configure<ChargeCorrectionOptions>(

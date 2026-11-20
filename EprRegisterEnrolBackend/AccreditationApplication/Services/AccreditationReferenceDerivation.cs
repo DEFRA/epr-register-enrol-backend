@@ -11,10 +11,10 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Services;
 ///
 /// <remarks>
 /// RA-690's derivation, superseded by <see cref="AccreditationNumberRules"/> (RA-783), which
-/// approval now uses: a new accreditation no longer reuses the registration's sequence. Nothing on
-/// main calls it: it's kept for RA-763's backfill migration in #262 (not yet merged), which
-/// re-derives renewals already issued; delete it with that migration. Don't use it to issue a number. Deliberately I/O-free - the caller chooses the
-/// source and supplies the year applied for.
+/// approval now uses: a new accreditation no longer reuses the registration's sequence. Its only
+/// caller is RA-764's OrganisationNameCorrectionMigration, which uses it to check the shape of a 2027
+/// number; delete it with that migration. Don't use it to issue a number. Deliberately I/O-free - the
+/// caller chooses the source and supplies the year applied for.
 ///
 /// Source validation is shape only: the source must be a 17-character reference
 /// (<c>{R|A}</c> + <c>YY</c> + agency <c>{E|S|W|N}</c> + process type <c>{R|X}</c> + 6-digit

@@ -785,6 +785,19 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByYearAsync(
+        int year,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var results = await ProjectCurrentAsync(
+            Builders<ApplicationEntity>.Filter.Empty,
+            null,
+            cancellationToken
+        );
+        return results.Where(a => a.Year == year).OrderBy(a => a.Id).ToList();
+    }
+
     public async Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null

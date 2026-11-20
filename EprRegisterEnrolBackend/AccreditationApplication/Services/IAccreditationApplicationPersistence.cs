@@ -205,6 +205,16 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
+    /// RA-784: every application applying for <paramref name="year"/>, whatever its status, oldest first. Used by
+    /// LastYearsAccreditationBackfillMigration to check each one against the 2026 public register.
+    /// RA-784 one-off; removed with LastYearsAccreditationBackfillMigration - do not use elsewhere.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetByYearAsync(
+        int year,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// RA-764: every application holding one of <paramref name="registrationReferences"/> and
     /// applying for <paramref name="year"/>, whatever its status, OrgId or ReEx organisation id, in
     /// id order. Used by OrganisationNameCorrectionMigration so a record under one of the

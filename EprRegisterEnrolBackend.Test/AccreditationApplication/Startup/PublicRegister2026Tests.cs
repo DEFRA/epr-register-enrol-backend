@@ -1,0 +1,111 @@
+using System.Text.RegularExpressions;
+using EprRegisterEnrolBackend.AccreditationApplication.Startup;
+using FluentAssertions;
+
+namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
+
+// RA-784: pins the 5 November 2026 public register snapshot, so any change to the data is a
+// deliberate one. Every row is used as published (agreed 19 November 2026), including the six that
+// look wrong, which are pinned here.
+public class PublicRegister2026Tests
+{
+    private static readonly Regex RegistrationNumber = new(
+        "^R26[ESWN][RX][0-9]{6}[0-9]{4}(ST|WO|AL|FB|PA|PL|GR|GO)$"
+    );
+    private static readonly Regex AccreditationNumber = new(
+        "^A26[ESWN][RX][0-9]{6}[0-9]{4}(ST|WO|AL|FB|PA|PL|GR|GO|GL)$"
+    );
+
+    private const string JAndAYoungRegistration = "R26WR5000950025PL";
+    private const string JpRecyclingRegistration = "R26WR5003020027PL";
+    private const string ComhairleRegistration = "R26SR5005410022GO";
+    private const string EncircRegistration = "R26ER5002260055GR";
+    private const string ReddyPaiSteelRegistration = "R26WX5002360007ST";
+    private const string ReddyPaiAluminiumRegistration = "R26WX5002360008AL";
+
+    // Rows whose Org ID column isn't the org in their registration number.
+    private static readonly string[] OrgIdDiffers =
+    [
+        EncircRegistration,
+        ReddyPaiSteelRegistration,
+        ReddyPaiAluminiumRegistration,
+    ];
+
+    private static IReadOnlyDictionary<string, PublicRegister2026Entry> Register =>
+        PublicRegister2026.ByRegistrationNumber;
+
+    [Fact]
+    public void Holds_every_row_of_the_register()
+    {
+        Register.Should().HaveCount(394);
+        Register.Values.Count(e => e.AccreditationNumber is null).Should().Be(19);
+    }
+
+    [Fact]
+    public void Accreditation_numbers_are_unique()
+    {
+        var numbers = Register
+            .Values.Select(e => e.AccreditationNumber)
+            .Where(n => n is not null)
+            .ToList();
+        numbers.Should().OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public void Every_row_names_its_organisation()
+    {
+        Register.Values.Should().OnlyContain(e => !string.IsNullOrWhiteSpace(e.OrganisationName));
+    }
+
+    [Fact]
+    public void Holds_Clearfield_Envirotech()
+    {
+        Register["R26ER5003240079PL"]
+            .Should()
+            .Be(new PublicRegister2026Entry("A26ER5003240164PL", 500324, "CLEARFIELD ENVIROTECH LIMITED"));
+    }
+
+    [Fact]
+    public void Every_other_row_is_well_formed_and_consistent()
+    {
+        foreach (var (registration, entry) in Register)
+        {
+            RegistrationNumber.IsMatch(registration).Should().BeTrue(registration);
+            if (!OrgIdDiffers.Contains(registration))
+                registration[5..11].Should().Be(entry.OrgId.ToString("D6"), registration);
+
+            if (entry.AccreditationNumber is not { } accreditation)
+                continue;
+
+            AccreditationNumber.IsMatch(accreditation).Should().BeTrue(accreditation);
+            if (registration == JpRecyclingRegistration)
+                continue;
+
+            // Same agency, process type and org; only the sequence may differ.
+            accreditation[3..11].Should().Be(registration[3..11], registration);
+            if (registration != ComhairleRegistration)
+                accreditation[^2..].Should().Be(registration[^2..], registration);
+        }
+    }
+
+    [Fact]
+    public void Rows_that_look_wrong_are_kept_as_published()
+    {
+        Register[JpRecyclingRegistration].AccreditationNumber.Should().Be("A26WR5005320025PL");
+        Register[ComhairleRegistration].AccreditationNumber.Should().Be("A26SR5005410022GL");
+        Register[EncircRegistration].OrgId.Should().Be(500069);
+        Register[ReddyPaiSteelRegistration].OrgId.Should().Be(500263);
+        Register[ReddyPaiAluminiumRegistration].OrgId.Should().Be(500263);
+    }
+
+    // Published as R26WR5000950025P; keyed by the full number so an application holding it matches.
+    [Fact]
+    public void J_and_A_Young_is_keyed_by_the_full_registration_number()
+    {
+        PublicRegister2026.JAndAYoungPublishedRegistrationNumber.Should().Be("R26WR5000950025P");
+        Register.Should().NotContainKey(PublicRegister2026.JAndAYoungPublishedRegistrationNumber);
+        Register[JAndAYoungRegistration]
+            .Should()
+            .Be(new PublicRegister2026Entry(null, 500095, "J. AND A. YOUNG (LEICESTER) LTD"));
+    }
+}
