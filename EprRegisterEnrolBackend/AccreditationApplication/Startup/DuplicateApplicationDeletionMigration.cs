@@ -320,80 +320,22 @@ public class DuplicateApplicationDeletionMigration(
         if (BeforeDeleteForTest is { } before)
             await before(cancellationToken);
 
-        // Set when an in-transaction check fails; throwing then aborts the transaction, and the
-        // reason (ids and counts only) is what is logged rather than an exception's message.
-        string? rollbackReason = null;
-        // Set when the guarded delete matched nothing because the target is already gone: another
-        // instance deleted it after this one's checks.
-        var deletedElsewhere = false;
-        void FailCheck(string reason)
-        {
-            rollbackReason = reason;
-            throw new InvalidOperationException(reason);
-        }
-
+        var attempt = new DeleteAttempt();
         try
         {
             using var session = await factory
                 .GetClient()
                 .StartSessionAsync(cancellationToken: cancellationToken);
             await session.WithTransactionAsync(
-                async (s, token) =>
-                {
-                    // The driver re-runs this on a transient error, so start each attempt clean.
-                    rollbackReason = null;
-                    deletedElsewhere = false;
-
-                    // 1. Exactly the record checked, unchanged since.
-                    var deleted = await collection.DeleteOneAsync(
+                (s, token) =>
+                    DeleteInTransactionAsync(
+                        collection,
                         s,
-                        GuardedTarget(target.OrganisationId, version),
-                        cancellationToken: token
-                    );
-                    if (deleted.DeletedCount != 1)
-                    {
-                        deletedElsewhere =
-                            await collection.CountDocumentsAsync(
-                                s,
-                                Filters.Eq(a => a.Id, TargetId),
-                                cancellationToken: token
-                            ) == 0;
-                        FailCheck(
-                            deletedElsewhere
-                                ? "the target was deleted by another run after the checks"
-                                : Invariant(
-                                    $"deleted {deleted.DeletedCount} records; the target changed after the checks"
-                                )
-                        );
-                    }
-
-                    if (AfterDeleteForTest is { } after)
-                        await after(s, token);
-
-                    // 2. The keeper is still live.
-                    var keeperLive = await collection.CountDocumentsAsync(
-                        s,
-                        Filters.And(
-                            Filters.Eq(a => a.Id, KeeperId),
-                            Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
-                        ),
-                        cancellationToken: token
-                    );
-                    if (keeperLive != 1)
-                        FailCheck("the keeper is no longer live");
-
-                    // 3. Exactly one live application left in the group.
-                    var live = await collection.CountDocumentsAsync(
-                        s,
-                        LiveInGroup(target.OrganisationId),
-                        cancellationToken: token
-                    );
-                    if (live != 1)
-                        FailCheck(
-                            Invariant($"the group would hold {live} live applications; expected 1")
-                        );
-                    return true;
-                },
+                        target.OrganisationId,
+                        version,
+                        attempt,
+                        token
+                    ),
                 DomainModelTransactions.Options,
                 cancellationToken
             );
@@ -407,43 +349,141 @@ public class DuplicateApplicationDeletionMigration(
         }
         catch (Exception ex)
         {
-            // Nothing for this run to do: the other run's transaction made the same checks.
-            if (deletedElsewhere)
-            {
-                if (logger.IsEnabled(LogLevel.Information))
-                    logger.LogInformation(
-                        "RA-788 {Mode:l}: application {TargetId} already deleted by another run "
-                            + "after the checks; skipped",
-                        ApplyMode,
-                        TargetId
-                    );
-                return RunResult.AlreadyDone;
-            }
-
-            // A failed check always rolls back.
-            if (rollbackReason is not null)
-            {
-                LogRolledBack(rollbackReason);
-                return RunResult.RolledBack;
-            }
-
-            // Any other error may have come from the commit itself (an unknown commit result), so
-            // what is actually in the collection is reported rather than assumed.
-            switch (await VerifyAsync(collection, ex, cancellationToken))
-            {
-                case Verified.Deleted:
-                    LogApplied(version);
-                    return RunResult.Applied;
-                case Verified.NotDeleted:
-                    LogRolledBack(ex.GetType().Name);
-                    return RunResult.RolledBack;
-                default:
-                    return RunResult.OutcomeUnknown;
-            }
+            return await OutcomeAfterErrorAsync(collection, attempt, ex, version, cancellationToken);
         }
 
         LogApplied(version);
         return RunResult.Applied;
+    }
+
+    // Why the last transaction attempt failed one of its own checks, if it did. Failing a check
+    // throws, which aborts the transaction; the reason (ids and counts only) is what is logged,
+    // rather than an exception's message.
+    private sealed class DeleteAttempt
+    {
+        public string? RollbackReason { get; private set; }
+
+        // The guarded delete matched nothing because the target is already gone: another instance
+        // deleted it after this one's checks.
+        public bool DeletedElsewhere { get; private set; }
+
+        // The driver re-runs the transaction body on a transient error, so each attempt starts clean.
+        public void Reset()
+        {
+            RollbackReason = null;
+            DeletedElsewhere = false;
+        }
+
+        public void Fail(string reason, bool deletedElsewhere = false)
+        {
+            RollbackReason = reason;
+            DeletedElsewhere = deletedElsewhere;
+            throw new InvalidOperationException(reason);
+        }
+    }
+
+    private async Task<bool> DeleteInTransactionAsync(
+        IMongoCollection<AccreditationApplicationModel> collection,
+        IClientSessionHandle session,
+        string organisationId,
+        long version,
+        DeleteAttempt attempt,
+        CancellationToken token
+    )
+    {
+        attempt.Reset();
+
+        // 1. Exactly the record checked, unchanged since.
+        var deleted = await collection.DeleteOneAsync(
+            session,
+            GuardedTarget(organisationId, version),
+            cancellationToken: token
+        );
+        if (deleted.DeletedCount != 1)
+        {
+            var gone =
+                await collection.CountDocumentsAsync(
+                    session,
+                    Filters.Eq(a => a.Id, TargetId),
+                    cancellationToken: token
+                ) == 0;
+            attempt.Fail(
+                gone
+                    ? "the target was deleted by another run after the checks"
+                    : Invariant(
+                        $"deleted {deleted.DeletedCount} records; the target changed after the checks"
+                    ),
+                deletedElsewhere: gone
+            );
+        }
+
+        if (AfterDeleteForTest is { } after)
+            await after(session, token);
+
+        // 2. The keeper is still live.
+        var keeperLive = await collection.CountDocumentsAsync(
+            session,
+            Filters.And(
+                Filters.Eq(a => a.Id, KeeperId),
+                Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
+            ),
+            cancellationToken: token
+        );
+        if (keeperLive != 1)
+            attempt.Fail("the keeper is no longer live");
+
+        // 3. Exactly one live application left in the group.
+        var live = await collection.CountDocumentsAsync(
+            session,
+            LiveInGroup(organisationId),
+            cancellationToken: token
+        );
+        if (live != 1)
+            attempt.Fail(Invariant($"the group would hold {live} live applications; expected 1"));
+        return true;
+    }
+
+    private async Task<RunResult> OutcomeAfterErrorAsync(
+        IMongoCollection<AccreditationApplicationModel> collection,
+        DeleteAttempt attempt,
+        Exception error,
+        long version,
+        CancellationToken cancellationToken
+    )
+    {
+        // Nothing for this run to do: the other run's transaction made the same checks.
+        if (attempt.DeletedElsewhere)
+        {
+            if (logger.IsEnabled(LogLevel.Information))
+                logger.LogInformation(
+                    "RA-788 {Mode:l}: application {TargetId} already deleted by another run "
+                        + "after the checks; skipped",
+                    ApplyMode,
+                    TargetId
+                );
+            return RunResult.AlreadyDone;
+        }
+
+        // A failed check always rolls back.
+        if (attempt.RollbackReason is { } reason)
+        {
+            LogRolledBack(reason);
+            return RunResult.RolledBack;
+        }
+
+        // Any other error may have come from the commit itself (an unknown commit result), so
+        // what is actually in the collection is reported rather than assumed.
+        switch (await VerifyAsync(collection, error, cancellationToken))
+        {
+            case Verified.Deleted:
+                LogApplied(version);
+                return RunResult.Applied;
+            case Verified.NotDeleted:
+                LogRolledBack(error.GetType().Name);
+                return RunResult.RolledBack;
+            default:
+                return RunResult.OutcomeUnknown;
+        }
     }
 
     private enum Verified
