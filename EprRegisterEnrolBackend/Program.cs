@@ -227,6 +227,13 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<ChargeCorrectionMigration>();
 
+    // RA-788: one-off deletion of the duplicate 2027 Plastic application (INC2560371).
+    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+    builder.Services.Configure<DuplicateApplicationDeletionOptions>(
+        builder.Configuration.GetSection(DuplicateApplicationDeletionOptions.SectionName)
+    );
+    builder.Services.AddHostedService<DuplicateApplicationDeletionMigration>();
+
     // RA-794: read-only audit and gated correction of wrongly-defaulted overseas-site isNewSite.
     // Both off by default (Diagnostics:Ra292*) - see docs/diagnostics/ra-794-isnewsite-correction.md.
     builder.Services.AddHostedService<IsNewSiteAudit>();
