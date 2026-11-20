@@ -306,6 +306,28 @@ Seeding sequence (`HttpReExApiAdapter.GetAccreditationAsync`):
 
 The full epr-backend API surface — including both endpoints above — is documented in its swagger definition, published as a static snapshot at [DEFRA/epr-re-ex-service: `docs/architecture/api-definitions/internal-api.yaml`](https://github.com/DEFRA/epr-re-ex-service/blob/main/docs/architecture/api-definitions/internal-api.yaml) (epr-backend itself serves the live version at `/swagger` when run locally; there's no swagger file checked into the epr-backend repo itself). Both endpoints above are documented there with full response schemas (`OrganisationResponse` and `AccreditationOverseasSitesResponse`).
 
+### Service client APIs
+
+Other services read this backend's data through two read-only APIs, both signed with a client id
+and HMAC-SHA256 (`ServiceClientAuthenticationHandler`). Each client is configured as
+`ServiceClients__Clients__N__Name` and `ServiceClients__Clients__N__ClientId` (non-secret config),
+with its secret in CDP secrets as `AUTH_SHARED_SECRET__{NAME}` (and `AUTH_SHARED_SECRET__{NAME}_NEXT`
+while it is rotated). A client with no secret is rejected. Both APIs share the per-client request
+limit (`ServiceClients__RateLimitPermitsPerMinute`, 429), the database query time limit
+(`ServiceClients__QueryTimeoutSeconds`, 503), the access log, and RFC 9457 problem errors.
+
+| API | Paths | Who may call it | Contract |
+| --- | --- | --- | --- |
+| Accreditation API | `/v1/...` | Any configured service client (ReEx) | [`docs/openapi/registration-accreditation-api.v2.yaml`](docs/openapi/registration-accreditation-api.v2.yaml), [onboarding guide](docs/reex-api-onboarding.md) |
+| Admin API (RA-740) | `/admin/...` | Only the client named `admin` (`epr-register-enrol-admin`, secret `AUTH_SHARED_SECRET__ADMIN`); any other client gets 403 | [`docs/openapi/admin-api.yaml`](docs/openapi/admin-api.yaml) |
+
+The Admin API is for the delivery team's support tool. `GET /admin/accreditation-applications`
+searches every application in the Legacy `accreditationApplications` collection (any status, any
+year), by `q` across the accreditation number, registration number, organisation number and
+organisation name, and by `status` and `year`, most recently updated first. Each item is the
+stored application, including personal and commercially sensitive data, so neither may be logged
+by the caller.
+
 ### Testing
 
 Tests run a full `WebApplication` backed by [Ephemeral MongoDB](https://github.com/asimmon/ephemeral-mongo). No mocking — tests read and write from an in-memory database.
