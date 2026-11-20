@@ -9,8 +9,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // SeedIfHigherAsync never lowers an existing higher value, so re-running on
 // every deploy is safe (idempotent).
 //
-// RA-690: accreditation references are derived from the registration reference
-// (AccreditationReferenceDerivation), never drawn from a counter, so the A-*
+// RA-690: accreditation references are built by AccreditationNumberRules (RA-783),
+// never drawn from a counter, so the A-*
 // pools are no longer seeded. Any A-* documents already in Mongo are left in
 // place deliberately - no migration, nothing here touches them.
 //

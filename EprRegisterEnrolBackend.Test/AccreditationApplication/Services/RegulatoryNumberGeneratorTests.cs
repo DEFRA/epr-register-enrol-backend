@@ -195,7 +195,7 @@ public class RegulatoryNumberGeneratorTests
     )
     {
         // RA-690: the generator issues registration numbers only - accreditation references
-        // are derived from the registration reference, so no A-* pool is ever drawn from.
+        // are built by AccreditationNumberRules, so no A-* pool is ever drawn from.
         var (generator, store) = Create();
 
         var number = await generator.GenerateAsync(

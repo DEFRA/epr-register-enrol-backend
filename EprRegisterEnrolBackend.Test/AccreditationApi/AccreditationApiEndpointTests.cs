@@ -156,13 +156,16 @@ public class AccreditationApiEndpointTests : IDisposable
         body.GetProperty("accreditationNumber").GetString().Should().Be("A27EX5000270012AL");
         body.GetProperty("registrationNumber").GetString().Should().Be(Registration);
         body.GetProperty("accreditationYear").GetInt32().Should().Be(2027);
-        body.GetProperty("status").GetString().Should().Be("approved");
+        body.TryGetProperty("status", out _).Should().BeFalse();
+        body.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
         body.GetProperty("material").GetString().Should().Be("Aluminium");
         body.GetProperty("wasteProcessingType").GetString().Should().Be("exporter");
         body.GetProperty("signatories").GetArrayLength().Should().Be(0);
         var history = body.GetProperty("statusHistory").EnumerateArray().Single();
         history.GetProperty("status").GetString().Should().Be("approved");
-        history.GetProperty("effectiveDate").GetString().Should().MatchRegex(@"^\d{4}-\d{2}-\d{2}$");
+        history.GetProperty("effectiveFromDate").GetString().Should().MatchRegex(@"^\d{4}-\d{2}-\d{2}$");
+        history.GetProperty("effectiveToDate").ValueKind.Should().Be(JsonValueKind.Null);
+        history.TryGetProperty("effectiveDate", out _).Should().BeFalse();
         history.GetProperty("recordedAt").GetDateTime().Should().BeAfter(DateTime.MinValue);
         body.GetProperty("tonnageBandHistory").GetArrayLength().Should().Be(0);
         body.GetProperty("overseasSites").GetArrayLength().Should().Be(2);
@@ -187,7 +190,8 @@ public class AccreditationApiEndpointTests : IDisposable
 
         var sites = body.GetProperty("overseasSites").EnumerateArray().ToList();
         sites.Select(s => s.GetProperty("orsId").GetString()).Should().Equal("001", "002");
-        sites[0].GetProperty("status").GetString().Should().Be("approved");
+        sites[0].TryGetProperty("status", out _).Should().BeFalse();
+        sites[0].GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
         sites[0].GetProperty("statusHistory").GetArrayLength().Should().Be(1);
         sites[0].GetProperty("interimSites").EnumerateArray()
             .Select(i => i.GetProperty("siteId").GetInt32()).Should().Equal(11);
@@ -381,14 +385,13 @@ public class AccreditationApiEndpointTests : IDisposable
         body.GetProperty("totalItems").GetInt32().Should().Be(2);
         var items = body.GetProperty("items").EnumerateArray().ToList();
         items.Select(i => i.GetProperty("orsId").GetString()).Should().Equal("001", "002");
-        items[0].GetProperty("validFrom").GetDateTime().Should().Be(
-            new DateTime(2026, 3, 14, 0, 0, 0, DateTimeKind.Utc)
-        );
-        items[0].GetProperty("status").GetString().Should().Be("approved");
+        items[0].GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
+        // Approved in March 2026, before the 2027 accreditation year: it applies from 1 January 2027.
         items[0].GetProperty("statusHistory").EnumerateArray().Single()
-            .GetProperty("effectiveDate").GetString().Should().Be("2026-03-14");
+            .GetProperty("effectiveFromDate").GetString().Should().Be("2027-01-01");
         items[0].GetProperty("interimSites").GetArrayLength().Should().Be(0);
-        items[1].TryGetProperty("validFrom", out _).Should().BeFalse();
+        foreach (var item in items)
+            item.TryGetProperty("validFrom", out _).Should().BeFalse();
         foreach (var item in items)
         {
             item.TryGetProperty("selected", out _).Should().BeFalse();
@@ -587,7 +590,7 @@ public class AccreditationApiEndpointTests : IDisposable
         exporter.GetProperty("accreditationYear").GetInt32().Should().Be(2027);
         exporter.GetProperty("material").GetString().Should().Be("Aluminium");
         exporter.GetProperty("wasteProcessingType").GetString().Should().Be("exporter");
-        exporter.GetProperty("status").GetString().Should().Be("approved");
+        exporter.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
         exporter.GetProperty("tonnageBand").GetString().Should().Be("up_to_5000");
         exporter.TryGetProperty("glassRecyclingProcess", out _).Should().BeFalse();
 
@@ -810,13 +813,14 @@ public class AccreditationApiEndpointTests : IDisposable
         body.GetProperty("items")
             .EnumerateArray()
             .Should()
-            .OnlyContain(i => i.GetProperty("status").GetString() == "approved");
+            .OnlyContain(i => i.GetProperty("latestStatus").GetProperty("status").GetString() == "approved");
     }
 
     [Theory]
     [InlineData("suspended")]
+    [InlineData("withdrawn")]
     [InlineData("cancelled")]
-    public async Task Search_FiltersByStatus_NoneAreSuspendedOrCancelledYet(string status)
+    public async Task Search_FiltersByStatus_NoneHaveANonApprovedStatusYet(string status)
     {
         await Seed();
 

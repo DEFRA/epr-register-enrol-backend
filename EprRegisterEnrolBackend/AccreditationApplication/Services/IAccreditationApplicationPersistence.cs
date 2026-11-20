@@ -35,19 +35,21 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
-    /// RA-690: the latest previous approved accreditation for the same registration - the source
-    /// an accreditation reference is derived from on renewal. Matches the organisation,
-    /// registration, material and glass process, a year strictly before
+    /// RA-690: the latest previous approved accreditation for the same registration. RA-783: its
+    /// year decides whether approval is a continuous renewal (the year before, so its number is
+    /// renewed) or a renewal after a break (an earlier year, so a new sequence that avoids its
+    /// own). Matches the organisation, registration and material (not the glass process: a
+    /// renewal keeps its number when the operator changes process, and takes this year's GR or
+    /// GO), a year strictly before
     /// <paramref name="beforeYear"/>, status Approved and a non-empty accreditation reference.
     /// Highest year wins, then most recently edited, so a lapsed renewal (e.g. 2026 to 2028)
-    /// still finds the 2026 accreditation. Runs server-side and returns at most one; null when
-    /// nothing matches.
+    /// still finds the 2026 accreditation, which makes it a renewal after a break. Runs
+    /// server-side and returns at most one; null when nothing matches.
     /// </summary>
     Task<AccreditationApplicationModel?> GetLatestPreviousAccreditationAsync(
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        GlassRecyclingProcess? glassRecyclingProcess,
         int beforeYear
     );
 
@@ -203,6 +205,19 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
+    /// RA-764: every application holding one of <paramref name="registrationReferences"/> and
+    /// applying for <paramref name="year"/>, whatever its status, OrgId or ReEx organisation id, in
+    /// id order. Used by OrganisationNameCorrectionMigration so a record under one of the
+    /// organisation's registrations that the OrgId lookup misses aborts the run instead.
+    /// RA-764 one-off; removed with OrganisationNameCorrectionMigration - do not use elsewhere.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationReferencesAndYearAsync(
+        IReadOnlyCollection<string> registrationReferences,
+        int year,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// RA-766: every application that is linked to a ManagementBe work item and is not Queried, and
     /// not yet Approved, Rejected or Withdrawn, oldest first. A Queried application is left out: its
     /// answer has not been sent, so any charge it now holds is a draft and must not reach ManagementBe
@@ -214,6 +229,16 @@ public interface IAccreditationApplicationPersistence
     Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenNotQueriedWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     );
+    /// <summary>
+    /// RA-794: every application created before <paramref name="createdBefore"/> that holds at
+    /// least one overseas site, oldest first. Read by the isNewSite audit and correction only
+    /// (IsNewSiteScanner); removed with them.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetCreatedBeforeWithOverseasSitesAsync(
+        DateTime createdBefore,
+        CancellationToken cancellationToken = default
+    );
+
     Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null

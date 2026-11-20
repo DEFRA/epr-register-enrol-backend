@@ -260,12 +260,11 @@ public sealed partial class ModelBackedApplicationPersistenceTests
     }
 
     [Theory]
-    [InlineData(MaterialType.Plastic, null, 2027)]
-    [InlineData(MaterialType.Plastic, null, 2026)]
-    [InlineData(MaterialType.Glass, GlassRecyclingProcess.Remelt, 2028)]
+    [InlineData(MaterialType.Plastic, 2027)]
+    [InlineData(MaterialType.Plastic, 2026)]
+    [InlineData(MaterialType.Glass, 2028)]
     public async Task GetLatestPreviousAccreditation_FindsTheSameApplication(
         MaterialType material,
-        GlassRecyclingProcess? process,
         int beforeYear
     )
     {
@@ -275,14 +274,12 @@ public sealed partial class ModelBackedApplicationPersistenceTests
             ReExOrganisationId,
             ReExRegistrationId,
             material,
-            process,
             beforeYear
         );
         var model = await _model.GetLatestPreviousAccreditationAsync(
             ReExOrganisationId,
             ReExRegistrationId,
             material,
-            process,
             beforeYear
         );
 
@@ -379,6 +376,37 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         var legacy = await _legacy.GetByOrgIdAndYearAsync(orgId, year, Ct);
         var model = await _model.GetByOrgIdAndYearAsync(orgId, year, Ct);
 
+        Assert.Equal(Ids(legacy), Ids(model));
+    }
+
+    // RA-764: the 2027 current and withdrawn plastic applications and the glass one; the 2026
+    // approved one; another organisation's; none for an unknown reference.
+    [Theory]
+    [InlineData(2027, 3, "R27EX1234567P", "R27ER7654321G")]
+    [InlineData(2027, 1, "R27EX0000001P")]
+    [InlineData(2027, 1, "R27ER7654321G", "R26ER0000000G")]
+    [InlineData(2026, 1, "R27EX1234567P")]
+    [InlineData(2027, 0, "R26ER0000000G")]
+    public async Task GetByRegistrationReferencesAndYear_FindsTheSameApplicationsInIdOrder(
+        int year,
+        int expected,
+        params string[] registrationReferences
+    )
+    {
+        await LookupDataAsync();
+
+        var legacy = await _legacy.GetByRegistrationReferencesAndYearAsync(
+            registrationReferences,
+            year,
+            Ct
+        );
+        var model = await _model.GetByRegistrationReferencesAndYearAsync(
+            registrationReferences,
+            year,
+            Ct
+        );
+
+        Assert.Equal(expected, legacy.Count);
         Assert.Equal(Ids(legacy), Ids(model));
     }
 

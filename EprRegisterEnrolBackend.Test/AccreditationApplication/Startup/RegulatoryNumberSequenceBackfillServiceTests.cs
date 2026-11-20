@@ -8,7 +8,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
 public class RegulatoryNumberSequenceBackfillServiceTests
 {
-    // RA-690: accreditation references are derived from the registration reference, never
+    // RA-690: accreditation references are built by AccreditationNumberRules, never
     // drawn from a counter - so only the eight registration pools are seeded, with the
     // starting values unchanged from RA-448.
     private static readonly IReadOnlyDictionary<string, int> RegistrationSeedValues =

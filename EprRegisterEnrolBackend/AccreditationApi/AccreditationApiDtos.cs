@@ -33,10 +33,12 @@ public record AccreditationSummaryDto
     public required string WasteProcessingType { get; init; }
 
     /// <summary>
-    /// <c>approved</c>, <c>suspended</c> or <c>cancelled</c>: the latest status history entry
-    /// whose effective date is on or before today.
+    /// The latest entry in the accreditation's <c>statusHistory</c>, the same entry and the same shape:
+    /// the latest <c>effectiveFromDate</c>, and the later <c>recordedAt</c> where two share one. It is
+    /// the latest whether or not its <c>effectiveFromDate</c> has arrived, so use its dates to tell
+    /// whether it is in effect.
     /// </summary>
-    public required string Status { get; init; }
+    public required StatusHistoryEntryDto LatestStatus { get; init; }
 
     /// <summary><c>up_to_500</c>, <c>up_to_5000</c>, <c>up_to_10000</c> or <c>over_10000</c>.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -79,8 +81,17 @@ public sealed record StatusHistoryEntryDto
 {
     public required string Status { get; init; }
 
-    /// <summary>When the status takes effect (UK date), serialised as <c>yyyy-MM-dd</c>.</summary>
-    public required DateOnly EffectiveDate { get; init; }
+    /// <summary>
+    /// The first day the status applies (UK date, <c>yyyy-MM-dd</c>): the later of 1 January of the
+    /// accreditation year and the UK date the change was recorded. May be in the future.
+    /// </summary>
+    public required DateOnly EffectiveFromDate { get; init; }
+
+    /// <summary>
+    /// The last day the status applies: the day before the next entry's
+    /// <c>effectiveFromDate</c>. Always present in the response, and <c>null</c> on the latest entry.
+    /// </summary>
+    public required DateOnly? EffectiveToDate { get; init; }
 
     public required DateTime RecordedAt { get; init; }
 }
@@ -188,11 +199,8 @@ public sealed record AccreditedOverseasSiteDto
 
     public required bool IsOecd { get; init; }
 
-    /// <summary>The date the site was approved onto the accreditation (ReEx ORS-A approval).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public DateTime? ValidFrom { get; init; }
-
-    public required string Status { get; init; }
+    /// <summary>The latest entry in the site's <c>statusHistory</c>: see the accreditation's.</summary>
+    public required StatusHistoryEntryDto LatestStatus { get; init; }
 
     public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
 

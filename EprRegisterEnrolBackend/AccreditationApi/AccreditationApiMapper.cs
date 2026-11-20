@@ -1,4 +1,3 @@
-using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Status;
 using Microsoft.Extensions.Logging;
@@ -16,10 +15,8 @@ public static class AccreditationApiMapper
 {
     private const string Approved = "approved";
 
-    public static AccreditationSummaryDto ToSummary(
-        AccreditationApplicationModel application,
-        DateTimeOffset now
-    ) => Summary(application, now, StatusHistory(application, null));
+    public static AccreditationSummaryDto ToSummary(AccreditationApplicationModel application) =>
+        Summary(application, StatusHistory(application));
 
     // RA-647: a record that cannot be addressed by its business references (organisation number,
     // registration number, accreditation number) cannot honour the contract, so it is dropped from
@@ -28,7 +25,6 @@ public static class AccreditationApiMapper
     // how an operator learns that one exists.
     public static IReadOnlyList<AccreditationSummaryDto> ToSummaries(
         IEnumerable<AccreditationApplicationModel> applications,
-        DateTimeOffset now,
         ILogger logger
     )
     {
@@ -46,7 +42,7 @@ public static class AccreditationApiMapper
                 continue;
             }
 
-            summaries.Add(ToSummary(application, now));
+            summaries.Add(ToSummary(application));
         }
 
         return summaries;
@@ -71,12 +67,11 @@ public static class AccreditationApiMapper
 
     public static AccreditationDto ToAccreditation(
         AccreditationApplicationModel application,
-        DateTimeOffset now,
         bool includeWithdrawn = false
     )
     {
-        var history = StatusHistory(application, null);
-        var summary = Summary(application, now, history);
+        var history = StatusHistory(application);
+        var summary = Summary(application, history);
         var recordedAt = Approval(application);
 
         return new AccreditationDto
@@ -88,7 +83,7 @@ public static class AccreditationApiMapper
             Material = summary.Material,
             GlassRecyclingProcess = summary.GlassRecyclingProcess,
             WasteProcessingType = summary.WasteProcessingType,
-            Status = summary.Status,
+            LatestStatus = summary.LatestStatus,
             TonnageBand = summary.TonnageBand,
             Signatories = application
                 .Prns.Authorisers.Select(a => new SignatoryDto
@@ -102,7 +97,7 @@ public static class AccreditationApiMapper
                 ? AccreditedSites(application)
                     .OrderBy(site => site.OrsId, StringComparer.Ordinal)
                     .ThenBy(site => site.SiteId)
-                    .Select(site => ToOverseasSite(application, site, includeWithdrawn, now))
+                    .Select(site => ToOverseasSite(application, site, includeWithdrawn))
                     .ToList()
                 : null,
             TonnageBandHistory = summary.TonnageBand is null
@@ -121,11 +116,10 @@ public static class AccreditationApiMapper
     public static AccreditedOverseasSiteDto ToOverseasSite(
         AccreditationApplicationModel application,
         OverseasSiteModel site,
-        bool includeWithdrawn,
-        DateTimeOffset now
+        bool includeWithdrawn
     )
     {
-        var history = StatusHistory(application, site);
+        var history = StatusHistory(application);
 
         return new AccreditedOverseasSiteDto
         {
@@ -141,8 +135,7 @@ public static class AccreditationApiMapper
             ConditionsOfExport = site.ConditionsOfExport,
             IsEu = site.IsEu,
             IsOecd = site.IsOecd,
-            ValidFrom = ParseInstant(site.ValidFrom),
-            Status = Project(history, now),
+            LatestStatus = StatusHistoryBuilder.Latest(history),
             StatusHistory = history,
             InterimSites = site
                 .InterimSites.Where(interim => includeWithdrawn || interim.RemovedAt is null)
@@ -154,7 +147,6 @@ public static class AccreditationApiMapper
 
     private static AccreditationSummaryDto Summary(
         AccreditationApplicationModel application,
-        DateTimeOffset now,
         IReadOnlyList<StatusHistoryEntryDto> history
     ) =>
         new()
@@ -174,7 +166,7 @@ public static class AccreditationApiMapper
                     }
                     : null,
             WasteProcessingType = IsExporter(application) ? "exporter" : "reprocessor",
-            Status = Project(history, now),
+            LatestStatus = StatusHistoryBuilder.Latest(history),
             TonnageBand = application.Prns.PlannedTonnageBand switch
             {
                 PlannedTonnageBand.UpTo500 => "up_to_500",
@@ -185,66 +177,21 @@ public static class AccreditationApiMapper
             },
         };
 
-    // No effective-dated history is held yet, so an accreditation, or one of its sites, has the
-    // single `approved` entry the v2 mapping document prescribes for records that predate it.
-    // It is recorded when the application was approved (the last case management status push,
-    // else the last edit). A site takes effect on its approval date when it has one: ReEx's, or a
-    // granted change request's effective date (RA-495 AC6).
+    // No status changes are held yet, so an accreditation, or one of its sites, has the single
+    // `approved` entry the v2 mapping document prescribes for records that predate them. It is
+    // recorded when the application was approved (the last case management status push, else the
+    // last edit). The dates follow from that: see StatusHistoryBuilder.
     private static List<StatusHistoryEntryDto> StatusHistory(
-        AccreditationApplicationModel application,
-        OverseasSiteModel? site
-    )
-    {
-        var recordedAt = Approval(application);
-        var effective = site is null ? recordedAt : ParseInstant(site.ValidFrom) ?? recordedAt;
-
-        return
-        [
-            new StatusHistoryEntryDto
-            {
-                Status = Approved,
-                EffectiveDate = UkDate(effective),
-                RecordedAt = recordedAt,
-            },
-        ];
-    }
-
-    // The status for today: the latest entry whose effective date is on or before today. A
-    // record always starts out approved, so a first entry that is not yet effective still
-    // projects as approved rather than as nothing.
-    private static string Project(IReadOnlyList<StatusHistoryEntryDto> history, DateTimeOffset now)
-    {
-        var today = UkDate(now.UtcDateTime);
-        return history
-                .Where(entry => entry.EffectiveDate <= today)
-                .OrderBy(entry => entry.EffectiveDate)
-                .ThenBy(entry => entry.RecordedAt)
-                .Select(entry => entry.Status)
-                .LastOrDefault()
-            ?? Approved;
-    }
+        AccreditationApplicationModel application
+    ) => StatusHistoryBuilder.Build([(Approved, Approval(application))], application.Year);
 
     private static DateTime Approval(AccreditationApplicationModel application) =>
         AsUtc(application.CaseManagementStatusUpdatedAt ?? application.DateLastEdited);
-
-    private static DateOnly UkDate(DateTime utc) => UkCalendar.ToUkDate(utc);
 
     private static DateTime AsUtc(DateTime value) =>
         value.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
             : value.ToUniversalTime();
-
-    // ValidFrom is held as the raw ISO string ReEx sent, or as a change request grant writes it;
-    // unparseable is treated as absent.
-    private static DateTime? ParseInstant(string? value) =>
-        DateTimeOffset.TryParse(
-            value,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal,
-            out var parsed
-        )
-            ? parsed.UtcDateTime
-            : null;
 
     private static InterimSiteDto ToInterimSite(InterimSiteModel interim) =>
         new()

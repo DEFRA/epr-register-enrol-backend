@@ -46,7 +46,14 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         FailNextOrsIdWrites = 0;
         FailNextInterimSiteNumberWrites = 0;
         OnLostRace = null;
+        AfterUpdate = null;
     }
+
+    /// <summary>
+    /// RA-783: runs after each successful <see cref="UpdateAsync"/> with the saved application, so
+    /// a test can play another approval committing the same accreditation number at that moment.
+    /// </summary>
+    public Action<AccreditationApplicationModel>? AfterUpdate { get; set; }
 
     /// <summary>
     /// When set, the next call to <see cref="UpdateAsync"/> returns null (as if the persisted
@@ -148,7 +155,6 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        GlassRecyclingProcess? glassRecyclingProcess,
         int beforeYear
     )
     {
@@ -157,7 +163,6 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 a.OrganisationId == organisationId
                 && a.RegistrationId == registrationId
                 && a.MaterialType == materialType
-                && a.GlassRecyclingProcess == glassRecyclingProcess
                 && a.Year < beforeYear
                 && a.ApplicationStatus == ApplicationStatus.Approved
                 && !string.IsNullOrEmpty(a.AccreditationReference)
@@ -368,6 +373,33 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             _store.Where(a => a.OrgId == orgId && a.Year == year).Select(ShallowCopy).ToList()
         );
 
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetCreatedBeforeWithOverseasSitesAsync(
+        DateTime createdBefore,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a => a.CreatedAt < createdBefore && a.OverseasSites?.Sites.Count > 0)
+                .Select(ShallowCopy)
+                .ToList()
+        );
+
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationReferencesAndYearAsync(
+        IReadOnlyCollection<string> registrationReferences,
+        int year,
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a =>
+                    a.Year == year
+                    && a.RegistrationReference is { } reference
+                    && registrationReferences.Contains(reference)
+                )
+                .Select(ShallowCopy)
+                .ToList()
+        );
+
     public Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenNotQueriedWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     ) =>
@@ -407,6 +439,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             return Task.FromResult<AccreditationApplicationModel?>(null);
         application.Version++;
         _store[idx] = application;
+        AfterUpdate?.Invoke(application);
         return Task.FromResult<AccreditationApplicationModel?>(application);
     }
 

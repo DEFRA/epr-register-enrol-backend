@@ -898,7 +898,7 @@ public class HttpCaseWorkingApiAdapterTests
         return JsonDocument.Parse(handler.CapturedRequestBody!).RootElement.GetProperty("payload");
     }
 
-    private static async Task<JsonElement> CapturedResumeSections(
+    internal static async Task<JsonElement> CapturedResumeSections(
         AccreditationApplicationModel application,
         params string[] sectionKeys
     )

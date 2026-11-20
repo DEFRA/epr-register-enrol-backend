@@ -286,7 +286,7 @@ public class AccreditationApiTestDataApiTests : IDisposable
             body.GetProperty("accreditationNumber").GetString().Should().Be(scenario.AccreditationReference);
             body.GetProperty("organisationNumber").GetInt32().Should().Be(scenario.OrgId);
             body.GetProperty("registrationNumber").GetString().Should().Be(scenario.RegistrationReference);
-            body.GetProperty("status").GetString().Should().Be("approved");
+            body.GetProperty("latestStatus").GetProperty("status").GetString().Should().Be("approved");
             body.GetProperty("material").GetString().Should().Be(scenario.Material.ToString());
             body.GetProperty("wasteProcessingType").GetString().Should().Be(scenario.IsExporter ? "exporter" : "reprocessor");
         }

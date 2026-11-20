@@ -70,8 +70,8 @@ is the same from one page to the next. The `granted_search_sort` index
 `(applicationStatus, accreditationReference, _id)` backs that sort for a search across all
 organisations.
 
-`status` maps only for `approved` today: it is the only API status with stored data. `suspended` and
-`cancelled` are valid values and always return an empty page (`totalItems` 0), until case management
+`status` maps only for `approved` today: it is the only API status with stored data. `suspended`,
+`cancelled` and `withdrawn` are valid values and always return an empty page (`totalItems` 0), until case management
 sends them and the filter has a source for them.
 
 `Accreditation` also carries `overseasSites[]` (exporters only, omitted for a reprocessor): every
@@ -89,8 +89,8 @@ not served.
 | `material` | App `MaterialType` → `materialType` | Accreditation (via Registration) | string, same names |
 | `glassRecyclingProcess` | App `GlassRecyclingProcess` → `glassRecyclingProcess` | Accreditation | `Remelt`/`Other` → `glass_re_melt`/`glass_other` |
 | `wasteProcessingType` | App `WasteProcessingType` → `wasteProcessingType` | Accreditation (via Registration) | |
-| `statusHistory[]` | none | **new**: Accreditation status history | each entry is `status`, `effectiveDate` and `recordedAt`. The first entry is `approved`, written when the application is approved |
-| `status` | none | **derived** from `statusHistory` | the latest entry whose `effectiveDate` is on or before today. Never stored, so a forward-dated change takes effect without a write |
+| `statusHistory[]` | none | **new**: Accreditation status history | each entry is `status`, `effectiveFromDate`, `effectiveToDate` and `recordedAt`. The first entry is `approved`, written when the application is approved. `effectiveFromDate` is the later of 1 January of the accreditation year and the UK date the change was recorded; `effectiveToDate` is the day before the next entry's `effectiveFromDate`, and `null` on the latest. Where two entries share an `effectiveFromDate`, the later `recordedAt` takes precedence, and the earlier one is kept with its `effectiveToDate` equal to that same date, so a period never ends before it starts. Both dates are worked out when the response is built, not stored |
+| `latestStatus` | none | **derived** from `statusHistory` | the latest entry of the history, in the same shape: the latest `effectiveFromDate`, and the later `recordedAt` where two share one. It is the latest whether or not its `effectiveFromDate` has arrived, so it can be future-dated (a 2027 accreditation approved in November 2026 has `approved` from 2027-01-01). It is the history's own entry, so its dates always match the history. Replaces the `status` string. Never stored |
 | `tonnageBandHistory[]` | App `Prns.PlannedTonnageBand` → `prns.plannedTonnageBand` (single value, int32) | **new**: Accreditation `tonnageBand`, one entry per version where it changed | each entry is `tonnageBand` and `recordedAt`. No `effectiveDate`: a band cannot be forward-dated or backdated. First entry from the seed (ReEx `prnIssuance.tonnageBand` / Org `PrnIssuance.PlannedIssuance`) or the application; later entries from in-year changes |
 | `tonnageBand` | as above | Accreditation `tonnageBand` | the current value, which is also the latest history entry. Included in search because it is on the public register |
 | `signatories[]` | App `Prns.Authorisers` → `prns.authorisers` (`fullName`, `email`; `isNew` not exposed). Seeded: Org `PrnIssuance.Signatories` → `prnIssuance.signatories` | Accreditation | get-one only, never in search. Personal data. When both exist, the application's list replaces the seed's (no merge) |
@@ -118,12 +118,12 @@ this API.
 For accreditations seeded from ReEx (or approved before the remodel), there is no effective-dated
 history, so the migration writes one entry each:
 
-- `statusHistory`: one entry with the ReEx status. `effectiveDate` is ReEx `validFrom` if present,
-  otherwise the approval date. `recordedAt` is the migration time.
+- `statusHistory`: one `approved` entry. `recordedAt` is when the application was approved (the last
+  case management status push, else the last edit), and `effectiveFromDate` follows from it (see above).
 - `tonnageBandHistory`: one entry from `prnIssuance.tonnageBand` (or `prns.plannedTonnageBand`),
   with `recordedAt` set to the migration time.
-- Each accredited overseas site: one `approved` status entry, with `effectiveDate` from the site's
-  `validFrom`.
+- Each accredited overseas site: one `approved` status entry, recorded when the application was
+  approved, like the accreditation's. The site's `validFrom` is not used.
 
 ## Accredited overseas sites
 
@@ -141,9 +141,9 @@ accreditation (`selected == true`). Paths are relative to `overseasSites.sites[]
 | `contact.fullName` / `email` / `phone` | `ContactName` / `ContactEmail` / `ContactPhone` | `contactName` / `contactEmail` / `contactPhone` | **restructured** |
 | `operationCodes[]` | `OperationCodes` | `operationCodes` | `code1`–`code3` dropped |
 | `repatriatedLoads`, `conditionsOfExport`, `isEu`, `isOecd` | same | same | |
-| `validFrom` | `ValidFrom` | `validFrom` | stored as a raw ISO string; parse to `date-time` |
-| `statusHistory[]` | none | **new**: overseas site status history | same entry shape and transition rules as the accreditation's. Lets one site be suspended without suspending the accreditation |
-| `status` | none | **derived** from `statusHistory` | same projection rule as the accreditation's `status` |
+| ~~`validFrom`~~ | `ValidFrom` | `validFrom` | **removed from the API**. Still stored as a raw ISO string, and not used for the status history |
+| `statusHistory[]` | none | **new**: overseas site status history | same entry shape, transition rules and status list (`approved`, `suspended`, `cancelled`, `withdrawn`) as the accreditation's. Lets one site be suspended without suspending the accreditation |
+| `latestStatus` | none | **derived** from `statusHistory` | the latest entry of the site's history, on the same rule as the accreditation's `latestStatus`. Replaces the `status` string |
 | `interimSites[]` | `InterimSites` | `interimSites` | **inlined**, unpaged (a site only ever has a few); withdrawn sites (`removedAt` set) only with `includeWithdrawn=true`. See below |
 
 ## Interim sites
@@ -167,5 +167,5 @@ embedded in the OverseasSite's `interimSites[]`, and changes to it are versions 
 
 - **Tonnage band dating (working assumption).** Bands cannot be forward-dated or backdated, so
   history entries carry only `recordedAt`. If the business later says otherwise, add
-  `effectiveDate` as on status history.
+  `effectiveFromDate` and `effectiveToDate` as on status history.
 - **Authentication** is still undefined. Expected to be HMAC request signing; details to follow.

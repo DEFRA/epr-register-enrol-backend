@@ -26,9 +26,13 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
     private const string OldName = "Encirc Ltd";
     private const string NewName = "VIDRALA UK & IRELAND LIMITED";
     private const string ReExId = "reex-500069";
-    private const string Registration = "R26NR5000690003GL";
-    private const string Accreditation2026 = "A26NR5000690003GL";
-    private const string Accreditation2027 = "A27NR5000690003GL";
+    // 500069's two registrations (glass remelt): NIEA, whose references carry 500069, and EA, whose
+    // references carry 500226.
+    private const string Registration = "R26NR5000690003GR";
+    private const string Accreditation2026 = "A26NR5000690003GR";
+    private const string Accreditation2027 = "A27NR5000690003GR";
+    private const string EaRegistration = "R26ER5002260055GR";
+    private const string EaAccreditation2027 = "A27ER5002260023GR";
     private const string ApplicationsCollection = "accreditationApplications";
 
     private readonly string _databaseName;
@@ -79,7 +83,7 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
             RegistrationReference = registration,
             AccreditationReference = accreditation,
             PreviousAccreditationNumbers = [Accreditation2026],
-            PreviousRegistrationNumbers = ["R25NR5000690003GL"],
+            PreviousRegistrationNumbers = ["R25NR5000690003GR"],
             DateLastEdited = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc),
             CaseManagementReference = "CASE-500069",
         };
@@ -136,8 +140,8 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
             Application(
                 orgId: 500070,
                 reExId: "reex-500070",
-                registration: "R26NR5000700001GL",
-                accreditation: "A27NR5000700001GL"
+                registration: "R26NR5000700001GR",
+                accreditation: "A27NR5000700001GR"
             )
         );
         await SeedOrganisationAsync(reExId: "reex-500070", number: 500070);
@@ -437,9 +441,9 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
     public async Task A_reference_for_another_organisation_aborts()
     {
         await SeedOldStateAsync();
-        await SeedAsync(Application(accreditation: "A27NR5000700003GL"));
+        await SeedAsync(Application(accreditation: "A27NR5000700003GR"));
 
-        await AssertAbortsWithoutWritingAsync("A27NR5000700003GL");
+        await AssertAbortsWithoutWritingAsync("A27NR5000700003GR");
     }
 
     [Fact]
@@ -452,11 +456,251 @@ public sealed class OrganisationNameCorrectionMigrationTests : IDisposable
     }
 
     [Fact]
-    public async Task No_application_holding_the_named_registration_aborts()
+    public async Task No_application_holding_an_allowed_registration_aborts()
     {
-        await SeedAsync(Application(registration: "R26NR5000690004GL"));
+        await SeedAsync(Application(registration: null, accreditation: null));
 
-        await AssertAbortsWithoutWritingAsync(Registration);
+        await AssertAbortsWithoutWritingAsync(
+            $"holds registration {Registration} or {EaRegistration}"
+        );
+    }
+
+    // RA-764 prod dry run, 17 Nov: aborted on exactly this record, as its EA reference carries 500226.
+    [Fact]
+    public async Task An_EA_registration_application_is_renamed_not_aborted()
+    {
+        var ea = await SeedAsync(Application(registration: EaRegistration, accreditation: null));
+        var organisation = await SeedOrganisationAsync();
+
+        var result = await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        result.Should().Be(RunResult.Applied);
+        (await ReadRawAsync(_raw, ea))["organisationName"].AsString.Should().Be(NewName);
+        (await ReadRawAsync(_rawOrganisations, organisation))["name"]
+            .AsString.Should()
+            .Be(NewName);
+        Logged(LogLevel.Error).Should().BeEmpty();
+    }
+
+    private async Task<ObjectId[]> SeedBothRegistrationsAsync() =>
+        [
+            await SeedAsync(Application()),
+            await SeedAsync(Application(registration: EaRegistration, accreditation: null)),
+            await SeedAsync(
+                Application(registration: EaRegistration, accreditation: EaAccreditation2027)
+            ),
+        ];
+
+    [Fact]
+    public async Task Both_registrations_are_renamed_in_one_run()
+    {
+        var applications = await SeedBothRegistrationsAsync();
+        var organisation = await SeedOrganisationAsync();
+
+        var result = await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        result.Should().Be(RunResult.Applied);
+        foreach (var id in applications)
+            (await ReadRawAsync(_raw, id))["organisationName"].AsString.Should().Be(NewName);
+        (await ReadRawAsync(_rawOrganisations, organisation))["name"]
+            .AsString.Should()
+            .Be(NewName);
+        Logged(LogLevel.Information)
+            .Where(m => m.StartsWith("RA-764 APPLIED") && !m.Contains("conflict"))
+            .Should()
+            .HaveCount(4);
+        Logged(LogLevel.Error).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Re_running_over_both_registrations_writes_nothing()
+    {
+        await SeedBothRegistrationsAsync();
+        await SeedOrganisationAsync();
+        await RunAsync(CreateMigration(enabled: true, apply: true));
+        var afterFirstRun = await SnapshotAsync();
+        _logger.Entries.Clear();
+
+        var result = await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        result.Should().Be(RunResult.Applied);
+        (await SnapshotAsync()).Should().Equal(afterFirstRun);
+        Logged(LogLevel.Information).Where(m => m.Contains("already holds")).Should().HaveCount(4);
+        Logged(LogLevel.Information).Should().NotContain(m => m.Contains(" -> "));
+        Logged(LogLevel.Error).Should().BeEmpty();
+    }
+
+    // Derived for 2027 from each allowed registration and its 2026 accreditation
+    // (A26NR5000690003GR, A26ER5002260023GR), plus a sequence other than the derived one; a draft
+    // with no registration yet may hold either registration's shape.
+    [Theory]
+    [InlineData(Registration, "A27NR5000690003GR")]
+    [InlineData(EaRegistration, "A27ER5002260055GR")]
+    [InlineData(EaRegistration, "A27ER5002260023GR")]
+    [InlineData(Registration, "A27NR5000690099GR")]
+    [InlineData(EaRegistration, "A27ER5002260001GR")]
+    [InlineData(null, "A27ER5002260023GR")]
+    [InlineData(null, "A27NR5000690003GR")]
+    public async Task An_accreditation_for_an_allowed_registration_is_accepted(
+        string? registration,
+        string accreditation
+    )
+    {
+        await SeedAsync(Application());
+        var target = await SeedAsync(
+            Application(registration: registration, accreditation: accreditation)
+        );
+
+        var result = await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        result.Should().Be(RunResult.Applied);
+        (await ReadRawAsync(_raw, target))["organisationName"].AsString.Should().Be(NewName);
+        Logged(LogLevel.Error).Should().BeEmpty();
+    }
+
+    [Theory]
+    // Registrations outside the allow-list: the ticket's original GL suffix, another sequence,
+    // another agency.
+    [InlineData("R26NR5000690003GL", null)]
+    [InlineData("R26ER5002260056GR", null)]
+    [InlineData("R26WR5000690003GR", null)]
+    // Accreditations that are not for the record's own registration.
+    [InlineData(Registration, "A27ER5002260023GR")]
+    [InlineData(EaRegistration, "A27NR5000690003GR")]
+    [InlineData(Registration, "A27NR5000690003GL")]
+    [InlineData(Registration, "A26NR5000690003GR")]
+    [InlineData(Registration, "A27NR50006900X3GR")]
+    [InlineData(null, "A27NR5000700003GR")]
+    public async Task A_reference_outside_the_allow_list_aborts(
+        string? registration,
+        string? accreditation
+    )
+    {
+        await SeedOldStateAsync();
+        await SeedOrganisationAsync();
+        await SeedAsync(Application(registration: registration, accreditation: accreditation));
+
+        await AssertAbortsWithoutWritingAsync(
+            $"registration {registration ?? "(null)"}, accreditation {accreditation ?? "(null)"}, "
+        );
+    }
+
+    // Review of PR #271: neither the OrgId nor the ReEx id lookup returns a record under one of the
+    // registrations holding another OrgId or ReEx organisation id, so it would have been silently
+    // left on the old name. Found by its registration, it aborts the run instead.
+    [Theory]
+    [InlineData(500226, ReExId)]
+    [InlineData(null, "reex-500226")]
+    [InlineData(500226, "reex-500226")]
+    public async Task An_application_under_a_registration_for_another_OrgId_or_ReEx_id_aborts(
+        int? orgId,
+        string reExId
+    )
+    {
+        await SeedOldStateAsync();
+        await SeedOrganisationAsync();
+        var stray = await SeedAsync(
+            Application(
+                orgId: orgId,
+                reExId: reExId,
+                registration: EaRegistration,
+                accreditation: null
+            )
+        );
+
+        await AssertAbortsWithoutWritingAsync(
+            $"application {stray} is Year 2027, OrgId {orgId?.ToString() ?? "(null)"}, ReEx "
+                + $"organisation {reExId}, status Approved, registration {EaRegistration}"
+        );
+        Logged(LogLevel.Error)
+            .Should()
+            .Contain(m => m.Contains($"ReEx organisation {ReExId}, registration null or one"));
+    }
+
+    [Fact]
+    public async Task Another_years_application_under_a_registration_is_not_looked_at()
+    {
+        var target = await SeedAsync(Application());
+        var other = await SeedAsync(
+            Application(year: 2026, orgId: 500226, registration: EaRegistration, accreditation: null)
+        );
+
+        var result = await RunAsync(CreateMigration(enabled: true, apply: true));
+
+        result.Should().Be(RunResult.Applied);
+        (await ReadRawAsync(_raw, target))["organisationName"].AsString.Should().Be(NewName);
+        (await ReadRawAsync(_raw, other))["organisationName"].AsString.Should().Be(OldName);
+    }
+
+    private string Completion() =>
+        Logged(LogLevel.Information)
+            .Should()
+            .ContainSingle(m => m.Contains("organisation name correction complete"))
+            .Subject;
+
+    // Review of PR #271: the spot check counts the applications per registration.
+    [Fact]
+    public async Task The_completion_log_counts_the_applications_per_registration()
+    {
+        var applications = await SeedBothRegistrationsAsync();
+        await SeedAsync(Application(registration: null, accreditation: null, orgId: null));
+        await SeedOrganisationAsync();
+
+        await RunAsync(CreateMigration(enabled: true));
+        Completion()
+            .Should()
+            .Contain(
+                $"{Registration}: 1 planned, 0 skipped (already renamed); {EaRegistration}: 2 "
+                    + "planned, 0 skipped (already renamed); no registration: 1 planned, 0 skipped"
+            );
+        Logged(LogLevel.Information)
+            .Should()
+            .Contain(m =>
+                m.Contains(applications[1].ToString())
+                && m.Contains($"registration {EaRegistration}, accreditation (null), status Approved)")
+            );
+
+        _logger.Entries.Clear();
+        await _persistence.UpdateFieldsAsync(
+            applications[2],
+            Builders<AccreditationApplicationModel>.Filter.Empty,
+            Builders<AccreditationApplicationModel>.Update.Set(a => a.OrganisationName, NewName),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        await RunAsync(CreateMigration(enabled: true, apply: true));
+        Completion()
+            .Should()
+            .Contain(
+                $"{Registration}: 1 applied, 0 skipped (already renamed), 0 not written; "
+                    + $"{EaRegistration}: 1 applied, 1 skipped (already renamed), 0 not written; "
+                    + "no registration: 1 applied, 0 skipped (already renamed), 0 not written"
+            );
+    }
+
+    // Prod has no data access, so the abort log is the only evidence of the unexpected record.
+    [Fact]
+    public async Task The_abort_log_names_the_records_keys_and_status()
+    {
+        await SeedAsync(Application());
+        var unexpected = await SeedAsync(
+            Application(
+                registration: "R26ER5002260056GR",
+                accreditation: null,
+                status: ApplicationStatus.Submitted
+            )
+        );
+
+        await AssertAbortsWithoutWritingAsync(
+            $"application {unexpected} is Year 2027, OrgId 500069, ReEx organisation {ReExId}, "
+                + "status Submitted, registration R26ER5002260056GR"
+        );
+        Logged(LogLevel.Error)
+            .Should()
+            .Contain(m =>
+                m.Contains($"one of {Registration}, {EaRegistration}")
+                && m.Contains("A27NR500069####GR")
+                && m.Contains("A27ER500226####GR")
+            );
     }
 
     [Fact]

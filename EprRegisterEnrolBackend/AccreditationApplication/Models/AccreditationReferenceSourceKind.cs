@@ -1,8 +1,10 @@
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
-// RA-690: which kind of existing reference an accreditation reference is derived from (see
-// AccreditationReferenceDerivation). Derivation never draws from a sequence counter - only
-// registration numbers do (RegulatoryNumberGenerator).
+// RA-690: which existing reference an issued accreditation reference is built on, as logged. A
+// continuous renewal names the accreditation it renews (PreviousAccreditation or
+// LastYearsAccreditationNumber); a new number names the Registration whose agency, process type
+// and OrgId it keeps (RA-783: its sequence is random). Never a sequence counter - only
+// registration numbers draw from one (RegulatoryNumberGenerator).
 public enum AccreditationReferenceSourceKind
 {
     PreviousAccreditation,

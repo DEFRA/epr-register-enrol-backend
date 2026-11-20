@@ -417,7 +417,6 @@ public sealed class ModelBackedApplicationPersistence(
         string organisationId,
         string registrationId,
         MaterialType materialType,
-        GlassRecyclingProcess? glassRecyclingProcess,
         int beforeYear
     )
     {
@@ -427,7 +426,6 @@ public sealed class ModelBackedApplicationPersistence(
         return results
             .Where(a =>
                 a.MaterialType == materialType
-                && a.GlassRecyclingProcess == glassRecyclingProcess
                 && a.Year < beforeYear
                 && a.ApplicationStatus == ApplicationStatus.Approved
                 // As legacy's query: null or empty, not blank, unlike the accreditation API's lookups.
@@ -697,6 +695,35 @@ public sealed class ModelBackedApplicationPersistence(
         return results.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
     }
 
+    // RA-794's isNewSite audit and correction, as legacy's query: every application created before the RA-292 deploy
+    // that holds an overseas site, in id order. createdAt has been the model's own Application field since v6.14
+    // (the backfill copies legacy's), and isNewSite, orsId and previousSites, which the classifier reads, are all
+    // projected. A current version the backfill missed has no createdAt to place it inside or outside the window, so
+    // the lookup refuses, as a write to one does, rather than leave a wrongly-defaulted site uncorrected unseen.
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetCreatedBeforeWithOverseasSitesAsync(
+        DateTime createdBefore,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var missed = await stores.Applications.Versions.FindAllCurrentAsync(
+            Builders<ApplicationEntity>.Filter.Eq(a => a.CreatedAt, null) & ApplicationFields.Accreditations,
+            cancellationToken: cancellationToken
+        );
+        if (missed.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Applications {string.Join(", ", missed.Select(m => m.EntityId))} have no createdAt in the model (missed by the backfill), so the RA-794 window cannot be applied to them: run the createdAt backfill until cut-readiness check A lists nothing."
+            );
+        }
+
+        var envelope = Builders<ApplicationEntity>.Filter.Lt(a => a.CreatedAt, createdBefore);
+        var results = await ProjectCurrentAsync(envelope, null, cancellationToken);
+        return results
+            .Where(a => a.CreatedAt < createdBefore && a.OverseasSites?.Sites.Count > 0)
+            .OrderBy(a => a.Id)
+            .ToList();
+    }
+
     // RA-766's charge correction, as legacy's query: every open application with a work item, Queried left out.
     public async Task<
         IReadOnlyList<AccreditationApplicationModel>
@@ -731,6 +758,31 @@ public sealed class ModelBackedApplicationPersistence(
 
         var results = await ProjectCurrentAsync(ofOrganisation, null, cancellationToken);
         return results.Where(a => a.OrgId == orgId && a.Year == year).OrderBy(a => a.Id).ToList();
+    }
+
+    // RA-764 one-off: the registration reference is not held on the application entity, so this
+    // projects every current application and filters, as the one startup call it backs allows.
+    public async Task<
+        IReadOnlyList<AccreditationApplicationModel>
+    > GetByRegistrationReferencesAndYearAsync(
+        IReadOnlyCollection<string> registrationReferences,
+        int year,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var results = await ProjectCurrentAsync(
+            Builders<ApplicationEntity>.Filter.Empty,
+            null,
+            cancellationToken
+        );
+        return results
+            .Where(a =>
+                a.Year == year
+                && a.RegistrationReference is { } reference
+                && registrationReferences.Contains(reference)
+            )
+            .OrderBy(a => a.Id)
+            .ToList();
     }
 
     public async Task<AccreditationApplicationModel?> UpdateAsync(
