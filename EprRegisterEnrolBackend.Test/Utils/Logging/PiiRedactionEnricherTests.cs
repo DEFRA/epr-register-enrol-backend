@@ -32,6 +32,69 @@ public class PiiRedactionEnricherTests
         enrichments.Client!.Address.Should().Be(PiiRedactionEnricher.RedactedValue);
     }
 
+    // Routing ignores case, so /Admin/... reaches the same endpoint.
+    [Theory]
+    [InlineData("/admin/accreditation-applications")]
+    [InlineData("/Admin/accreditation-applications")]
+    [InlineData("/admin")]
+    public void Enrich_DropsTheQuery_FromAnAdminApiRequestsUrl(string path)
+    {
+        var enrichments = new SpecialProperties.HttpContextEnrichments
+        {
+            Url = new Url
+            {
+                Path = path,
+                Query = "q=Jane%20Smith&searchFields=organisationName",
+                Full = $"https://backend.test{path}?q=Jane%20Smith&searchFields=organisationName",
+                Original = $"{path}?q=Jane%20Smith&searchFields=organisationName",
+            },
+        };
+        var logEvent = CreateLogEvent(
+            new LogEventProperty(
+                SpecialProperties.SpecialKeys.HttpContext,
+                new ScalarValue(enrichments)
+            )
+        );
+
+        new PiiRedactionEnricher().Enrich(logEvent, new TestPropertyFactory());
+
+        enrichments.Url!.Query.Should().BeNull();
+        enrichments.Url.Full.Should().Be($"https://backend.test{path}");
+        enrichments.Url.Original.Should().Be(path);
+        enrichments.Url.Path.Should().Be(path);
+    }
+
+    // Only the /admin segment: /administrator is another path, and a path the ECS enricher
+    // records without a leading slash is left alone rather than throwing.
+    [Theory]
+    [InlineData("/v1/accreditations")]
+    [InlineData("/administrator")]
+    [InlineData("admin/accreditation-applications")]
+    [InlineData("")]
+    public void Enrich_KeepsTheQuery_OnOtherRequests(string path)
+    {
+        var enrichments = new SpecialProperties.HttpContextEnrichments
+        {
+            Url = new Url
+            {
+                Path = path,
+                Query = "year=2027",
+                Full = $"https://backend.test{path}?year=2027",
+            },
+        };
+        var logEvent = CreateLogEvent(
+            new LogEventProperty(
+                SpecialProperties.SpecialKeys.HttpContext,
+                new ScalarValue(enrichments)
+            )
+        );
+
+        new PiiRedactionEnricher().Enrich(logEvent, new TestPropertyFactory());
+
+        enrichments.Url!.Query.Should().Be("year=2027");
+        enrichments.Url.Full.Should().Be($"https://backend.test{path}?year=2027");
+    }
+
     [Fact]
     public void Enrich_RedactsNameAndEmail_OnClientUserAndTopLevelUser()
     {

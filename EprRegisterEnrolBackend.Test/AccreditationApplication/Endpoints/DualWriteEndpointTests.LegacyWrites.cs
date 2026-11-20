@@ -69,6 +69,26 @@ public sealed partial class DualWriteEndpointTests
         Assert.IsType<ModelBackedApplicationPersistence>(persistence);
     }
 
+    // RA-740: the admin API searches the Legacy collection whichever persistence serves the rest of the service.
+    [Fact]
+    public async Task LegacyWritesOff_TheAdminSearchStillReadsTheLegacyCollection()
+    {
+        var (factory, client) = Start(s_cut);
+        using var _ = factory;
+        using var __ = client;
+
+        var search = factory.Services.GetRequiredService<ILegacyApplicationSearch>();
+        var (items, total) = await search.SearchLegacyApplicationsAsync(
+            new LegacyApplicationSearchCriteria(),
+            0,
+            1,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.IsType<AccreditationApplicationPersistence>(search);
+        Assert.Equal(items.Count, (int)Math.Min(total, 1));
+    }
+
     // After the cut the persistence already projects from the model, so reads serve it as it is (projecting it a
     // second time would only cost a read), and a write's response is read back from it once the write has committed.
     [Fact]
