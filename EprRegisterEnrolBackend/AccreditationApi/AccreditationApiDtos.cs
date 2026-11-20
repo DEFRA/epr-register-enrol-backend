@@ -140,7 +140,9 @@ public sealed record ContactDetailsDto
 }
 
 /// <summary>
-/// An interim site, returned inside its overseas site. <c>removedAt</c> set means withdrawn.
+/// An interim site, returned inside its overseas site, withdrawn ones included. It is
+/// <c>approved</c> from when its overseas site was approved and <c>withdrawn</c> from when it was
+/// withdrawn, as its <c>statusHistory</c> shows.
 /// </summary>
 public sealed record InterimSiteDto
 {
@@ -159,8 +161,10 @@ public sealed record InterimSiteDto
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTime? CreatedAt { get; init; }
 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public DateTime? RemovedAt { get; init; }
+    /// <summary>The latest entry in the interim site's <c>statusHistory</c>: see the accreditation's.</summary>
+    public required StatusHistoryEntryDto LatestStatus { get; init; }
+
+    public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
 }
 
 /// <summary>
@@ -204,7 +208,7 @@ public sealed record AccreditedOverseasSiteDto
 
     public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
 
-    /// <summary>Active interim sites; withdrawn ones too when <c>includeWithdrawn=true</c>.</summary>
+    /// <summary>Every interim site on the site, withdrawn ones included.</summary>
     public required IReadOnlyList<InterimSiteDto> InterimSites { get; init; }
 }
 

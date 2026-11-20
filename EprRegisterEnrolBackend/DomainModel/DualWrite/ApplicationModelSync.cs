@@ -120,7 +120,7 @@ public sealed class ApplicationModelSync(
     }
 
     // RA-763: the seed and the migrator put last year's accreditation number on the Registration, but a number that
-    // reaches the legacy application after it was migrated (such as the RA-763 backfill, if it were applied while
+    // reaches the legacy application after it was migrated (such as the RA-784 backfill, if it were applied while
     // DualWrite was off after migration) would otherwise stop at the Application. A year the Registration has no
     // number for takes the application's; a year it holds keeps its own, as in the migrator, and a different number
     // is recorded once as an AccreditationNumberDiffers conflict.

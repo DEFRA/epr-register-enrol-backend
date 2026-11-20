@@ -130,6 +130,21 @@ public class InterimSiteModel
     // else, so the same site comes back with its original SiteId, SiteNumber, CreatedAt and
     // IsNewSite and the withdraw/restore sequence stays legible.
     public DateTime? RemovedAt { get; set; }
+
+    // RA-781. The status changes of this interim site, oldest first: approved when it is added,
+    // withdrawn each time it is withdrawn, approved each time it is restored. Optional: a document
+    // written before this field has none, and the API then builds the history from CreatedAt and
+    // RemovedAt. Server-owned (see InterimSiteStatusHistory); not taken from a request.
+    // Not in the HTTP responses of the application endpoints: only the accreditation API serves it, as statusHistory.
+    [JsonIgnore]
+    public List<InterimSiteStatusChange> StatusHistory { get; set; } = [];
+}
+
+/// <summary>RA-781: one status change of an interim site: its status, and when it was recorded.</summary>
+public class InterimSiteStatusChange
+{
+    public required string Status { get; set; }
+    public required DateTime RecordedAt { get; set; }
 }
 
 public class BesEvidenceModel

@@ -226,12 +226,27 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<OrganisationNameCorrectionMigration>();
 
+    // RA-784: one-off backfill of last year's accreditation number onto 2027 applications that don't
+    // hold one, from the 2026 public register. It never replaces a number already held.
+    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+    builder.Services.Configure<LastYearsAccreditationBackfillOptions>(
+        builder.Configuration.GetSection(LastYearsAccreditationBackfillOptions.SectionName)
+    );
+    builder.Services.AddHostedService<LastYearsAccreditationBackfillMigration>();
+
     // RA-766: one-off correction of the charge held by the Case Management service after a query.
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
     builder.Services.Configure<ChargeCorrectionOptions>(
         builder.Configuration.GetSection(ChargeCorrectionOptions.SectionName)
     );
     builder.Services.AddHostedService<ChargeCorrectionMigration>();
+
+    // RA-788: one-off deletion of the duplicate 2027 Plastic application (INC2560371).
+    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
+    builder.Services.Configure<DuplicateApplicationDeletionOptions>(
+        builder.Configuration.GetSection(DuplicateApplicationDeletionOptions.SectionName)
+    );
+    builder.Services.AddHostedService<DuplicateApplicationDeletionMigration>();
 
     // RA-794: read-only audit and gated correction of wrongly-defaulted overseas-site isNewSite.
     // Both off by default (Diagnostics:Ra292*) - see docs/diagnostics/ra-794-isnewsite-correction.md.
