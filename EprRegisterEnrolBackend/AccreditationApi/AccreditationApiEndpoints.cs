@@ -157,7 +157,6 @@ public static partial class AccreditationApiEndpoints
         string organisationNumber,
         string registrationNumber,
         string year,
-        HttpContext http,
         GrantedAccreditations accreditations,
         CancellationToken cancellationToken
     )
@@ -224,7 +223,6 @@ public static partial class AccreditationApiEndpoints
         string registrationNumber,
         string year,
         string orsId,
-        HttpContext http,
         GrantedAccreditations accreditations,
         CancellationToken cancellationToken
     )
