@@ -1547,13 +1547,6 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   GetById backfills of `orgId` and `nation`. Both fields are mapped onto the model (the Organisation's number
   and the Registration's nation), so since v6.12 the backfill's write goes through the unit of work; the ReEx
   lookups stay outside it, and a read that has nothing to backfill still opens no transaction.
-  The RA-764 organisation name correction (`OrganisationNameCorrectionMigration`, a one-off startup migration
-  renaming organisation 500069 on its 2027 data) is a second exception: it writes the legacy `organisationName`
-  and the Organisation `name` it maps onto, each with an update guarded on the old name, so it may run with
-  `DualWrite` on. The Organisation is organisation-wide, so the read model then projects the new name onto
-  500069's applications for other years too, while their legacy documents keep the old one. The migration
-  records a `SeededDetailsDiffer` conflict on each of those (unless one is already recorded), so the reconciler
-  accepts that difference rather than reporting it as drift.
   The RA-794 isNewSite correction (`IsNewSiteCorrectionMigration`, a one-off startup migration, v6.15) also writes
   outside the request paths, but it does not bypass the unit of work, so the rule above does not apply. Each application's write runs in `IDualWriteUnitOfWork`, and the
   callback re-reads the application in the transaction. It sets the legacy site list with a `$set` guarded on the

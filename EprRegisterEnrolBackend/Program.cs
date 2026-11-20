@@ -213,13 +213,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<AccreditationReferenceCorrectionMigration>();
 
-    // RA-764: one-off rename of organisation 500069 on its 2027 accreditation data.
-    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
-    builder.Services.Configure<OrganisationNameCorrectionOptions>(
-        builder.Configuration.GetSection(OrganisationNameCorrectionOptions.SectionName)
-    );
-    builder.Services.AddHostedService<OrganisationNameCorrectionMigration>();
-
     // RA-766: one-off correction of the charge held by the Case Management service after a query.
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
     builder.Services.Configure<ChargeCorrectionOptions>(

@@ -193,31 +193,6 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
-    /// RA-764: every application for ReEx organisation number <paramref name="orgId"/> applying
-    /// for <paramref name="year"/>, whatever its status. Used by OrganisationNameCorrectionMigration
-    /// to find every copy of the organisation's name it must correct.
-    /// RA-764 one-off; removed with OrganisationNameCorrectionMigration - do not use elsewhere.
-    /// </summary>
-    Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
-        int orgId,
-        int year,
-        CancellationToken cancellationToken = default
-    );
-
-    /// <summary>
-    /// RA-764: every application holding one of <paramref name="registrationReferences"/> and
-    /// applying for <paramref name="year"/>, whatever its status, OrgId or ReEx organisation id, in
-    /// id order. Used by OrganisationNameCorrectionMigration so a record under one of the
-    /// organisation's registrations that the OrgId lookup misses aborts the run instead.
-    /// RA-764 one-off; removed with OrganisationNameCorrectionMigration - do not use elsewhere.
-    /// </summary>
-    Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationReferencesAndYearAsync(
-        IReadOnlyCollection<string> registrationReferences,
-        int year,
-        CancellationToken cancellationToken = default
-    );
-
-    /// <summary>
     /// RA-766: every application that is linked to a ManagementBe work item and is not Queried, and
     /// not yet Approved, Rejected or Withdrawn, oldest first. A Queried application is left out: its
     /// answer has not been sent, so any charge it now holds is a draft and must not reach ManagementBe
