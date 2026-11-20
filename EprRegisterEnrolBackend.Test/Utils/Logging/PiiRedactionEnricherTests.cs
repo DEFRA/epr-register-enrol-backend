@@ -64,16 +64,22 @@ public class PiiRedactionEnricherTests
         enrichments.Url.Path.Should().Be(path);
     }
 
-    [Fact]
-    public void Enrich_KeepsTheQuery_OnOtherRequests()
+    // Only the /admin segment: /administrator is another path, and a path the ECS enricher
+    // records without a leading slash is left alone rather than throwing.
+    [Theory]
+    [InlineData("/v1/accreditations")]
+    [InlineData("/administrator")]
+    [InlineData("admin/accreditation-applications")]
+    [InlineData("")]
+    public void Enrich_KeepsTheQuery_OnOtherRequests(string path)
     {
         var enrichments = new SpecialProperties.HttpContextEnrichments
         {
             Url = new Url
             {
-                Path = "/v1/accreditations",
+                Path = path,
                 Query = "year=2027",
-                Full = "https://backend.test/v1/accreditations?year=2027",
+                Full = $"https://backend.test{path}?year=2027",
             },
         };
         var logEvent = CreateLogEvent(
@@ -86,7 +92,7 @@ public class PiiRedactionEnricherTests
         new PiiRedactionEnricher().Enrich(logEvent, new TestPropertyFactory());
 
         enrichments.Url!.Query.Should().Be("year=2027");
-        enrichments.Url.Full.Should().Be("https://backend.test/v1/accreditations?year=2027");
+        enrichments.Url.Full.Should().Be($"https://backend.test{path}?year=2027");
     }
 
     [Fact]

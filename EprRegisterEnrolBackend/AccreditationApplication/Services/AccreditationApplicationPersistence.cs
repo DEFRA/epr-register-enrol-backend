@@ -289,7 +289,7 @@ public class AccreditationApplicationPersistence(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
     )> SearchLegacyApplicationsAsync(
-        LegacyApplicationSearch search,
+        LegacyApplicationSearchCriteria search,
         long skip,
         int limit,
         TimeSpan? maxTime = null,

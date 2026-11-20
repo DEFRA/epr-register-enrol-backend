@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Elastic.CommonSchema;
 using Elastic.CommonSchema.Serilog;
+using EprRegisterEnrolBackend.AdminApi;
 using Serilog.Core;
 using Serilog.Events;
 
@@ -73,12 +74,14 @@ public sealed class PiiRedactionEnricher : ILogEventEnricher
         url.Original = WithoutQuery(url.Original);
     }
 
-    // /admin itself too, which is a 404 but still carries whatever query was sent.
+    // /admin itself too, which is a 404 but still carries whatever query was sent. A PathString
+    // must start with '/', so anything else is not an admin path.
     private static bool IsAdminPath(string? path) =>
         path is not null
-        && (
-            path.Equals("/admin", StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith("/admin/", StringComparison.OrdinalIgnoreCase)
+        && path.StartsWith('/')
+        && new PathString(path).StartsWithSegments(
+            AdminApiEndpoints.PathPrefix,
+            StringComparison.OrdinalIgnoreCase
         );
 
     private static string? WithoutQuery(string? url)

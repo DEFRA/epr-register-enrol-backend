@@ -495,7 +495,7 @@ public class AdminApiEndpointTests : IDisposable
     private sealed class TimedOutSearch : ILegacyApplicationSearch
     {
         public Task<(IReadOnlyList<AccreditationApplicationModel> Items, long Total)> SearchLegacyApplicationsAsync(
-            LegacyApplicationSearch search,
+            LegacyApplicationSearchCriteria search,
             long skip,
             int limit,
             TimeSpan? maxTime = null,

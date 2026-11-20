@@ -79,7 +79,7 @@ public sealed partial class DualWriteEndpointTests
 
         var search = factory.Services.GetRequiredService<ILegacyApplicationSearch>();
         var (items, total) = await search.SearchLegacyApplicationsAsync(
-            new LegacyApplicationSearch(),
+            new LegacyApplicationSearchCriteria(),
             0,
             1,
             cancellationToken: TestContext.Current.CancellationToken

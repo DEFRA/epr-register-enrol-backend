@@ -61,12 +61,12 @@ public sealed class LegacyApplicationSearchTests : IDisposable
     }
 
     private async Task<IReadOnlyList<AccreditationApplicationModel>> Search(
-        LegacyApplicationSearch search,
+        LegacyApplicationSearchCriteria search,
         long skip = 0,
         int limit = 100
     ) => (await _sut.SearchLegacyApplicationsAsync(search, skip, limit, cancellationToken: Ct)).Items;
 
-    private static LegacyApplicationSearch Text(
+    private static LegacyApplicationSearchCriteria Text(
         string text,
         params LegacyApplicationSearchField[] fields
     ) => new(text, fields);
@@ -175,8 +175,8 @@ public sealed class LegacyApplicationSearchTests : IDisposable
         var byOrg = await Seed(orgId: 500777);
         await Seed(accreditation: "A27-OTHER", registration: "R25-OTHER", name: "Other", orgId: 500888);
 
-        var text = await Search(new LegacyApplicationSearch("key"));
-        var number = await Search(new LegacyApplicationSearch("777"));
+        var text = await Search(new LegacyApplicationSearchCriteria("key"));
+        var number = await Search(new LegacyApplicationSearchCriteria("777"));
 
         text.Select(a => a.Id)
             .Should()
@@ -215,7 +215,7 @@ public sealed class LegacyApplicationSearchTests : IDisposable
         var literal = await Seed(name: $"Name {text} here");
         await Seed(name: "abc Ltd x 1 b");
 
-        var found = await Search(new LegacyApplicationSearch(text));
+        var found = await Search(new LegacyApplicationSearchCriteria(text));
 
         found.Select(a => a.Id).Should().Equal(literal.Id);
     }
@@ -228,7 +228,7 @@ public sealed class LegacyApplicationSearchTests : IDisposable
         await Seed(status: ApplicationStatus.Submitted);
 
         var found = await Search(
-            new LegacyApplicationSearch(
+            new LegacyApplicationSearchCriteria(
                 Statuses: [ApplicationStatus.Approved, ApplicationStatus.Withdrawn]
             )
         );
@@ -242,7 +242,7 @@ public sealed class LegacyApplicationSearchTests : IDisposable
         var match = await Seed(year: 2026);
         await Seed(year: 2027);
 
-        var found = await Search(new LegacyApplicationSearch(Year: 2026));
+        var found = await Search(new LegacyApplicationSearchCriteria(Year: 2026));
 
         found.Select(a => a.Id).Should().Equal(match.Id);
     }
@@ -256,7 +256,7 @@ public sealed class LegacyApplicationSearchTests : IDisposable
         await Seed(name: "Other", status: ApplicationStatus.Approved, year: 2027);
 
         var found = await Search(
-            new LegacyApplicationSearch("acme", null, [ApplicationStatus.Approved], 2027)
+            new LegacyApplicationSearchCriteria("acme", null, [ApplicationStatus.Approved], 2027)
         );
 
         found.Select(a => a.Id).Should().Equal(match.Id);
@@ -269,7 +269,7 @@ public sealed class LegacyApplicationSearchTests : IDisposable
         await Seed(name: null);
 
         var found = await Search(
-            new LegacyApplicationSearch(null, [LegacyApplicationSearchField.OrganisationName])
+            new LegacyApplicationSearchCriteria(null, [LegacyApplicationSearchField.OrganisationName])
         );
 
         found.Should().HaveCount(2);
@@ -283,7 +283,7 @@ public sealed class LegacyApplicationSearchTests : IDisposable
         var tiedHigh = await Seed(updatedAt: Now, id: ObjectId.Parse("000000000000000000000002"));
         var newest = await Seed(updatedAt: Now.AddDays(1));
 
-        var found = await Search(new LegacyApplicationSearch());
+        var found = await Search(new LegacyApplicationSearchCriteria());
 
         found.Select(a => a.Id).Should().Equal(newest.Id, tiedHigh.Id, tiedLow.Id, oldest.Id);
     }

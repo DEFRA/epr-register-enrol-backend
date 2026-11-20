@@ -20,6 +20,12 @@ namespace EprRegisterEnrolBackend.AdminApi;
 /// </summary>
 public static class AdminApiEndpoints
 {
+    /// <summary>
+    /// Where the admin API is mapped. Its error format (<see cref="ServiceApiProblems"/>) and its
+    /// log redaction (<c>PiiRedactionEnricher</c>) key on the same prefix.
+    /// </summary>
+    public const string PathPrefix = "/admin";
+
     private const int DefaultLimit = 50;
     private const int MaxLimit = 100;
     private const int MaxSearchLength = 100;
@@ -40,7 +46,7 @@ public static class AdminApiEndpoints
 
     public static void UseAdminApiEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/admin")
+        var group = app.MapGroup(PathPrefix)
             .RequireAuthorization(ServiceClientPolicies.Admin)
             .AddEndpointFilter<ServiceClientAccessLogFilter>()
             .AddEndpointFilter<ServiceClientRateLimitFilter>()
@@ -73,7 +79,7 @@ public static class AdminApiEndpoints
             return badPaging;
 
         var (items, total) = await applications.SearchLegacyApplicationsAsync(
-            new LegacyApplicationSearch(q, fields, statuses, year),
+            new LegacyApplicationSearchCriteria(q, fields, statuses, year),
             (long)(pageNumber - 1) * limit,
             limit,
             config.Value.QueryTimeout,

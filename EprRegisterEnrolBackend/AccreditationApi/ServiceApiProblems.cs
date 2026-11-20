@@ -1,4 +1,5 @@
 using System.Globalization;
+using EprRegisterEnrolBackend.AdminApi;
 using EprRegisterEnrolBackend.Auth;
 using MongoDB.Driver;
 
@@ -13,7 +14,7 @@ namespace EprRegisterEnrolBackend.AccreditationApi;
 /// </summary>
 public static class ServiceApiProblems
 {
-    private static readonly PathString[] ApiPrefixes = ["/v1", "/admin"];
+    private static readonly PathString[] ApiPrefixes = ["/v1", AdminApiEndpoints.PathPrefix];
 
     public static IApplicationBuilder UseServiceApiProblems(this IApplicationBuilder app) =>
         app.Use(
