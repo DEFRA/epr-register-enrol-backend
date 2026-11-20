@@ -169,7 +169,9 @@ and phone number. Treat them as personal data.
   in the future. `effectiveToDate` is the day before the next entry's `effectiveFromDate`, and is
   `null` on the latest entry. Where two entries have the same `effectiveFromDate`, the one with the
   later `recordedAt` takes precedence, and the earlier one ends on that same date
-  (`effectiveToDate` equals `effectiveFromDate`). `recordedAt` and `createdAt` are UTC times.
+  (`effectiveToDate` equals `effectiveFromDate`). If they also share a `recordedAt` (an interim site
+  withdrawn before its overseas site was approved has both entries at the approval), the entry later
+  in the array takes precedence. `recordedAt` and `createdAt` are UTC times.
 - Until effective-dated history is recorded, each history has one `approved` entry. For an
   accreditation approved before that, its date is when case management last changed it, or the last
   edit, so treat an older approval date as approximate.
