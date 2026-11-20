@@ -44,12 +44,14 @@ public sealed class LastYearsAccreditationBackfillOptions
 //   3. Last year's number: added where the application holds none; left alone where it holds the
 //      same; reported, never overwritten, where it holds a different one. A row with no accreditation
 //      means the operator was registered only in 2026: nothing to add, and the 2027 number is a
-//      first-time one.
+//      first-time one. An application that already holds a number against such a row is reported,
+//      not changed.
 //   4. An issued 2027 number is checked against the register and reported if it doesn't fit: a
 //      renewal must keep last year's agency, process type, org and sequence; a first-time number
 //      must keep the registration's agency, process type and org. Only reported, never corrected.
 // The run ends with a report: every application whose registration number isn't on the register
-// (its org and registration number), and every register row no 2027 application used.
+// (its org and registration number), and every register row no 2027 application used. The report
+// is logged even if the run stops part-way, with the writes done so far.
 //
 // Every application is planned before anything is written. Each write is a single targeted update
 // guarded on the application still holding no number, so a re-run is a no-op and a concurrent
@@ -163,25 +165,34 @@ public class LastYearsAccreditationBackfillMigration(
             .ToList();
 
         var writes = new List<Write>();
-        foreach (var plan in plans)
+        var finished = false;
+        try
         {
-            if (
-                await ReportAndApplyAsync(
-                    persistence,
-                    unitOfWork,
-                    plan,
-                    mode,
-                    confirmedBy,
-                    cancellationToken
+            foreach (var plan in plans)
+            {
+                if (
+                    await ReportAndApplyAsync(
+                        persistence,
+                        unitOfWork,
+                        plan,
+                        mode,
+                        confirmedBy,
+                        cancellationToken
+                    )
+                    is { } write
                 )
-                is { } write
-            )
-                writes.Add(write);
+                    writes.Add(write);
+            }
+            finished = true;
         }
-
-        ReportNotOnTheRegister(plans, mode);
-        ReportUnusedRegisterRows(plans, mode);
-        ReportSummary(plans, writes, mode);
+        finally
+        {
+            // Cancelled or failed part-way: the report still says what was planned and what was written so far,
+            // and the exception carries on.
+            ReportNotOnTheRegister(plans, mode);
+            ReportUnusedRegisterRows(plans, mode);
+            ReportSummary(plans, writes, mode, finished);
+        }
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
 
@@ -243,9 +254,14 @@ public class LastYearsAccreditationBackfillMigration(
         var held = application.LastYearsAccreditationNumber;
         var (outcome, detail) = row.AccreditationNumber switch
         {
-            null => (
+            null when held is null => (
                 Outcome.RegisteredOnly,
                 $"register row {registrationNumber} has no accreditation, so the operator was registered only in {LastYear}"
+            ),
+            null => (
+                Outcome.HoldsADifferentNumber,
+                $"holds {held.Year} accreditation {held.AccreditationNumber}, but register row "
+                    + $"{registrationNumber} has no accreditation (registered only in {LastYear}); left as it is"
             ),
             var number when held is null => (
                 Outcome.Added,
@@ -262,10 +278,11 @@ public class LastYearsAccreditationBackfillMigration(
             ),
         };
 
+        // Against a registered-only row, the issuer would renew from the number the application holds.
         var (issued, issuedDetail) = CheckIssuedNumber(
             application.AccreditationReference,
             registrationNumber,
-            row.AccreditationNumber
+            row.AccreditationNumber ?? held?.AccreditationNumber
         );
         return new Plan(
             application,
@@ -469,6 +486,21 @@ public class LastYearsAccreditationBackfillMigration(
         );
         foreach (var plan in missing)
         {
+            if (plan.Application.PreviousRegistrationNumbers.Count == 0)
+            {
+                logger.LogWarning(
+                    "RA-784 {Mode} report: not on the register: org {OrgId} {OrganisationName}, registration "
+                        + "{RegistrationReference}, application {ApplicationId} ({ApplicationReference})",
+                    mode,
+                    plan.Application.OrgId,
+                    plan.Application.OrganisationName,
+                    plan.Application.RegistrationReference,
+                    plan.Id,
+                    plan.Application.ApplicationReference
+                );
+                continue;
+            }
+
             logger.LogWarning(
                 "RA-784 {Mode} report: not on the register: org {OrgId} {OrganisationName}, registration "
                     + "{RegistrationReference} (previous {PreviousRegistrationNumbers}), application "
@@ -524,8 +556,8 @@ public class LastYearsAccreditationBackfillMigration(
     }
 
     // Planned against actual: the outcomes are what the plan found; the writes are what an APPLY run did with the
-    // Added ones (a dry run writes nothing).
-    private void ReportSummary(IReadOnlyList<Plan> plans, IReadOnlyList<Write> writes, string mode)
+    // Added ones (a dry run writes nothing). A run that stopped part-way says so, with the writes done so far.
+    private void ReportSummary(IReadOnlyList<Plan> plans, IReadOnlyList<Write> writes, string mode, bool finished)
     {
         if (!logger.IsEnabled(LogLevel.Information))
             return;
@@ -543,8 +575,9 @@ public class LastYearsAccreditationBackfillMigration(
             Enum.GetValues<IssuedNumber>().Select(i => $"{i}={plans.Count(p => p.Issued == i)}")
         );
         logger.LogInformation(
-            "RA-784 last year's accreditation backfill complete. Mode={Mode}, applications={Count}. "
+            "RA-784 last year's accreditation backfill {Ending}. Mode={Mode}, applications={Count}. "
                 + "Last year's accreditation planned: {Outcomes}. Written: {Written}. Issued numbers: {Issued}",
+            finished ? "complete" : "stopped part-way",
             mode,
             plans.Count,
             outcomes,

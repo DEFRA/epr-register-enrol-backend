@@ -366,6 +366,32 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         LoggedFor(id).Should().Contain(nameof(Migration.Outcome.RegisteredOnly));
     }
 
+    // A registered-only row can't confirm a number the application already holds, so a person checks it. The issued
+    // number is checked as a renewal of the held one, because that's what the issuer would renew from.
+    [Fact]
+    public async Task A_number_already_held_against_a_registered_only_row_is_reported_and_left_alone()
+    {
+        var application = Application(DtsRegistration, 500237, accreditationReference: "A27ER5002370119PL");
+        application.LastYearsAccreditationNumber = new() { Year = 2026, AccreditationNumber = "A26ER5002370042PL" };
+        var id = await SeedAsync(application);
+        var before = await SnapshotAsync();
+
+        await ApplyAsync();
+
+        (await SnapshotAsync()).Should().Equal(before);
+        _logger
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Warning
+                && e.Message.Contains(id.ToString())
+                && e.Message.Contains(nameof(Migration.Outcome.HoldsADifferentNumber))
+                && e.Message.Contains($"register row {DtsRegistration} has no accreditation")
+                && e.Message.Contains(nameof(Migration.IssuedNumber.DoesNotFitTheRegister))
+                && e.Message.Contains("not a renewal of A26ER5002370042PL")
+            );
+        Logged(LogLevel.Information).Should().NotContain(m => m.Contains("APPLIED"));
+    }
+
     [Fact]
     public async Task The_same_number_already_held_is_left_alone()
     {
@@ -618,6 +644,25 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task The_report_names_previous_registration_numbers_only_when_there_are_some()
+    {
+        var withoutPrevious = await SeedAsync(Application("R26ER5009990001PL", 500999));
+        var regenerated = Application("R26ER5009980001PL", 500998);
+        regenerated.PreviousRegistrationNumbers = ["R26ER5009980002PL"];
+        var withPrevious = await SeedAsync(regenerated);
+
+        await CreateMigration().RunAsync(Ct);
+
+        var lines = Logged(LogLevel.Warning).Where(m => m.Contains("report: not on the register")).ToList();
+        lines.Should().ContainSingle(m => m.Contains(withoutPrevious.ToString())).Which.Should().NotContain("previous");
+        lines
+            .Should()
+            .ContainSingle(m => m.Contains(withPrevious.ToString()))
+            .Which.Should()
+            .Contain("registration R26ER5009980001PL (previous R26ER5009980002PL)");
+    }
+
+    [Fact]
     public async Task The_report_lists_every_register_row_no_application_used()
     {
         await SeedAsync(Egger());
@@ -727,6 +772,48 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         Logged(LogLevel.Information)
             .Should()
             .ContainSingle(m => m.Contains("planned: Added=2") && m.Contains("Written: Written=1, LostTheRace=0, Failed=1"));
+    }
+
+    // Stopped part-way (here, the host shutting down after the first write): the reports are still logged, with the
+    // writes done so far, and the cancellation carries on.
+    [Fact]
+    public async Task A_run_cancelled_part_way_still_logs_the_report()
+    {
+        var egger = await SeedAsync(Egger());
+        var gap = await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var cancelling = new CancelAfterTheFirstWriteUnitOfWork(stopping);
+
+        var run = () => CreateMigration(apply: true, unitOfWork: cancelling).RunAsync(stopping.Token);
+
+        await run.Should().ThrowAsync<OperationCanceledException>();
+        (await ReadAsync(egger)).LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(EggerAccreditation);
+        (await ReadAsync(gap)).LastYearsAccreditationNumber.Should().BeNull();
+        Logged(LogLevel.Warning).Should().Contain(m => m.Contains("report") && m.Contains("0 2027 applications"));
+        Logged(LogLevel.Information).Should().Contain(m => m.Contains("register rows matched no 2027 application"));
+        Logged(LogLevel.Information)
+            .Should()
+            .ContainSingle(m =>
+                m.Contains("stopped part-way")
+                && m.Contains("planned: Added=2")
+                && m.Contains("Written: Written=1, LostTheRace=0, Failed=0")
+            );
+    }
+
+    private sealed class CancelAfterTheFirstWriteUnitOfWork(CancellationTokenSource stopping) : IDualWriteUnitOfWork
+    {
+        public async Task<IResult> RunAsync(
+            string operation,
+            string applicationId,
+            Func<MongoDB.Driver.IClientSessionHandle?, CancellationToken, Task<IResult>> work,
+            CancellationToken cancellationToken = default
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await work(null, cancellationToken);
+            await stopping.CancelAsync();
+            return result;
+        }
     }
 
     private sealed class BeforeTheWriteUnitOfWork(Func<Task> beforeTheWrite) : IDualWriteUnitOfWork
