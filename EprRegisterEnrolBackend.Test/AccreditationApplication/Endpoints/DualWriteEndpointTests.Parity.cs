@@ -26,13 +26,20 @@ public sealed partial class DualWriteEndpointTests
 
     // A write's response carries the time it set in memory (to the tick); Mongo stores milliseconds, so a read
     // afterwards shows the stored value. That is true with the flag off too, so compare to the millisecond.
+    // System.Text.Json trims a fraction's trailing zeros and leaves it out on a whole second, so write the truncated
+    // value the same way: 21.0004567Z in memory and the stored 21Z both come out as 21Z
+    // (DualWriteParityMillisecondsTests).
     private static readonly Regex s_fraction = new(@"\.(\d+)Z", RegexOptions.Compiled);
 
-    private static JsonNode ToMilliseconds(JsonNode node) =>
+    internal static JsonNode ToMilliseconds(JsonNode node) =>
         JsonNode.Parse(
             s_fraction.Replace(
                 node.ToJsonString(),
-                m => "." + m.Groups[1].Value.PadRight(3, '0')[..3] + "Z"
+                m =>
+                {
+                    var milliseconds = m.Groups[1].Value.PadRight(3, '0')[..3].TrimEnd('0');
+                    return milliseconds.Length == 0 ? "Z" : "." + milliseconds + "Z";
+                }
             )
         )!;
 
