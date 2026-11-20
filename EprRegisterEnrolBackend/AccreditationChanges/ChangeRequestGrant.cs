@@ -253,5 +253,5 @@ internal static class ChangeRequestGrant
 /// RA-495: a change request or its accreditation application changed between read and write. In a transaction it
 /// rolls the whole push back; without one, the push is read again.
 /// </summary>
-internal sealed class ChangeRequestWriteConflictException()
+public sealed class ChangeRequestWriteConflictException()
     : Exception("The change request or its accreditation was changed at the same time.");

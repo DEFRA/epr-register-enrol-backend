@@ -72,11 +72,12 @@ public static class ChangeRequestStatusEndpoints
         IAccreditationApplicationPersistence applications,
         IDualWriteUnitOfWork unitOfWork,
         HttpContext httpContext,
-        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
-        var logger = loggerFactory.CreateLogger(typeof(ChangeRequestStatusEndpoints));
+        var logger = httpContext
+            .RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(ChangeRequestStatusEndpoints));
         // Sent by ManagementBe's push hook for tracing only; its absence never fails the request.
         var correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var values)
             ? values.ToString()
