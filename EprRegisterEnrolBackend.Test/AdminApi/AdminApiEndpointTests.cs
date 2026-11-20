@@ -4,10 +4,15 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Test.Auth;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Auth;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.AdminApi;
 
@@ -343,6 +348,86 @@ public class AdminApiEndpointTests : IDisposable
 
         await AssertProblem(response, HttpStatusCode.MethodNotAllowed, "method_not_allowed");
         response.Content.Headers.Allow.Should().Contain("GET");
+    }
+
+    [Fact]
+    public async Task TheAdminClientNamedWithAnotherCase_GetsAPage()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder
+                .UseSetting("ServiceClients:Clients:1:Name", "Admin")
+                .ConfigureAppConfiguration(
+                    (_, config) =>
+                        config.AddInMemoryCollection(
+                            new Dictionary<string, string?> { ["ServiceClients:Clients:1:Name"] = "Admin" }
+                        )
+                )
+        );
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            ServiceClientSigner.Request(HttpMethod.Get, SearchPath, AdminClientId, AdminSecret),
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // ---- protection shared with /v1 ----
+
+    [Fact]
+    public async Task AClientOverItsLimit_Gets429_AsAProblem()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.Configure<ServiceClientsConfig>(config => config.RateLimitPermitsPerMinute = 1)
+            )
+        );
+        using var client = factory.CreateClient();
+        Task<HttpResponseMessage> Search() =>
+            client.SendAsync(
+                ServiceClientSigner.Request(HttpMethod.Get, SearchPath, AdminClientId, AdminSecret),
+                Ct
+            );
+
+        (await Search()).StatusCode.Should().Be(HttpStatusCode.OK);
+        var response = await Search();
+
+        await AssertProblem(response, HttpStatusCode.TooManyRequests, "rate_limited");
+    }
+
+    [Fact]
+    public async Task ASearchTheDatabaseStopped_Is503_AsAProblem()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.AddSingleton<ILegacyApplicationSearch, TimedOutSearch>()
+            )
+        );
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            ServiceClientSigner.Request(HttpMethod.Get, $"{SearchPath}?q=harbour", AdminClientId, AdminSecret),
+            Ct
+        );
+
+        await AssertProblem(response, HttpStatusCode.ServiceUnavailable, "query_timeout");
+    }
+
+    // Mongo stopping a query after its MaxTime.
+    private sealed class TimedOutSearch : ILegacyApplicationSearch
+    {
+        public Task<(IReadOnlyList<AccreditationApplicationModel> Items, long Total)> SearchLegacyApplicationsAsync(
+            LegacyApplicationSearch search,
+            long skip,
+            int limit,
+            TimeSpan? maxTime = null,
+            CancellationToken cancellationToken = default
+        ) =>
+            throw (MongoExecutionTimeoutException)
+                System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+                    typeof(MongoExecutionTimeoutException)
+                );
     }
 
     [Fact]

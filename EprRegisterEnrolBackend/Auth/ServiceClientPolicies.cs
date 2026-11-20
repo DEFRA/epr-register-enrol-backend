@@ -27,10 +27,13 @@ public static class ServiceClientPolicies
         options.AddPolicy(
             Admin,
             policy =>
+                // Ignoring case, as the name's secret (AUTH_SHARED_SECRET__ADMIN) is found.
                 RequireReadingClient(policy)
-                    .RequireClaim(
-                        ServiceClientAuthenticationHandler.ClientNameClaimType,
-                        AdminClientName
+                    .RequireAssertion(context =>
+                        context.User.HasClaim(claim =>
+                            claim.Type == ServiceClientAuthenticationHandler.ClientNameClaimType
+                            && string.Equals(claim.Value, AdminClientName, StringComparison.OrdinalIgnoreCase)
+                        )
                     )
         );
     }
