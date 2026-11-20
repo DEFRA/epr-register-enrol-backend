@@ -288,7 +288,7 @@ public class LastYearsAccreditationBackfillMigration(
     // RA-783's rules, for an issued number: a renewal keeps everything of last year's number but the
     // year and material code; a first-time number keeps the registration's agency, process type and
     // org, with a random sequence. The material code is the application's, so it isn't compared (a
-    // 2026 glass number ends GL).
+    // 2026 glass number can end GL, as Comhairle Nan Eilean Siar's does).
     private static (IssuedNumber, string?) CheckIssuedNumber(
         string? issued,
         string registrationNumber,

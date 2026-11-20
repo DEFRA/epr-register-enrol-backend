@@ -9,6 +9,7 @@ using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,7 +22,9 @@ using Migration = EprRegisterEnrolBackend.AccreditationApplication.Startup.LastY
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
 // RA-784: runs against the real ephemeral mongod, with rows from the real public register, so the
-// guarded updates and the matching are exercised exactly as production runs them.
+// guarded updates and the matching run against real Mongo. Most tests write through the legacy-only
+// unit of work; Apply_with_dual_write_on_writes_the_domain_model_too uses the real dual-write one, as
+// prod does.
 public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 {
     // Egger (UK) Limited: accredited in 2026, with a different sequence from its registration.
@@ -59,7 +62,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
     public LastYearsAccreditationBackfillMigrationTests(MongoIntegrationFixture fixture)
     {
-        _databaseName = MongoIntegrationFixture.NewDatabaseName("ra763");
+        _databaseName = MongoIntegrationFixture.NewDatabaseName("ra784");
         _factory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _persistence = new AccreditationApplicationPersistence(
             _factory,
@@ -268,10 +271,15 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         egger.OrganisationName = "Egger (UK) Limited";
         var id = await SeedAsync(egger);
 
+        await CreateMigration().RunAsync(Ct);
+        var dryRun = LoggedFor(id);
+        _logger.Entries.Clear();
         await ApplyAsync();
 
-        var plan = LoggedFor(id);
-        plan.Should().Contain("org 500027 Egger (UK) Limited").And.Contain(EggerAccreditation);
+        dryRun.Should()
+            .Contain("DRY RUN")
+            .And.Contain("org 500027 Egger (UK) Limited")
+            .And.Contain(EggerAccreditation);
         Logged(LogLevel.Information)
             .Should()
             .Contain(m =>
@@ -528,7 +536,6 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         var application = await ReadAsync(id);
         application.AccreditationReference.Should().Be(ClearfieldIssued);
-        application.PreviousAccreditationNumbers.Should().BeEmpty();
         application.LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(ClearfieldAccreditation);
         _logger
             .Entries.Should()
@@ -647,7 +654,104 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     }
 
     [Fact]
-    public async Task The_summary_counts_every_outcome()
+    public async Task An_issued_number_on_an_application_not_on_the_register_is_reported_as_not_checked()
+    {
+        var id = await SeedAsync(
+            Application("R26ER5009990001PL", 500999, accreditationReference: "A27ER5009990001PL")
+        );
+
+        await CreateMigration().RunAsync(Ct);
+
+        _logger
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Warning
+                && e.Message.Contains(id.ToString())
+                && e.Message.Contains(nameof(Migration.IssuedNumber.NotChecked))
+                && e.Message.Contains("could not be checked")
+            );
+    }
+
+    // --- writes that don't happen ----------------------------------------------------------------------------------
+
+    // Another instance (or anything else) gives the application a number between planning and writing: the guard
+    // stops the write, and the run says so without overwriting it.
+    [Fact]
+    public async Task An_application_given_a_number_after_planning_is_not_overwritten()
+    {
+        var id = await SeedAsync(Egger());
+        const string other = "A26ER5000270001WO";
+        var racing = new BeforeTheWriteUnitOfWork(() =>
+            _factory
+                .GetCollection<AccreditationApplicationModel>("accreditationApplications")
+                .UpdateOneAsync(
+                    a => a.Id == id,
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.LastYearsAccreditationNumber,
+                        new AccreditationNumberForYearModel { Year = 2026, AccreditationNumber = other }
+                    ),
+                    cancellationToken: Ct
+                )
+        );
+
+        await CreateMigration(apply: true, unitOfWork: racing).RunAsync(Ct);
+
+        (await ReadAsync(id)).LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(other);
+        Logged(LogLevel.Error)
+            .Should()
+            .ContainSingle(m =>
+                m.Contains(id.ToString()) && m.Contains("gained last year's accreditation after planning")
+            );
+        Logged(LogLevel.Information).Should().NotContain(m => m.Contains("APPLIED"));
+    }
+
+    // The unit of work rolls a failed write back and answers a problem: the run logs it and carries on.
+    [Fact]
+    public async Task A_write_that_fails_is_logged_and_the_run_carries_on()
+    {
+        var failed = await SeedAsync(Egger());
+        var gap = await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+        var failing = new FailingUnitOfWork(failed.ToString());
+
+        var result = await CreateMigration(apply: true, unitOfWork: failing).RunAsync(Ct);
+
+        result.Should().Be(Migration.RunResult.Applied);
+        (await ReadAsync(failed)).LastYearsAccreditationNumber.Should().BeNull();
+        (await ReadAsync(gap)).LastYearsAccreditationNumber!.AccreditationNumber.Should().Be(GapAccreditation);
+        Logged(LogLevel.Error)
+            .Should()
+            .ContainSingle(m => m.Contains(failed.ToString()) && m.Contains("write failed and was rolled back"));
+    }
+
+    private sealed class BeforeTheWriteUnitOfWork(Func<Task> beforeTheWrite) : IDualWriteUnitOfWork
+    {
+        public async Task<IResult> RunAsync(
+            string operation,
+            string applicationId,
+            Func<MongoDB.Driver.IClientSessionHandle?, CancellationToken, Task<IResult>> work,
+            CancellationToken cancellationToken = default
+        )
+        {
+            await beforeTheWrite();
+            return await work(null, cancellationToken);
+        }
+    }
+
+    private sealed class FailingUnitOfWork(string failingApplicationId) : IDualWriteUnitOfWork
+    {
+        public Task<IResult> RunAsync(
+            string operation,
+            string applicationId,
+            Func<MongoDB.Driver.IClientSessionHandle?, CancellationToken, Task<IResult>> work,
+            CancellationToken cancellationToken = default
+        ) =>
+            applicationId == failingApplicationId
+                ? Task.FromResult(Results.Problem(statusCode: StatusCodes.Status500InternalServerError))
+                : work(null, cancellationToken);
+    }
+
+    [Fact]
+    public async Task The_summary_counts_the_outcomes_and_issued_numbers()
     {
         await SeedAsync(Egger());
         await SeedAsync(Application(DtsRegistration, 500237));

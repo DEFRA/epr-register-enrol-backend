@@ -205,9 +205,9 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
-    /// RA-763: every application applying for <paramref name="year"/>, whatever its status, oldest first. Used by
+    /// RA-784: every application applying for <paramref name="year"/>, whatever its status, oldest first. Used by
     /// LastYearsAccreditationBackfillMigration to check each one against the 2026 public register.
-    /// RA-763 one-off; removed with LastYearsAccreditationBackfillMigration - do not use elsewhere.
+    /// RA-784 one-off; removed with LastYearsAccreditationBackfillMigration - do not use elsewhere.
     /// </summary>
     Task<IReadOnlyList<AccreditationApplicationModel>> GetByYearAsync(
         int year,
