@@ -86,34 +86,47 @@ public class OverseasSiteMergeTests
         result.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
     }
 
-    [Fact]
-    public void Merge_UnknownSiteId_IsTreatedAsNew()
-    {
-        // Anomalous — sites are only created via the add-site endpoint — but it has never been
-        // persisted, so it errs toward the regulator's attention, as unknown authoriser emails do.
-        var result = OverseasSiteMerge.Merge(
-            [Site(1, isNewSite: false)],
-            [Site(99, isNewSite: false)]
-        );
+    // --- RA-794: the PATCH never creates an ORS site ---
 
-        result.Should().ContainSingle().Which.IsNewSite.Should().BeTrue();
+    [Fact]
+    public void Merge_UnknownSiteId_Throws()
+    {
+        // It used to be stored as a new site with whatever OrsId the client sent - possibly none,
+        // which is the shape the RA-794 correction reads as a wrongly-defaulted ReEx site.
+        var incoming = Site(99, isNewSite: true);
+
+        var act = () => OverseasSiteMerge.Merge([Site(1)], [incoming]);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*99*");
     }
 
     [Fact]
-    public void Merge_EmptyPersistedList_TreatsEverySiteAsNew()
+    public void Merge_NullPersistedList_ThrowsForAnyIncomingSite()
     {
-        OverseasSiteMerge.Merge([], [Site(1), Site(2)]).Should().OnlyContain(s => s.IsNewSite);
+        var act = () => OverseasSiteMerge.Merge(null, [Site(1)]);
+
+        act.Should().Throw<InvalidOperationException>();
     }
 
     [Fact]
-    public void Merge_NullPersistedList_TreatsEverySiteAsNew()
+    public void UnknownSiteIds_ReturnsOnlyIdsThePersistedListLacks()
     {
         OverseasSiteMerge
-            .Merge(null, [Site(1)])
+            .UnknownSiteIds([Site(1), Site(2)], [Site(2), Site(7), Site(7), Site(1)])
             .Should()
-            .ContainSingle()
-            .Which.IsNewSite.Should()
-            .BeTrue();
+            .Equal(7);
+    }
+
+    [Fact]
+    public void UnknownSiteIds_EveryIdKnown_ReturnsEmpty()
+    {
+        OverseasSiteMerge.UnknownSiteIds([Site(1), Site(2)], [Site(2)]).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void UnknownSiteIds_NullPersistedList_ReturnsEveryIncomingId()
+    {
+        OverseasSiteMerge.UnknownSiteIds(null, [Site(1), Site(2)]).Should().Equal(1, 2);
     }
 
     [Fact]
@@ -323,12 +336,6 @@ public class OverseasSiteMergeTests
         result[0].PreviousSites[0].SiteName.Should().Be("Pre-promotion");
     }
 
-    [Fact]
-    public void Merge_UnknownSite_HasNoUndoStack()
-    {
-        OverseasSiteMerge.Merge([Site(1)], [Site(99)])[0].PreviousSites.Should().BeEmpty();
-    }
-
     // --- OrsId: server-owned, protected across merge ---
 
     [Fact]
@@ -370,17 +377,6 @@ public class OverseasSiteMergeTests
         OverseasSiteMerge.Merge([persisted], [incoming])[0].OrsId.Should().BeNull();
     }
 
-    [Fact]
-    public void Merge_UnknownSite_KeepsTheSuppliedOrsId()
-    {
-        // No persisted value to restore. Forcing null would destroy data the client legitimately
-        // sent for a site the server has never seen.
-        var incoming = Site(99);
-        incoming.OrsId = "007";
-
-        OverseasSiteMerge.Merge([Site(1)], [incoming])[0].OrsId.Should().Be("007");
-    }
-
     // --- RegisteredNowAccredited (epr-zgrb) ---
 
     [Fact]
@@ -415,20 +411,6 @@ public class OverseasSiteMergeTests
     public void Merge_ClientClaimsPromotedForUnpromotedSite_CannotSetTheFlag()
     {
         var incoming = Site(1);
-        incoming.RegisteredNowAccredited = true;
-
-        OverseasSiteMerge
-            .Merge([Site(1)], [incoming])[0]
-            .RegisteredNowAccredited.Should()
-            .BeFalse();
-    }
-
-    [Fact]
-    public void Merge_UnknownSite_CannotArrivePromoted()
-    {
-        // Promotion only ever happens via PromoteOverseasSite against an already-persisted site,
-        // so a site the server has never seen cannot be promoted regardless of what is sent.
-        var incoming = Site(99);
         incoming.RegisteredNowAccredited = true;
 
         OverseasSiteMerge

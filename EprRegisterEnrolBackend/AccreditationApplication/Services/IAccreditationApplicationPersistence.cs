@@ -239,6 +239,16 @@ public interface IAccreditationApplicationPersistence
     Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenNotQueriedWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     );
+    /// <summary>
+    /// RA-794: every application created before <paramref name="createdBefore"/> that holds at
+    /// least one overseas site, oldest first. Read by the isNewSite audit and correction only
+    /// (IsNewSiteScanner); removed with them.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetCreatedBeforeWithOverseasSitesAsync(
+        DateTime createdBefore,
+        CancellationToken cancellationToken = default
+    );
+
     Task<AccreditationApplicationModel?> UpdateAsync(
         AccreditationApplicationModel application,
         IClientSessionHandle? session = null
