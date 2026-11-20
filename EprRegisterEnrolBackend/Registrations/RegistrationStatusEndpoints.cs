@@ -1,3 +1,4 @@
+using System.Globalization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Auth;
@@ -20,7 +21,8 @@ public sealed record RegistrationStatusResponse(
     MaterialType MaterialType,
     GlassRecyclingProcess? GlassRecyclingProcess,
     bool IsExporter,
-    string? SiteAddress
+    string? SiteAddress,
+    string? ReExOrganisationId = null
 );
 
 /// <summary>
@@ -66,22 +68,63 @@ public static class RegistrationStatusEndpoints
     // RA-739: the frontend's manage page URLs carry the registration number, not the ReEx registration id. Only the
     // current version's number matches, so a superseded number is a 404. ReEx is then asked with that version's
     // ReEx registration id, so a number another organisation holds is a 404 too.
+    //
+    // The URL's organisationId is the organisation's number, never ReEx's id. It is 404 unless it is a number, and
+    // unless it is the number of the organisation ReEx finds holding the registration; the same when ReEx records no
+    // number or id for that organisation, as there is then nothing to resolve. The response carries ReEx's id for
+    // the organisation, for the frontend's other calls. Unlike the status by registration id, this fails when ReEx
+    // cannot answer: without the organisation there is neither the id nor the check that the pair belongs together.
     private static async Task<IResult> GetStatusByNumber(
         string registrationNumber,
         string? organisationId,
         RegistrationVersionStore store,
         IReExApiAdapter reEx,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
         if (string.IsNullOrWhiteSpace(organisationId))
             return Results.BadRequest("organisationId is required.");
+        if (
+            !int.TryParse(
+                organisationId,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var organisationNumber
+            )
+        )
+            return Results.NotFound();
 
         var current = await store.FindCurrentByRegistrationNumberAsync(
             registrationNumber,
             cancellationToken
         );
-        return await StatusAsync(current, organisationId, reEx, cancellationToken);
+        if (current?.ReExRegistrationId is not { } registrationId)
+            return Results.NotFound();
+
+        var holder = await reEx.GetRegistrationHolderAsync(organisationId, registrationId, cancellationToken);
+        if (holder.IsNotFound)
+            return Results.NotFound();
+        if (!holder.IsSuccess)
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+
+        var organisation = holder.Value!;
+        if (organisation.OrganisationNumber != organisationNumber || organisation.ReExOrganisationId is null)
+        {
+            loggerFactory
+                .CreateLogger(nameof(RegistrationStatusEndpoints))
+                .LogWarning(
+                    "Registration {RegistrationNumber} is not under organisation number {OrganisationNumber}: ReEx "
+                        + "records number {ReExOrganisationNumber} and id {ReExOrganisationIdPresent} for its holder",
+                    registrationNumber,
+                    organisationNumber,
+                    organisation.OrganisationNumber,
+                    organisation.ReExOrganisationId is not null
+                );
+            return Results.NotFound();
+        }
+
+        return Results.Ok(Response(current, registrationId, organisation.Name, organisation.ReExOrganisationId));
     }
 
     // A version without a ReEx registration id cannot be checked against ReEx, so it has no status to show.
@@ -103,19 +146,26 @@ public static class RegistrationStatusEndpoints
         // blip. The frontend shows no registration-only page without the name.
         var organisationName = holder.IsSuccess ? holder.Value : null;
 
-        return Results.Ok(
-            new RegistrationStatusResponse(
-                registrationId,
-                current.RegistrationNumber,
-                current.Status,
-                organisationName,
-                current.Material,
-                current.GlassRecyclingProcess,
-                current.WasteProcessingType == WasteProcessingKind.Exporter,
-                SiteAddress(current.Site?.Address)
-            )
-        );
+        return Results.Ok(Response(current, registrationId, organisationName, reExOrganisationId: null));
     }
+
+    private static RegistrationStatusResponse Response(
+        RegistrationEntity current,
+        string registrationId,
+        string? organisationName,
+        string? reExOrganisationId
+    ) =>
+        new(
+            registrationId,
+            current.RegistrationNumber,
+            current.Status,
+            organisationName,
+            current.Material,
+            current.GlassRecyclingProcess,
+            current.WasteProcessingType == WasteProcessingKind.Exporter,
+            SiteAddress(current.Site?.Address),
+            reExOrganisationId
+        );
 
     // As an accreditation application's site address is (Line1, town, postcode). An address with nothing in it
     // is no address, so null rather than "".

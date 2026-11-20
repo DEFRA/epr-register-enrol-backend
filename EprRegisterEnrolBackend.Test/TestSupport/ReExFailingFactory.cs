@@ -17,9 +17,28 @@ internal static class ReExFailingFactory
         ReExErrorKind kind = ReExErrorKind.ServerError
     )
     {
+        var statusCode = kind == ReExErrorKind.ServerError ? 500 : (int?)null;
         var reEx = Substitute.For<IReExApiAdapter>();
         reEx.GetRegistrationHolderNameAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(ReExResult<string?>.Fail(new ReExError(kind), kind == ReExErrorKind.ServerError ? 500 : null));
+            .Returns(ReExResult<string?>.Fail(new ReExError(kind), statusCode));
+        reEx.GetRegistrationHolderAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ReExResult<RegistrationHolder>.Fail(new ReExError(kind), statusCode));
+        return factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton(reEx))
+        );
+    }
+
+    /// <summary>
+    /// The host with ReEx saying <paramref name="holder"/> holds any registration it is asked about.
+    /// </summary>
+    public static WebApplicationFactory<Program> WithReExHolder(
+        this WebApplicationFactory<Program> factory,
+        RegistrationHolder holder
+    )
+    {
+        var reEx = Substitute.For<IReExApiAdapter>();
+        reEx.GetRegistrationHolderAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ReExResult<RegistrationHolder>.Success(holder, 200));
         return factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services => services.AddSingleton(reEx))
         );

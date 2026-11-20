@@ -561,6 +561,8 @@ static WebApplication SetupApplication(WebApplication app)
     {
         app.UseRegistrationStatusEndpoints();
         app.UseAccreditationChangeEndpoints();
+        // RA-495: Case Management's status pushes for the work items change requests raise.
+        app.UseChangeRequestStatusEndpoints();
     }
 
     if (app.Environment.IsDevelopment())

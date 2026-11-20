@@ -46,6 +46,14 @@ public class TestOrganisationReExApiAdapter(
         For(organisationId)
             .GetRegistrationHolderNameAsync(organisationId, registrationId, cancellationToken);
 
+    public Task<ReExResult<RegistrationHolder>> GetRegistrationHolderAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    ) =>
+        For(organisationId)
+            .GetRegistrationHolderAsync(organisationId, registrationId, cancellationToken);
+
     public Task<ReExResult<Nation>> GetNationAsync(
         string organisationId,
         string registrationId,

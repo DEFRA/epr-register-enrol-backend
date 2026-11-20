@@ -301,7 +301,7 @@ public class HttpCaseWorkingApiAdapter(
                     OperationCodes = effective.OperationCodes,
                     ConditionsOfExport = effective.ConditionsOfExport,
                     BesEvidence = BesEvidenceFiles(site.BesEvidence),
-                    SuppliedFields = ChangeRequestRules.SuppliedFields(site.Answers),
+                    SuppliedFields = ChangeRequestRules.SuppliedFields(site),
                     ChargePence = site.ChargePence,
                 };
             }),

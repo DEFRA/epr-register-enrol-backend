@@ -59,4 +59,10 @@ public enum ChangeReason
     /// was given it from the legacy document (RA-706).
     /// </summary>
     CreatedAtBackfilled,
+
+    /// <summary>
+    /// RA-495: Case Management granted an in-year change request item adding a registered ORS to an existing
+    /// Accreditation: the Accreditation gains the site, and the ORS its first approved date if it had none.
+    /// </summary>
+    ChangeRequestGranted,
 }

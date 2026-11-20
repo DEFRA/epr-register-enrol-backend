@@ -197,6 +197,20 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         registration!.Status.Should().Be(RegistrationStatus.Approved);
     }
 
+    // RA-495: the registered ORS already holds Clean BES evidence, which the add-ORS journey lists read-only.
+    [Fact]
+    public async Task SeedAsync_GivesTheNoChangeRequestsExportersRegisteredOrsBesEvidence()
+    {
+        var seeded = await SeedOnce(organisationId: "50020");
+
+        var ghent = seeded.OverseasSites!.Sites.Single(s => s.OrsId == "002");
+        ghent.IsEu.Should().BeFalse();
+        ghent.BesEvidence!.BesEvidenceUploads.Select(f => (f.Filename, f.ScanStatus))
+            .Should()
+            .Equal(("ghent-bes-certificate.pdf", "Clean"), ("ghent-bes-audit-report.pdf", "Clean"));
+        seeded.OverseasSites.Sites.Single(s => s.OrsId == "001").BesEvidence.Should().BeNull();
+    }
+
     // RA-697: org 50021, an Approved exporter registration with no accreditation in any year, for the
     // registration-only manage pages.
     [Fact]

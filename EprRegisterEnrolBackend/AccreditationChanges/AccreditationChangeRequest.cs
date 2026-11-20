@@ -143,6 +143,12 @@ public abstract class ChangeRequestItem
 
     [BsonGuidRepresentation(GuidRepresentation.Standard)]
     public Guid? CaseManagementWorkItemId { get; set; }
+
+    /// <summary>
+    /// RA-495: the <c>occurredAt</c> of the last Case Management status push applied to this item, its ordering
+    /// watermark: a push at or before it is a duplicate or out of order and changes nothing.
+    /// </summary>
+    public DateTime? CaseManagementStatusUpdatedAt { get; set; }
 }
 
 public class TonnageBandUpgradeItem : ChangeRequestItem
