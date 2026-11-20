@@ -1544,6 +1544,35 @@ public class HttpReExApiAdapterTests
         result.StatusCode.Should().Be(500);
     }
 
+    [Fact]
+    public async Task GetRegistrationHolderAsync_Success_ReturnsTheNameAndBothOrganisationIds()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetRegistrationHolderAsync(
+            "509193",
+            "reg-exporter-1",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
+        result.Value.Should().Be(new RegistrationHolder("Test Recycling Solutions Ltd", "6a2fcd74e16883c137d01188", 509193));
+    }
+
+    [Fact]
+    public async Task GetRegistrationHolderAsync_RegistrationNotTheOrganisations_ReturnsNotFound()
+    {
+        var sut = BuildSut(OrganisationJson);
+
+        var result = await sut.GetRegistrationHolderAsync(
+            "509193",
+            "not-this-organisations-registration",
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsNotFound.Should().BeTrue();
+    }
+
     // ---------------- RA-526: GetNationAsync ----------------
 
     [Fact]

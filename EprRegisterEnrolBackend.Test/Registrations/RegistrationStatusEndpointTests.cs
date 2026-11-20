@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DomainModel.Entities;
@@ -429,6 +430,113 @@ public sealed class RegistrationStatusEndpointTests(MongoIntegrationFixture fixt
         var response = await client.GetAsync(HeldByNumberPath, Ct);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    private async Task<WebApplicationFactory<Program>> FactoryWithTheApprovedRegistration(
+        Func<WebApplicationFactory<Program>, WebApplicationFactory<Program>>? configure = null
+    )
+    {
+        var baseFactory = Factory(expandEnabled: true);
+        await Versions(baseFactory)
+            .InsertAsync(
+                Registration(RegistrationStatus.Approved),
+                new ChangeInfo { Reason = ChangeReason.ReExImport },
+                cancellationToken: Ct
+            );
+        return configure is null ? baseFactory : configure(baseFactory);
+    }
+
+    // The organisation in the URL is its number. ReEx's id for it comes back for the frontend's other calls, which
+    // are keyed by that id.
+    [Fact]
+    public async Task ByNumber_ReturnsReExsIdForTheOrganisationHoldingTheNumber()
+    {
+        using var factory = await FactoryWithTheApprovedRegistration(f =>
+            f.WithReExHolder(new RegistrationHolder("Delta Green Ltd", "6b0043733a116db324a3dbaf", 50003))
+        );
+        using var client = FrontendClient(factory);
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(response))
+            .GetProperty("reExOrganisationId")
+            .GetString()
+            .Should()
+            .Be("6b0043733a116db324a3dbaf");
+    }
+
+    // ReEx's own id is not an organisation number, so it is not found, though ReEx would answer to it.
+    [Fact]
+    public async Task ByNumber_OrganisationIdThatIsNotANumber_ReturnsNotFound()
+    {
+        using var factory = await FactoryWithTheApprovedRegistration(f =>
+            f.WithReExHolder(new RegistrationHolder("Delta Green Ltd", "6b0043733a116db324a3dbaf", 50003))
+        );
+        using var client = FrontendClient(factory);
+
+        var response = await client.GetAsync($"{ByNumberPath}?organisationId=6b0043733a116db324a3dbaf", Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Theory]
+    [InlineData("-50003")]
+    [InlineData("+50003")]
+    [InlineData("50003.0")]
+    public async Task ByNumber_OrganisationIdThatIsNotWholeDigits_ReturnsNotFound(string organisationId)
+    {
+        using var factory = await FactoryWithTheApprovedRegistration();
+        using var client = FrontendClient(factory);
+
+        var response = await client.GetAsync($"{ByNumberPath}?organisationId={Uri.EscapeDataString(organisationId)}", Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // The organisation ReEx found holding the registration has another number than the URL's.
+    [Fact]
+    public async Task ByNumber_ReExsNumberForTheHolderDiffersFromTheUrls_ReturnsNotFound()
+    {
+        using var factory = await FactoryWithTheApprovedRegistration(f =>
+            f.WithReExHolder(new RegistrationHolder("Delta Green Ltd", "6b0043733a116db324a3dbaf", 999999))
+        );
+        using var client = FrontendClient(factory);
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Theory]
+    [InlineData(null, "6b0043733a116db324a3dbaf")]
+    [InlineData(50003, null)]
+    public async Task ByNumber_ReExRecordsNoNumberOrNoIdForTheHolder_ReturnsNotFound(
+        int? organisationNumber,
+        string? reExOrganisationId
+    )
+    {
+        using var factory = await FactoryWithTheApprovedRegistration(f =>
+            f.WithReExHolder(new RegistrationHolder("Delta Green Ltd", reExOrganisationId, organisationNumber))
+        );
+        using var client = FrontendClient(factory);
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Unlike the status by registration id, which leaves the name out: with no answer there is no id to return and
+    // no check that the pair belongs together.
+    [Fact]
+    public async Task ByNumber_ReExFailing_ReturnsServiceUnavailable()
+    {
+        using var factory = await FactoryWithTheApprovedRegistration(f => f.WithReExFailing());
+        using var client = FrontendClient(factory);
+
+        var response = await client.GetAsync(HeldByNumberPath, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
     }
 
     // A superseded number belongs to an older version only.

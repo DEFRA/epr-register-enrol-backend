@@ -456,6 +456,18 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         CancellationToken cancellationToken = default
     )
     {
+        var holder = await GetRegistrationHolderAsync(organisationId, registrationId, cancellationToken);
+        return holder.IsSuccess
+            ? ReExResult<string?>.Success(holder.Value!.Name, 200)
+            : ReExResult<string?>.Fail(holder.Error!, holder.StatusCode);
+    }
+
+    public async Task<ReExResult<RegistrationHolder>> GetRegistrationHolderAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
         var orgResult = await reExClient.GetOrganisationsAsync(organisationId, cancellationToken);
         if (!orgResult.IsSuccess)
         {
@@ -464,7 +476,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 organisationId,
                 orgResult.Error?.Message
             );
-            return ReExResult<string?>.Fail(orgResult.Error!, orgResult.StatusCode);
+            return ReExResult<RegistrationHolder>.Fail(orgResult.Error!, orgResult.StatusCode);
         }
 
         var org = orgResult.Value!;
@@ -475,13 +487,16 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 organisationId,
                 registrationId
             );
-            return ReExResult<string?>.Fail(
+            return ReExResult<RegistrationHolder>.Fail(
                 new ReExError(ReExErrorKind.NotFound, $"Registration {registrationId} not found"),
                 404
             );
         }
 
-        return ReExResult<string?>.Success(org.CompanyDetails?.Name, 200);
+        return ReExResult<RegistrationHolder>.Success(
+            new RegistrationHolder(org.CompanyDetails?.Name, org.Id, org.OrgId),
+            200
+        );
     }
 
     public async Task<ReExResult<Nation>> GetNationAsync(
