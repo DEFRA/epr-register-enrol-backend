@@ -96,11 +96,6 @@ public class DuplicateApplicationDeletionMigration(
     private static FilterDefinitionBuilder<AccreditationApplicationModel> Filter =>
         Builders<AccreditationApplicationModel>.Filter;
 
-    // A failed in-transaction check: throwing aborts the transaction.
-    private sealed class RollbackException(string reason) : Exception(reason)
-    {
-        public string Reason { get; } = reason;
-    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -219,10 +214,10 @@ public class DuplicateApplicationDeletionMigration(
             }
             return Abort(
                 mode,
-                "target {TargetId} not found and keeper {KeeperId} is {KeeperState}",
-                TargetId,
-                KeeperId,
-                keeper is null ? "missing" : $"status={keeper.ApplicationStatus}"
+                Invariant(
+                    $"target {TargetId} not found and keeper {KeeperId} is ",
+                    keeper is null ? (FormattableString)$"missing" : $"status={keeper.ApplicationStatus}"
+                )
             );
         }
 
@@ -230,40 +225,28 @@ public class DuplicateApplicationDeletionMigration(
         if (!IsTarget(target))
             return Abort(
                 mode,
-                "target {TargetId} is year={Year} material={Material} registration={Registration} "
-                    + "orgId={TargetOrgId} status={Status}; expected year={ExpectedYear} "
-                    + "material={ExpectedMaterial} registration={ExpectedRegistration} orgId=null "
-                    + "or {ExpectedOrgId} status=Saved",
-                TargetId,
-                target.Year,
-                target.MaterialType,
-                target.RegistrationId ?? "null",
-                OrgIdText(target.OrgId),
-                target.ApplicationStatus,
-                AccreditationYear,
-                Material,
-                RegistrationId,
-                OrgId,
-                ApplicationStatus.Saved
+                Invariant(
+                    $"target {TargetId} is year={target.Year} material={target.MaterialType} ",
+                    $"registration={target.RegistrationId ?? "null"} ",
+                    $"orgId={OrgIdText(target.OrgId)} status={target.ApplicationStatus}; ",
+                    $"expected year={AccreditationYear} material={Material} ",
+                    $"registration={RegistrationId} orgId=null or {OrgId} status=Saved"
+                )
             );
 
         // 3. The keeper exists, is still Updated and is in the same group.
         if (keeper is null)
-            return Abort(mode, "keeper {KeeperId} not found", KeeperId);
+            return Abort(mode, Invariant($"keeper {KeeperId} not found"));
         if (!IsKeeper(keeper, target))
             return Abort(
                 mode,
-                "keeper {KeeperId} is year={Year} material={Material} registration={Registration} "
-                    + "orgId={KeeperOrgId} status={Status} sameReExOrganisation={SameOrganisation}; "
-                    + "expected the target's group, orgId={ExpectedOrgId} and status=Updated",
-                KeeperId,
-                keeper.Year,
-                keeper.MaterialType,
-                keeper.RegistrationId ?? "null",
-                OrgIdText(keeper.OrgId),
-                keeper.ApplicationStatus,
-                keeper.OrganisationId == target.OrganisationId,
-                OrgId
+                Invariant(
+                    $"keeper {KeeperId} is year={keeper.Year} material={keeper.MaterialType} ",
+                    $"registration={keeper.RegistrationId ?? "null"} ",
+                    $"orgId={OrgIdText(keeper.OrgId)} status={keeper.ApplicationStatus} ",
+                    $"sameReExOrganisation={keeper.OrganisationId == target.OrganisationId}; ",
+                    $"expected the target's group, orgId={OrgId} and status=Updated"
+                )
             );
 
         // 4. Exactly the two live applications in the group.
@@ -274,8 +257,7 @@ public class DuplicateApplicationDeletionMigration(
         if (live != 2)
             return Abort(
                 mode,
-                "the group holds {LiveCount} live applications; expected 2",
-                live
+                Invariant($"the group holds {live} live applications; expected 2")
             );
 
         // 5. The Version the delete is guarded on.
@@ -294,16 +276,19 @@ public class DuplicateApplicationDeletionMigration(
         return new CheckOutcome(null, target, target.Version);
     }
 
-    private CheckOutcome Abort(string mode, string reason, params object?[] args)
+    // The reason holds only ids, statuses, years, materials and counts (see the class comment).
+    private CheckOutcome Abort(string mode, string reason)
     {
-#pragma warning disable CA2254 // The template is built from constant fragments only.
         logger.LogError(
-            "RA-788 {Mode:l}: aborted, nothing has been written: " + reason,
-            [mode, .. args]
+            "RA-788 {Mode:l}: aborted, nothing has been written: {Reason:l}",
+            mode,
+            reason
         );
-#pragma warning restore CA2254
         return new CheckOutcome(RunResult.Aborted, null, 0);
     }
+
+    private static string Invariant(params FormattableString[] parts) =>
+        string.Concat(parts.Select(p => p.ToString(CultureInfo.InvariantCulture)));
 
     private async Task<RunResult> DeleteAsync(
         IMongoDbClientFactory factory,
@@ -317,6 +302,15 @@ public class DuplicateApplicationDeletionMigration(
         if (BeforeDeleteForTest is { } before)
             await before(cancellationToken);
 
+        // Set when an in-transaction check fails; throwing then aborts the transaction, and the
+        // reason (ids and counts only) is what is logged rather than an exception's message.
+        string? rollbackReason = null;
+        void FailCheck(string reason)
+        {
+            rollbackReason = reason;
+            throw new InvalidOperationException(reason);
+        }
+
         try
         {
             using var session = await factory
@@ -325,6 +319,9 @@ public class DuplicateApplicationDeletionMigration(
             await session.WithTransactionAsync(
                 async (s, token) =>
                 {
+                    // The driver re-runs this on a transient error, so start each attempt clean.
+                    rollbackReason = null;
+
                     // 1. Exactly the record checked, unchanged since.
                     var deleted = await collection.DeleteOneAsync(
                         s,
@@ -332,8 +329,10 @@ public class DuplicateApplicationDeletionMigration(
                         cancellationToken: token
                     );
                     if (deleted.DeletedCount != 1)
-                        throw new RollbackException(
-                            $"deleted {deleted.DeletedCount} records; the target changed after the checks"
+                        FailCheck(
+                            Invariant(
+                                $"deleted {deleted.DeletedCount} records; the target changed after the checks"
+                            )
                         );
 
                     if (AfterDeleteForTest is { } after)
@@ -349,7 +348,7 @@ public class DuplicateApplicationDeletionMigration(
                         cancellationToken: token
                     );
                     if (keeperLive != 1)
-                        throw new RollbackException("the keeper is no longer live");
+                        FailCheck("the keeper is no longer live");
 
                     // 3. Exactly one live application left in the group.
                     var live = await collection.CountDocumentsAsync(
@@ -358,8 +357,8 @@ public class DuplicateApplicationDeletionMigration(
                         cancellationToken: token
                     );
                     if (live != 1)
-                        throw new RollbackException(
-                            $"the group would hold {live} live applications; expected 1"
+                        FailCheck(
+                            Invariant($"the group would hold {live} live applications; expected 1")
                         );
                     return true;
                 },
@@ -372,10 +371,10 @@ public class DuplicateApplicationDeletionMigration(
         {
             logger.LogError(
                 "RA-788 {Mode:l}: rolled back, nothing has been deleted. target={TargetId} "
-                    + "reason={Reason}",
+                    + "reason={Reason:l}",
                 ApplyMode,
                 TargetId,
-                ex is RollbackException rollback ? rollback.Reason : ex.GetType().Name
+                rollbackReason ?? ex.GetType().Name
             );
             return RunResult.RolledBack;
         }
