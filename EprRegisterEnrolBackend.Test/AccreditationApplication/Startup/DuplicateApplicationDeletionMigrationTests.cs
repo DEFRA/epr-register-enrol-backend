@@ -227,11 +227,19 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
 
     // --- Aborts ---
 
-    public static TheoryData<string> TargetMismatches => ["status", "registration", "year", "orgId"];
+    // Each case names the reason it must abort with, so it cannot pass by tripping another check.
+    public static TheoryData<string, string> TargetMismatches =>
+        new()
+        {
+            { "status", "status=Submitted" },
+            { "registration", "registration=68da9750c020f0e3dff99999" },
+            { "year", "year=2026" },
+            { "orgId", "orgId=500999" },
+        };
 
     [Theory]
     [MemberData(nameof(TargetMismatches))]
-    public async Task A_target_that_does_not_match_aborts(string mismatch)
+    public async Task A_target_that_does_not_match_aborts(string mismatch, string reason)
     {
         await SeedAsync(
             mismatch switch
@@ -244,15 +252,21 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             Keeper()
         );
 
-        await AssertAbortedAsync(Applying());
+        await AssertAbortedAsync(Applying(), $"target {Migration.TargetId} is ", reason);
     }
 
-    public static TheoryData<string> KeeperMismatches =>
-        ["missing", "status", "organisation", "orgId"];
+    public static TheoryData<string, string> KeeperMismatches =>
+        new()
+        {
+            { "missing", $"keeper {Migration.KeeperId} not found" },
+            { "status", "status=Saved" },
+            { "organisation", "sameReExOrganisation=False" },
+            { "orgId", "orgId=500999" },
+        };
 
     [Theory]
     [MemberData(nameof(KeeperMismatches))]
-    public async Task A_keeper_that_is_missing_or_does_not_match_aborts(string mismatch)
+    public async Task A_keeper_that_is_missing_or_does_not_match_aborts(string mismatch, string reason)
     {
         await SeedAsync(Target());
         switch (mismatch)
@@ -268,7 +282,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                 break;
         }
 
-        await AssertAbortedAsync(Applying());
+        await AssertAbortedAsync(Applying(), $"keeper {Migration.KeeperId} ", reason);
     }
 
     [Fact]
@@ -280,7 +294,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             Application(null, ApplicationStatus.Saved, null)
         );
 
-        await AssertAbortedAsync(Applying());
+        await AssertAbortedAsync(Applying(), "the group holds 3 live applications; expected 2");
     }
 
     [Fact]
@@ -288,13 +302,23 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     {
         await SeedAsync(Keeper(status: ApplicationStatus.Withdrawn));
 
-        var result = await Applying().RunAsync(Ct);
-
-        result.Should().Be(RunResult.Aborted);
+        await AssertAbortedAsync(
+            Applying(),
+            $"target {Migration.TargetId} not found and keeper {Migration.KeeperId} is status=Withdrawn"
+        );
         (await ExistsAsync(Migration.KeeperId)).Should().BeTrue();
     }
 
-    private async Task AssertAbortedAsync(Migration migration)
+    [Fact]
+    public async Task A_missing_target_and_missing_keeper_aborts()
+    {
+        await AssertAbortedAsync(
+            Applying(),
+            $"target {Migration.TargetId} not found and keeper {Migration.KeeperId} is missing"
+        );
+    }
+
+    private async Task AssertAbortedAsync(Migration migration, params string[] reasonParts)
     {
         var before = await CountAsync();
 
@@ -303,12 +327,15 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
         result.Should().Be(RunResult.Aborted);
         (await CountAsync()).Should().Be(before);
         Messages.Should().NotContain(m => m.StartsWith("RA-788 APPLIED"));
-        _logger
+        var aborted = _logger
             .Entries.Should()
-            .Contain(e =>
+            .ContainSingle(e =>
                 e.LogLevel == LogLevel.Error
                 && e.Message.StartsWith("RA-788 APPLY: aborted, nothing has been written")
-            );
+            )
+            .Which.Message;
+        foreach (var part in reasonParts)
+            aborted.Should().Contain(part);
     }
 
     // --- Rollbacks ---
@@ -337,7 +364,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     {
         await SeedProductionShapeAsync();
         var migration = Applying();
-        migration.AfterDeleteForTest = _ => throw new InvalidOperationException("injected");
+        migration.AfterDeleteForTest = (_, _) => throw new InvalidOperationException("injected");
 
         var result = await migration.RunAsync(Ct);
 
@@ -351,6 +378,66 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                 && m.Contains(nameof(InvalidOperationException))
             );
         Messages.Should().NotContain(m => m.Contains("injected"));
+    }
+
+    // The two checks made after the delete, inside the transaction: the change that trips each is
+    // written in the same session, so the transaction sees it and rolls it back with the delete.
+    [Fact]
+    public async Task A_keeper_no_longer_live_after_the_delete_rolls_back()
+    {
+        await SeedProductionShapeAsync();
+        var migration = Applying();
+        migration.AfterDeleteForTest = async (session, token) =>
+            await _applications.UpdateOneAsync(
+                session,
+                a => a.Id == Migration.KeeperId,
+                Builders<AccreditationApplicationModel>.Update.Set(
+                    a => a.ApplicationStatus,
+                    ApplicationStatus.Withdrawn
+                ),
+                cancellationToken: token
+            );
+
+        var result = await migration.RunAsync(Ct);
+
+        result.Should().Be(RunResult.RolledBack);
+        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
+        (
+            await _applications
+                .Find(a => a.Id == Migration.KeeperId)
+                .SingleAsync(Ct)
+        ).ApplicationStatus.Should().Be(ApplicationStatus.Updated);
+        Messages
+            .Should()
+            .Contain(m =>
+                m.StartsWith("RA-788 APPLY: rolled back")
+                && m.Contains("reason=the keeper is no longer live")
+            );
+    }
+
+    [Fact]
+    public async Task A_group_not_left_with_one_live_application_rolls_back()
+    {
+        await SeedProductionShapeAsync();
+        var migration = Applying();
+        migration.AfterDeleteForTest = async (session, token) =>
+            await _applications.InsertOneAsync(
+                session,
+                Application(null, ApplicationStatus.Saved, null),
+                cancellationToken: token
+            );
+
+        var result = await migration.RunAsync(Ct);
+
+        result.Should().Be(RunResult.RolledBack);
+        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
+        (await CountAsync()).Should().Be(4);
+        Messages
+            .Should()
+            .Contain(m =>
+                m.StartsWith("RA-788 APPLY: rolled back")
+                && m.Contains("reason=the group would hold 2 live applications; expected 1")
+            );
     }
 
     // --- Logging ---
