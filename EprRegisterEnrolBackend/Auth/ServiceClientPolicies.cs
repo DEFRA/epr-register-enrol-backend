@@ -13,7 +13,7 @@ public static class ServiceClientPolicies
 
     /// <summary>
     /// RA-740: <see cref="Read"/>, and the client must be the admin service client: the one whose
-    /// configured <see cref="ServiceClientDefinition.Name"/> is <see cref="AdminClientName"/>. Guards
+    /// configured <see cref="ServiceClientDefinition.Name"/> is <see cref="AdminClientName"/>, ignoring case. Guards
     /// the <c>/admin</c> API. Any other known client, such as ReEx, is answered 403.
     /// </summary>
     public const string Admin = "ServiceClientAdmin";
@@ -27,7 +27,7 @@ public static class ServiceClientPolicies
         options.AddPolicy(
             Admin,
             policy =>
-                // Ignoring case, as the name's secret (AUTH_SHARED_SECRET__ADMIN) is found.
+                // Ignoring case: an "Admin" entry finds the same secret, so it is the same client.
                 RequireReadingClient(policy)
                     .RequireAssertion(context =>
                         context.User.HasClaim(claim =>

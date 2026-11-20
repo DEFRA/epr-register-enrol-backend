@@ -36,6 +36,7 @@ public class PiiRedactionEnricherTests
     [Theory]
     [InlineData("/admin/accreditation-applications")]
     [InlineData("/Admin/accreditation-applications")]
+    [InlineData("/admin")]
     public void Enrich_DropsTheQuery_FromAnAdminApiRequestsUrl(string path)
     {
         var enrichments = new SpecialProperties.HttpContextEnrichments

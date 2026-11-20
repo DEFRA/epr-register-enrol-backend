@@ -63,7 +63,7 @@ public sealed class PiiRedactionEnricher : ILogEventEnricher
     // drop the query.
     private static void RedactAdminQuery(Url? url)
     {
-        if (url?.Path is null || !url.Path.StartsWith("/admin/", StringComparison.OrdinalIgnoreCase))
+        if (!IsAdminPath(url?.Path))
         {
             return;
         }
@@ -72,6 +72,14 @@ public sealed class PiiRedactionEnricher : ILogEventEnricher
         url.Full = WithoutQuery(url.Full);
         url.Original = WithoutQuery(url.Original);
     }
+
+    // /admin itself too, which is a 404 but still carries whatever query was sent.
+    private static bool IsAdminPath(string? path) =>
+        path is not null
+        && (
+            path.Equals("/admin", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("/admin/", StringComparison.OrdinalIgnoreCase)
+        );
 
     private static string? WithoutQuery(string? url)
     {

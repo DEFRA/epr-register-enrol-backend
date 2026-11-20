@@ -166,13 +166,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
 
     // Accreditation Application
-    builder.Services.AddSingleton<
-        IAccreditationApplicationPersistence,
-        AccreditationApplicationPersistence
-    >();
-    // RA-740: the admin API searches the Legacy collection, which the persistence above reads.
+    builder.Services.AddSingleton<AccreditationApplicationPersistence>();
+    builder.Services.AddSingleton<IAccreditationApplicationPersistence>(sp =>
+        sp.GetRequiredService<AccreditationApplicationPersistence>()
+    );
+    // RA-740: the admin API always searches the Legacy collection. Registered on its own, so the cut,
+    // which replaces IAccreditationApplicationPersistence with the model-backed one, leaves it there.
     builder.Services.AddSingleton<ILegacyApplicationSearch>(sp =>
-        (ILegacyApplicationSearch)sp.GetRequiredService<IAccreditationApplicationPersistence>()
+        sp.GetRequiredService<AccreditationApplicationPersistence>()
     );
 
     // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a

@@ -356,7 +356,10 @@ components:
           x-commercially-sensitive: true
         samplingPlan:
           allOf: [{ $ref: '#/components/schemas/StoredSection' }]
-          description: '`AccreditationApplicationSamplingPlan`.'
+          description: >-
+            `AccreditationApplicationSamplingPlan`. Refers to uploaded files by name and storage key;
+            the files themselves can hold personal data.
+          x-personal-data: true
         overseasSites:
           allOf: [{ $ref: '#/components/schemas/StoredSection' }]
           nullable: true
@@ -365,7 +368,9 @@ components:
         besEvidence:
           allOf: [{ $ref: '#/components/schemas/StoredSection' }]
           nullable: true
-          description: '`AccreditationApplicationBesEvidence`. Holds uploaded file names.'
+          description: >-
+            `AccreditationApplicationBesEvidence`. Refers to uploaded files by name and storage key;
+            the files themselves can hold personal data.
           x-personal-data: true
         query:
           allOf: [{ $ref: '#/components/schemas/StoredSection' }]
