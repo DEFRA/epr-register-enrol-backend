@@ -246,6 +246,25 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         created.RemovedAt.Should().BeNull();
     }
 
+    // RA-781: the status history starts with the site approved from when it is added.
+    [Fact]
+    public async Task Create_StartsTheStatusHistoryWithAnApprovedEntry()
+    {
+        Reset();
+        var app = Seed();
+
+        await _client.PostAsJsonAsync(
+            Collection(app),
+            ValidRequest(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        var created = (await StoredSiteAsync(app)).InterimSites.Single();
+        var entry = created.StatusHistory.Should().ContainSingle().Subject;
+        entry.Status.Should().Be("approved");
+        entry.RecordedAt.Should().Be(created.CreatedAt!.Value);
+    }
+
     [Fact]
     public async Task Create_PointsTheLegacyMirrorAtTheFirstActiveSite()
     {
@@ -419,6 +438,61 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         site.InterimSites[0].RemovedAt.Should().NotBeNull();
     }
 
+    // RA-781: the withdrawal is a status change of its own, recorded when it happens.
+    [Fact]
+    public async Task Withdraw_AddsAWithdrawnEntry_AtTheTimeOfRemovedAt()
+    {
+        Reset();
+        var createdAt = new DateTime(2026, 1, 5, 12, 0, 0, DateTimeKind.Utc);
+        var app = Seed(interimSites: [Interim(2, createdAt: createdAt)]);
+
+        await _client.DeleteAsync(Item(app, 2), TestContext.Current.CancellationToken);
+
+        var site = (await StoredSiteAsync(app)).InterimSites.Single();
+        site.StatusHistory.Select(h => h.Status).Should().Equal("approved", "withdrawn");
+        site.StatusHistory[0].RecordedAt.Should().Be(createdAt);
+        site.StatusHistory[1].RecordedAt.Should().Be(site.RemovedAt!.Value);
+    }
+
+    // Withdrawing again records nothing: it is the same withdrawal.
+    [Fact]
+    public async Task Withdraw_AlreadyWithdrawn_AddsNoEntry()
+    {
+        Reset();
+        var app = Seed(
+            interimSites: [Interim(2, removedAt: new DateTime(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc))]
+        );
+
+        await _client.DeleteAsync(Item(app, 2), TestContext.Current.CancellationToken);
+
+        (await StoredSiteAsync(app)).InterimSites.Single().StatusHistory.Should().BeEmpty();
+    }
+
+    // RA-781: restoring no longer loses the withdrawal. Withdrawn, restored and withdrawn again, it is
+    // still one interim site with all of it in its history.
+    [Fact]
+    public async Task WithdrawRestoreWithdraw_KeepsEveryChange_OnOneInterimSite()
+    {
+        Reset();
+        var app = Seed(interimSites: [Interim(2)]);
+
+        await _client.DeleteAsync(Item(app, 2), TestContext.Current.CancellationToken);
+        await _client.PostAsync(
+            $"{Item(app, 2)}/restore",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+        await _client.DeleteAsync(Item(app, 2), TestContext.Current.CancellationToken);
+
+        var sites = (await StoredSiteAsync(app)).InterimSites;
+        var site = sites.Should().ContainSingle().Subject;
+        site.StatusHistory.Select(h => h.Status)
+            .Should()
+            .Equal("approved", "withdrawn", "approved", "withdrawn");
+        site.StatusHistory.Select(h => h.RecordedAt).Should().BeInAscendingOrder();
+        site.RemovedAt.Should().Be(site.StatusHistory[^1].RecordedAt);
+    }
+
     [Fact]
     public async Task Withdraw_LeavesTheOtherInterimSitesAndTheirCodesUnchanged()
     {
@@ -512,6 +586,44 @@ public class AccreditationApplicationEndpointsInterimSitesTests
         restored.SiteId.Should().Be(2);
         restored.SiteNumber.Should().Be("SN-0002");
         restored.CreatedAt.Should().Be(createdAt);
+    }
+
+    // A site withdrawn before RA-781 has no stored history: the restore gives it the one it can know
+    // (approved, withdrawn on its RemovedAt) and then records the restore.
+    [Fact]
+    public async Task Restore_OfASiteWithNoStoredHistory_KeepsItsWithdrawal()
+    {
+        Reset();
+        var createdAt = new DateTime(2026, 1, 5, 12, 0, 0, DateTimeKind.Utc);
+        var withdrawnAt = new DateTime(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc);
+        var app = Seed(interimSites: [Interim(2, createdAt: createdAt, removedAt: withdrawnAt)]);
+
+        await _client.PostAsync(
+            $"{Item(app, 2)}/restore",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        var site = (await StoredSiteAsync(app)).InterimSites.Single();
+        site.StatusHistory.Select(h => h.Status).Should().Equal("approved", "withdrawn", "approved");
+        site.StatusHistory[0].RecordedAt.Should().Be(createdAt);
+        site.StatusHistory[1].RecordedAt.Should().Be(withdrawnAt);
+        site.StatusHistory[2].RecordedAt.Should().BeAfter(withdrawnAt);
+    }
+
+    [Fact]
+    public async Task Restore_AnActiveSite_AddsNoEntry()
+    {
+        Reset();
+        var app = Seed(interimSites: [Interim(2)]);
+
+        await _client.PostAsync(
+            $"{Item(app, 2)}/restore",
+            content: null,
+            TestContext.Current.CancellationToken
+        );
+
+        (await StoredSiteAsync(app)).InterimSites.Single().StatusHistory.Should().BeEmpty();
     }
 
     [Fact]

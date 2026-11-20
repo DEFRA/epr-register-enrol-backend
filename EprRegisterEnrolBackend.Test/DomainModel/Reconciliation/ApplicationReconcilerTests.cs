@@ -396,6 +396,48 @@ public sealed class ApplicationReconcilerTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_AWithdrawnInterimSiteWithItsHistory_IsNotADifference()
+    {
+        var site = Site(1, "001", "Plant");
+        var interim = Interim(1, "001", removedAt: Day1.AddDays(5));
+        interim.StatusHistory =
+        [
+            new() { Status = "approved", RecordedAt = Day1 },
+            new() { Status = "withdrawn", RecordedAt = Day1.AddDays(5) },
+        ];
+        site.InterimSites = [interim];
+        InterimSiteSync.SyncMirror(site);
+        var id = await CreateAsync(Application(sites: site));
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.DifferencesByField.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Run_ARestoredInterimSite_IsADifferenceUntilTheModelHoldsItsHistory()
+    {
+        var site = Site(1, "001", "Plant");
+        var interim = Interim(1, "001");
+        interim.StatusHistory =
+        [
+            new() { Status = "approved", RecordedAt = Day1 },
+            new() { Status = "withdrawn", RecordedAt = Day1.AddDays(5) },
+            new() { Status = "approved", RecordedAt = Day1.AddDays(9) },
+        ];
+        site.InterimSites = [interim];
+        InterimSiteSync.SyncMirror(site);
+        var id = await CreateAsync(Application(sites: site));
+        await MigrateAsync(id);
+
+        var report = await _reconciler.RunAsync(Ct);
+
+        report.WithDifferences.Should().Be(1);
+        report.DifferencesByField.Keys.Should().NotBeEmpty().And.OnlyContain(field => field.EndsWith("statusHistory"));
+    }
+
+    [Fact]
     public async Task Run_APreRa603SingularInterimSite_IsNotADifference()
     {
         var site = Site(1, "001", "Plant");
