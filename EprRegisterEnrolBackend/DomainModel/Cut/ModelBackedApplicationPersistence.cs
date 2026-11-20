@@ -744,47 +744,6 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
-    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
-        int orgId,
-        int year,
-        CancellationToken cancellationToken = default
-    )
-    {
-        var ofOrganisation = await OfOrganisationNumberAsync(orgId, cancellationToken);
-        if (ofOrganisation is null)
-        {
-            return [];
-        }
-
-        var results = await ProjectCurrentAsync(ofOrganisation, null, cancellationToken);
-        return results.Where(a => a.OrgId == orgId && a.Year == year).OrderBy(a => a.Id).ToList();
-    }
-
-    // RA-764 one-off: the registration reference is not held on the application entity, so this
-    // projects every current application and filters, as the one startup call it backs allows.
-    public async Task<
-        IReadOnlyList<AccreditationApplicationModel>
-    > GetByRegistrationReferencesAndYearAsync(
-        IReadOnlyCollection<string> registrationReferences,
-        int year,
-        CancellationToken cancellationToken = default
-    )
-    {
-        var results = await ProjectCurrentAsync(
-            Builders<ApplicationEntity>.Filter.Empty,
-            null,
-            cancellationToken
-        );
-        return results
-            .Where(a =>
-                a.Year == year
-                && a.RegistrationReference is { } reference
-                && registrationReferences.Contains(reference)
-            )
-            .OrderBy(a => a.Id)
-            .ToList();
-    }
-
     public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByYearAsync(
         int year,
         CancellationToken cancellationToken = default

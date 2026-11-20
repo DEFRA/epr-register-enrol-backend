@@ -197,7 +197,7 @@ The correction is idempotent: a corrected site reads `false` and is not flagged 
   `true` back.
 - Nothing on the site changes except `isNewSite`. History snapshots (`overseasSites.versions`) are
   not changed: they record what was submitted, and nothing reads `isNewSite` from them.
-- There is no audit entry on the application, as with the RA-691 and RA-764 corrections. The log
+- There is no audit entry on the application, as with the RA-691 correction. The log
   line for each applied correction names who confirmed the spot check.
 
 ## The domain model (dual-write)
