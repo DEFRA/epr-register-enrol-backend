@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.Status;
 using Microsoft.Extensions.Logging;
 
@@ -65,10 +66,7 @@ public static class AccreditationApiMapper
         AccreditationApplicationModel application
     ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
 
-    public static AccreditationDto ToAccreditation(
-        AccreditationApplicationModel application,
-        bool includeWithdrawn = false
-    )
+    public static AccreditationDto ToAccreditation(AccreditationApplicationModel application)
     {
         var history = StatusHistory(application);
         var summary = Summary(application, history);
@@ -97,7 +95,7 @@ public static class AccreditationApiMapper
                 ? AccreditedSites(application)
                     .OrderBy(site => site.OrsId, StringComparer.Ordinal)
                     .ThenBy(site => site.SiteId)
-                    .Select(site => ToOverseasSite(application, site, includeWithdrawn))
+                    .Select(site => ToOverseasSite(application, site))
                     .ToList()
                 : null,
             TonnageBandHistory = summary.TonnageBand is null
@@ -115,8 +113,7 @@ public static class AccreditationApiMapper
 
     public static AccreditedOverseasSiteDto ToOverseasSite(
         AccreditationApplicationModel application,
-        OverseasSiteModel site,
-        bool includeWithdrawn
+        OverseasSiteModel site
     )
     {
         var history = StatusHistory(application);
@@ -138,9 +135,8 @@ public static class AccreditationApiMapper
             LatestStatus = StatusHistoryBuilder.Latest(history),
             StatusHistory = history,
             InterimSites = site
-                .InterimSites.Where(interim => includeWithdrawn || interim.RemovedAt is null)
-                .OrderBy(interim => interim.SiteId)
-                .Select(ToInterimSite)
+                .InterimSites.OrderBy(interim => interim.SiteId)
+                .Select(interim => ToInterimSite(application, interim))
                 .ToList(),
         };
     }
@@ -193,8 +189,45 @@ public static class AccreditationApiMapper
             ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
             : value.ToUniversalTime();
 
-    private static InterimSiteDto ToInterimSite(InterimSiteModel interim) =>
-        new()
+    // RA-781: an interim site is not approved as such. It is approved from when its overseas site was
+    // approved (not CreatedAt: it takes effect with the application that adds it), withdrawn from each
+    // withdrawal and approved again from each restore. The changes come from the stored history; a
+    // site with none stored is approved, then withdrawn from RemovedAt if it is withdrawn now. A change
+    // recorded before the approval applies from the approval, as the site cannot be withdrawn before it
+    // is in the accreditation. Their dates follow StatusHistoryBuilder's rules, as an accreditation's do.
+    private static List<StatusHistoryEntryDto> InterimStatusHistory(
+        AccreditationApplicationModel application,
+        InterimSiteModel interim
+    )
+    {
+        var approval = Approval(application);
+        var changes = new List<(string Status, DateTime RecordedAt)> { (Approved, approval) };
+        if (interim.StatusHistory.Count > 0)
+        {
+            // The first stored entry is the site being added: it is the approval itself.
+            changes.AddRange(
+                interim.StatusHistory.Skip(1).Select(change => (change.Status, AsUtc(change.RecordedAt)))
+            );
+        }
+        else if (interim.RemovedAt is { } removed)
+        {
+            changes.Add((InterimSiteStatusHistory.Withdrawn, AsUtc(removed)));
+        }
+
+        changes = changes
+            .Select(change => (change.Status, change.RecordedAt < approval ? approval : change.RecordedAt))
+            .ToList();
+
+        return StatusHistoryBuilder.Build(changes, application.Year);
+    }
+
+    private static InterimSiteDto ToInterimSite(
+        AccreditationApplicationModel application,
+        InterimSiteModel interim
+    )
+    {
+        var history = InterimStatusHistory(application, interim);
+        return new InterimSiteDto
         {
             SiteId = interim.SiteId,
             SiteNumber = interim.SiteNumber,
@@ -216,8 +249,10 @@ public static class AccreditationApiMapper
             },
             OperationCodes = interim.OperationCodes,
             CreatedAt = interim.CreatedAt is { } created ? AsUtc(created) : null,
-            RemovedAt = interim.RemovedAt is { } removed ? AsUtc(removed) : null,
+            LatestStatus = StatusHistoryBuilder.Latest(history),
+            StatusHistory = history,
         };
+    }
 
     private static AddressDto? ToOverseasAddress(OverseasSiteModel site)
     {

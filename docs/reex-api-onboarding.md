@@ -93,9 +93,9 @@ Accreditations for 2027 onwards are served.
 | Route | Returns |
 | --- | --- |
 | `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100). `year`, `organisationNumber`, `registrationNumber` and `status` (`approved`, `suspended`, `cancelled` or `withdrawn`) are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404. Results are ordered by accreditation number |
-| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}?includeWithdrawn=false` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
-| `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20&includeWithdrawn=false` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
-| `…/accreditations/{year}/overseas-sites/{orsId}?includeWithdrawn=false` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
+| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
+| `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
+| `…/accreditations/{year}/overseas-sites/{orsId}` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
 
 Notes: the shapes follow the v2 draft spec (`docs/openapi/registration-accreditation-api.v2.yaml`).
 `tonnageBand` is the operator's planned band. Signatories are returned only when getting one
@@ -134,7 +134,13 @@ are left out. The order of fields is not significant. **Ignore fields you do not
 An overseas site has `siteId`, `orsId`, `siteName`, `formattedAddress`, `address`, `contact`,
 `operationCodes`, `isEu`, `isOecd`, `latestStatus`, `statusHistory` and `interimSites`. An
 interim site has `siteId`, `siteNumber`, `siteName`, `address`, `contact`, `operationCodes`,
-`createdAt` and, if it was withdrawn, `removedAt`.
+`createdAt`, `latestStatus` and `statusHistory`.
+
+An interim site's status is `approved` from when its overseas site was approved, and `withdrawn` from
+when it was withdrawn. Withdrawn interim sites are always returned: read `latestStatus` to tell
+them from current ones. A withdrawn interim site that is restored is the same interim site, so its
+history reads approved, withdrawn, approved. A new interim site added in place of a withdrawn one is a
+separate interim site, with its own history. The dates follow the rules in "Status and dates" below.
 
 `siteId` identifies a site within its accreditation. It is unique there, across overseas and interim
 sites, and is never reused after a site is removed. It is not unique across accreditations, so
@@ -315,8 +321,8 @@ are ordered by accreditation number, so the order is stable between pages.
 
 For an exporter, `overseasSites` in the detail response lists them. Use the site routes to page
 them or to fetch one by `orsId`. Only sites included in the accreditation are returned: a site the
-organisation registered but did not accredit is a `404`. Withdrawn interim sites are left out
-unless you add `includeWithdrawn=true`.
+organisation registered but did not accredit is a `404`. Withdrawn interim sites are included: see
+their `latestStatus`.
 
 ### Is a registration or accreditation I cannot find really missing?
 
@@ -352,7 +358,7 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 | 404 | `accreditation_not_found` | no granted accreditation for that organisation, registration and year |
 | 404 | `overseas_site_not_found` | no such overseas site on the accreditation |
 | 404 | `not_found` | no such route |
-| 400 | `invalid_organisation_number`, `invalid_registration_number`, `invalid_year`, `invalid_ors_id`, `invalid_paging`, `invalid_include_withdrawn`, `invalid_status` | bad input |
+| 400 | `invalid_organisation_number`, `invalid_registration_number`, `invalid_year`, `invalid_ors_id`, `invalid_paging`, `invalid_status` | bad input |
 | 405 | `method_not_allowed` | any method other than GET |
 | 429 | `rate_limited` | too many requests: wait for the `Retry-After` seconds |
 | 503 | `query_timeout` | the database stopped a query for taking too long: retry, with a narrower search if you can |
@@ -394,6 +400,12 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
 
 ## What's new
 
+- Each interim site has `statusHistory` and `latestStatus`, in the same shape as an accreditation's
+  and an overseas site's. It is `approved` from when its overseas site was approved and `withdrawn`
+  from when it was withdrawn. Withdrawn interim sites are always returned, so `removedAt` and the
+  `includeWithdrawn` query parameter are removed (a request that still sends `includeWithdrawn` is
+  answered as if it did not, and is no longer a `400`). **Breaking for clients that read `removedAt`
+  or send `includeWithdrawn`.**
 - `status` (a string) on an accreditation, in search results, and on each overseas site is replaced
   by `latestStatus`: the latest entry of that record's `statusHistory`, in the same shape
   (`status`, `effectiveFromDate`, `effectiveToDate`, `recordedAt`). It always matches the history,
@@ -420,8 +432,7 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
   as `year`. The filters combine with AND.
 - Getting an accreditation now returns the complete accreditation: an exporter's accredited
   overseas sites, with their interim sites and status history, are in the same response under
-  `overseasSites`, so one request is enough. `includeWithdrawn=true` includes withdrawn interim
-  sites. The separate overseas-site routes are unchanged.
+  `overseasSites`, so one request is enough. The separate overseas-site routes are unchanged.
 - A record that cannot be addressed by its organisation, registration and accreditation numbers is
   left out of the response and logged by us, so one bad record does not fail a page.
 
@@ -439,7 +450,7 @@ and are put back to this state whenever the service starts. Do not rely on them 
 | `990002` | `R26EX9900020002FB` | `A27EX9900020002FB` | 2027 | exporter, fibre, 10 overseas sites (`001` to `010`) each with 2 interim sites |
 | `990003` | `R26ER9900030000PL` | `A27ER9900030000PL` | 2027 | reprocessor, plastic |
 | `990004` | `R26ER9900040000ST` | `A27ER9900040000ST` | 2027 | reprocessor, steel (the metal example) |
-| `990005` | `R26EX9900050002WD` | `A27EX9900050002WD` | 2027 | exporter, wood, 3 registered overseas sites of which only `001` and `002` are accredited, and a withdrawn interim site on `001` (returned only with `includeWithdrawn=true`). `003` is a 404 |
+| `990005` | `R26EX9900050002WD` | `A27EX9900050002WD` | 2027 | exporter, wood, 3 registered overseas sites of which only `001` and `002` are accredited, and a withdrawn interim site on `001`. `003` is a 404 |
 | `990006` | `R26ER9900060000AL` | `A27ER9900060000AL` and `A28ER9900060000AL` | 2027 and 2028 | reprocessor, aluminium, one registration accredited in two years. Search by `registrationNumber` or `organisationNumber` returns both |
 | `990007` | `R26ER9900070000PL` | none | 2027 | an application that was submitted but never granted. It is not served: a lookup is a 404 and a search finds nothing |
 | `990008` | `R26ER9900080000ST` | `A26ER9900080000ST` | 2026 | approved, but before 2027, so not served: a lookup is a 404 |

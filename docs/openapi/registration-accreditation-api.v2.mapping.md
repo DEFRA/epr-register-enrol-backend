@@ -76,7 +76,7 @@ sends them and the filter has a source for them.
 
 `Accreditation` also carries `overseasSites[]` (exporters only, omitted for a reprocessor): every
 accredited overseas site, as described in [Accredited overseas sites](#accredited-overseas-sites),
-ordered by `orsId`, unpaged. `includeWithdrawn` applies to the interim sites inside them. A record
+ordered by `orsId`, unpaged. Each site's interim sites include the withdrawn ones. A record
 with no organisation, registration or accreditation number is dropped from the response and logged,
 not served.
 
@@ -144,13 +144,13 @@ accreditation (`selected == true`). Paths are relative to `overseasSites.sites[]
 | ~~`validFrom`~~ | `ValidFrom` | `validFrom` | **removed from the API**. Still stored as a raw ISO string, and not used for the status history |
 | `statusHistory[]` | none | **new**: overseas site status history | same entry shape, transition rules and status list (`approved`, `suspended`, `cancelled`, `withdrawn`) as the accreditation's. Lets one site be suspended without suspending the accreditation |
 | `latestStatus` | none | **derived** from `statusHistory` | the latest entry of the site's history, on the same rule as the accreditation's `latestStatus`. Replaces the `status` string |
-| `interimSites[]` | `InterimSites` | `interimSites` | **inlined**, unpaged (a site only ever has a few); withdrawn sites (`removedAt` set) only with `includeWithdrawn=true`. See below |
+| `interimSites[]` | `InterimSites` | `interimSites` | **inlined**, unpaged (a site only ever has a few); withdrawn sites included, each with its own status history. See below |
 
 ## Interim sites
 
 Source: App `InterimSiteModel` at `overseasSites.sites[].interimSites[]`, returned inside the
-overseas site's `interimSites[]`. Unchanged from v0.1 except that `isNewSite` is dropped and there
-are no separate endpoints. In the target model an interim site is part of its overseas site: it is
+overseas site's `interimSites[]`. Unchanged from v0.1 except that `isNewSite` is dropped, there
+are no separate endpoints, and (RA-781) `removedAt` is replaced by a status history. In the target model an interim site is part of its overseas site: it is
 embedded in the OverseasSite's `interimSites[]`, and changes to it are versions of that overseas site.
 
 | API field | C# | Mongo field | Notes |
@@ -161,7 +161,32 @@ embedded in the OverseasSite's `interimSites[]`, and changes to it are versions 
 | `contact.*` | `ContactName` / `ContactEmail` / `ContactPhone` | flat fields on the site | **restructured** |
 | `operationCodes[]` | `OperationCodes` | `operationCodes` | |
 | `createdAt` | `CreatedAt` | `createdAt` | absent before RA-603 |
-| `removedAt` | `RemovedAt` | `removedAt` | present means withdrawn |
+| `statusHistory[]` | `StatusHistory` (optional) | `statusHistory` | **new**: see below. Replaces `removedAt` |
+| `latestStatus` | none | **derived** from `statusHistory` | the latest entry of the interim site's history, on the same rule as an accreditation's `latestStatus` |
+
+### Interim site status (RA-781)
+
+An interim site is not approved as such. It is `approved` from when its overseas site was approved
+(not from `createdAt`: it takes effect with the application that adds it), `withdrawn` from when it
+is withdrawn, and `approved` again from each restore. A restored interim site is the same interim
+site, so its history reads approved, withdrawn, approved. A new interim site added in place of a
+withdrawn one is a separate interim site, with its own history. The dates follow the same rules as an
+accreditation's (see Status history above), and withdrawn interim sites are always returned: the
+history explains them, so `removedAt` and `includeWithdrawn` no longer exist.
+
+The stored side is one optional field on each interim site in the application document, so a restore
+does not lose the withdrawal: `statusHistory`, a list of `{ status, recordedAt }`, oldest first. An
+`approved` entry is added when the site is added, a `withdrawn` entry each time it is withdrawn and an
+`approved` entry each time it is restored. `RemovedAt` stays as it is. No new collection, no migration:
+
+- the first stored entry is the site being added, and the API replaces its `recordedAt` with when the
+  overseas site was approved. A change recorded before that applies from the approval;
+- a site with no stored history (written before RA-781) is built from `createdAt` and `removedAt`:
+  approved, then withdrawn from `removedAt` if it is withdrawn now;
+- a site restored before RA-781 has already lost the date it was withdrawn, and nothing can recover
+  it: its history starts as if it had never been withdrawn;
+- the client cannot write the history: a merge of the site list keeps what is stored, and a site the
+  client adds starts its own.
 
 ## Open items
 

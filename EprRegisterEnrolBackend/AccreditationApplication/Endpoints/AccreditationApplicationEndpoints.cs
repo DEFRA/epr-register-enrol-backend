@@ -2495,8 +2495,8 @@ public static class AccreditationApplicationEndpoints
     }
 
     /// <summary>
-    /// RA-603: edits one interim site in place. SiteId, SiteNumber, CreatedAt and RemovedAt are
-    /// server-owned and are not taken from the request - the request shape is the same
+    /// RA-603: edits one interim site in place. SiteId, SiteNumber, CreatedAt, RemovedAt and StatusHistory
+    /// are server-owned and are not taken from the request - the request shape is the same
     /// <see cref="AddInterimSiteRequest"/> the create route uses, so the R12/R13 rule is enforced
     /// by the same validator rather than a second copy of it.
     /// </summary>
@@ -2638,7 +2638,7 @@ public static class AccreditationApplicationEndpoints
         if (interimSite is null)
             return Results.NotFound();
 
-        interimSite.RemovedAt ??= DateTime.UtcNow;
+        InterimSiteStatusHistory.Withdraw(interimSite, DateTime.UtcNow);
 
         InterimSiteSync.SyncMirror(site);
         application!.DateLastEdited = DateTime.UtcNow;
@@ -2697,7 +2697,7 @@ public static class AccreditationApplicationEndpoints
         if (interimSite is null)
             return Results.NotFound();
 
-        interimSite.RemovedAt = null;
+        InterimSiteStatusHistory.Restore(interimSite, DateTime.UtcNow);
 
         InterimSiteSync.SyncMirror(site);
         application!.DateLastEdited = DateTime.UtcNow;
@@ -2899,8 +2899,10 @@ public static class AccreditationApplicationEndpoints
         int siteId,
         string siteNumber,
         AddInterimSiteRequest request
-    ) =>
-        new()
+    )
+    {
+        var now = DateTime.UtcNow;
+        return new InterimSiteModel
         {
             SiteId = siteId,
             SiteNumber = siteNumber,
@@ -2916,8 +2918,10 @@ public static class AccreditationApplicationEndpoints
             ContactPhone = request.ContactPhone,
             OperationCodes = request.OperationCodes,
             IsNewSite = true,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = now,
+            StatusHistory = InterimSiteStatusHistory.Added(now),
         };
+    }
 
     // Bundles UpdateInterimSite's DI-service/framework parameters under one [AsParameters]
     // argument so the handler stays under Sonar's 7-parameter limit (S107) — the route itself

@@ -197,6 +197,9 @@ public sealed class ApplicationReconciler(
                     interim.SiteNumber,
                     interim.SiteNumber
                 );
+                // RA-781: an interim site's status history is stored on the legacy document only. The model does not
+                // hold it yet, so the accreditation API builds it from CreatedAt and RemovedAt there: not a difference.
+                interim.StatusHistory = [];
             }
         }
     }

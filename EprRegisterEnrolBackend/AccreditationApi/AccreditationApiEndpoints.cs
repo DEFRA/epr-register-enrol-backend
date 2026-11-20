@@ -162,10 +162,6 @@ public static partial class AccreditationApiEndpoints
         CancellationToken cancellationToken
     )
     {
-        var withdrawn = ParseIncludeWithdrawn(http.Request.Query["includeWithdrawn"]);
-        if (withdrawn.Problem is not null)
-            return withdrawn.Problem;
-
         var lookup = await Resolve(
             organisationNumber,
             registrationNumber,
@@ -174,9 +170,7 @@ public static partial class AccreditationApiEndpoints
             cancellationToken
         );
         return lookup.Problem
-            ?? Results.Ok(
-                AccreditationApiMapper.ToAccreditation(lookup.Application!, withdrawn.Include)
-            );
+            ?? Results.Ok(AccreditationApiMapper.ToAccreditation(lookup.Application!));
     }
 
     private static async Task<IResult> ListOverseasSites(
@@ -192,10 +186,6 @@ public static partial class AccreditationApiEndpoints
         var paging = ParsePaging(query["pageNumber"], query["limit"]);
         if (paging.Problem is not null)
             return paging.Problem;
-
-        var withdrawn = ParseIncludeWithdrawn(query["includeWithdrawn"]);
-        if (withdrawn.Problem is not null)
-            return withdrawn.Problem;
 
         var lookup = await Resolve(
             organisationNumber,
@@ -223,9 +213,7 @@ public static partial class AccreditationApiEndpoints
                 Items = sites
                     .Skip((paging.PageNumber - 1) * paging.Limit)
                     .Take(paging.Limit)
-                    .Select(site =>
-                        AccreditationApiMapper.ToOverseasSite(application, site, withdrawn.Include)
-                    )
+                    .Select(site => AccreditationApiMapper.ToOverseasSite(application, site))
                     .ToList(),
             }
         );
@@ -250,10 +238,6 @@ public static partial class AccreditationApiEndpoints
             );
         }
 
-        var withdrawn = ParseIncludeWithdrawn(http.Request.Query["includeWithdrawn"]);
-        if (withdrawn.Problem is not null)
-            return withdrawn.Problem;
-
         var lookup = await Resolve(
             organisationNumber,
             registrationNumber,
@@ -275,28 +259,7 @@ public static partial class AccreditationApiEndpoints
                 "overseas_site_not_found",
                 $"No overseas site {orsId} was found on the {year} accreditation of registration {registrationNumber}."
             )
-            : Results.Ok(
-                AccreditationApiMapper.ToOverseasSite(application, site, withdrawn.Include)
-            );
-    }
-
-    private sealed record Withdrawn(bool Include, IResult? Problem);
-
-    private static Withdrawn ParseIncludeWithdrawn(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return new Withdrawn(false, null);
-
-        return bool.TryParse(value, out var include)
-            ? new Withdrawn(include, null)
-            : new Withdrawn(
-                false,
-                new ServiceProblemResult(
-                    StatusCodes.Status400BadRequest,
-                    "invalid_include_withdrawn",
-                    "includeWithdrawn must be true or false."
-                )
-            );
+            : Results.Ok(AccreditationApiMapper.ToOverseasSite(application, site));
     }
 
     private sealed record Lookup(AccreditationApplicationModel? Application, IResult? Problem);

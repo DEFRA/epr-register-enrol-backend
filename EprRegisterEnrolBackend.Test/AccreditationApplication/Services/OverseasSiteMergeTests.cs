@@ -200,6 +200,68 @@ public class OverseasSiteMergeTests
         result[0].InterimSite!.IsNewSite.Should().BeTrue();
     }
 
+    // RA-781: the status history is server-owned, as RemovedAt is: a merge must not wipe it, and a
+    // client must not be able to write it.
+    private static readonly DateTime T1 = new(2026, 1, 5, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime T2 = new(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc);
+
+    private static InterimSiteModel WithHistory(
+        InterimSiteModel interim,
+        params (string Status, DateTime At)[] history
+    )
+    {
+        interim.StatusHistory = history
+            .Select(h => new InterimSiteStatusChange { Status = h.Status, RecordedAt = h.At })
+            .ToList();
+        return interim;
+    }
+
+    [Fact]
+    public void Merge_KnownInterimSite_KeepsThePersistedStatusHistory_NotTheClients()
+    {
+        var persisted = WithHistory(Interim(2), ("approved", T1), ("withdrawn", T2));
+        persisted.RemovedAt = T2;
+        var incoming = WithHistory(Interim(2), ("approved", T2.AddDays(30)));
+
+        var result = OverseasSiteMerge.Merge([Site(1, interimSite: persisted)], [Site(1, interimSite: incoming)]);
+
+        var merged = result[0].InterimSites.Single();
+        merged.StatusHistory.Select(h => (h.Status, h.RecordedAt))
+            .Should()
+            .Equal(("approved", T1), ("withdrawn", T2));
+    }
+
+    [Fact]
+    public void Merge_NewInterimSite_StartsItsOwnHistory_WhateverTheClientSent()
+    {
+        var incoming = WithHistory(Interim(3), ("withdrawn", T2));
+        incoming.CreatedAt = T1;
+
+        var result = OverseasSiteMerge.Merge([Site(1)], [Site(1, interimSite: incoming)]);
+
+        var entry = result[0].InterimSites.Single().StatusHistory.Should().ContainSingle().Subject;
+        entry.Status.Should().Be("approved");
+        entry.RecordedAt.Should().Be(T1);
+    }
+
+    // The frontend leaves withdrawn sites out of what it sends; an omitted site is withdrawn now, not
+    // destroyed, and the withdrawal is recorded.
+    [Fact]
+    public void Merge_InterimSiteTheClientOmitted_IsWithdrawnWithAWithdrawnEntry()
+    {
+        var persisted = Site(1);
+        persisted.InterimSites = [Interim(2), Interim(3)];
+        var incoming = Site(1);
+        incoming.InterimSites = [Interim(3)];
+
+        var result = OverseasSiteMerge.Merge([persisted], [incoming]);
+
+        var omitted = result[0].InterimSites.Single(i => i.SiteId == 2);
+        omitted.RemovedAt.Should().NotBeNull();
+        omitted.StatusHistory.Select(h => h.Status).Should().Equal("approved", "withdrawn");
+        result[0].InterimSites.Single(i => i.SiteId == 3).RemovedAt.Should().BeNull();
+    }
+
     [Fact]
     public void Merge_InterimSiteIdChanged_IsTreatedAsNew()
     {
