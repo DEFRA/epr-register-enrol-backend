@@ -49,6 +49,14 @@ paths:
         the results (AND); the values of a repeated `status` combine with OR. With no `q` and no
         filters, every application is returned, a page at a time.
 
+        **Drafts and missing values.** Every application is listed, drafts (`Saved`, `Started`)
+        included, whatever it is missing. A draft has no `accreditationReference` until one is
+        reserved, so it is null, and `registrationReference` can be null too. `orgId` is null until the
+        application is first submitted (or until an operator reads it and it is filled in), so an
+        organisation-number search can't find it then; its references and name still can.
+        `organisationName` is the copy taken when the application was created, so it is not
+        updated when the organisation is renamed.
+
         **Order.** Most recently changed first: `updatedAt` descending (any change, including a
         status sent by Case Management), then `applicationId`. An application updated between two page requests moves to the top,
         so a row can repeat or be skipped across pages.
@@ -237,6 +245,11 @@ components:
         **Legacy.** One document from the `accreditationApplications` collection, as stored, in
         camelCase. Values derived when an operator reads an application (`notificationStatus`,
         `dueDate`) are not stored, so are not returned.
+
+        The properties below are the fields known today. The item is the whole stored document,
+        so a field added to the stored application appears here without a change to this spec.
+        Clients should ignore fields they don't use. Any field may be null or absent on a draft.
+      additionalProperties: true
       required: [applicationId, organisationId, year, materialType, applicationStatus]
       properties:
         applicationId:
@@ -250,11 +263,15 @@ components:
           type: integer
           format: int32
           nullable: true
-          description: The organisation number (ReEx's numeric org ID), for example 500112.
+          description: |
+            The organisation number (ReEx's numeric org ID), for example 500112. Null until the
+            application is first submitted, or until an operator reads it and it is filled in.
         organisationName:
           type: string
           nullable: true
-          description: Can be a person's name, for a sole trader.
+          description: |
+            Can be a person's name, for a sole trader. The copy taken when the application was
+            created; not updated when the organisation is renamed.
           x-personal-data: true
         year: { type: integer, format: int32, description: Accreditation year. }
         registrationId: { type: string, nullable: true, description: ReEx's registration ID. }
@@ -305,14 +322,14 @@ components:
         registrationReference:
           type: string
           nullable: true
-          description: The registration number, for example R25ER5001120018PL.
+          description: The registration number, for example R25ER5001120018PL. Can be null on a draft.
         previousRegistrationNumbers:
           type: array
           items: { type: string }
         accreditationReference:
           type: string
           nullable: true
-          description: The accreditation number, for example A27ER5001120018PL. Reserved before approval.
+          description: The accreditation number, for example A27ER5001120018PL. Reserved before approval; null on a draft until then.
         lastYearsAccreditationNumber:
           type: object
           nullable: true
