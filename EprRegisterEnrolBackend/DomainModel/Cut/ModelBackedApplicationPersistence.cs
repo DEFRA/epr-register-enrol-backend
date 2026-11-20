@@ -695,6 +695,35 @@ public sealed class ModelBackedApplicationPersistence(
         return results.FirstOrDefault(a => a.CaseManagementWorkItemId == workItemId);
     }
 
+    // RA-794's isNewSite audit and correction, as legacy's query: every application created before the RA-292 deploy
+    // that holds an overseas site, in id order. createdAt has been the model's own Application field since v6.14
+    // (the backfill copies legacy's), and isNewSite, orsId and previousSites, which the classifier reads, are all
+    // projected. A current version the backfill missed has no createdAt to place it inside or outside the window, so
+    // the lookup refuses, as a write to one does, rather than leave a wrongly-defaulted site uncorrected unseen.
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetCreatedBeforeWithOverseasSitesAsync(
+        DateTime createdBefore,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var missed = await stores.Applications.Versions.FindAllCurrentAsync(
+            Builders<ApplicationEntity>.Filter.Eq(a => a.CreatedAt, null) & ApplicationFields.Accreditations,
+            cancellationToken: cancellationToken
+        );
+        if (missed.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Applications {string.Join(", ", missed.Select(m => m.EntityId))} have no createdAt in the model (missed by the backfill), so the RA-794 window cannot be applied to them: run the createdAt backfill until cut-readiness check A lists nothing."
+            );
+        }
+
+        var envelope = Builders<ApplicationEntity>.Filter.Lt(a => a.CreatedAt, createdBefore);
+        var results = await ProjectCurrentAsync(envelope, null, cancellationToken);
+        return results
+            .Where(a => a.CreatedAt < createdBefore && a.OverseasSites?.Sites.Count > 0)
+            .OrderBy(a => a.Id)
+            .ToList();
+    }
+
     // RA-766's charge correction, as legacy's query: every open application with a work item, Queried left out.
     public async Task<
         IReadOnlyList<AccreditationApplicationModel>

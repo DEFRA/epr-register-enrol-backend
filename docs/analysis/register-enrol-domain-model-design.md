@@ -1,6 +1,17 @@
 # Register & Enrol backend: splitting the application aggregate into a domain model
 
-**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.14, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06, v6.9 2026-11-06, v6.10 2026-11-09, v6.12 2026-11-14, v6.13 2026-11-16, v6.14 2026-11-16
+**Repo:** `epr-register-enrol-backend` (.NET, MongoDB) · **Baseline:** `origin/main` @ `308f73f` (includes PR #210) · **Status:** draft v6.15, with the 2026 import descoped · **Dates:** v1 2026-10-20, v2 2026-10-21, v3 2026-10-22, v4 2026-10-26, v5 2026-10-26, v6 2026-10-27, v6.1 2026-10-28, v6.2 2026-11-03, v6.3 2026-11-03, v6.4 2026-11-04, v6.5 2026-11-04, v6.6 2026-11-05, v6.7 2026-11-06, v6.8 2026-11-06, v6.9 2026-11-06, v6.10 2026-11-09, v6.12 2026-11-14, v6.13 2026-11-16, v6.14 2026-11-16, v6.15 2026-11-18
+
+**Changes in v6.15 (2026-11-18): the RA-794 isNewSite correction**
+
+- **A new ORS transition: a wrongly-defaulted operator proposal becomes a ReEx site** (§3.4). The RA-794 correction
+  (`IsNewSiteCorrectionMigration`, a one-off startup migration) sets `isNewSite` to `false` on legacy sites that
+  ReEx proves were seeded from it. A site with no `orsId` that the wrong `true` had made an operator proposal of
+  its application (Proposed, or Discarded once the application closed) is set to what the migrator makes of a ReEx
+  site: `origin` ReEx, `status` Active, no `proposedByApplicationId`. That re-derives the site's origin, so it is
+  not checked against `OverseasSiteTransitions.Registered`.
+- **Another writer outside the request paths** (§6.2). It writes through the dual-write unit of work, in its
+  transaction, and runs after the cut too. Its created-before window reads the Application's `createdAt` (v6.14).
 
 **Changes in v6.14 (2026-11-16): phase 6, the cut (RA-706)**
 
@@ -889,6 +900,8 @@ stateDiagram-v2
     [*] --> Active : seeded from ReEx ORS-A, or migrated
     [*] --> Proposed : added in an application
     Proposed --> Active : application approved
+    Proposed --> Active : RA-794 correction (re-derived as ReEx)
+    Discarded --> Active : RA-794 correction (re-derived as ReEx)
     Proposed --> Discarded : application rejected / withdrawn
     Active --> Withdrawn : interim site withdrawn (removedAt)
     Withdrawn --> Active : interim site restored
@@ -901,6 +914,13 @@ withdrawn and restored while it is still Proposed, and goes back to Proposed. An
 interim site that already has `removedAt` is migrated, or first synced, straight in as Withdrawn. Code:
 `OverseasSiteTransitions.Registered` and `OverseasSiteTransitions.Interim`. Whether an ORS itself can be withdrawn from a
 registration is still open ([Q5](#q5), second part).
+
+The two RA-794 transitions are not lifecycle steps. A legacy site stored with a wrongly-defaulted `isNewSite: true`
+and no `orsId` was migrated as an operator proposal of its application: Proposed, or Discarded once the
+application closed. The RA-794 correction (`IsNewSiteCorrectionMigration`) proves the site came from ReEx and
+sets it to what the migrator makes of a ReEx site: `origin` ReEx, `status` Active, no `proposedByApplicationId`.
+So it is not checked against `OverseasSiteTransitions.Registered`, which governs the application-driven steps. It
+changes only this application's own `orsId`-less proposal, and leaves every other ORS as it is (§6.2).
 
 ---
 
@@ -1534,6 +1554,17 @@ proposal. No Accreditation exists for the prior year here, so `sourceAccreditati
   500069's applications for other years too, while their legacy documents keep the old one. The migration
   records a `SeededDetailsDiffer` conflict on each of those (unless one is already recorded), so the reconciler
   accepts that difference rather than reporting it as drift.
+  The RA-794 isNewSite correction (`IsNewSiteCorrectionMigration`, a one-off startup migration, v6.15) also writes
+  outside the request paths, but it does not bypass the unit of work, so the rule above does not apply. Each application's write runs in `IDualWriteUnitOfWork`, and the
+  callback re-reads the application in the transaction. It sets the legacy site list with a `$set` guarded on the
+  version it read, and in the same transaction writes the one ORS change described in §3.4 as a new ORS version
+  (reason `Migration`). The unit of work then syncs the application, which rebuilds
+  `applicationOverseasSites[].isNewSite` from the corrected legacy site. If anything fails, everything rolls back,
+  legacy included. That covers a guard that matches nothing, or an application version, site entry or ORS the
+  model is missing. With `DualWrite` off, only the legacy document is written, and the migration reads it as
+  corrected. After the cut, the same code runs against the model-backed persistence and the cut's flush, and its
+  window reads the Application's `createdAt`. Covered by `IsNewSiteCorrectionTests.Correction_WithDualWrite_*` and
+  `ModelBackedApplicationPersistenceTests.IsNewSiteCorrection_AfterTheCut_*`.
 - **Approval** (`status` push `approved`), in one transaction:
   - set Application `Approved`
   - insert the Accreditation, unique on `applicationId`, so a retried push is a no-op, and taking
