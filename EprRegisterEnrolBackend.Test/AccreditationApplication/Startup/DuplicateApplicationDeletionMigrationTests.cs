@@ -377,13 +377,28 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             Messages.Should().NotContain(m => m.Contains(personal));
     }
 
-    [Fact]
-    public async Task ExecuteAsync_logs_a_failure_instead_of_throwing()
+    // The failure is recorded with its mode on a dry run and an apply alike.
+    [Theory]
+    [InlineData(false, null, "RA-788 DRY RUN (nothing will be written): duplicate application deletion failed")]
+    [InlineData(true, null, "RA-788 DRY RUN (nothing will be written): duplicate application deletion failed")]
+    [InlineData(true, "A Reviewer", "RA-788 APPLY: duplicate application deletion failed")]
+    public async Task ExecuteAsync_logs_a_failure_with_its_mode_instead_of_throwing(
+        bool apply,
+        string? confirmedBy,
+        string expected
+    )
     {
         // No IMongoDbClientFactory registered: resolving it throws.
         var migration = new Migration(
             new ServiceCollection().BuildServiceProvider(),
-            Options.Create(new DuplicateApplicationDeletionOptions { Enabled = true }),
+            Options.Create(
+                new DuplicateApplicationDeletionOptions
+                {
+                    Enabled = true,
+                    Apply = apply,
+                    SpotCheckConfirmedBy = confirmedBy,
+                }
+            ),
             _logger
         );
 
@@ -392,9 +407,11 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
 
         _logger
             .Entries.Should()
-            .Contain(e =>
-                e.LogLevel == LogLevel.Error
-                && e.Message.StartsWith("RA-788 duplicate application deletion failed")
-            );
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Error && e.Message.Contains("deletion failed")
+            )
+            .Which.Message.Should()
+            .StartWith(expected)
+            .And.Contain("error=");
     }
 }

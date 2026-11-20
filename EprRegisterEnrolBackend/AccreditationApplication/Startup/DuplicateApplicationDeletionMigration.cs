@@ -96,7 +96,6 @@ public class DuplicateApplicationDeletionMigration(
     private static FilterDefinitionBuilder<AccreditationApplicationModel> Filter =>
         Builders<AccreditationApplicationModel>.Filter;
 
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Yield so host startup is never held up by anything below.
@@ -107,14 +106,24 @@ public class DuplicateApplicationDeletionMigration(
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
-            // The type only: a message could carry personal data. Every check runs before the
-            // transaction and the delete is guarded, so the next run starts again safely.
+            // The mode is logged on a dry run and an apply alike, so the record of a failure shows
+            // which run it was. The type only: a message could carry personal data. Every check
+            // runs before the transaction and the delete is guarded, so the next run starts again
+            // safely.
             logger.LogError(
-                "RA-788 duplicate application deletion failed: error={Error}",
+                "RA-788 {Mode:l}: duplicate application deletion failed: error={Error}",
+                ModeOf(options.Value),
                 ex.GetType().Name
             );
         }
     }
+
+    // The same rule AuthorisedReviewer applies, without its log line: Apply takes effect only with a
+    // named reviewer.
+    private static string ModeOf(DuplicateApplicationDeletionOptions settings) =>
+        settings.Apply && !string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy)
+            ? ApplyMode
+            : DryRunMode;
 
     // Extracted so tests can await the run deterministically - BackgroundService's StartAsync only
     // kicks ExecuteAsync off as a background task.
