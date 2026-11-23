@@ -175,7 +175,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     }
 
     // RA-766, RA-768 (temporary): the stub holds no work items, so it answers with an empty one:
-    // no state, no charge, not duly made and no overseas sites. The charge correction then finds
+    // no state, no charge, not duly made, no overseas sites and no query responses. The charge correction then finds
     // nothing it may not change, and the overseas sites correction finds nothing to remove.
     public Task<CaseWorkingWorkItem> GetWorkItemAsync(
         Guid workItemId,
@@ -192,7 +192,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
             );
         }
 
-        return Task.FromResult(new CaseWorkingWorkItem(null, null, false, []));
+        return Task.FromResult(new CaseWorkingWorkItem(null, null, false, [], []));
     }
 
     // RA-768 (temporary): the stub holds no sites, so every named site is already gone.

@@ -580,28 +580,38 @@ public class AccreditationApplicationPersistence(
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);
 
-    // RA-766, RA-768: the three statuses an application can no longer leave, which the one-off
-    // Case Management corrections leave alone.
-    internal static readonly ApplicationStatus[] ClosedStatuses =
+    // RA-766: the statuses ChargeCorrectionMigration leaves alone: the three an application can no
+    // longer leave, and Queried, whose answer (and so its charge) has not been sent yet.
+    internal static readonly ApplicationStatus[] ExcludedStatuses =
     [
         ApplicationStatus.Approved,
         ApplicationStatus.Rejected,
         ApplicationStatus.Withdrawn,
+        ApplicationStatus.Queried,
     ];
 
     public async Task<
         IReadOnlyList<AccreditationApplicationModel>
-    > GetOpenWithCaseManagementWorkItemAsync(CancellationToken cancellationToken = default)
+    > GetOpenNotQueriedWithCaseManagementWorkItemAsync(CancellationToken cancellationToken = default)
     {
         var filter = Builders<AccreditationApplicationModel>.Filter;
         return await Collection
             .Find(
                 filter.Ne(a => a.CaseManagementWorkItemId, null)
-                    & filter.Nin(a => a.ApplicationStatus, ClosedStatuses)
+                    & filter.Nin(a => a.ApplicationStatus, ExcludedStatuses)
             )
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);
     }
+
+    // RA-768: OverseasSitesCorrectionMigration's candidates, every status included.
+    public async Task<
+        IReadOnlyList<AccreditationApplicationModel>
+    > GetWithCaseManagementWorkItemAsync(CancellationToken cancellationToken = default) =>
+        await Collection
+            .Find(Builders<AccreditationApplicationModel>.Filter.Ne(a => a.CaseManagementWorkItemId, null))
+            .SortBy(a => a.Id)
+            .ToListAsync(cancellationToken);
 
     public async Task<
         IReadOnlyList<AccreditationApplicationModel>

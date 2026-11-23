@@ -301,10 +301,9 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         Assert.Equal(legacy.Id, model!.Id);
     }
 
-    // RA-766's and RA-768's corrections: open applications with a work item, Queried included,
-    // closed ones left out, in id order.
+    // RA-766's charge correction: open applications with a work item, Queried left out, in id order.
     [Fact]
-    public async Task GetOpenWithCaseManagementWorkItem_FindsTheSameApplications()
+    public async Task GetOpenNotQueriedWithCaseManagementWorkItem_FindsTheSameApplications()
     {
         var data = await LookupDataAsync();
         var queried = await MigratedAsync(
@@ -321,14 +320,29 @@ public sealed partial class ModelBackedApplicationPersistenceTests
                 OtherOrganisationId
             )
         );
+
+        var legacy = await _legacy.GetOpenNotQueriedWithCaseManagementWorkItemAsync(Ct);
+        var model = await _model.GetOpenNotQueriedWithCaseManagementWorkItemAsync(Ct);
+
+        Assert.Equal([data.OtherOrganisation.Id], Ids(legacy));
+        Assert.Equal(Ids(legacy), Ids(model));
+        Assert.DoesNotContain(queried.Id, Ids(model));
+    }
+
+    // RA-768's overseas sites correction: every application with a work item, any status, in id
+    // order.
+    [Fact]
+    public async Task GetWithCaseManagementWorkItem_FindsTheSameApplications()
+    {
+        var data = await LookupDataAsync();
         var withdrawn = await MigratedAsync(
             Variant(
-                Day1.AddDays(6),
+                Day1.AddDays(5),
                 a =>
                 {
                     a.RegistrationId = OtherRegistrationId;
                     a.RegistrationReference = "R27EX0000001P";
-                    a.Year = 2029;
+                    a.Year = 2028;
                     a.ApplicationStatus = ApplicationStatus.Withdrawn;
                     a.CaseManagementWorkItemId = Guid.NewGuid();
                 },
@@ -336,12 +350,11 @@ public sealed partial class ModelBackedApplicationPersistenceTests
             )
         );
 
-        var legacy = await _legacy.GetOpenWithCaseManagementWorkItemAsync(Ct);
-        var model = await _model.GetOpenWithCaseManagementWorkItemAsync(Ct);
+        var legacy = await _legacy.GetWithCaseManagementWorkItemAsync(Ct);
+        var model = await _model.GetWithCaseManagementWorkItemAsync(Ct);
 
-        Assert.Equal([data.OtherOrganisation.Id, queried.Id], Ids(legacy));
+        Assert.Equal([data.OtherOrganisation.Id, withdrawn.Id], Ids(legacy));
         Assert.Equal(Ids(legacy), Ids(model));
-        Assert.DoesNotContain(withdrawn.Id, Ids(model));
     }
 
     [Fact]

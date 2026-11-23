@@ -643,7 +643,67 @@ public class HttpCaseWorkingApiAdapter(
                 ? ReadOverseasSiteIds(overseasSitesElement)
                 : null;
 
-        return new CaseWorkingWorkItem(detail?.StateId, charge, dulyMade, overseasSites);
+        return new CaseWorkingWorkItem(
+            detail?.StateId,
+            charge,
+            dulyMade,
+            overseasSites,
+            ReadQueryResponses(detail?.AuditLog ?? default)
+        );
+    }
+
+    // ManagementBe's audit action for an operator's answer to a query (ReAccreditationResumeService
+    // .AuditAction), written since RA-311 (management-be c2a5b4b, 24 July 2026) with the answered
+    // section keys comma-joined in details.sectionKeys.
+    internal const string QueryRespondedAuditAction = "query-responded";
+
+    // RA-768: the query-responded entries of the audit log, or null when the audit log is not a
+    // list of entries with a string action, or a query-responded entry has no readable createdAt
+    // (with an offset; ManagementBe sends UTC) or details.sectionKeys - the caller must not read an unreadable log as "no responses".
+    private static List<CaseWorkingQueryResponse>? ReadQueryResponses(JsonElement auditLog)
+    {
+        if (auditLog.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var responses = new List<CaseWorkingQueryResponse>();
+        foreach (var entry in auditLog.EnumerateArray())
+        {
+            if (
+                entry.ValueKind != JsonValueKind.Object
+                || !entry.TryGetProperty("action", out var action)
+                || action.ValueKind != JsonValueKind.String
+            )
+            {
+                return null;
+            }
+            if (action.GetString() != QueryRespondedAuditAction)
+                continue;
+
+            if (
+                !entry.TryGetProperty("createdAt", out var createdAt)
+                || createdAt.ValueKind != JsonValueKind.String
+                || !createdAt.TryGetDateTime(out var createdAtValue)
+                // No offset: the instant is unknown, so the cutoff cannot be applied.
+                || createdAtValue.Kind == DateTimeKind.Unspecified
+                || !entry.TryGetProperty("details", out var details)
+                || details.ValueKind != JsonValueKind.Object
+                || !details.TryGetProperty("sectionKeys", out var sectionKeys)
+                || sectionKeys.ValueKind != JsonValueKind.String
+            )
+            {
+                return null;
+            }
+
+            responses.Add(
+                new CaseWorkingQueryResponse(
+                    createdAtValue.ToUniversalTime(),
+                    sectionKeys
+                        .GetString()!
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                )
+            );
+        }
+        return responses;
     }
 
     // RA-768: the ids of payload.overseasSites.sites, or null when that is not a list of site
@@ -1500,6 +1560,7 @@ public class HttpCaseWorkingApiAdapter(
     {
         public string? StateId { get; init; }
         public JsonElement Payload { get; init; }
+        public JsonElement AuditLog { get; init; }
     }
 
     // RA-766 (temporary): the errorCode of a ProblemDetails body. Nothing else of the body is read.

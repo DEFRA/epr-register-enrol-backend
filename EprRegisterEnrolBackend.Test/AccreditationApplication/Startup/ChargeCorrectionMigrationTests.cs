@@ -88,7 +88,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         };
         application.Prns.PlannedTonnageBand = band;
         await _persistence.CreateAsync(application);
-        _workItems[workItemId] = new CaseWorkingWorkItem(workItemState, storedPence, dulyMade, []);
+        _workItems[workItemId] = new CaseWorkingWorkItem(workItemState, storedPence, dulyMade, [], []);
         return (workItemId, application);
     }
 
@@ -416,7 +416,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     {
         var persistence = Substitute.For<IAccreditationApplicationPersistence>();
         persistence
-            .GetOpenWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
+            .GetOpenNotQueriedWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("connection string with a secret"));
         var services = new ServiceCollection();
         services.AddSingleton(persistence);

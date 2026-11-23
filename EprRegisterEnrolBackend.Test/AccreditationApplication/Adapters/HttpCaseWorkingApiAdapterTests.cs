@@ -3264,6 +3264,96 @@ public class HttpCaseWorkingApiAdapterTests
         workItem.OverseasSites.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetWorkItemAsync_ReadsTheQueryRespondedEntriesOfTheAuditLog()
+    {
+        var (adapter, _) = CreateAdapterWith(
+            new RawBodyHttpMessageHandler(
+                HttpStatusCode.OK,
+                """
+                {
+                  "stateId": "in-assessment",
+                  "payload": { "overseasSites": { "sites": [] } },
+                  "auditLog": [
+                    { "action": "query-responded", "createdAt": "2026-09-20T09:00:00Z",
+                      "details": { "sectionKeys": "prn-tonnage" } },
+                    { "action": "work-item-assigned", "createdAt": "not read" },
+                    { "action": "query-responded", "createdAt": "2026-08-20T11:00:00+01:00",
+                      "details": { "sectionKeys": "site-details, overseas-reprocessing-sites,", "responderEmail": "not read" } }
+                  ]
+                }
+                """
+            )
+        );
+
+        var workItem = await adapter.GetWorkItemAsync(
+            Guid.NewGuid(),
+            CaseWorkingCorrectionActor.OverseasSitesCorrection,
+            TestContext.Current.CancellationToken
+        );
+
+        workItem.QueryResponses.Should().HaveCount(2);
+        workItem.QueryResponses![0].CreatedAt.Should().Be(new DateTime(2026, 9, 20, 9, 0, 0, DateTimeKind.Utc));
+        workItem.QueryResponses[0].SectionKeys.Should().Equal("prn-tonnage");
+        workItem.QueryResponses[1].CreatedAt.Should().Be(new DateTime(2026, 8, 20, 10, 0, 0, DateTimeKind.Utc));
+        workItem.QueryResponses[1].CreatedAt.Kind.Should().Be(DateTimeKind.Utc);
+        workItem
+            .QueryResponses[1]
+            .SectionKeys.Should()
+            .Equal("site-details", "overseas-reprocessing-sites");
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_ReadsAnEmptyAuditLogAsNoQueryResponses()
+    {
+        var (adapter, _) = CreateAdapterWith(
+            new RawBodyHttpMessageHandler(
+                HttpStatusCode.OK,
+                """{ "stateId": "submitted", "payload": {}, "auditLog": [] }"""
+            )
+        );
+
+        var workItem = await adapter.GetWorkItemAsync(
+            Guid.NewGuid(),
+            CaseWorkingCorrectionActor.OverseasSitesCorrection,
+            TestContext.Current.CancellationToken
+        );
+
+        workItem.QueryResponses.Should().NotBeNull().And.BeEmpty();
+    }
+
+    public static TheoryData<string> UnreadableAuditLogs =>
+        new()
+        {
+            """{ "stateId": "submitted" }""",
+            """{ "stateId": "submitted", "auditLog": null }""",
+            """{ "stateId": "submitted", "auditLog": {} }""",
+            """{ "stateId": "submitted", "auditLog": [ "query-responded" ] }""",
+            """{ "stateId": "submitted", "auditLog": [ { "createdAt": "2026-08-20T10:00:00Z" } ] }""",
+            """{ "stateId": "submitted", "auditLog": [ { "action": 7 } ] }""",
+            """{ "stateId": "submitted", "auditLog": [ { "action": "query-responded", "details": { "sectionKeys": "overseas-reprocessing-sites" } } ] }""",
+            """{ "stateId": "submitted", "auditLog": [ { "action": "query-responded", "createdAt": "yesterday", "details": { "sectionKeys": "overseas-reprocessing-sites" } } ] }""",
+            """{ "stateId": "submitted", "auditLog": [ { "action": "query-responded", "createdAt": "2026-08-20T10:00:00", "details": { "sectionKeys": "overseas-reprocessing-sites" } } ] }""",
+            """{ "stateId": "submitted", "auditLog": [ { "action": "query-responded", "createdAt": "2026-08-20T10:00:00Z" } ] }""",
+            """{ "stateId": "submitted", "auditLog": [ { "action": "query-responded", "createdAt": "2026-08-20T10:00:00Z", "details": { } } ] }""",
+            """{ "stateId": "submitted", "auditLog": [ { "action": "query-responded", "createdAt": "2026-08-20T10:00:00Z", "details": { "sectionKeys": ["overseas-reprocessing-sites"] } } ] }""",
+        };
+
+    [Theory]
+    [MemberData(nameof(UnreadableAuditLogs))]
+    public async Task GetWorkItemAsync_ReadsAMissingOrMalformedAuditLogAsUnreadable(string body)
+    {
+        var (adapter, _) = CreateAdapterWith(new RawBodyHttpMessageHandler(HttpStatusCode.OK, body));
+
+        var workItem = await adapter.GetWorkItemAsync(
+            Guid.NewGuid(),
+            CaseWorkingCorrectionActor.OverseasSitesCorrection,
+            TestContext.Current.CancellationToken
+        );
+
+        workItem.QueryResponses.Should().BeNull();
+    }
+
     [Theory]
     [InlineData("approved")]
     [InlineData("Rejected")]
@@ -3271,14 +3361,14 @@ public class HttpCaseWorkingApiAdapterTests
     [InlineData("approved-pending-contact")]
     [InlineData("rejected-pending-contact")]
     public void A_work_item_in_a_closed_state_is_decided(string stateId) =>
-        new CaseWorkingWorkItem(stateId, null, false, []).IsDecided.Should().BeTrue();
+        new CaseWorkingWorkItem(stateId, null, false, [], []).IsDecided.Should().BeTrue();
 
     [Theory]
     [InlineData("in-assessment")]
     [InlineData("duly-made")]
     [InlineData(null)]
     public void A_work_item_in_any_other_state_is_not_decided(string? stateId) =>
-        new CaseWorkingWorkItem(stateId, null, true, []).IsDecided.Should().BeFalse();
+        new CaseWorkingWorkItem(stateId, null, true, [], []).IsDecided.Should().BeFalse();
 
     [Fact]
     public async Task RemoveOverseasSitesAsync_PostsTheSitesAndReasonAndReportsWhatWasRemoved()

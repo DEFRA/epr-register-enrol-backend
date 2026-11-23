@@ -32,7 +32,7 @@ public sealed class OverseasSitesCorrectionOptions
 // removes named sites only and never replaces the list (a regulator may have changed operation
 // codes on the sites that stay).
 //
-// For every application linked to a work item that is not yet Approved, Rejected or Withdrawn:
+// Every application linked to a work item is a candidate:
 //   - Queried in this service                   -> skipped-queried (not read: the operator can
 //     still change the selection, and resubmitting syncs it through RA-557; removing a site first
 //     would show the regulator a change the operator has not submitted)
@@ -43,25 +43,31 @@ public sealed class OverseasSitesCorrectionOptions
 //     (the Case Management endpoint's own rule). A work item site this service does not hold at
 //     all is not removed: it is logged as unmatched, for analysis.
 //   - nothing to remove                         -> unchanged
+//   - Approved, Rejected or Withdrawn here      -> skipped-decided (list only: the work item is
+//     read, never written)
 //   - work item state missing                   -> failed
 //   - work item decided (CaseWorkingWorkItem.DecidedStates; checked before duly made, as the
 //     Case Management service does)            -> skipped-decided
 //   - work item duly made (payload.paymentDate) -> skipped-duly-made
+//   - audit log missing or unreadable           -> failed
+//   - cause not confirmed: no query-responded audit entry before CauseCutoff whose section keys
+//     include the overseas sites or BES evidence section (RA-557 merges both into
+//     payload.overseasSites)                   -> skipped-cause-unconfirmed (list only)
 //   - otherwise: dry run logs would-update; apply calls the endpoint and logs updated, or
 //     unchanged when every site was already gone, or the skipped outcome when it refused with a
 //     409 (decided or duly-made).
-// The skipped-decided and skipped-duly-made lines are the list for the business owner: they carry
-// the site ids that would have been removed. One failure is logged at Error (the HTTP status or
-// exception type only) and the run carries on. A re-run changes nothing, because corrected work
-// items are then unchanged.
+// The skipped-decided, skipped-duly-made and skipped-cause-unconfirmed lines are the lists for the
+// business owner: they carry the site ids that would have been removed. One failure is logged at
+// Error (the HTTP status, exception type or the unreadable value only) and the run carries on. A
+// re-run changes nothing, because corrected work items are then unchanged.
 //
 // Applications are read from the legacy collection, not the domain model, because DualWrite is
 // off in prod. Nothing is written to this service's own data.
 //
 // Logging is built to be queried in Grafana (OpenSearch, Lucene). CDP only indexes the message
 // text, so every value is in the message, as `key=value`. No personal data is logged: the
-// application reference, work item id, site ids (orsId/siteId) and outcome only - never a site
-// name, address or contact.
+// application reference, work item id, site ids (orsId/siteId), statuses and outcome only - never
+// a site name, address or contact.
 //
 // Run it before RA-766's ChargeCorrectionMigration, or re-check the charges afterwards: the
 // endpoint removes sites only and never changes the charge the work item holds, so the charge is
@@ -84,6 +90,28 @@ public class OverseasSitesCorrectionMigration(
     internal const string Reason =
         "RA-768: removing overseas sites the operator deselected in a query response before RA-557";
 
+    // RA-557 was merged on 11 September 2026 (ticket background). Only a query response the Case
+    // Management service recorded before then fits the defect this story fixes (ticket Scope
+    // comment: "a query-responded entry before 11 September 2026 whose sectionKeys include overseas
+    // sites"). Anything else is listed, not fixed.
+    internal static readonly DateTime CauseCutoff = new(2026, 9, 11, 0, 0, 0, DateTimeKind.Utc);
+
+    // The section keys whose resubmission RA-557 merges into payload.overseasSites.
+    internal static readonly IReadOnlySet<string> SiteSectionKeys = new HashSet<string>(
+        StringComparer.Ordinal
+    )
+    {
+        AccreditationApplicationSections.OverseasReprocessingSitesKey,
+        AccreditationApplicationSections.BroadlyEquivalentStandardsKey,
+    };
+
+    private static readonly ApplicationStatus[] ClosedStatuses =
+    [
+        ApplicationStatus.Approved,
+        ApplicationStatus.Rejected,
+        ApplicationStatus.Withdrawn,
+    ];
+
     internal enum RunMode
     {
         Disabled,
@@ -100,6 +128,7 @@ public class OverseasSitesCorrectionMigration(
         int SkippedQueried,
         int SkippedDulyMade,
         int SkippedDecided,
+        int SkippedCauseUnconfirmed,
         int Failed,
         int UnmatchedSites
     );
@@ -112,10 +141,15 @@ public class OverseasSitesCorrectionMigration(
         SkippedQueried,
         SkippedDulyMade,
         SkippedDecided,
+        SkippedCauseUnconfirmed,
         Failed,
     }
 
     private sealed record Result(Outcome Outcome, int UnmatchedSites);
+
+    // The planned outcome for an open application with sites to remove, or the unreadable value
+    // that makes it a failure.
+    private sealed record Plan(Outcome Outcome, string? Error = null);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -142,7 +176,7 @@ public class OverseasSitesCorrectionMigration(
     {
         var settings = options.Value;
         if (!settings.Enabled)
-            return new Summary(RunMode.Disabled, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            return new Summary(RunMode.Disabled, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
         var apply = settings.Apply;
         if (apply && string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy))
@@ -162,7 +196,7 @@ public class OverseasSitesCorrectionMigration(
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
         var caseWorking = serviceProvider.GetRequiredService<ICaseWorkingApiAdapter>();
 
-        var applications = await persistence.GetOpenWithCaseManagementWorkItemAsync(
+        var applications = await persistence.GetWithCaseManagementWorkItemAsync(
             cancellationToken
         );
 
@@ -191,6 +225,7 @@ public class OverseasSitesCorrectionMigration(
             counts.GetValueOrDefault(Outcome.SkippedQueried),
             counts.GetValueOrDefault(Outcome.SkippedDulyMade),
             counts.GetValueOrDefault(Outcome.SkippedDecided),
+            counts.GetValueOrDefault(Outcome.SkippedCauseUnconfirmed),
             counts.GetValueOrDefault(Outcome.Failed),
             unmatched
         );
@@ -200,7 +235,9 @@ public class OverseasSitesCorrectionMigration(
                 "RA-768 overseas sites correction summary: mode={Mode} candidates={Candidates} "
                     + "updated={Updated} would-update={WouldUpdate} unchanged={Unchanged} "
                     + "skipped-queried={SkippedQueried} skipped-duly-made={SkippedDulyMade} "
-                    + "skipped-decided={SkippedDecided} failed={Failed} unmatched-sites={UnmatchedSites}",
+                    + "skipped-decided={SkippedDecided} "
+                    + "skipped-cause-unconfirmed={SkippedCauseUnconfirmed} failed={Failed} "
+                    + "unmatched-sites={UnmatchedSites}",
                 modeText,
                 summary.Candidates,
                 summary.Updated,
@@ -209,6 +246,7 @@ public class OverseasSitesCorrectionMigration(
                 summary.SkippedQueried,
                 summary.SkippedDulyMade,
                 summary.SkippedDecided,
+                summary.SkippedCauseUnconfirmed,
                 summary.Failed,
                 summary.UnmatchedSites
             );
@@ -227,7 +265,7 @@ public class OverseasSitesCorrectionMigration(
 
         if (application.ApplicationStatus == ApplicationStatus.Queried)
         {
-            LogOutcome(Outcome.SkippedQueried, application, workItemId, []);
+            LogOutcome(Outcome.SkippedQueried, application, workItemId, null, []);
             return new Result(Outcome.SkippedQueried, 0);
         }
 
@@ -253,22 +291,26 @@ public class OverseasSitesCorrectionMigration(
 
             if (toRemove.Count == 0)
             {
-                LogOutcome(Outcome.Unchanged, application, workItemId, []);
+                LogOutcome(Outcome.Unchanged, application, workItemId, workItem, []);
                 return new Result(Outcome.Unchanged, unmatchedCount);
             }
 
-            if (workItem.StateId is null)
-                return Failed(application, workItemId, "state-missing", unmatchedCount);
+            // Closed here: decided, whatever the work item says. Listed, never written.
+            var plan = ClosedStatuses.Contains(application.ApplicationStatus)
+                ? new Plan(Outcome.SkippedDecided)
+                : PlanFor(workItem, apply);
+            if (plan.Error is { } error)
+                return Failed(application, workItemId, error, unmatchedCount);
 
             var (outcome, sites) = await CorrectAsync(
                 caseWorking,
                 workItemId,
-                PlannedOutcome(workItem, apply),
+                plan.Outcome,
                 toRemove,
                 cancellationToken
             );
 
-            LogOutcome(outcome, application, workItemId, sites);
+            LogOutcome(outcome, application, workItemId, workItem, sites);
             return new Result(outcome, unmatchedCount);
         }
         catch (Exception ex)
@@ -289,19 +331,37 @@ public class OverseasSitesCorrectionMigration(
         }
     }
 
-    // Decided is checked before duly made, as the Case Management service does.
-    private static Outcome PlannedOutcome(CaseWorkingWorkItem workItem, bool apply)
+    // For an open application with sites to remove. Decided is checked before duly made, as the
+    // Case Management service does; both before the cause, so the business owner's list of
+    // untouched work items is complete whatever the cause.
+    private static Plan PlanFor(CaseWorkingWorkItem workItem, bool apply)
     {
+        if (workItem.StateId is null)
+            return new Plan(Outcome.Failed, "state-missing");
         if (workItem.IsDecided)
-            return Outcome.SkippedDecided;
+            return new Plan(Outcome.SkippedDecided);
         if (workItem.DulyMade)
-            return Outcome.SkippedDulyMade;
-        return apply ? Outcome.Updated : Outcome.WouldUpdate;
+            return new Plan(Outcome.SkippedDulyMade);
+        if (workItem.QueryResponses is not { } responses)
+            return new Plan(Outcome.Failed, "audit-log-unreadable");
+        if (!CauseConfirmed(responses))
+            return new Plan(Outcome.SkippedCauseUnconfirmed);
+        return new Plan(apply ? Outcome.Updated : Outcome.WouldUpdate);
     }
+
+    // The defect this story fixes: a query response recorded before RA-557 that resubmitted the
+    // overseas sites or the BES evidence.
+    internal static bool CauseConfirmed(IReadOnlyList<CaseWorkingQueryResponse> responses) =>
+        responses.Any(r =>
+            r.CreatedAt < CauseCutoff && r.SectionKeys.Any(SiteSectionKeys.Contains)
+        );
 
     // Calls the endpoint only for a planned update; otherwise the plan stands, with the sites that
     // would have been removed. Returns the outcome and the site ids to log.
-    private static async Task<(Outcome Outcome, IReadOnlyList<CaseWorkingSiteIds> Sites)> CorrectAsync(
+    private static async Task<(
+        Outcome Outcome,
+        IReadOnlyList<CaseWorkingSiteIds> Sites
+    )> CorrectAsync(
         ICaseWorkingApiAdapter caseWorking,
         Guid workItemId,
         Outcome planned,
@@ -324,7 +384,9 @@ public class OverseasSitesCorrectionMigration(
             RemoveOverseasSitesOutcome.Unchanged => (Outcome.Unchanged, result.Removed),
             RemoveOverseasSitesOutcome.Decided => (Outcome.SkippedDecided, toRemove),
             RemoveOverseasSitesOutcome.DulyMade => (Outcome.SkippedDulyMade, toRemove),
-            _ => throw new InvalidOperationException($"Unhandled remove outcome {result.Outcome}"),
+            _ => throw new InvalidOperationException(
+                $"Unhandled remove outcome {result.Outcome}"
+            ),
         };
     }
 
@@ -399,20 +461,25 @@ public class OverseasSitesCorrectionMigration(
         Outcome outcome,
         AccreditationApplicationModel application,
         Guid workItemId,
+        CaseWorkingWorkItem? workItem,
         IReadOnlyList<CaseWorkingSiteIds> sites
     )
     {
         if (!logger.IsEnabled(LogLevel.Information))
             return;
 
-        logger.LogInformation(
-            "RA-768 overseas sites correction: outcome={Outcome} applicationReference={ApplicationReference} "
-                + "workItemId={WorkItemId} sites={Sites}",
-            OutcomeText(outcome),
-            application.ApplicationReference ?? "none",
-            workItemId,
-            sites.Count == 0 ? "none" : string.Join(",", sites.Select(SiteText))
-        );
+        var line =
+            $"outcome={OutcomeText(outcome)} "
+            + $"applicationReference={application.ApplicationReference ?? "none"} "
+            + $"workItemId={workItemId} "
+            + $"sites={(sites.Count == 0 ? "none" : string.Join(",", sites.Select(SiteText)))}";
+        // Which side is closed: this service's status and the work item's state.
+        if (outcome == Outcome.SkippedDecided)
+            line +=
+                $" applicationStatus={application.ApplicationStatus} "
+                + $"workItemState={workItem?.StateId ?? "none"}";
+
+        logger.LogInformation("RA-768 overseas sites correction: {Line}", line);
     }
 
     // orsId/siteId, "none" for an id the site does not have.
@@ -428,6 +495,7 @@ public class OverseasSitesCorrectionMigration(
             Outcome.SkippedQueried => "skipped-queried",
             Outcome.SkippedDulyMade => "skipped-duly-made",
             Outcome.SkippedDecided => "skipped-decided",
+            Outcome.SkippedCauseUnconfirmed => "skipped-cause-unconfirmed",
             Outcome.Failed => "failed",
             _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null),
         };

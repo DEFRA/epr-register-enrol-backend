@@ -77,6 +77,12 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
 
     private static CaseWorkingSiteIds Held(string? orsId, string? siteId) => new(orsId, siteId);
 
+    // The defect's own pattern: the overseas sites answered in a query response before RA-557.
+    private static readonly CaseWorkingQueryResponse SitesAnsweredBeforeRa557 = new(
+        new DateTime(2026, 8, 20, 10, 0, 0, DateTimeKind.Utc),
+        ["prn-tonnage", "overseas-reprocessing-sites"]
+    );
+
     // Default: the operator kept ORS-1 and deselected ORS-2; the work item still holds both.
     private async Task<(Guid WorkItemId, AccreditationApplicationModel Application)> SeedAsync(
         IReadOnlyList<OverseasSiteModel>? ours = null,
@@ -85,7 +91,8 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
         bool hasWorkItem = true,
         string? workItemState = "in-assessment",
         bool dulyMade = false,
-        bool noOverseasSites = false
+        bool noOverseasSites = false,
+        IReadOnlyList<CaseWorkingQueryResponse>? responses = null
     )
     {
         var workItemId = Guid.NewGuid();
@@ -110,7 +117,8 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
             workItemState,
             null,
             dulyMade,
-            held ?? [Held("ORS-1", "1"), Held("ORS-2", "2")]
+            held ?? [Held("ORS-1", "1"), Held("ORS-2", "2")],
+            responses ?? [SitesAnsweredBeforeRa557]
         );
         return (workItemId, application);
     }
@@ -184,6 +192,15 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
     ) =>
         $"RA-768 overseas sites correction: outcome={outcome} "
         + $"applicationReference={application.ApplicationReference} workItemId={workItemId} sites={sites}";
+
+    private static string DecidedLine(
+        AccreditationApplicationModel application,
+        Guid workItemId,
+        string sites,
+        string workItemState
+    ) =>
+        Line("skipped-decided", application, workItemId, sites)
+        + $" applicationStatus={application.ApplicationStatus} workItemState={workItemState}";
 
     private static string FailedLine(
         AccreditationApplicationModel application,
@@ -434,7 +451,7 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
         await DidNotWriteAsync();
         OutcomeLines()
             .Should()
-            .Equal(Line("skipped-decided", application, workItemId, "ORS-2/2"));
+            .Equal(DecidedLine(application, workItemId, "ORS-2/2", state));
     }
 
     [Theory]
@@ -460,7 +477,13 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
 
         (summary.SkippedDulyMade + summary.SkippedDecided).Should().Be(1);
         summary.Updated.Should().Be(0);
-        OutcomeLines().Should().Equal(Line(outcome, application, workItemId, "ORS-2/2"));
+        OutcomeLines()
+            .Should()
+            .Equal(
+                refusal == RemoveOverseasSitesOutcome.Decided
+                    ? DecidedLine(application, workItemId, "ORS-2/2", "in-assessment")
+                    : Line(outcome, application, workItemId, "ORS-2/2")
+            );
     }
 
     [Fact]
@@ -657,7 +680,7 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
             .Contain(
                 "RA-768 overseas sites correction summary: mode=dry-run candidates=3 updated=0 "
                     + "would-update=1 unchanged=1 skipped-queried=1 skipped-duly-made=0 "
-                    + "skipped-decided=0 failed=0 unmatched-sites=1"
+                    + "skipped-decided=0 skipped-cause-unconfirmed=0 failed=0 unmatched-sites=1"
             );
     }
 
@@ -665,14 +688,157 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
     [InlineData(ApplicationStatus.Approved)]
     [InlineData(ApplicationStatus.Rejected)]
     [InlineData(ApplicationStatus.Withdrawn)]
-    public async Task Closed_applications_are_not_candidates(ApplicationStatus status)
+    public async Task A_closed_application_holding_a_deselected_site_is_listed_and_never_written(
+        ApplicationStatus status
+    )
     {
-        await SeedAsync(status: status);
+        // The work item may not show the decision yet, and no state, duly-made marker or audit
+        // log is needed: closed here is enough.
+        var (workItemId, application) = await SeedAsync(
+            status: status,
+            workItemState: null,
+            responses: []
+        );
 
         var summary = await RunAsync(apply: true);
 
-        summary.Candidates.Should().Be(0);
-        await DidNotReadAsync();
+        summary.Candidates.Should().Be(1);
+        summary.SkippedDecided.Should().Be(1);
+        await DidNotWriteAsync();
+        OutcomeLines()
+            .Should()
+            .Equal(DecidedLine(application, workItemId, "ORS-2/2", "none"));
+    }
+
+    [Fact]
+    public async Task A_closed_application_with_nothing_to_remove_is_unchanged()
+    {
+        var (workItemId, application) = await SeedAsync(
+            status: ApplicationStatus.Approved,
+            held: [Held("ORS-1", "1")]
+        );
+
+        var summary = await RunAsync(apply: true);
+
+        summary.Unchanged.Should().Be(1);
+        await DidNotWriteAsync();
+        OutcomeLines().Should().Equal(Line("unchanged", application, workItemId, "none"));
+    }
+
+    [Fact]
+    public async Task A_closed_application_whose_work_item_cannot_be_read_is_a_failure()
+    {
+        var (workItemId, application) = await SeedAsync(status: ApplicationStatus.Withdrawn);
+        _workItems[workItemId] = _workItems[workItemId] with { OverseasSites = null };
+
+        var summary = await RunAsync(apply: true);
+
+        summary.Failed.Should().Be(1);
+        Logged(LogLevel.Error)
+            .Should()
+            .Equal(FailedLine(application, workItemId, "overseas-sites-unreadable", "none"));
+    }
+
+    public static TheoryData<string, string> SiteSectionKeys =>
+        new()
+        {
+            { "overseas-reprocessing-sites", "overseas sites" },
+            { "broadly-equivalent-standards", "BES evidence, which RA-557 merges too" },
+        };
+
+    [Theory]
+    [MemberData(nameof(SiteSectionKeys))]
+    public async Task A_query_response_before_RA_557_answering_the_sites_confirms_the_cause(
+        string sectionKey,
+        string because
+    )
+    {
+        var (workItemId, application) = await SeedAsync(
+            responses:
+            [
+                new CaseWorkingQueryResponse(
+                    new DateTime(2026, 9, 10, 23, 59, 59, DateTimeKind.Utc),
+                    ["site-details", sectionKey]
+                ),
+            ]
+        );
+
+        var summary = await RunAsync(apply: true);
+
+        summary.Updated.Should().Be(1, because);
+        OutcomeLines().Should().Equal(Line("updated", application, workItemId, "ORS-2/2"));
+    }
+
+    public static TheoryData<CaseWorkingQueryResponse[], string> UnconfirmedCauses =>
+        new()
+        {
+            { [], "no query response at all" },
+            {
+                [
+                    new CaseWorkingQueryResponse(
+                        new DateTime(2026, 9, 11, 0, 0, 0, DateTimeKind.Utc),
+                        ["overseas-reprocessing-sites"]
+                    ),
+                ],
+                "only a response from RA-557's day onwards"
+            },
+            {
+                [
+                    new CaseWorkingQueryResponse(
+                        new DateTime(2026, 8, 20, 10, 0, 0, DateTimeKind.Utc),
+                        ["prn-tonnage", "site-details"]
+                    ),
+                ],
+                "a response before RA-557 that did not answer the sites"
+            },
+        };
+
+    [Theory]
+    [MemberData(nameof(UnconfirmedCauses))]
+    public async Task Sites_to_remove_without_the_defects_cause_are_listed_and_never_sent(
+        CaseWorkingQueryResponse[] responses,
+        string because
+    )
+    {
+        var (workItemId, application) = await SeedAsync(responses: responses);
+
+        var summary = await RunAsync(apply: true);
+
+        summary.SkippedCauseUnconfirmed.Should().Be(1, because);
+        summary.Updated.Should().Be(0);
+        await DidNotWriteAsync();
+        OutcomeLines()
+            .Should()
+            .Equal(Line("skipped-cause-unconfirmed", application, workItemId, "ORS-2/2"));
+    }
+
+    [Fact]
+    public async Task A_work_item_whose_audit_log_is_unreadable_is_a_failure_not_unconfirmed()
+    {
+        var (workItemId, application) = await SeedAsync();
+        _workItems[workItemId] = _workItems[workItemId] with { QueryResponses = null };
+
+        var summary = await RunAsync(apply: true);
+
+        summary.Failed.Should().Be(1);
+        summary.SkippedCauseUnconfirmed.Should().Be(0);
+        await DidNotWriteAsync();
+        Logged(LogLevel.Error)
+            .Should()
+            .Equal(FailedLine(application, workItemId, "audit-log-unreadable", "none"));
+    }
+
+    [Fact]
+    public async Task A_duly_made_work_item_is_listed_whatever_the_cause()
+    {
+        var (workItemId, application) = await SeedAsync(dulyMade: true, responses: []);
+
+        var summary = await RunAsync(apply: false);
+
+        summary.SkippedDulyMade.Should().Be(1);
+        OutcomeLines()
+            .Should()
+            .Equal(Line("skipped-duly-made", application, workItemId, "ORS-2/2"));
     }
 
     [Fact]
@@ -690,7 +856,7 @@ public sealed class OverseasSitesCorrectionMigrationTests : IDisposable
     {
         var persistence = Substitute.For<IAccreditationApplicationPersistence>();
         persistence
-            .GetOpenWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
+            .GetWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("connection string with a secret"));
         var services = new ServiceCollection();
         services.AddSingleton(persistence);

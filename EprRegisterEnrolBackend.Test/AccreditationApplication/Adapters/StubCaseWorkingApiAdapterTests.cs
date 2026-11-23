@@ -461,7 +461,7 @@ public class StubCaseWorkingApiAdapterTests
                 TestContext.Current.CancellationToken
             );
 
-        workItem.Should().BeEquivalentTo(new CaseWorkingWorkItem(null, null, false, []));
+        workItem.Should().BeEquivalentTo(new CaseWorkingWorkItem(null, null, false, [], []));
     }
 
     [Fact]

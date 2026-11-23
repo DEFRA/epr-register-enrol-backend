@@ -121,12 +121,9 @@ public class ChargeCorrectionMigration(
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
         var caseWorking = serviceProvider.GetRequiredService<ICaseWorkingApiAdapter>();
 
-        // Queried applications are left out: see the class comment.
-        var applications = (
-            await persistence.GetOpenWithCaseManagementWorkItemAsync(cancellationToken)
-        )
-            .Where(a => a.ApplicationStatus != ApplicationStatus.Queried)
-            .ToList();
+        var applications = await persistence.GetOpenNotQueriedWithCaseManagementWorkItemAsync(
+            cancellationToken
+        );
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(

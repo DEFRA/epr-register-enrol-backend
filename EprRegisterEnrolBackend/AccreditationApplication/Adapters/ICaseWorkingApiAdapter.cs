@@ -58,8 +58,8 @@ public interface ICaseWorkingApiAdapter
 
     // RA-766, RA-768 (temporary; removed with the last of ChargeCorrectionMigration and
     // OverseasSitesCorrectionMigration): reads the parts of a work item those one-off corrections
-    // need (ManagementBe's GET /work-items/{id}): its state, charge, duly-made marker and the ids of
-    // the overseas sites it holds. Not a general work item read. The caller names the correction it
+    // need (ManagementBe's GET /work-items/{id}): its state, charge, duly-made marker, the ids of
+    // the overseas sites it holds and its query-responded audit entries. Not a general work item read. The caller names the correction it
     // acts as, which ManagementBe records as the end user. Allowed to throw (an
     // HttpRequestException carrying the status code for a non-success response): each migration
     // counts a failure and carries on.
@@ -131,20 +131,24 @@ public sealed record ResumeFromQueryResult(bool IsSuccess);
 // recorded (ManagementBe's own duly-made rule: payload.paymentDate present and not null).
 // OverseasSites is null when payload.overseasSites.sites is missing or is not a readable list of
 // sites; a site with neither id is kept, with both ids null, so the caller can refuse it.
+// QueryResponses holds the work item's query-responded audit entries (RA-768); it is null when the
+// audit log is missing or any entry is unreadable, so a caller can never read it as "none".
 public sealed record CaseWorkingWorkItem(
     string? StateId,
     int? ChargeAmountPence,
     bool DulyMade,
-    IReadOnlyList<CaseWorkingSiteIds>? OverseasSites
+    IReadOnlyList<CaseWorkingSiteIds>? OverseasSites,
+    IReadOnlyList<CaseWorkingQueryResponse>? QueryResponses
 )
 {
     // The states ManagementBe never changes a charge or the overseas sites in: its terminal states
     // plus the two pending-contact states, which are already a decided outcome (this service shows
     // them as AwaitingDecision, so the application status alone would not catch them).
     //
-    // A copy: the source of truth is ReAccreditationChargeCorrectionService.IsClosed in
-    // epr-register-enrol-management-be (TerminalStates plus ReAccreditationConfirmContactGuard),
-    // which both its PUT .../charge and its POST .../overseas-sites/remove call. The dry runs need
+    // A copy: the source of truth is ReAccreditationCorrectionGuards.IsDecided in
+    // epr-register-enrol-management-be (TerminalStates plus
+    // StandardConfirmContactGuard.ForPendingState), which both its PUT .../charge and its
+    // POST .../overseas-sites/remove call. The dry runs need
     // it here because a dry run never calls either. If the list changes there before both
     // migrations are removed, change it here too.
     internal static readonly IReadOnlySet<string> DecidedStates = new HashSet<string>(
@@ -160,6 +164,13 @@ public sealed record CaseWorkingWorkItem(
 
     public bool IsDecided => StateId is { } stateId && DecidedStates.Contains(stateId);
 }
+
+// RA-768 (temporary): one query-responded audit entry: when the operator's answer reached
+// ManagementBe, and the section keys it answered (stored comma-joined in details.sectionKeys).
+public sealed record CaseWorkingQueryResponse(
+    DateTime CreatedAt,
+    IReadOnlyList<string> SectionKeys
+);
 
 // RA-768 (temporary): a site's ids as ManagementBe holds them. SiteId is the string form of this
 // service's integer site id (ManagementBe matches on the string form).
