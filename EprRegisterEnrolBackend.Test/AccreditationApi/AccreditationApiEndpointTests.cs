@@ -632,7 +632,7 @@ public class AccreditationApiEndpointTests : IDisposable
         var response = await Get(RegistrationPath);
 
         await AssertProblem(response, HttpStatusCode.NotFound, "registration_not_found");
-        var detail = (await Json(await Get(RegistrationPath))).GetProperty("detail").GetString();
+        var detail = (await Json(response)).GetProperty("detail").GetString();
         detail.Should().Contain($"{Org}").And.Contain(Registration);
     }
 

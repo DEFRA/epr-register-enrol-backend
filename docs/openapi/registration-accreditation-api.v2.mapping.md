@@ -31,17 +31,17 @@ after the migration (domain model design, decision D3).
 | Removed | Reason (architecture review) |
 | --- | --- |
 | `/organisations`, `/organisations/{organisationNumber}` | We do not own Organisation. It is an internal data model only. |
-| `/organisations/.../registrations[...]`, `/registrations` search | Registration endpoints are dropped for now. |
+| `/organisations/.../registrations[...]`, `/registrations` search | Registration endpoints are dropped for now. Getting one registration came back to serve its applications' overseas sites, with their ORS ids. |
 | Registered overseas-site and interim-site endpoints | Dropped until ORS management and its migration plan are worked out. |
 | `.../applications[...]`, `AccreditationApplication` schema | Application is not for external use. Only the Accreditation is exposed. |
-| `ApplicationStatus`, `applicationStatus` | Application-specific. Replaced by `Accreditation.status`. |
+| `ApplicationStatus`, `applicationStatus` | Application-specific. Replaced by `Accreditation.status`. Getting a registration serves it on each application. |
 | `SectionStatus` | Application-specific, not accreditation-specific. |
 | `UploadedFile`, `samplingPlan`, `besEvidence` | Uploaded files only matter to the application. |
 | `samplingInspectionPlan` | Hidden. |
 | `formSubmissionTime` | Application data. |
 | `businessPlan`, `prnIssuance.prnIncomeBusinessPlan` | Commercially sensitive. Not available through this API at all. |
 | Overseas site `code1`, `code2`, `code3` | Duplicates of `operationCodes`. |
-| Overseas site `isNewSite`, `selected`, `registeredNowAccredited` | Application-time flags. The application holds every registered site, with `selected` marking those chosen for accreditation. The API returns only the chosen ones, so the flag is not needed. |
+| Overseas site `isNewSite`, `selected`, `registeredNowAccredited` | Application-time flags. The application holds every registered site, with `selected` marking those chosen for accreditation. The accreditation routes return only the chosen ones, so they do not need the flag. Getting a registration returns every site with `selected`. |
 | Interim site `isNewSite` | Application-time flag. |
 | Interim-site endpoints, `interimSiteIds` | Interim sites are returned inside their overseas site (`interimSites[]`). |
 | `material` filter on search | Search is by year only. |

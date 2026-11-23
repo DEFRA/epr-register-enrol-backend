@@ -233,7 +233,10 @@ public sealed record RegistrationDto
 
     public required string RegistrationNumber { get; init; }
 
-    /// <summary>Ordered by year.</summary>
+    /// <summary>
+    /// Ordered by year. A year can hold more than one application, such as a rejected one and its
+    /// resubmission.
+    /// </summary>
     public required IReadOnlyList<RegistrationApplicationDto> Applications { get; init; }
 }
 

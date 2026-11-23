@@ -96,7 +96,7 @@ registration and year. Accreditations for 2027 onwards are served.
 | `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
-| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` | every application for the registration, whatever its status or year, ordered by year. Each gives its `year`, `applicationStatus`, `accreditationNumber` once it has one, and every overseas site on it (ordered by `orsId` with unnumbered sites first, not paged) with `selected` saying whether the site is selected on the application. On an application not yet approved, a selected site is not yet accredited. `orsId` is `null` until one is issued. This route needs no granted accreditation |
+| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` | every application for the registration, whatever its status or year, ordered by year. A year can hold more than one application, such as a rejected one and its resubmission. Each gives its `year`, `applicationStatus`, `accreditationNumber` once it has one, and every overseas site on it (ordered by `orsId` with unnumbered sites first, not paged) with `selected` saying whether the site is selected on the application. On an application not yet approved, a selected site is not yet accredited. `orsId` is `null` until one is issued. This route needs no granted accreditation |
 
 Notes: the shapes follow the v2 draft spec (`docs/openapi/registration-accreditation-api.v2.yaml`).
 `tonnageBand` is the operator's planned band. Signatories are returned only when getting one
@@ -404,6 +404,10 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
 
 ## What's new
 
+- `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` returns every
+  application for a registration, whatever its status, with every overseas site on it, its `orsId`
+  and whether it is `selected`. It needs no granted accreditation. A registration with no
+  application is a `404` with `registration_not_found`.
 - Each interim site has `statusHistory` and `latestStatus`, in the same shape as an accreditation's
   and an overseas site's. It is `approved` from when its overseas site was approved and `withdrawn`
   from when it was withdrawn. Withdrawn interim sites are always returned, so `removedAt` and the
@@ -454,10 +458,10 @@ and are put back to this state whenever the service starts. Do not rely on them 
 | `990002` | `R26EX9900020002FB` | `A27EX9900020002FB` | 2027 | exporter, fibre, 10 overseas sites (`001` to `010`) each with 2 interim sites |
 | `990003` | `R26ER9900030000PL` | `A27ER9900030000PL` | 2027 | reprocessor, plastic |
 | `990004` | `R26ER9900040000ST` | `A27ER9900040000ST` | 2027 | reprocessor, steel (the metal example) |
-| `990005` | `R26EX9900050002WD` | `A27EX9900050002WD` | 2027 | exporter, wood, 3 registered overseas sites of which only `001` and `002` are accredited, and a withdrawn interim site on `001`. `003` is a 404 |
+| `990005` | `R26EX9900050002WD` | `A27EX9900050002WD` | 2027 | exporter, wood, 3 registered overseas sites of which only `001` and `002` are accredited, and a withdrawn interim site on `001`. `003` is a 404 on the accreditation routes, and getting the registration shows it with `selected` false |
 | `990006` | `R26ER9900060000AL` | `A27ER9900060000AL` and `A28ER9900060000AL` | 2027 and 2028 | reprocessor, aluminium, one registration accredited in two years. Search by `registrationNumber` or `organisationNumber` returns both |
-| `990007` | `R26ER9900070000PL` | none | 2027 | an application that was submitted but never granted. It is not served: a lookup is a 404 and a search finds nothing |
-| `990008` | `R26ER9900080000ST` | `A26ER9900080000ST` | 2026 | approved, but before 2027, so not served: a lookup is a 404 |
+| `990007` | `R26ER9900070000PL` | none | 2027 | an application that was submitted but never granted. The accreditation routes do not serve it: a lookup is a 404 and a search finds nothing. Getting the registration returns the application as `Submitted` |
+| `990008` | `R26ER9900080000ST` | `A26ER9900080000ST` | 2026 | approved, but before 2027, so the accreditation routes do not serve it: a lookup is a 404. Getting the registration returns the application |
 
 For example: `GET /v1/organisations/990002/registrations/R26EX9900020002FB/accreditations/2027/overseas-sites`.
 
