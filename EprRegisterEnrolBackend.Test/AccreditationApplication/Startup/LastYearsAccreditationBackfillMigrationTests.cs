@@ -11,12 +11,14 @@ using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Diagnostics.Metrics;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using NSubstitute;
 using Migration = EprRegisterEnrolBackend.AccreditationApplication.Startup.LastYearsAccreditationBackfillMigration;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
@@ -880,5 +882,185 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 && m.Contains("planned: Added=2")
                 && m.Contains("Written: Written=2, LostTheRace=0, Failed=0")
             );
+    }
+
+    // --- when it runs ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_read_and_the_plan_are_logged()
+    {
+        await SeedAsync(Egger());
+        await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+
+        await CreateMigration().RunAsync(Ct);
+
+        Logged(LogLevel.Information)
+            .Should()
+            .Contain(m => m.Contains("components ready"))
+            .And.Contain(m => m.Contains("read 2 2027 applications"))
+            .And.Contain(m => m.Contains("planned 2 applications"));
+    }
+
+    // Started during start-up, the backfill stalled on ext-test; it now waits until the application has started.
+    [Fact]
+    public async Task The_backfill_reads_nothing_until_the_application_has_started()
+    {
+        using var started = new CancellationTokenSource();
+        var reachedWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        lifetime.ApplicationStarted.Returns(_ =>
+        {
+            reachedWait.TrySetResult();
+            return started.Token;
+        });
+        var persistence = EmptyPersistence();
+        var migration = HostedMigration(persistence, lifetime);
+
+        await migration.StartAsync(Ct);
+        // The getter is only read by the wait, so without the wait this times out rather than passing vacuously.
+        await reachedWait.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        migration.ExecuteTask!.IsCompleted.Should().BeFalse();
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+
+        await started.CancelAsync();
+        await migration.ExecuteTask.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        await persistence.ReceivedWithAnyArgs(1).GetByYearAsync(0, Ct);
+        Logged(LogLevel.Information).Should().Contain(m => m.Contains("backfill complete"));
+    }
+
+    [Fact]
+    public async Task Shutting_down_before_the_application_has_started_reads_nothing()
+    {
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        lifetime.ApplicationStarted.Returns(CancellationToken.None);
+        var persistence = EmptyPersistence();
+        var migration = HostedMigration(persistence, lifetime);
+
+        await migration.StartAsync(Ct);
+        await migration.StopAsync(Ct);
+
+        migration.ExecuteTask!.IsCompleted.Should().BeTrue();
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+        _logger.Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_read_that_takes_too_long_is_logged_as_a_failure_with_the_reason()
+    {
+        var slow = Substitute.For<IAccreditationApplicationPersistence>();
+        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
+
+        await RunHostedAndExpectTimeoutAsync(slow);
+    }
+
+    // A read stuck somewhere that ignores the token (a connection handshake, say) still ends the wait.
+    [Fact]
+    public async Task A_read_that_ignores_the_token_is_still_cut_off()
+    {
+        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
+        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>().Task);
+
+        await RunHostedAndExpectTimeoutAsync(stuck);
+    }
+
+    // Only the limit we set is reported as a timeout; the caller's own cancellation stays a cancellation.
+    [Fact]
+    public async Task The_callers_cancellation_is_not_reported_as_a_timeout()
+    {
+        var slow = Substitute.For<IAccreditationApplicationPersistence>();
+        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
+        var migration = HostedMigration(slow, lifetime: null);
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        caller.CancelAfter(TimeSpan.FromMilliseconds(200));
+
+        var run = () => migration.RunAsync(caller.Token);
+
+        await run.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    // A cancellation that is neither our limit nor the caller's (the driver's own, say) is not reported as a timeout.
+    [Fact]
+    public async Task A_cancellation_from_the_read_itself_is_not_reported_as_a_timeout()
+    {
+        var cancelled = Substitute.For<IAccreditationApplicationPersistence>();
+        cancelled.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromCanceled<IReadOnlyList<AccreditationApplicationModel>>(new CancellationToken(canceled: true)));
+        var migration = HostedMigration(cancelled, lifetime: null);
+
+        var run = () => migration.RunAsync(Ct);
+
+        (await run.Should().ThrowAsync<OperationCanceledException>()).Which.Should().NotBeOfType<TimeoutException>();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task A_read_limit_of_zero_or_less_fails_the_run_saying_how_to_set_it(int seconds)
+    {
+        var migration = HostedMigration(EmptyPersistence(), lifetime: null, readTimeout: TimeSpan.FromSeconds(seconds));
+
+        var run = () => migration.RunAsync(Ct);
+
+        await run.Should().ThrowAsync<InvalidOperationException>().WithMessage("*ReadTimeout must be a positive duration as hh:mm:ss*");
+    }
+
+    private async Task RunHostedAndExpectTimeoutAsync(IAccreditationApplicationPersistence persistence)
+    {
+        var migration = HostedMigration(persistence, lifetime: null, readTimeout: TimeSpan.FromSeconds(1));
+
+        await migration.StartAsync(Ct);
+        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        var failure = _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
+            .Subject;
+        failure.Exception.Should().BeOfType<TimeoutException>()
+            .Which.Message.Should().Be("Reading the 2027 applications took longer than 00:00:01, so nothing was planned");
+        Logged(LogLevel.Information).Should().NotContain(m => m.Contains("planned"));
+    }
+
+    private static async Task<IReadOnlyList<AccreditationApplicationModel>> Never(CancellationToken ct)
+    {
+        await Task.Delay(Timeout.Infinite, ct);
+        return [];
+    }
+
+    private static IAccreditationApplicationPersistence EmptyPersistence()
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        persistence.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>([]));
+        return persistence;
+    }
+
+    // A hosted (ExecuteAsync) migration over the given persistence and lifetime, unlike CreateMigration's, which tests
+    // call RunAsync on directly against the real Mongo persistence.
+    private Migration HostedMigration(
+        IAccreditationApplicationPersistence persistence,
+        IHostApplicationLifetime? lifetime,
+        TimeSpan? readTimeout = null
+    )
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(persistence);
+        services.AddSingleton<IDualWriteUnitOfWork>(new LegacyOnlyUnitOfWork());
+        if (lifetime is not null)
+            services.AddSingleton(lifetime);
+        return new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(
+                new LastYearsAccreditationBackfillOptions
+                {
+                    Enabled = true,
+                    ReadTimeout = readTimeout ?? TimeSpan.FromMinutes(2),
+                }
+            ),
+            _logger
+        );
     }
 }
