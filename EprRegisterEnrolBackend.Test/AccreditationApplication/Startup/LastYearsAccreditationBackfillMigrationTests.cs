@@ -902,35 +902,82 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
     // Started during start-up, the backfill stalled on ext-test; it now waits until the application has started.
     [Fact]
-    public async Task The_backfill_waits_until_the_application_has_started()
+    public async Task The_backfill_reads_nothing_until_the_application_has_started()
     {
-        await SeedAsync(Egger());
         using var started = new CancellationTokenSource();
         var lifetime = Substitute.For<IHostApplicationLifetime>();
         lifetime.ApplicationStarted.Returns(started.Token);
-        var migration = HostedMigration(_persistence, lifetime);
+        var persistence = EmptyPersistence();
+        var migration = HostedMigration(persistence, lifetime);
 
         await migration.StartAsync(Ct);
-        await Task.Delay(300, Ct);
-        var beforeStart = _logger.Entries.Count;
-        await started.CancelAsync();
-        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
-        beforeStart.Should().Be(0);
+        migration.ExecuteTask!.IsCompleted.Should().BeFalse();
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+
+        await started.CancelAsync();
+        await migration.ExecuteTask.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        await persistence.ReceivedWithAnyArgs(1).GetByYearAsync(0, Ct);
         Logged(LogLevel.Information).Should().Contain(m => m.Contains("backfill complete"));
+    }
+
+    [Fact]
+    public async Task Shutting_down_before_the_application_has_started_reads_nothing()
+    {
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        lifetime.ApplicationStarted.Returns(CancellationToken.None);
+        var persistence = EmptyPersistence();
+        var migration = HostedMigration(persistence, lifetime);
+
+        await migration.StartAsync(Ct);
+        await migration.StopAsync(Ct);
+
+        migration.ExecuteTask!.IsCompleted.Should().BeTrue();
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+        _logger.Entries.Should().BeEmpty();
     }
 
     [Fact]
     public async Task A_read_that_takes_too_long_is_logged_as_a_failure_with_the_reason()
     {
-        static async Task<IReadOnlyList<AccreditationApplicationModel>> Never(CancellationToken ct)
-        {
-            await Task.Delay(Timeout.Infinite, ct);
-            return [];
-        }
         var slow = Substitute.For<IAccreditationApplicationPersistence>();
-        slow.GetByYearAsync(default, default).ReturnsForAnyArgs(call => Never(call.ArgAt<CancellationToken>(1)));
-        var migration = HostedMigration(slow, lifetime: null, readTimeout: TimeSpan.FromSeconds(1));
+        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
+
+        await RunHostedAndExpectTimeoutAsync(slow);
+    }
+
+    // A read stuck somewhere that ignores the token (a connection handshake, say) still ends the wait.
+    [Fact]
+    public async Task A_read_that_ignores_the_token_is_still_cut_off()
+    {
+        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
+        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>().Task);
+
+        await RunHostedAndExpectTimeoutAsync(stuck);
+    }
+
+    // Only the limit we set is reported as a timeout; the caller's own cancellation stays a cancellation.
+    [Fact]
+    public async Task The_callers_cancellation_is_not_reported_as_a_timeout()
+    {
+        var slow = Substitute.For<IAccreditationApplicationPersistence>();
+        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
+        var migration = HostedMigration(slow, lifetime: null);
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        caller.CancelAfter(TimeSpan.FromMilliseconds(200));
+
+        var run = () => migration.RunAsync(caller.Token);
+
+        await run.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    private async Task RunHostedAndExpectTimeoutAsync(IAccreditationApplicationPersistence persistence)
+    {
+        var migration = HostedMigration(persistence, lifetime: null, readTimeout: TimeSpan.FromSeconds(1));
 
         await migration.StartAsync(Ct);
         await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
@@ -939,10 +986,26 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
             .Subject;
         failure.Exception.Should().BeOfType<TimeoutException>()
-            .Which.Message.Should().Contain("Reading the 2027 applications took over 1 seconds");
+            .Which.Message.Should().Be("Reading the 2027 applications took longer than 00:00:01, so nothing was planned");
         Logged(LogLevel.Information).Should().NotContain(m => m.Contains("planned"));
     }
 
+    private static async Task<IReadOnlyList<AccreditationApplicationModel>> Never(CancellationToken ct)
+    {
+        await Task.Delay(Timeout.Infinite, ct);
+        return [];
+    }
+
+    private static IAccreditationApplicationPersistence EmptyPersistence()
+    {
+        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
+        persistence.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>([]));
+        return persistence;
+    }
+
+    // A hosted (ExecuteAsync) migration over the given persistence and lifetime, unlike CreateMigration's, which tests
+    // call RunAsync on directly against the real Mongo persistence.
     private Migration HostedMigration(
         IAccreditationApplicationPersistence persistence,
         IHostApplicationLifetime? lifetime,
@@ -956,11 +1019,14 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             services.AddSingleton(lifetime);
         return new Migration(
             services.BuildServiceProvider(),
-            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            Options.Create(
+                new LastYearsAccreditationBackfillOptions
+                {
+                    Enabled = true,
+                    ReadTimeout = readTimeout ?? TimeSpan.FromMinutes(2),
+                }
+            ),
             _logger
-        )
-        {
-            ReadTimeout = readTimeout ?? TimeSpan.FromMinutes(2),
-        };
+        );
     }
 }

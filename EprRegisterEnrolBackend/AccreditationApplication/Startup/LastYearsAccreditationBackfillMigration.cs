@@ -22,6 +22,10 @@ public sealed class LastYearsAccreditationBackfillOptions
     // Who reviewed the dry-run output against the live records. Required before Apply takes
     // effect; logged with every applied change so the authorisation outlives the env var.
     public string? SpotCheckConfirmedBy { get; set; }
+
+    // How long the read of the year's applications may take before the run gives up and logs why, as a TimeSpan
+    // ("00:02:00"). Raise it if a legitimately slow read is cut short.
+    public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromMinutes(2);
 }
 
 // RA-784: a 2027 renewal's accreditation number is last year's accreditation number with the year
@@ -118,9 +122,6 @@ public class LastYearsAccreditationBackfillMigration(
         string Detail
     );
 
-    // How long the read of the 2027 applications may take before the run gives up and logs why. Settable for tests.
-    internal TimeSpan ReadTimeout { get; init; } = TimeSpan.FromMinutes(2);
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Yield so host startup is never held up by anything below.
@@ -140,16 +141,16 @@ public class LastYearsAccreditationBackfillMigration(
         }
     }
 
-    private Task WaitForApplicationStartedAsync(CancellationToken stoppingToken)
+    private async Task WaitForApplicationStartedAsync(CancellationToken stoppingToken)
     {
         var lifetime = serviceProvider.GetService<IHostApplicationLifetime>();
         if (lifetime is null || lifetime.ApplicationStarted.IsCancellationRequested)
-            return Task.CompletedTask;
+            return;
 
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lifetime.ApplicationStarted.Register(() => started.TrySetResult());
-        stoppingToken.Register(() => started.TrySetCanceled(stoppingToken));
-        return started.Task;
+        await using var onStarted = lifetime.ApplicationStarted.Register(() => started.TrySetResult());
+        await using var onStopping = stoppingToken.Register(() => started.TrySetCanceled(stoppingToken));
+        await started.Task;
     }
 
     // Extracted so tests can await the run deterministically - BackgroundService's StartAsync only
@@ -172,7 +173,12 @@ public class LastYearsAccreditationBackfillMigration(
         var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
         var applications = await ReadApplicationsAsync(persistence, cancellationToken);
         if (logger.IsEnabled(LogLevel.Information))
-            logger.LogInformation("RA-784 {Mode}: read {Count} 2027 applications", mode, applications.Count);
+            logger.LogInformation(
+                "RA-784 {Mode}: read {Count} {Year} applications",
+                mode,
+                applications.Count,
+                AccreditationYear
+            );
 
         // Organisation by organisation; a draft without its OrgId yet sorts by its ReEx id after the rest.
         var plans = applications
@@ -218,22 +224,27 @@ public class LastYearsAccreditationBackfillMigration(
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
 
-    // A read that doesn't finish in time fails the run, which ExecuteAsync logs, rather than waiting silently.
+    // A read that doesn't finish in time fails the run, which ExecuteAsync logs, rather than waiting silently. The wait
+    // is abandoned when the limit passes even if the read itself ignores the token (a connection handshake, say).
     private async Task<IReadOnlyList<AccreditationApplicationModel>> ReadApplicationsAsync(
         IAccreditationApplicationPersistence persistence,
         CancellationToken cancellationToken
     )
     {
+        var limit = options.Value.ReadTimeout;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(ReadTimeout);
+        timeout.CancelAfter(limit);
         try
         {
-            return await persistence.GetByYearAsync(AccreditationYear, timeout.Token);
+            return await persistence
+                .GetByYearAsync(AccreditationYear, timeout.Token)
+                .WaitAsync(timeout.Token);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException(
-                $"Reading the 2027 applications took over {ReadTimeout.TotalSeconds:0} seconds, so nothing was planned"
+                $"Reading the {AccreditationYear} applications took longer than {limit}, so nothing was planned"
             );
         }
     }
