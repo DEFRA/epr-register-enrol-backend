@@ -224,8 +224,8 @@ public sealed record PageDto<T>
 }
 
 /// <summary>
-/// A registration, as this backend holds it: every application for it, of any status and year.
-/// This backend holds no registration record, so the applications are all there is to serve.
+/// The v2 <c>Registration</c>: every application for it, of any status and year. This backend holds
+/// no registration record, so the applications are all there is to serve.
 /// </summary>
 public sealed record RegistrationDto
 {
@@ -240,7 +240,10 @@ public sealed record RegistrationDto
     public required IReadOnlyList<RegistrationApplicationDto> Applications { get; init; }
 }
 
-/// <summary>One application for a registration, with every overseas site on it.</summary>
+/// <summary>
+/// The v2 <c>RegistrationApplication</c>: one application for a registration, with every overseas
+/// site on it.
+/// </summary>
 public sealed record RegistrationApplicationDto
 {
     public required int Year { get; init; }
@@ -259,7 +262,9 @@ public sealed record RegistrationApplicationDto
     public required IReadOnlyList<RegistrationOverseasSiteDto> OverseasSites { get; init; }
 }
 
-/// <summary>An overseas site as it stands on an application.</summary>
+/// <summary>
+/// The v2 <c>RegistrationOverseasSite</c>: an overseas site as it stands on an application.
+/// </summary>
 public sealed record RegistrationOverseasSiteDto
 {
     public required int SiteId { get; init; }

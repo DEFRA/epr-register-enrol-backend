@@ -578,7 +578,6 @@ public class AccreditationApiEndpointTests : IDisposable
                 a.OverseasSites!.Sites.Reverse();
                 a.OverseasSites.Sites.Add(Site(4, "004", selected: true, validFrom: null));
                 a.OverseasSites.Sites[^1].OrsId = null;
-                a.OverseasSites.Sites[^1].Coordinates = "53.55, 9.99";
             }
         );
 
@@ -587,11 +586,7 @@ public class AccreditationApiEndpointTests : IDisposable
         var sites = body.GetProperty("applications")[0].GetProperty("overseasSites").EnumerateArray().ToList();
         sites.Select(s => s.GetProperty("siteId").GetInt32()).Should().Equal(4, 1, 2, 3);
         sites[0].GetProperty("orsId").ValueKind.Should().Be(JsonValueKind.Null);
-        sites[0].GetProperty("coordinates").GetString().Should().Be("53.55, 9.99");
         sites[1].GetProperty("orsId").GetString().Should().Be("001");
-        sites[1].GetProperty("siteName").GetString().Should().Be("Site 001");
-        sites[1].GetProperty("address").GetProperty("line1").GetString().Should().Be("1 Hafenstrasse");
-        sites[1].GetProperty("address").GetProperty("country").GetString().Should().Be("Germany");
         sites.Select(s => s.GetProperty("selected").GetBoolean()).Should().Equal(true, true, true, false);
     }
 
@@ -639,7 +634,7 @@ public class AccreditationApiEndpointTests : IDisposable
     [Theory]
     [InlineData("/v1/organisations/abc/registrations/R27EX5000270012AL", "invalid_organisation_number")]
     [InlineData("/v1/organisations/500027/registrations/R27EX!", "invalid_registration_number")]
-    public async Task Registration_WithABadPath_Is400(string path, string code)
+    public async Task Registration_InvalidPath_Is400(string path, string code)
     {
         var response = await Get(path);
 

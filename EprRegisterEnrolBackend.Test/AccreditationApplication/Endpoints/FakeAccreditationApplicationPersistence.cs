@@ -210,7 +210,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 .FirstOrDefault()
         );
 
-    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationNumberAsync(
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
         int orgId,
         string registrationNumber,
         TimeSpan? maxTime = null

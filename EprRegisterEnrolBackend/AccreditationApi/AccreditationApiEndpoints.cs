@@ -9,8 +9,8 @@ namespace EprRegisterEnrolBackend.AccreditationApi;
 
 /// <summary>
 /// The read-only accreditation API for service clients such as ReEx: an accreditation for an
-/// organisation's registration in a year, and the overseas sites on it, and the overseas sites on
-/// every application for a registration. Reachable only with the
+/// organisation's registration in a year and the overseas sites on it, and a registration with the
+/// overseas sites on every application for it. Reachable only with the
 /// <see cref="ServiceClientPolicies.Read"/> policy (client-id plus HMAC auth, one credential per
 /// client). Paths follow the draft OpenAPI spec (docs/openapi), under <c>/v1</c>.
 /// </summary>
@@ -178,7 +178,7 @@ public static partial class AccreditationApiEndpoints
             ? new ServiceProblemResult(
                 StatusCodes.Status404NotFound,
                 "registration_not_found",
-                $"No application was found for organisation {path.OrgId}, registration {registrationNumber}."
+                $"No registration was found for organisation {path.OrgId}, registration {registrationNumber}."
             )
             : Results.Ok(
                 AccreditationApiMapper.ToRegistration(path.OrgId, registrationNumber, applications)
@@ -358,30 +358,25 @@ public static partial class AccreditationApiEndpoints
             )
         )
         {
-            return new RegistrationPath(
-                0,
-                BadRequest(
-                    "invalid_organisation_number",
-                    "organisationNumber must be a whole number, for example 500027."
-                )
+            return Invalid(
+                "invalid_organisation_number",
+                "organisationNumber must be a whole number, for example 500027."
             );
         }
 
         return RegistrationNumberPattern().IsMatch(registrationNumber)
             ? new RegistrationPath(orgId, null)
-            : new RegistrationPath(
-                0,
-                BadRequest(
-                    "invalid_registration_number",
-                    "registrationNumber must be letters, digits, hyphens or underscores, up to 40 characters."
-                )
+            : Invalid(
+                "invalid_registration_number",
+                "registrationNumber must be letters, digits, hyphens or underscores, up to 40 characters."
             );
+
+        static RegistrationPath Invalid(string code, string detail) =>
+            new(0, new ServiceProblemResult(StatusCodes.Status400BadRequest, code, detail));
     }
 
-    private static Lookup Bad(string code, string detail) => new(null, BadRequest(code, detail));
-
-    private static ServiceProblemResult BadRequest(string code, string detail) =>
-        new(StatusCodes.Status400BadRequest, code, detail);
+    private static Lookup Bad(string code, string detail) =>
+        new(null, new ServiceProblemResult(StatusCodes.Status400BadRequest, code, detail));
 
     private sealed record Paging(int PageNumber, int Limit, IResult? Problem);
 

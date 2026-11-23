@@ -6,9 +6,9 @@ using Microsoft.Extensions.Logging;
 namespace EprRegisterEnrolBackend.AccreditationApi;
 
 /// <summary>
-/// Builds the accreditation API's v2 responses from a granted accreditation application. This
-/// backend holds applications, not accreditations of its own, so a granted application is the
-/// accreditation. Nothing is invented beyond the one-entry histories the v2 mapping document
+/// Builds the accreditation API's v2 responses from a granted accreditation application, and a
+/// registration's from its applications. This backend holds applications, not accreditations of its
+/// own, so a granted application is the accreditation. Nothing is invented beyond the one-entry histories the v2 mapping document
 /// prescribes for accreditations that predate effective-dated history: what the application
 /// does not hold is left out.
 /// </summary>
@@ -150,28 +150,34 @@ public static class AccreditationApiMapper
         {
             OrganisationNumber = organisationNumber,
             RegistrationNumber = registrationNumber,
-            Applications = applications
-                .Select(application => new RegistrationApplicationDto
-                {
-                    Year = application.Year,
-                    ApplicationStatus = application.ApplicationStatus.ToString(),
-                    AccreditationNumber = Blank(application.AccreditationReference),
-                    OverseasSites = (application.OverseasSites?.Sites ?? [])
-                        .OrderBy(site => site.OrsId, StringComparer.Ordinal)
-                        .ThenBy(site => site.SiteId)
-                        .Select(site => new RegistrationOverseasSiteDto
-                        {
-                            SiteId = site.SiteId,
-                            OrsId = site.OrsId,
-                            SiteName = site.SiteName,
-                            FormattedAddress = Blank(site.SiteAddress),
-                            Address = ToOverseasAddress(site),
-                            Coordinates = Blank(site.Coordinates),
-                            Selected = site.Selected,
-                        })
-                        .ToList(),
-                })
+            Applications = applications.Select(ToRegistrationApplication).ToList(),
+        };
+
+    private static RegistrationApplicationDto ToRegistrationApplication(
+        AccreditationApplicationModel application
+    ) =>
+        new()
+        {
+            Year = application.Year,
+            ApplicationStatus = application.ApplicationStatus.ToString(),
+            AccreditationNumber = Blank(application.AccreditationReference),
+            OverseasSites = (application.OverseasSites?.Sites ?? [])
+                .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+                .ThenBy(site => site.SiteId)
+                .Select(ToRegistrationOverseasSite)
                 .ToList(),
+        };
+
+    private static RegistrationOverseasSiteDto ToRegistrationOverseasSite(OverseasSiteModel site) =>
+        new()
+        {
+            SiteId = site.SiteId,
+            OrsId = site.OrsId,
+            SiteName = site.SiteName,
+            FormattedAddress = Blank(site.SiteAddress),
+            Address = ToOverseasAddress(site),
+            Coordinates = Blank(site.Coordinates),
+            Selected = site.Selected,
         };
 
     private static AccreditationSummaryDto Summary(

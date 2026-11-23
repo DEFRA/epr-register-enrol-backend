@@ -491,7 +491,7 @@ public sealed class ModelBackedApplicationPersistence(
             .FirstOrDefault();
     }
 
-    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationNumberAsync(
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
         int orgId,
         string registrationNumber,
         TimeSpan? maxTime = null

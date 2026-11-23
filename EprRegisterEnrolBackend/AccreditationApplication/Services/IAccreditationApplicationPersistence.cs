@@ -109,7 +109,7 @@ public interface IAccreditationApplicationPersistence
     /// organisation number and registration number), ordered by year. This backend holds no
     /// registration of its own, so these applications are the registration. Read-only.
     /// </summary>
-    Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationNumberAsync(
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
         int orgId,
         string registrationNumber,
         TimeSpan? maxTime = null

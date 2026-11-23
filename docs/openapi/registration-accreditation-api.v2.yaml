@@ -54,9 +54,9 @@ info:
 servers:
   - url: /
 tags:
-  - name: Registrations
   - name: Accreditations
   - name: Accredited overseas sites
+  - name: Registrations
 
 paths:
   /v1/accreditations:
@@ -95,28 +95,6 @@ paths:
                         type: array
                         items: { $ref: '#/components/schemas/AccreditationSummary' }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '405': { $ref: '#/components/responses/MethodNotAllowed' }
-        '429': { $ref: '#/components/responses/TooManyRequests' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
-
-  /v1/organisations/{organisationNumber}/registrations/{registrationNumber}:
-    get:
-      tags: [Registrations]
-      operationId: getRegistration
-      summary: Get a registration, with the overseas sites on every application for it
-      parameters:
-        - $ref: '#/components/parameters/OrganisationNumber'
-        - $ref: '#/components/parameters/RegistrationNumber'
-      responses:
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '200':
-          description: The registration.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Registration' }
-        '404': { $ref: '#/components/responses/NotFound' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '405': { $ref: '#/components/responses/MethodNotAllowed' }
@@ -198,6 +176,28 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AccreditedOverseasSite' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /v1/organisations/{organisationNumber}/registrations/{registrationNumber}:
+    get:
+      tags: [Registrations]
+      operationId: getRegistration
+      summary: Get a registration, with the overseas sites on every application for it
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+      responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '200':
+          description: The registration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Registration' }
         '404': { $ref: '#/components/responses/NotFound' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -563,6 +563,10 @@ components:
           items: { $ref: '#/components/schemas/InterimSite' }
 
     # ---- registration ---------------------------------------------------------------------
+    ApplicationStatus:
+      type: string
+      description: Mirrors the `ApplicationStatus` enum.
+      enum: [Saved, Started, Submitted, DulyMade, Queried, Updated, AwaitingDecision, Approved, Rejected, Withdrawn]
     Registration:
       type: object
       description: |
@@ -570,7 +574,7 @@ components:
         holds no registration record, so the applications are all there is.
       required: [organisationNumber, registrationNumber, applications]
       properties:
-        organisationNumber: { type: integer, format: int32 }
+        organisationNumber: { type: integer, format: int32, description: ReEx numeric organisation number (`OrgId`). }
         registrationNumber: { type: string }
         applications:
           type: array
@@ -579,12 +583,11 @@ components:
           items: { $ref: '#/components/schemas/RegistrationApplication' }
     RegistrationApplication:
       type: object
+      description: One application for a registration, with every overseas site on it.
       required: [year, applicationStatus, overseasSites]
       properties:
         year: { type: integer, format: int32 }
-        applicationStatus:
-          type: string
-          enum: [Saved, Started, Submitted, DulyMade, Queried, Updated, AwaitingDecision, Approved, Rejected, Withdrawn]
+        applicationStatus: { $ref: '#/components/schemas/ApplicationStatus' }
         accreditationNumber:
           type: string
           description: Present once the application holds an accreditation number.
@@ -596,6 +599,10 @@ components:
           items: { $ref: '#/components/schemas/RegistrationOverseasSite' }
     RegistrationOverseasSite:
       type: object
+      description: |
+        An overseas site as it stands on an application, selected or not. It carries what is needed
+        to tell the site apart and match its ORS id; the rest of the site is served on the
+        accreditation once the site is accredited.
       required: [siteId, orsId, siteName, selected]
       properties:
         siteId:
@@ -604,9 +611,12 @@ components:
           description: Identifies the site within its application. Not a database id.
         orsId: { type: string, nullable: true, example: '001', description: '`null` until one is issued.' }
         siteName: { type: string }
-        formattedAddress: { type: string, description: Pre-formatted single-line address. }
-        address: { $ref: '#/components/schemas/Address' }
-        coordinates: { type: string }
+        formattedAddress: { type: string, nullable: true, description: Pre-formatted single-line address. }
+        address:
+          allOf: [{ $ref: '#/components/schemas/Address' }]
+          type: object
+          nullable: true
+        coordinates: { type: string, nullable: true }
         selected:
           type: boolean
           description: >-

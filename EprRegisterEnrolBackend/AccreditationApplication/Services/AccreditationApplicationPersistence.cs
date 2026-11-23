@@ -232,14 +232,13 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
-    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationNumberAsync(
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
         int orgId,
         string registrationNumber,
         TimeSpan? maxTime = null
     )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
-        // The (OrgId, RegistrationReference, Year) index serves the filter.
         var filter = filters.And(
             filters.Eq(a => a.OrgId, orgId),
             filters.Eq(a => a.RegistrationReference, registrationNumber)
@@ -900,7 +899,8 @@ public class AccreditationApplicationPersistence(
                 builder.Ascending(a => a.SourceReExAccreditationId)
             ),
             // Backs GetGrantedAccreditationAsync, called for every service client read of an
-            // accreditation (organisation number, registration number and year).
+            // accreditation (organisation number, registration number and year), and
+            // GetByOrgIdAndRegistrationNumberAsync, for a service client read of a registration.
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Combine(
                     builder.Ascending(a => a.OrgId),

@@ -679,6 +679,60 @@ public class AccreditationApiMapperTests
         interims[0].TryGetProperty("isNewSite", out _).Should().BeFalse();
     }
 
+    // ---- registration ----
+
+    private static JsonElement RegistrationSite(OverseasSiteModel site) =>
+        JsonSerializer
+            .SerializeToElement(
+                AccreditationApiMapper.ToRegistration(
+                    500027,
+                    "R27EX5000270012AL",
+                    [
+                        Application(
+                            exporter: true,
+                            configure: a =>
+                                a.OverseasSites = new AccreditationApplicationOverseasSites
+                                {
+                                    Sites = [site],
+                                }
+                        ),
+                    ]
+                ),
+                Web
+            )
+            .GetProperty("applications")[0]
+            .GetProperty("overseasSites")[0];
+
+    [Fact]
+    public void RegistrationOverseasSite_CarriesItsDetails()
+    {
+        var json = RegistrationSite(Site());
+
+        json.GetProperty("siteId").GetInt32().Should().Be(7);
+        json.GetProperty("orsId").GetString().Should().Be("001");
+        json.GetProperty("siteName").GetString().Should().Be("Approved Recyclers GmbH");
+        json.GetProperty("formattedAddress")
+            .GetString()
+            .Should()
+            .Be("Hafenstrasse 1, Hamburg, Germany");
+        var address = json.GetProperty("address");
+        address.GetProperty("line1").GetString().Should().Be("Hafenstrasse 1");
+        address.GetProperty("country").GetString().Should().Be("Germany");
+        json.GetProperty("coordinates").GetString().Should().Be("53.5511, 9.9937");
+        json.GetProperty("selected").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void RegistrationOverseasSite_LeavesOutWhatTheApplicationDoesNotNeedToShare()
+    {
+        var json = RegistrationSite(Site());
+
+        json.TryGetProperty("contact", out _).Should().BeFalse();
+        json.TryGetProperty("operationCodes", out _).Should().BeFalse();
+        json.TryGetProperty("besEvidence", out _).Should().BeFalse();
+        json.TryGetProperty("statusHistory", out _).Should().BeFalse();
+    }
+
     // ---- interim site status (RA-781) ----
 
     private static JsonElement InterimOf(InterimSiteModel interim) =>

@@ -88,26 +88,6 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         Assert.Equal(legacy?.Id, model?.Id);
     }
 
-    [Theory]
-    [InlineData(500001, "R27EX1234567P", 3)]
-    [InlineData(500027, "R27EX0000001P", 2)]
-    [InlineData(500027, "R27EX1234567P", 0)]
-    [InlineData(500099, "R27EX1234567P", 0)]
-    public async Task GetByRegistrationNumber_FindsTheSameApplications_OfEveryStatus(
-        int orgId,
-        string registration,
-        int expected
-    )
-    {
-        await ApiDataAsync();
-
-        var legacy = await _legacy.GetByRegistrationNumberAsync(orgId, registration);
-        var model = await _model.GetByRegistrationNumberAsync(orgId, registration);
-
-        Assert.Equal(expected, legacy.Count);
-        Assert.Equal(legacy.Select(a => a.Id), model.Select(a => a.Id));
-    }
-
     [Fact]
     public async Task GetGrantedAccreditation_BeforeTheFirstYear_IsNull()
     {
@@ -186,6 +166,26 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         Assert.Equal(status == "approved", legacyTotal > 0);
         Assert.Equal(legacyTotal, modelTotal);
         Assert.Equal(Ids(legacyItems), Ids(modelItems));
+    }
+
+    [Theory]
+    [InlineData(500001, "R27EX1234567P", 3)]
+    [InlineData(500027, "R27EX0000001P", 2)]
+    [InlineData(500027, "R27EX1234567P", 0)]
+    [InlineData(500099, "R27EX1234567P", 0)]
+    public async Task GetByOrgIdAndRegistrationNumber_FindsTheSameApplications_OfEveryStatus(
+        int orgId,
+        string registration,
+        int expected
+    )
+    {
+        await ApiDataAsync();
+
+        var legacy = await _legacy.GetByOrgIdAndRegistrationNumberAsync(orgId, registration);
+        var model = await _model.GetByOrgIdAndRegistrationNumberAsync(orgId, registration);
+
+        Assert.Equal(expected, legacy.Count);
+        Assert.Equal(legacy.Select(a => a.Id), model.Select(a => a.Id));
     }
 
     // RA-702's load protection: the API passes a time limit, and the model's lookup query asks the server for it, as

@@ -96,7 +96,7 @@ registration and year. Accreditations for 2027 onwards are served.
 | `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
-| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` | every application for the registration, whatever its status or year, ordered by year. A year can hold more than one application, such as a rejected one and its resubmission. Each gives its `year`, `applicationStatus`, `accreditationNumber` once it has one, and every overseas site on it (ordered by `orsId` with unnumbered sites first, not paged) with `selected` saying whether the site is selected on the application. On an application not yet approved, a selected site is not yet accredited. `orsId` is `null` until one is issued. This route needs no granted accreditation |
+| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` | every application for the registration, whatever its status or year, with every overseas site on it. Needs no granted accreditation |
 
 Notes: the shapes follow the v2 draft spec (`docs/openapi/registration-accreditation-api.v2.yaml`).
 `tonnageBand` is the operator's planned band. Signatories are returned only when getting one
@@ -149,6 +149,23 @@ identify a site by organisation, registration, year and `siteId` together. It is
 
 **Personal data.** `signatories` hold a person's name and email, and every `contact` a name, email
 and phone number. Treat them as personal data.
+
+### Registration
+
+| Field | Meaning |
+| --- | --- |
+| `organisationNumber` | the numeric organisation number |
+| `registrationNumber` | the registration's number |
+| `applications` | every application for the registration, whatever its status, ordered by year. A year can hold more than one application, such as a rejected one and its resubmission |
+| `applications[].year` | the scheme year the application is for |
+| `applications[].applicationStatus` | for example `Saved`, `Submitted`, `Approved` or `Rejected` |
+| `applications[].accreditationNumber` | present once the application holds one |
+| `applications[].overseasSites` | every overseas site on the application, selected or not, ordered by `orsId` with unnumbered sites first. Empty for a reprocessor. Not paged |
+| `overseasSites[].orsId` | always present, and `null` until one is issued |
+| `overseasSites[].selected` | whether the site is selected on the application. On an application not yet approved, a selected site is not yet accredited |
+
+A site on a registration also has `siteId`, `siteName`, `formattedAddress`, `address` and
+`coordinates`. `siteId` identifies the site within its application.
 
 ### Status and dates
 
@@ -326,6 +343,8 @@ For an exporter, `overseasSites` in the detail response lists them. Use the site
 them or to fetch one by `orsId`. Only sites included in the accreditation are returned: a site the
 organisation registered but did not accredit is a `404`. Withdrawn interim sites are included: see
 their `latestStatus`.
+
+For the sites on applications not yet granted, with their ORS ids, get the registration.
 
 ### Is a registration or accreditation I cannot find really missing?
 
