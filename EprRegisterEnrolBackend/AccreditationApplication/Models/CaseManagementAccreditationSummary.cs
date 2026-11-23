@@ -21,6 +21,7 @@ public sealed record CaseManagementAccreditationSummary(
     string? CompanyRegisteredAddress,
     CaseManagementSummaryPrns Prns,
     CaseManagementSummaryBusinessPlan BusinessPlan,
+    CaseManagementSummaryFiles SamplingPlan,
     IReadOnlyList<CaseManagementSummarySite> OverseasSites
 )
 {
@@ -38,7 +39,52 @@ public sealed record CaseManagementAccreditationSummary(
             application.CompanyRegisteredAddress,
             CaseManagementSummaryPrns.From(application.Prns),
             CaseManagementSummaryBusinessPlan.From(application.BusinessPlan),
+            CaseManagementSummaryFiles.From(application.SamplingPlan.Files),
             CaseManagementSummarySite.AccreditedFrom(application)
+        );
+}
+
+/// <summary>
+/// RA-769: the files of a document section (the sampling plan, or a site's BES evidence), shaped like the work item
+/// payload's <c>samplingPlan</c> and <c>besEvidence</c> (<c>{ files: [...] }</c>).
+/// </summary>
+public sealed record CaseManagementSummaryFiles(IReadOnlyList<CaseManagementSummaryFile> Files)
+{
+    public static CaseManagementSummaryFiles From(IEnumerable<AccreditationApplicationFile> files) =>
+        new([.. files.Select(CaseManagementSummaryFile.From)]);
+
+    public static CaseManagementSummaryFiles From(BesEvidenceModel? evidence) =>
+        new([.. (evidence?.BesEvidenceUploads ?? []).Select(CaseManagementSummaryFile.From)]);
+}
+
+/// <summary>
+/// RA-769: one document, with what management-be needs to serve it from S3 on a download: its id, name, content
+/// type, scan result and S3 location. The S3 details are for the server side only and are never rendered to a
+/// browser. Who uploaded it, when, the BES validity dates and the document type are not carried. A scan result that
+/// is missing (BES evidence can lack one) is answered as <c>Pending</c>: not a clean file.
+/// </summary>
+public sealed record CaseManagementSummaryFile(
+    string FileId,
+    string Filename,
+    string? ContentType,
+    string ScanStatus,
+    string S3Key,
+    string? S3Bucket
+)
+{
+    private const string Pending = nameof(FileScanStatus.Pending);
+
+    public static CaseManagementSummaryFile From(AccreditationApplicationFile file) =>
+        new(file.FileId, file.Filename, file.ContentType, file.ScanStatus.ToString(), file.S3Key, file.S3Bucket);
+
+    public static CaseManagementSummaryFile From(BesEvidenceFileModel file) =>
+        new(
+            file.FileId,
+            file.Filename,
+            file.ContentType,
+            string.IsNullOrWhiteSpace(file.ScanStatus) ? Pending : file.ScanStatus,
+            file.S3Key,
+            file.S3Bucket
         );
 }
 
@@ -109,7 +155,7 @@ public sealed record CaseManagementSummaryBusinessPlan(
 /// Management reads it with the code it already has), minus everything that is not a fact about the accredited site:
 /// <c>IsNewSite</c> and <c>RegisteredNowAccredited</c> (both stay true for the whole year after grant, so would
 /// mark every site as new), <c>Selected</c> (only selected sites are returned) and the ReEx <c>ValidFrom</c>.
-/// Its interim sites are the active ones only. BES evidence files are added by a later task.
+/// Its interim sites are the active ones only, and its BES evidence is the files alone.
 /// </summary>
 public sealed record CaseManagementSummarySite(
     int SiteId,
@@ -132,7 +178,8 @@ public sealed record CaseManagementSummarySite(
     bool? ConditionsOfExport,
     bool IsEu,
     bool IsOecd,
-    IReadOnlyList<CaseManagementSummaryInterimSite> InterimSites
+    IReadOnlyList<CaseManagementSummaryInterimSite> InterimSites,
+    CaseManagementSummaryFiles BesEvidence
 )
 {
     /// <summary>
@@ -170,7 +217,8 @@ public sealed record CaseManagementSummarySite(
             site.ConditionsOfExport,
             site.IsEu,
             site.IsOecd,
-            [.. InterimSiteSync.Active(site).Select(CaseManagementSummaryInterimSite.From)]
+            [.. InterimSiteSync.Active(site).Select(CaseManagementSummaryInterimSite.From)],
+            CaseManagementSummaryFiles.From(site.BesEvidence)
         );
 }
 

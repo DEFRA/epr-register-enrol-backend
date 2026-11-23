@@ -235,7 +235,8 @@ public class CaseManagementAccreditationSummaryEndpointTests
                 "conditionsOfExport",
                 "isEu",
                 "isOecd",
-                "interimSites"
+                "interimSites",
+                "besEvidence"
             );
         body.GetRawText()
             .Should()
@@ -460,6 +461,133 @@ public class CaseManagementAccreditationSummaryEndpointTests
             .Be(JsonValueKind.Null);
     }
 
+    private static AccreditationApplicationFile SamplingFile(
+        string fileId,
+        FileScanStatus scanStatus = FileScanStatus.Clean
+    ) =>
+        new()
+        {
+            FileId = fileId,
+            Filename = $"{fileId}.pdf",
+            ContentType = "application/pdf",
+            UploadedByUserId = "user-SECRET",
+            ScanStatus = scanStatus,
+            S3Key = $"sampling-plans/{fileId}.pdf",
+            S3Bucket = "plans-bucket",
+        };
+
+    private static BesEvidenceFileModel BesFile(string fileId, string? scanStatus = "Clean") =>
+        new()
+        {
+            FileId = fileId,
+            Filename = $"{fileId}.pdf",
+            ContentType = "application/pdf",
+            ScanStatus = scanStatus,
+            BesEvidenceValidFromDate = "2026-01-01",
+            BesEvidenceExpiryDate = "2027-12-31",
+            UploadedBy = "uploader-SECRET",
+            S3Key = $"bes/{fileId}.pdf",
+            S3Bucket = "bes-bucket",
+        };
+
+    [Fact]
+    public async Task TheSamplingPlan_AnswersEachFileWithWhatADownloadNeeds_AndNothingElse()
+    {
+        var app = ApprovedExporter();
+        app.SamplingPlan.Files = [SamplingFile("sp-1"), SamplingFile("sp-2", FileScanStatus.Pending)];
+
+        var body = await GetBody(app);
+
+        var files = body.GetProperty("samplingPlan").GetProperty("files").EnumerateArray().ToList();
+        files.Should().HaveCount(2);
+        files[0]
+            .EnumerateObject()
+            .Select(p => p.Name)
+            .Should()
+            .BeEquivalentTo("fileId", "filename", "contentType", "scanStatus", "s3Key", "s3Bucket");
+        files[0].GetProperty("fileId").GetString().Should().Be("sp-1");
+        files[0].GetProperty("filename").GetString().Should().Be("sp-1.pdf");
+        files[0].GetProperty("contentType").GetString().Should().Be("application/pdf");
+        files[0].GetProperty("scanStatus").GetString().Should().Be("Clean");
+        files[0].GetProperty("s3Key").GetString().Should().Be("sampling-plans/sp-1.pdf");
+        files[0].GetProperty("s3Bucket").GetString().Should().Be("plans-bucket");
+        files[1].GetProperty("scanStatus").GetString().Should().Be("Pending");
+        body.GetRawText().Should().NotContain("SECRET");
+    }
+
+    [Fact]
+    public async Task AnApplicationWithNoSamplingPlanFiles_AnswersAnEmptyList()
+    {
+        var body = await GetBody(ApprovedExporter());
+
+        body.GetProperty("samplingPlan").GetProperty("files").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ASitesBesEvidence_AnswersEachFileWithWhatADownloadNeeds_AndNothingElse()
+    {
+        var app = ApprovedExporter();
+        var site = Site(1, "001", "Speira GmbH");
+        site.BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads = [BesFile("bes-1"), BesFile("bes-2", scanStatus: null)],
+        };
+        app.OverseasSites = new() { Sites = [site] };
+
+        var body = await GetBody(app);
+
+        var files = body.GetProperty("overseasSites")[0]
+            .GetProperty("besEvidence")
+            .GetProperty("files")
+            .EnumerateArray()
+            .ToList();
+        files.Should().HaveCount(2);
+        files[0]
+            .EnumerateObject()
+            .Select(p => p.Name)
+            .Should()
+            .BeEquivalentTo("fileId", "filename", "contentType", "scanStatus", "s3Key", "s3Bucket");
+        files[0].GetProperty("fileId").GetString().Should().Be("bes-1");
+        files[0].GetProperty("scanStatus").GetString().Should().Be("Clean");
+        files[0].GetProperty("s3Key").GetString().Should().Be("bes/bes-1.pdf");
+        files[0].GetProperty("s3Bucket").GetString().Should().Be("bes-bucket");
+        // No scan result is not a clean one: it is answered as Pending.
+        files[1].GetProperty("scanStatus").GetString().Should().Be("Pending");
+        body.GetRawText().Should().NotContain("SECRET").And.NotContain("2027-12-31");
+    }
+
+    [Fact]
+    public async Task ASiteWithNoBesEvidence_AnswersAnEmptyList()
+    {
+        var app = ApprovedExporter();
+        var withEvidence = Site(1, "001", "A");
+        var withoutObject = Site(2, "002", "B");
+        withoutObject.BesEvidence = null;
+        withEvidence.BesEvidence = new BesEvidenceModel();
+        app.OverseasSites = new() { Sites = [withEvidence, withoutObject] };
+
+        var body = await GetBody(app);
+
+        foreach (var site in body.GetProperty("overseasSites").EnumerateArray())
+        {
+            site.GetProperty("besEvidence").GetProperty("files").GetArrayLength().Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task AnUnselectedSitesBesEvidence_IsNeverAnswered()
+    {
+        var app = ApprovedExporter();
+        var requested = Site(2, "002", "Requested ORS", selected: false);
+        requested.BesEvidence = new BesEvidenceModel { BesEvidenceUploads = [BesFile("bes-requested")] };
+        app.OverseasSites = new() { Sites = [Site(1, "001", "Granted ORS"), requested] };
+
+        var body = await GetBody(app);
+
+        body.GetProperty("overseasSites").GetArrayLength().Should().Be(1);
+        body.GetRawText().Should().NotContain("bes-requested");
+    }
+
     [Fact]
     public async Task TheResponseCarriesOnlyTheAllowListedFields()
     {
@@ -485,6 +613,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
                 "companyRegisteredAddress",
                 "prns",
                 "businessPlan",
+                "samplingPlan",
                 "overseasSites"
             );
         var raw = body.GetRawText();
