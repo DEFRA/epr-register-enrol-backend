@@ -885,6 +885,13 @@ current documents.
 **Registration.** This also adopts ReEx's lifecycle (Q4), from `VALID_REG_TRANSITIONS`. Registrations
 **cannot be suspended** (PAE-1705).
 
+Until this service implements new registrations, the status is ReEx's (RA-806): each seed copies the registration's
+ReEx `status` (`REGISTRATION_STATUS`: `created`, `approved`, `rejected`, `cancelled`, matched by name ignoring case)
+onto the Registration, a new one or the current version, and a change is a new version with `lastChange.reason =
+ReExRefresh`. A missing or unrecognised ReEx status is logged at Error and leaves the held status as it is (`created`
+on a new Registration), without failing the seed. The migration makes no ReEx calls, so a Registration it creates is
+`created` until the next seed for it, and nothing else writes the status.
+
 ```mermaid
 stateDiagram-v2
     [*] --> created : migrated from applications / (future) new registration
@@ -1271,7 +1278,7 @@ pending uploads and nonces are **unchanged**.
 | `Organisation.submitterContactDetails`, `users[]` | Organisation | ✚ `users` is not in `OrganisationDto` |
 | `Organisation.registrations[]` | Registration (by `organisationId`) | |
 | `Organisation.accreditations[]` | ⚠ **Conflicts with fixed decision 3** | Recommend removing it, or nesting accreditations under each registration in this response |
-| `Registration.registrationNumber`, `status`, `material`, `wasteProcessingType`, `glassRecyclingProcess`, `siteAddress`, `noticeAddress`, `recyclingProcess`, `exportPorts`, `wasteManagementPermits`, `approvedPersons`, `yearlyMetrics`, `contactDetails`, `submitterContactDetails`, `samplingInspectionPlan`, `gridReference`, `suppliers`, `plantEquipmentDetails`, `siteId`, `formSubmissionTime` | Registration | ✚ Several are not on `RegistrationBaseDto` today: `recyclingProcess`, `approvedPersons`, `contactDetails`, `samplingInspectionPlan`, `suppliers` and `formSubmissionTime` |
+| `Registration.registrationNumber`, `status`, `material`, `wasteProcessingType`, `glassRecyclingProcess`, `siteAddress`, `noticeAddress`, `recyclingProcess`, `exportPorts`, `wasteManagementPermits`, `approvedPersons`, `yearlyMetrics`, `contactDetails`, `submitterContactDetails`, `samplingInspectionPlan`, `gridReference`, `suppliers`, `plantEquipmentDetails`, `siteId`, `formSubmissionTime` | Registration | ✚ Several are not on `RegistrationBaseDto` today: `recyclingProcess`, `approvedPersons`, `contactDetails`, `samplingInspectionPlan`, `suppliers` and `formSubmissionTime`. `status` is read and copied at seed since RA-806 (§3.4) |
 | `Registration.yearlyMetrics` (object) | Registration.`yearlyMetrics[]` | ⚠ ReEx sends a **list** (`ReprocessorRegistrationDto.YearlyMetrics`); the PR has a single object |
 | `WasteManagementPermit.authorisedWeight`, `permitWindow` | Registration permits | ⚠ ReEx has `authorisedMaterials[]{material, authorisedWeightInTonnes, timeScale}`. Reshape it or change the PR |
 | `Registration.accreditationReference` (single) | ⚠ Many accreditations per registration (one per year) | Replace with the `…/accreditations` sub-resource, or `currentAccreditationNumber` |

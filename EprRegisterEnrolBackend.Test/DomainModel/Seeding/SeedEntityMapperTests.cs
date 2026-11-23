@@ -7,7 +7,7 @@ using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.DomainModel.Seeding;
 
-public class SeedEntityMapperTests
+public partial class SeedEntityMapperTests
 {
     private static ReExAccreditationDto Dto() =>
         new()

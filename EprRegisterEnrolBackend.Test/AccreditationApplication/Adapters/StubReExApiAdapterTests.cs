@@ -15,7 +15,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 /// true — indistinguishable from a wizard-added site. Registry/prior-year sites must report
 /// IsNewSite = false, matching HttpReExApiAdapter's live-API mapping.
 /// </summary>
-public class StubReExApiAdapterTests
+public partial class StubReExApiAdapterTests
 {
     [Fact]
     public async Task GetAccreditationAsync_SeededOverseasSites_AreFlaggedIsNewSiteFalse()

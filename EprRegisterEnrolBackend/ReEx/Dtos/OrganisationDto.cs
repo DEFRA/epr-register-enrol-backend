@@ -125,6 +125,12 @@ public class RegistrationBaseDto
     /// </summary>
     public string? SubmittedToRegulator { get; init; }
 
+    /// <summary>
+    /// RA-806: ReEx's lifecycle status for THIS registration (created, approved, rejected or cancelled), copied onto
+    /// the domain model's Registration at seed. Raw, as ReEx sent it: see ReExRegistrationStatusMapper.
+    /// </summary>
+    public string? Status { get; init; }
+
     public NoticeAddressDto? NoticeAddress { get; init; }
     public List<WasteManagementPermitDto> WasteManagementPermits { get; init; } = [];
 
