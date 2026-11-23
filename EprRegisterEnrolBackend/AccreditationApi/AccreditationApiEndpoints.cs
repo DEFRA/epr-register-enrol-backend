@@ -9,14 +9,17 @@ namespace EprRegisterEnrolBackend.AccreditationApi;
 
 /// <summary>
 /// The read-only accreditation API for service clients such as ReEx: an accreditation for an
-/// organisation's registration in a year, and the overseas sites on it. Reachable only with the
+/// organisation's registration in a year, and the overseas sites on it, and the overseas sites on
+/// every application for a registration. Reachable only with the
 /// <see cref="ServiceClientPolicies.Read"/> policy (client-id plus HMAC auth, one credential per
 /// client). Paths follow the draft OpenAPI spec (docs/openapi), under <c>/v1</c>.
 /// </summary>
 public static partial class AccreditationApiEndpoints
 {
-    private const string AccreditationRoute =
-        "/v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}";
+    private const string RegistrationRoute =
+        "/v1/organisations/{organisationNumber}/registrations/{registrationNumber}";
+
+    private const string AccreditationRoute = $"{RegistrationRoute}/accreditations/{{year}}";
 
     private const int DefaultLimit = 20;
     private const int MaxLimit = 100;
@@ -36,6 +39,7 @@ public static partial class AccreditationApiEndpoints
             .WithTags("Service clients");
 
         group.MapGet("/v1/accreditations", SearchAccreditations).WithName("SearchAccreditations");
+        group.MapGet(RegistrationRoute, GetRegistration).WithName("GetRegistration");
         group.MapGet(AccreditationRoute, GetAccreditation).WithName("GetAccreditation");
         group
             .MapGet($"{AccreditationRoute}/overseas-sites", ListOverseasSites)
@@ -151,6 +155,34 @@ public static partial class AccreditationApiEndpoints
                 ),
             }
         );
+    }
+
+    private static async Task<IResult> GetRegistration(
+        string organisationNumber,
+        string registrationNumber,
+        RegistrationApplications registrations,
+        CancellationToken cancellationToken
+    )
+    {
+        var path = ParseRegistrationPath(organisationNumber, registrationNumber);
+        if (path.Problem is not null)
+            return path.Problem;
+
+        var applications = await registrations.FindAsync(
+            path.OrgId,
+            registrationNumber,
+            cancellationToken
+        );
+
+        return applications.Count == 0
+            ? new ServiceProblemResult(
+                StatusCodes.Status404NotFound,
+                "registration_not_found",
+                $"No application was found for organisation {path.OrgId}, registration {registrationNumber}."
+            )
+            : Results.Ok(
+                AccreditationApiMapper.ToRegistration(path.OrgId, registrationNumber, applications)
+            );
     }
 
     private static async Task<IResult> GetAccreditation(
@@ -273,28 +305,10 @@ public static partial class AccreditationApiEndpoints
         CancellationToken cancellationToken
     )
     {
-        if (
-            !int.TryParse(
-                organisationNumber,
-                NumberStyles.None,
-                CultureInfo.InvariantCulture,
-                out var orgId
-            )
-        )
-        {
-            return Bad(
-                "invalid_organisation_number",
-                "organisationNumber must be a whole number, for example 500027."
-            );
-        }
-
-        if (!RegistrationNumberPattern().IsMatch(registrationNumber))
-        {
-            return Bad(
-                "invalid_registration_number",
-                "registrationNumber must be letters, digits, hyphens or underscores, up to 40 characters."
-            );
-        }
+        var registration = ParseRegistrationPath(organisationNumber, registrationNumber);
+        if (registration.Problem is not null)
+            return new Lookup(null, registration.Problem);
+        var orgId = registration.OrgId;
 
         if (
             year.Length != 4
@@ -328,8 +342,46 @@ public static partial class AccreditationApiEndpoints
             : new Lookup(served, null);
     }
 
-    private static Lookup Bad(string code, string detail) =>
-        new(null, new ServiceProblemResult(StatusCodes.Status400BadRequest, code, detail));
+    private sealed record RegistrationPath(int OrgId, IResult? Problem);
+
+    private static RegistrationPath ParseRegistrationPath(
+        string organisationNumber,
+        string registrationNumber
+    )
+    {
+        if (
+            !int.TryParse(
+                organisationNumber,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var orgId
+            )
+        )
+        {
+            return new RegistrationPath(
+                0,
+                BadRequest(
+                    "invalid_organisation_number",
+                    "organisationNumber must be a whole number, for example 500027."
+                )
+            );
+        }
+
+        return RegistrationNumberPattern().IsMatch(registrationNumber)
+            ? new RegistrationPath(orgId, null)
+            : new RegistrationPath(
+                0,
+                BadRequest(
+                    "invalid_registration_number",
+                    "registrationNumber must be letters, digits, hyphens or underscores, up to 40 characters."
+                )
+            );
+    }
+
+    private static Lookup Bad(string code, string detail) => new(null, BadRequest(code, detail));
+
+    private static ServiceProblemResult BadRequest(string code, string detail) =>
+        new(StatusCodes.Status400BadRequest, code, detail);
 
     private sealed record Paging(int PageNumber, int Limit, IResult? Problem);
 

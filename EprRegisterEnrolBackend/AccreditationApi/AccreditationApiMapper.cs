@@ -141,6 +141,39 @@ public static class AccreditationApiMapper
         };
     }
 
+    public static RegistrationDto ToRegistration(
+        int organisationNumber,
+        string registrationNumber,
+        IEnumerable<AccreditationApplicationModel> applications
+    ) =>
+        new()
+        {
+            OrganisationNumber = organisationNumber,
+            RegistrationNumber = registrationNumber,
+            Applications = applications
+                .Select(application => new RegistrationApplicationDto
+                {
+                    Year = application.Year,
+                    ApplicationStatus = application.ApplicationStatus.ToString(),
+                    AccreditationNumber = Blank(application.AccreditationReference),
+                    OverseasSites = (application.OverseasSites?.Sites ?? [])
+                        .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+                        .ThenBy(site => site.SiteId)
+                        .Select(site => new RegistrationOverseasSiteDto
+                        {
+                            SiteId = site.SiteId,
+                            OrsId = site.OrsId,
+                            SiteName = site.SiteName,
+                            FormattedAddress = Blank(site.SiteAddress),
+                            Address = ToOverseasAddress(site),
+                            Coordinates = Blank(site.Coordinates),
+                            Selected = site.Selected,
+                        })
+                        .ToList(),
+                })
+                .ToList(),
+        };
+
     private static AccreditationSummaryDto Summary(
         AccreditationApplicationModel application,
         IReadOnlyList<StatusHistoryEntryDto> history

@@ -232,6 +232,26 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationNumberAsync(
+        int orgId,
+        string registrationNumber,
+        TimeSpan? maxTime = null
+    )
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        // Covered by the (OrgId, RegistrationReference, Year) index.
+        var filter = filters.And(
+            filters.Eq(a => a.OrgId, orgId),
+            filters.Eq(a => a.RegistrationReference, registrationNumber)
+        );
+
+        return await Collection
+            .Find(filter, new FindOptions { MaxTime = maxTime })
+            .SortBy(a => a.Year)
+            .ThenBy(a => a.Id)
+            .ToListAsync();
+    }
+
     public async Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total

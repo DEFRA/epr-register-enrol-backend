@@ -87,8 +87,8 @@ twice is refused as `reused_nonce`.
 
 ## Endpoints
 
-All require a granted (approved) accreditation for the organisation, registration and year.
-Accreditations for 2027 onwards are served.
+The accreditation routes require a granted (approved) accreditation for the organisation,
+registration and year. Accreditations for 2027 onwards are served.
 
 | Route | Returns |
 | --- | --- |
@@ -96,6 +96,7 @@ Accreditations for 2027 onwards are served.
 | `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
+| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` | every application for the registration, whatever its status or year, ordered by year. Each gives its `year`, `applicationStatus`, `accreditationNumber` once it has one, and every overseas site on it (ordered by `orsId`, not paged) with `selected` saying whether the site is in the accreditation. `orsId` is `null` until one is issued. This route needs no granted accreditation |
 
 Notes: the shapes follow the v2 draft spec (`docs/openapi/registration-accreditation-api.v2.yaml`).
 `tonnageBand` is the operator's planned band. Signatories are returned only when getting one
@@ -359,6 +360,7 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 | 403 | `forbidden` | the client is known but not allowed to make this request |
 | 404 | `accreditation_not_found` | no granted accreditation for that organisation, registration and year |
 | 404 | `overseas_site_not_found` | no such overseas site on the accreditation |
+| 404 | `registration_not_found` | no application for that organisation and registration |
 | 404 | `not_found` | no such route |
 | 400 | `invalid_organisation_number`, `invalid_registration_number`, `invalid_year`, `invalid_ors_id`, `invalid_paging`, `invalid_status` | bad input |
 | 405 | `method_not_allowed` | any method other than GET |

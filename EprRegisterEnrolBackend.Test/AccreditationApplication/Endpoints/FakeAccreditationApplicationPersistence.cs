@@ -210,6 +210,20 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 .FirstOrDefault()
         );
 
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByRegistrationNumberAsync(
+        int orgId,
+        string registrationNumber,
+        TimeSpan? maxTime = null
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a => a.OrgId == orgId && a.RegistrationReference == registrationNumber)
+                .OrderBy(a => a.Year)
+                .ThenBy(a => a.Id)
+                .Select(ShallowCopy)
+                .ToList()
+        );
+
     public Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
