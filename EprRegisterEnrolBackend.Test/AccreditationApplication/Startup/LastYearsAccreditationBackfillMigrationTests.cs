@@ -950,6 +950,43 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task The_backfill_waits_the_start_delay_before_reading()
+    {
+        var persistence = EmptyPersistence();
+        var migration = HostedMigration(persistence, lifetime: null, startDelay: TimeSpan.FromHours(1));
+
+        await migration.StartAsync(Ct);
+        await WaitForLogAsync("waiting 01:00:00 after start-up");
+
+        migration.ExecuteTask!.IsCompleted.Should().BeFalse();
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+
+        await migration.StopAsync(Ct);
+
+        migration.ExecuteTask.IsCompleted.Should().BeTrue();
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
+    }
+
+    [Theory]
+    [InlineData("-00:00:01")]
+    [InlineData("1.00:00:01")]
+    public async Task A_start_delay_below_zero_or_over_a_day_fails_the_run_saying_how_to_set_it(string delay)
+    {
+        var persistence = EmptyPersistence();
+        var migration = HostedMigration(persistence, lifetime: null, startDelay: TimeSpan.Parse(delay));
+
+        await migration.StartAsync(Ct);
+        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
+            .Which.Exception.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Contain("StartDelay must be from zero to a day as hh:mm:ss");
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+    }
+
+    [Fact]
     public async Task A_read_that_takes_too_long_is_logged_as_a_failure_with_the_reason()
     {
         var slow = Substitute.For<IAccreditationApplicationPersistence>();
@@ -1084,6 +1121,14 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         Logged(LogLevel.Information).Should().NotContain(m => m.Contains("planned"));
     }
 
+    private async Task WaitForLogAsync(string text)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(30));
+        while (!_logger.Entries.ToList().Exists(e => e.Message.Contains(text)))
+            await Task.Delay(TimeSpan.FromMilliseconds(20), limit.Token);
+    }
+
     private static async Task<IReadOnlyList<AccreditationApplicationModel>> Never(CancellationToken ct)
     {
         await Task.Delay(Timeout.Infinite, ct);
@@ -1104,7 +1149,8 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         IAccreditationApplicationPersistence persistence,
         IHostApplicationLifetime? lifetime,
         TimeSpan? readTimeout = null,
-        TimeSpan? progressInterval = null
+        TimeSpan? progressInterval = null,
+        TimeSpan? startDelay = null
     )
     {
         var services = new ServiceCollection();
@@ -1119,6 +1165,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 {
                     Enabled = true,
                     ReadTimeout = readTimeout ?? TimeSpan.FromMinutes(2),
+                    StartDelay = startDelay ?? TimeSpan.Zero,
                 }
             ),
             _logger

@@ -27,6 +27,10 @@ public sealed class LastYearsAccreditationBackfillOptions
     // How long the read of the year's applications may take before the run gives up and logs why, as hh:mm:ss
     // ("00:02:00"; a bare "120" would mean 120 days). Raise it if a legitimately slow read is cut short.
     public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
+    // How long to wait after the application has started before reading, as hh:mm:ss, up to a day. On ext-test the
+    // backfill's first read, straight after start-up, stalled, while the RA-651 check's, 30 seconds later, did not.
+    public TimeSpan StartDelay { get; set; } = TimeSpan.FromSeconds(30);
 }
 
 // RA-784: a 2027 renewal's accreditation number is last year's accreditation number with the year
@@ -132,6 +136,7 @@ public class LastYearsAccreditationBackfillMigration(
             // Run once start-up has finished, not during it: on ext-test the backfill stalled silently when it ran
             // during start-up, alongside index set-up, seeds and diagnostics.
             await WaitForApplicationStartedAsync(stoppingToken);
+            await WaitTheStartDelayAsync(stoppingToken);
             await RunAsync(stoppingToken);
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
@@ -152,6 +157,26 @@ public class LastYearsAccreditationBackfillMigration(
         await using var onStarted = lifetime.ApplicationStarted.Register(() => started.TrySetResult());
         await using var onStopping = stoppingToken.Register(() => started.TrySetCanceled(stoppingToken));
         await started.Task;
+    }
+
+    // Only when enabled, so a switched-off backfill doesn't sit waiting.
+    private async Task WaitTheStartDelayAsync(CancellationToken stoppingToken)
+    {
+        if (!options.Value.Enabled)
+            return;
+
+        var delay = options.Value.StartDelay;
+        if (delay < TimeSpan.Zero || delay > TimeSpan.FromDays(1))
+            throw new InvalidOperationException(
+                $"{LastYearsAccreditationBackfillOptions.SectionName}:StartDelay must be from zero to a day as "
+                    + $"hh:mm:ss (for example 00:00:30), not {delay}"
+            );
+        if (delay == TimeSpan.Zero)
+            return;
+
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation("RA-784 last year's accreditation backfill: waiting {Delay} after start-up", delay);
+        await Task.Delay(delay, stoppingToken);
     }
 
     // Extracted so tests can await the run deterministically - BackgroundService's StartAsync only
