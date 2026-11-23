@@ -11,12 +11,14 @@ using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Diagnostics.Metrics;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using NSubstitute;
 using Migration = EprRegisterEnrolBackend.AccreditationApplication.Startup.LastYearsAccreditationBackfillMigration;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
@@ -880,5 +882,85 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 && m.Contains("planned: Added=2")
                 && m.Contains("Written: Written=2, LostTheRace=0, Failed=0")
             );
+    }
+
+    // --- when it runs ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_read_and_the_plan_are_logged()
+    {
+        await SeedAsync(Egger());
+        await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+
+        await CreateMigration().RunAsync(Ct);
+
+        Logged(LogLevel.Information)
+            .Should()
+            .Contain(m => m.Contains("read 2 2027 applications"))
+            .And.Contain(m => m.Contains("planned 2 applications"));
+    }
+
+    // Started during start-up, the backfill stalled on ext-test; it now waits until the application has started.
+    [Fact]
+    public async Task The_backfill_waits_until_the_application_has_started()
+    {
+        await SeedAsync(Egger());
+        using var started = new CancellationTokenSource();
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        lifetime.ApplicationStarted.Returns(started.Token);
+        var migration = HostedMigration(_persistence, lifetime);
+
+        await migration.StartAsync(Ct);
+        await Task.Delay(300, Ct);
+        var beforeStart = _logger.Entries.Count;
+        await started.CancelAsync();
+        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        beforeStart.Should().Be(0);
+        Logged(LogLevel.Information).Should().Contain(m => m.Contains("backfill complete"));
+    }
+
+    [Fact]
+    public async Task A_read_that_takes_too_long_is_logged_as_a_failure_with_the_reason()
+    {
+        static async Task<IReadOnlyList<AccreditationApplicationModel>> Never(CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return [];
+        }
+        var slow = Substitute.For<IAccreditationApplicationPersistence>();
+        slow.GetByYearAsync(default, default).ReturnsForAnyArgs(call => Never(call.ArgAt<CancellationToken>(1)));
+        var migration = HostedMigration(slow, lifetime: null, readTimeout: TimeSpan.FromSeconds(1));
+
+        await migration.StartAsync(Ct);
+        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        var failure = _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
+            .Subject;
+        failure.Exception.Should().BeOfType<TimeoutException>()
+            .Which.Message.Should().Contain("Reading the 2027 applications took over 1 seconds");
+        Logged(LogLevel.Information).Should().NotContain(m => m.Contains("planned"));
+    }
+
+    private Migration HostedMigration(
+        IAccreditationApplicationPersistence persistence,
+        IHostApplicationLifetime? lifetime,
+        TimeSpan? readTimeout = null
+    )
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(persistence);
+        services.AddSingleton<IDualWriteUnitOfWork>(new LegacyOnlyUnitOfWork());
+        if (lifetime is not null)
+            services.AddSingleton(lifetime);
+        return new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            _logger
+        )
+        {
+            ReadTimeout = readTimeout ?? TimeSpan.FromMinutes(2),
+        };
     }
 }

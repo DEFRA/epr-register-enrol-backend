@@ -118,12 +118,18 @@ public class LastYearsAccreditationBackfillMigration(
         string Detail
     );
 
+    // How long the read of the 2027 applications may take before the run gives up and logs why. Settable for tests.
+    internal TimeSpan ReadTimeout { get; init; } = TimeSpan.FromMinutes(2);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Yield so host startup is never held up by anything below.
         await Task.Yield();
         try
         {
+            // Run once start-up has finished, not during it: on ext-test the backfill stalled silently when its first
+            // Mongo read competed with the start-up work (index set-up, seeds, diagnostics) for the first connections.
+            await WaitForApplicationStartedAsync(stoppingToken);
             await RunAsync(stoppingToken);
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
@@ -132,6 +138,18 @@ public class LastYearsAccreditationBackfillMigration(
             // failure part-way leaves a state the next run re-plans from safely.
             logger.LogError(ex, "RA-784 last year's accreditation backfill failed");
         }
+    }
+
+    private Task WaitForApplicationStartedAsync(CancellationToken stoppingToken)
+    {
+        var lifetime = serviceProvider.GetService<IHostApplicationLifetime>();
+        if (lifetime is null || lifetime.ApplicationStarted.IsCancellationRequested)
+            return Task.CompletedTask;
+
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lifetime.ApplicationStarted.Register(() => started.TrySetResult());
+        stoppingToken.Register(() => started.TrySetCanceled(stoppingToken));
+        return started.Task;
     }
 
     // Extracted so tests can await the run deterministically - BackgroundService's StartAsync only
@@ -152,7 +170,9 @@ public class LastYearsAccreditationBackfillMigration(
         var persistence =
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
         var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
-        var applications = await persistence.GetByYearAsync(AccreditationYear, cancellationToken);
+        var applications = await ReadApplicationsAsync(persistence, cancellationToken);
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation("RA-784 {Mode}: read {Count} 2027 applications", mode, applications.Count);
 
         // Organisation by organisation; a draft without its OrgId yet sorts by its ReEx id after the rest.
         var plans = applications
@@ -163,6 +183,8 @@ public class LastYearsAccreditationBackfillMigration(
             .ThenBy(a => a.Id)
             .Select(a => PlanFor(a, a.Id!.Value))
             .ToList();
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation("RA-784 {Mode}: planned {Count} applications", mode, plans.Count);
 
         var writes = new List<Write>();
         var finished = false;
@@ -194,6 +216,26 @@ public class LastYearsAccreditationBackfillMigration(
             ReportSummary(plans, writes, mode, finished);
         }
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
+    }
+
+    // A read that doesn't finish in time fails the run, which ExecuteAsync logs, rather than waiting silently.
+    private async Task<IReadOnlyList<AccreditationApplicationModel>> ReadApplicationsAsync(
+        IAccreditationApplicationPersistence persistence,
+        CancellationToken cancellationToken
+    )
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ReadTimeout);
+        try
+        {
+            return await persistence.GetByYearAsync(AccreditationYear, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Reading the 2027 applications took over {ReadTimeout.TotalSeconds:0} seconds, so nothing was planned"
+            );
+        }
     }
 
     // Apply takes effect only with a named reviewer; otherwise the run stays a dry run.
