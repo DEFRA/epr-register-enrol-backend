@@ -22,6 +22,10 @@ public sealed class LastYearsAccreditationBackfillOptions
     // Who reviewed the dry-run output against the live records. Required before Apply takes
     // effect; logged with every applied change so the authorisation outlives the env var.
     public string? SpotCheckConfirmedBy { get; set; }
+
+    // How long the read of the year's applications may take before the run gives up and logs why, as hh:mm:ss
+    // ("00:02:00"; a bare "120" would mean 120 days). Raise it if a legitimately slow read is cut short.
+    public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromMinutes(2);
 }
 
 // RA-784: a 2027 renewal's accreditation number is last year's accreditation number with the year
@@ -124,6 +128,9 @@ public class LastYearsAccreditationBackfillMigration(
         await Task.Yield();
         try
         {
+            // Run once start-up has finished, not during it: on ext-test the backfill stalled silently when it ran
+            // during start-up, alongside index set-up, seeds and diagnostics.
+            await WaitForApplicationStartedAsync(stoppingToken);
             await RunAsync(stoppingToken);
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
@@ -132,6 +139,18 @@ public class LastYearsAccreditationBackfillMigration(
             // failure part-way leaves a state the next run re-plans from safely.
             logger.LogError(ex, "RA-784 last year's accreditation backfill failed");
         }
+    }
+
+    private async Task WaitForApplicationStartedAsync(CancellationToken stoppingToken)
+    {
+        var lifetime = serviceProvider.GetService<IHostApplicationLifetime>();
+        if (lifetime is null || lifetime.ApplicationStarted.IsCancellationRequested)
+            return;
+
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var onStarted = lifetime.ApplicationStarted.Register(() => started.TrySetResult());
+        await using var onStopping = stoppingToken.Register(() => started.TrySetCanceled(stoppingToken));
+        await started.Task;
     }
 
     // Extracted so tests can await the run deterministically - BackgroundService's StartAsync only
@@ -152,7 +171,18 @@ public class LastYearsAccreditationBackfillMigration(
         var persistence =
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
         var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
-        var applications = await persistence.GetByYearAsync(AccreditationYear, cancellationToken);
+        // Creating these builds the domain model stores, each of which ensures its indexes synchronously, so log once
+        // they exist: a stall before this line is in creating them, a stall after it is in the read.
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation("RA-784 {Mode}: components ready", mode);
+        var applications = await ReadApplicationsAsync(persistence, cancellationToken);
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "RA-784 {Mode}: read {Count} {Year} applications",
+                mode,
+                applications.Count,
+                AccreditationYear
+            );
 
         // Organisation by organisation; a draft without its OrgId yet sorts by its ReEx id after the rest.
         var plans = applications
@@ -163,6 +193,8 @@ public class LastYearsAccreditationBackfillMigration(
             .ThenBy(a => a.Id)
             .Select(a => PlanFor(a, a.Id!.Value))
             .ToList();
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation("RA-784 {Mode}: planned {Count} applications", mode, plans.Count);
 
         var writes = new List<Write>();
         var finished = false;
@@ -194,6 +226,37 @@ public class LastYearsAccreditationBackfillMigration(
             ReportSummary(plans, writes, mode, finished);
         }
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
+    }
+
+    // A read that doesn't finish in time fails the run, which ExecuteAsync logs, rather than waiting silently. The wait
+    // is abandoned when the limit passes even if the read itself ignores the token (a connection handshake, say); such a
+    // read carries on in the background until it ends on its own, which is fine for a one-off.
+    private async Task<IReadOnlyList<AccreditationApplicationModel>> ReadApplicationsAsync(
+        IAccreditationApplicationPersistence persistence,
+        CancellationToken cancellationToken
+    )
+    {
+        var limit = options.Value.ReadTimeout;
+        if (limit <= TimeSpan.Zero)
+            throw new InvalidOperationException(
+                $"{LastYearsAccreditationBackfillOptions.SectionName}:ReadTimeout must be a positive duration as "
+                    + $"hh:mm:ss (for example 00:02:00), not {limit}"
+            );
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(limit);
+        try
+        {
+            return await persistence
+                .GetByYearAsync(AccreditationYear, timeout.Token)
+                .WaitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+            when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Reading the {AccreditationYear} applications took longer than {limit}, so nothing was planned"
+            );
+        }
     }
 
     // Apply takes effect only with a named reviewer; otherwise the run stays a dry run.
