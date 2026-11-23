@@ -57,6 +57,28 @@ public class CaseManagementAccreditationSummaryEndpointTests
             PermitNumbers = ["PERMIT-SECRET"],
             SubmittedBy = new SubmittedByModel { FullName = "Sam Submitter", JobTitle = "Director" },
             SubmitterContactDetails = new SubmitterContactDetailsModel { Email = "submitter@example.com" },
+            Prns = new AccreditationApplicationPrns
+            {
+                PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
+                Authorisers =
+                [
+                    new PrnsAuthoriser
+                    {
+                        FullName = "Ada Authoriser",
+                        Email = "ada@example.com",
+                        IsNew = true,
+                    },
+                    new PrnsAuthoriser { FullName = "Bob Signer", Email = "bob@example.com" },
+                ],
+                Versions = [new PrnsSnapshot { VersionedAt = DateTime.UtcNow }],
+            },
+            BusinessPlan = new AccreditationApplicationBusinessPlan
+            {
+                NewInfrastructurePercent = 60,
+                NewInfrastructureDetail = "A new sorting line",
+                PriceSupportPercent = 40,
+                PriceSupportDetail = null,
+            },
         };
 
     [Fact]
@@ -82,6 +104,66 @@ public class CaseManagementAccreditationSummaryEndpointTests
     }
 
     [Fact]
+    public async Task AnApprovedApplication_AnswersItsPrnDetailsAndBusinessPlan()
+    {
+        var app = ApprovedExporter();
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.GetAsync(Url(app.OrganisationId, app.ApplicationId!), Ct);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        var prns = body.GetProperty("prns");
+        prns.GetProperty("plannedTonnageBand").GetString().Should().Be("UpTo5000");
+        var authorisers = prns.GetProperty("authorisers").EnumerateArray().ToList();
+        authorisers.Should().HaveCount(2);
+        authorisers[0].GetProperty("fullName").GetString().Should().Be("Ada Authoriser");
+        authorisers[0].GetProperty("email").GetString().Should().Be("ada@example.com");
+        authorisers[1].GetProperty("fullName").GetString().Should().Be("Bob Signer");
+        var plan = body.GetProperty("businessPlan");
+        plan.GetProperty("newInfrastructurePercent").GetInt32().Should().Be(60);
+        plan.GetProperty("newInfrastructureDetail").GetString().Should().Be("A new sorting line");
+        plan.GetProperty("priceSupportPercent").GetInt32().Should().Be(40);
+    }
+
+    [Fact]
+    public async Task APrnsSection_CarriesOnlyTheBandAndAuthorisers_AndAnAuthoriserOnlyItsNameAndEmail()
+    {
+        var app = ApprovedExporter();
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.GetAsync(Url(app.OrganisationId, app.ApplicationId!), Ct);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        var prns = body.GetProperty("prns");
+        prns.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo("plannedTonnageBand", "authorisers");
+        prns.GetProperty("authorisers")[0]
+            .EnumerateObject()
+            .Select(p => p.Name)
+            .Should()
+            .BeEquivalentTo("fullName", "email");
+        body.GetRawText().Should().NotContainEquivalentOf("isNew").And.NotContainEquivalentOf("versions");
+    }
+
+    [Fact]
+    public async Task AnApplicationWithNoPrnsOrBusinessPlan_AnswersThemEmpty()
+    {
+        var app = ApprovedExporter();
+        app.Prns = new AccreditationApplicationPrns();
+        app.BusinessPlan = new AccreditationApplicationBusinessPlan();
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.GetAsync(Url(app.OrganisationId, app.ApplicationId!), Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        body.GetProperty("prns").GetProperty("authorisers").GetArrayLength().Should().Be(0);
+        body.GetProperty("prns").GetProperty("plannedTonnageBand").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("businessPlan").GetProperty("newInfrastructurePercent").ValueKind
+            .Should()
+            .Be(JsonValueKind.Null);
+    }
+
+    [Fact]
     public async Task TheResponseCarriesOnlyTheAllowListedFields()
     {
         var app = ApprovedExporter();
@@ -103,7 +185,9 @@ public class CaseManagementAccreditationSummaryEndpointTests
                 "material",
                 "glassRecyclingProcess",
                 "siteAddress",
-                "companyRegisteredAddress"
+                "companyRegisteredAddress",
+                "prns",
+                "businessPlan"
             );
         var raw = body.GetRawText();
         raw.Should().NotContain("SECRET").And.NotContain("submitter@example.com").And.NotContain("01234567");
