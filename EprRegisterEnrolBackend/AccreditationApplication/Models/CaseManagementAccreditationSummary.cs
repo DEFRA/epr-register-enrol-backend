@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApi;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 /// <summary>
@@ -108,7 +109,7 @@ public sealed record CaseManagementSummaryBusinessPlan(
 /// Management reads it with the code it already has), minus everything that is not a fact about the accredited site:
 /// <c>IsNewSite</c> and <c>RegisteredNowAccredited</c> (both stay true for the whole year after grant, so would
 /// mark every site as new), <c>Selected</c> (only selected sites are returned) and the ReEx <c>ValidFrom</c>.
-/// Interim sites and BES evidence files are added by later tasks.
+/// Its interim sites are the active ones only. BES evidence files are added by a later task.
 /// </summary>
 public sealed record CaseManagementSummarySite(
     int SiteId,
@@ -130,7 +131,8 @@ public sealed record CaseManagementSummarySite(
     string? RepatriatedLoads,
     bool? ConditionsOfExport,
     bool IsEu,
-    bool IsOecd
+    bool IsOecd,
+    IReadOnlyList<CaseManagementSummaryInterimSite> InterimSites
 )
 {
     /// <summary>
@@ -167,6 +169,47 @@ public sealed record CaseManagementSummarySite(
             site.RepatriatedLoads,
             site.ConditionsOfExport,
             site.IsEu,
-            site.IsOecd
+            site.IsOecd,
+            [.. InterimSiteSync.Active(site).Select(CaseManagementSummaryInterimSite.From)]
+        );
+}
+
+/// <summary>
+/// RA-769: an interim site of an overseas site, shaped like the work item payload's interim site. Only active
+/// interim sites are ever built (a withdrawn one, with <c>RemovedAt</c> set, is not returned), so neither
+/// <c>RemovedAt</c> nor the status history is carried. <c>IsNewSite</c> and <c>CreatedAt</c> are not carried
+/// either: the former stays true for the year after grant.
+/// </summary>
+public sealed record CaseManagementSummaryInterimSite(
+    int SiteId,
+    string SiteNumber,
+    string SiteName,
+    string AddressLine1,
+    string? AddressLine2,
+    string TownOrCity,
+    string? StateOrRegion,
+    string? Postcode,
+    string Country,
+    string ContactName,
+    string ContactEmail,
+    string ContactPhone,
+    IReadOnlyList<string> OperationCodes
+)
+{
+    public static CaseManagementSummaryInterimSite From(InterimSiteModel interim) =>
+        new(
+            interim.SiteId,
+            interim.SiteNumber,
+            interim.SiteName,
+            interim.AddressLine1,
+            interim.AddressLine2,
+            interim.TownOrCity,
+            interim.StateOrRegion,
+            interim.Postcode,
+            interim.Country,
+            interim.ContactName,
+            interim.ContactEmail,
+            interim.ContactPhone,
+            [.. interim.OperationCodes]
         );
 }

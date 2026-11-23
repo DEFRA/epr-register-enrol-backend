@@ -234,7 +234,8 @@ public class CaseManagementAccreditationSummaryEndpointTests
                 "repatriatedLoads",
                 "conditionsOfExport",
                 "isEu",
-                "isOecd"
+                "isOecd",
+                "interimSites"
             );
         body.GetRawText()
             .Should()
@@ -242,6 +243,134 @@ public class CaseManagementAccreditationSummaryEndpointTests
             .And.NotContainEquivalentOf("registeredNowAccredited")
             .And.NotContainEquivalentOf("validFrom")
             .And.NotContainEquivalentOf("selected");
+    }
+
+    private static InterimSiteModel Interim(int siteId, string name, DateTime? removedAt = null) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = $"I-{siteId}",
+            Country = "Germany",
+            SiteName = name,
+            AddressLine1 = "2 Interim Strasse",
+            AddressLine2 = "Unit 4",
+            TownOrCity = "Hamburg",
+            StateOrRegion = "Hamburg",
+            Postcode = "20095",
+            ContactName = "Ines Interim",
+            ContactEmail = "ines@example.de",
+            ContactPhone = "+49 456",
+            OperationCodes = ["R12", "R3"],
+            IsNewSite = true,
+            CreatedAt = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+            RemovedAt = removedAt,
+        };
+
+    [Fact]
+    public async Task AnInterimSite_AnswersItsDetails_AndNothingElse()
+    {
+        var app = ApprovedExporter();
+        var site = Site(1, "001", "Speira GmbH");
+        site.InterimSites = [Interim(11, "Hamburg Interim")];
+        app.OverseasSites = new() { Sites = [site] };
+
+        var body = await GetBody(app);
+
+        var interim = body.GetProperty("overseasSites")[0].GetProperty("interimSites")[0];
+        interim.GetProperty("siteId").GetInt32().Should().Be(11);
+        interim.GetProperty("siteNumber").GetString().Should().Be("I-11");
+        interim.GetProperty("siteName").GetString().Should().Be("Hamburg Interim");
+        interim.GetProperty("addressLine1").GetString().Should().Be("2 Interim Strasse");
+        interim.GetProperty("addressLine2").GetString().Should().Be("Unit 4");
+        interim.GetProperty("townOrCity").GetString().Should().Be("Hamburg");
+        interim.GetProperty("stateOrRegion").GetString().Should().Be("Hamburg");
+        interim.GetProperty("postcode").GetString().Should().Be("20095");
+        interim.GetProperty("country").GetString().Should().Be("Germany");
+        interim.GetProperty("contactName").GetString().Should().Be("Ines Interim");
+        interim.GetProperty("contactEmail").GetString().Should().Be("ines@example.de");
+        interim.GetProperty("contactPhone").GetString().Should().Be("+49 456");
+        interim.GetProperty("operationCodes").EnumerateArray().Select(e => e.GetString()).Should().Equal("R12", "R3");
+        interim
+            .EnumerateObject()
+            .Select(p => p.Name)
+            .Should()
+            .BeEquivalentTo(
+                "siteId",
+                "siteNumber",
+                "siteName",
+                "addressLine1",
+                "addressLine2",
+                "townOrCity",
+                "stateOrRegion",
+                "postcode",
+                "country",
+                "contactName",
+                "contactEmail",
+                "contactPhone",
+                "operationCodes"
+            );
+        body.GetRawText()
+            .Should()
+            .NotContainEquivalentOf("isNewSite")
+            .And.NotContainEquivalentOf("removedAt")
+            .And.NotContainEquivalentOf("createdAt")
+            .And.NotContainEquivalentOf("statusHistory");
+    }
+
+    [Fact]
+    public async Task WithdrawnInterimSites_AreNeverAnswered_SoNeverTheFirstOne()
+    {
+        var app = ApprovedExporter();
+        var withdrawn = Site(1, "001", "Only withdrawn");
+        withdrawn.InterimSites = [Interim(11, "Gone", removedAt: DateTime.UtcNow)];
+        var mixed = Site(2, "002", "Withdrawn first");
+        mixed.InterimSites =
+        [
+            Interim(21, "Gone first", removedAt: DateTime.UtcNow),
+            Interim(22, "Active one"),
+            Interim(23, "Active two"),
+        ];
+        app.OverseasSites = new() { Sites = [withdrawn, mixed] };
+
+        var body = await GetBody(app);
+
+        var sites = body.GetProperty("overseasSites");
+        sites[0].GetProperty("interimSites").GetArrayLength().Should().Be(0);
+        sites[1]
+            .GetProperty("interimSites")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("siteName").GetString())
+            .Should()
+            .Equal("Active one", "Active two");
+    }
+
+    [Fact]
+    public async Task ASiteWithNoInterimSites_AnswersAnEmptyList()
+    {
+        var app = ApprovedExporter();
+        app.OverseasSites = new() { Sites = [Site(1, "001", "No interim")] };
+
+        var body = await GetBody(app);
+
+        body.GetProperty("overseasSites")[0].GetProperty("interimSites").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ALegacySiteWithOnlyTheSingularInterimSite_StillAnswersIt()
+    {
+        var app = ApprovedExporter();
+        var site = Site(1, "001", "Legacy");
+        site.InterimSite = Interim(11, "Legacy interim");
+        app.OverseasSites = new() { Sites = [site] };
+
+        var body = await GetBody(app);
+
+        body.GetProperty("overseasSites")[0]
+            .GetProperty("interimSites")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("siteName").GetString())
+            .Should()
+            .Equal("Legacy interim");
     }
 
     [Fact]
