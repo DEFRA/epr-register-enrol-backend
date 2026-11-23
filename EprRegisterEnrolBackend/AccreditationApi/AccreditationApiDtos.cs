@@ -250,8 +250,8 @@ public sealed record RegistrationApplicationDto
     public string? AccreditationNumber { get; init; }
 
     /// <summary>
-    /// Every overseas site on the application, ordered by ORS id, whether or not it was selected for
-    /// the accreditation. Empty for a reprocessor.
+    /// Every overseas site on the application, whether or not it is selected. Ordered by ORS id, with
+    /// sites that have none first. Empty for a reprocessor.
     /// </summary>
     public required IReadOnlyList<RegistrationOverseasSiteDto> OverseasSites { get; init; }
 }
@@ -275,6 +275,9 @@ public sealed record RegistrationOverseasSiteDto
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Coordinates { get; init; }
 
-    /// <summary>Whether the site is included in the application's accreditation.</summary>
+    /// <summary>
+    /// Whether the site is selected on the application. On an application that is not yet approved
+    /// this is the operator's choice, not an accredited site.
+    /// </summary>
     public required bool Selected { get; init; }
 }

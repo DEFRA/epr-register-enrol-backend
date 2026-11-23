@@ -239,7 +239,7 @@ public class AccreditationApplicationPersistence(
     )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
-        // Covered by the (OrgId, RegistrationReference, Year) index.
+        // The (OrgId, RegistrationReference, Year) index serves the filter.
         var filter = filters.And(
             filters.Eq(a => a.OrgId, orgId),
             filters.Eq(a => a.RegistrationReference, registrationNumber)

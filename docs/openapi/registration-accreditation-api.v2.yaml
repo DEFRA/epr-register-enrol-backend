@@ -591,8 +591,8 @@ components:
         overseasSites:
           type: array
           description: >-
-            Every overseas site on the application, ordered by ORS id, whether or not it was
-            selected for the accreditation. Empty for a reprocessor.
+            Every overseas site on the application, whether or not it is selected. Ordered by ORS
+            id, with sites that have none first. Empty for a reprocessor.
           items: { $ref: '#/components/schemas/RegistrationOverseasSite' }
     RegistrationOverseasSite:
       type: object
@@ -609,4 +609,6 @@ components:
         coordinates: { type: string }
         selected:
           type: boolean
-          description: Whether the site is included in the application's accreditation.
+          description: >-
+            Whether the site is selected on the application. On an application that is not yet
+            approved this is the operator's choice, not an accredited site.
