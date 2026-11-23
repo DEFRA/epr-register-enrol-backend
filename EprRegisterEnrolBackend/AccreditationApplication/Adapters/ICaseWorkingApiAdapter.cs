@@ -56,13 +56,16 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
-    // RA-766 (temporary; removed with ChargeCorrectionMigration): reads only the state, charge and
-    // duly-made marker of a work item (ManagementBe's GET /work-items/{id}), acting as the charge
-    // correction. Not a general work item read. Allowed to throw (an HttpRequestException
-    // carrying the status code for a non-success response): the migration counts a failure and
-    // carries on.
-    Task<CaseWorkingWorkItem> GetChargeStateAsync(
+    // RA-766, RA-768 (temporary; removed with the last of ChargeCorrectionMigration and
+    // OverseasSitesCorrectionMigration): reads the parts of a work item those one-off corrections
+    // need (ManagementBe's GET /work-items/{id}): its state, charge, duly-made marker and the ids of
+    // the overseas sites it holds. Not a general work item read. The caller names the correction it
+    // acts as, which ManagementBe records as the end user. Allowed to throw (an
+    // HttpRequestException carrying the status code for a non-success response): each migration
+    // counts a failure and carries on.
+    Task<CaseWorkingWorkItem> GetWorkItemAsync(
         Guid workItemId,
+        CaseWorkingCorrectionActor actor,
         CancellationToken cancellationToken = default
     );
 
@@ -73,6 +76,20 @@ public interface ICaseWorkingApiAdapter
     Task<SetChargeOutcome> SetChargeAsync(
         Guid workItemId,
         int chargeAmountPence,
+        CancellationToken cancellationToken = default
+    );
+
+    // RA-768 (temporary; removed with OverseasSitesCorrectionMigration): removes the named sites
+    // from the work item's payload.overseasSites.sites (ManagementBe's POST
+    // /work-items/re-accreditation/{id}/overseas-sites/remove), acting as the overseas sites
+    // correction. A 409 with reason decided or duly-made is that outcome; any other non-success
+    // response throws an HttpRequestException carrying the status, including a 409 with reason
+    // concurrency-conflict (the work item stayed busy) or any other reason. A 200 whose body has no
+    // removed list throws a JsonException.
+    Task<RemoveOverseasSitesResult> RemoveOverseasSitesAsync(
+        Guid workItemId,
+        IReadOnlyList<CaseWorkingSiteIds> sites,
+        string reason,
         CancellationToken cancellationToken = default
     );
 
@@ -109,10 +126,75 @@ public sealed record NotificationStatusResult(string? NotificationStatus, DateTi
 
 public sealed record ResumeFromQueryResult(bool IsSuccess);
 
-// RA-766 (temporary): the parts of a ManagementBe work item the charge correction needs.
+// RA-766, RA-768 (temporary): the parts of a ManagementBe work item the one-off corrections need.
 // ChargeAmountPence is null when none is stored; DulyMade is whether a payment date has been
-// recorded (what ManagementBe's own charge-corrected audit entry reports).
-public sealed record CaseWorkingWorkItem(string? StateId, int? ChargeAmountPence, bool DulyMade);
+// recorded (ManagementBe's own duly-made rule: payload.paymentDate present and not null).
+// OverseasSites is null when payload.overseasSites.sites is missing or is not a readable list of
+// sites; a site with neither id is kept, with both ids null, so the caller can refuse it.
+public sealed record CaseWorkingWorkItem(
+    string? StateId,
+    int? ChargeAmountPence,
+    bool DulyMade,
+    IReadOnlyList<CaseWorkingSiteIds>? OverseasSites
+)
+{
+    // The states ManagementBe never changes a charge or the overseas sites in: its terminal states
+    // plus the two pending-contact states, which are already a decided outcome (this service shows
+    // them as AwaitingDecision, so the application status alone would not catch them).
+    //
+    // A copy: the source of truth is ReAccreditationChargeCorrectionService.IsClosed in
+    // epr-register-enrol-management-be (TerminalStates plus ReAccreditationConfirmContactGuard),
+    // which both its PUT .../charge and its POST .../overseas-sites/remove call. The dry runs need
+    // it here because a dry run never calls either. If the list changes there before both
+    // migrations are removed, change it here too.
+    internal static readonly IReadOnlySet<string> DecidedStates = new HashSet<string>(
+        StringComparer.OrdinalIgnoreCase
+    )
+    {
+        "approved",
+        "rejected",
+        "withdrawn",
+        "approved-pending-contact",
+        "rejected-pending-contact",
+    };
+
+    public bool IsDecided => StateId is { } stateId && DecidedStates.Contains(stateId);
+}
+
+// RA-768 (temporary): a site's ids as ManagementBe holds them. SiteId is the string form of this
+// service's integer site id (ManagementBe matches on the string form).
+public sealed record CaseWorkingSiteIds(string? OrsId, string? SiteId);
+
+// RA-766, RA-768 (temporary): the identity a one-off correction acts as. ManagementBe requires an
+// end-user id on every call and records it on the audit entries it writes.
+public sealed record CaseWorkingCorrectionActor(string UserId, string UserName)
+{
+    public static readonly CaseWorkingCorrectionActor ChargeCorrection = new(
+        "ra-766-charge-correction",
+        "RA-766 charge correction"
+    );
+
+    public static readonly CaseWorkingCorrectionActor OverseasSitesCorrection = new(
+        "ra-768-overseas-sites-correction",
+        "RA-768 overseas sites correction"
+    );
+}
+
+// RA-768 (temporary): Updated when ManagementBe removed at least one site (Removed lists the ids of
+// the sites it removed, as it held them); Unchanged when every named site was already gone;
+// DulyMade and Decided when it refused with a 409 and wrote nothing.
+public enum RemoveOverseasSitesOutcome
+{
+    Updated,
+    Unchanged,
+    DulyMade,
+    Decided,
+}
+
+public sealed record RemoveOverseasSitesResult(
+    RemoveOverseasSitesOutcome Outcome,
+    IReadOnlyList<CaseWorkingSiteIds> Removed
+);
 
 // RA-766 (temporary): Closed means ManagementBe answered 409: the work item is approved,
 // refused, withdrawn or awaiting applicant contact, and its charge is never changed.

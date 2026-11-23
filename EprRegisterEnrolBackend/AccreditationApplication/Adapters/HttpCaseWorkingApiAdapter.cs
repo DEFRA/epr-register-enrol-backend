@@ -593,13 +593,9 @@ public class HttpCaseWorkingApiAdapter(
         }
     }
 
-    // RA-766 (temporary): the identity the charge correction acts as. ManagementBe requires an
-    // end-user id on every mutating call and records it on the charge-corrected audit entry.
-    internal const string ChargeCorrectionUserId = "ra-766-charge-correction";
-    internal const string ChargeCorrectionUserName = "RA-766 charge correction";
-
-    public async Task<CaseWorkingWorkItem> GetChargeStateAsync(
+    public async Task<CaseWorkingWorkItem> GetWorkItemAsync(
         Guid workItemId,
+        CaseWorkingCorrectionActor actor,
         CancellationToken cancellationToken = default
     )
     {
@@ -608,8 +604,8 @@ public class HttpCaseWorkingApiAdapter(
         using var request = BuildRequest(
             HttpMethod.Get,
             endpoint,
-            userId: ChargeCorrectionUserId,
-            userName: ChargeCorrectionUserName
+            userId: actor.UserId,
+            userName: actor.UserName
         );
         var client = httpClientFactory.CreateClient(BackgroundHttpClientName);
 
@@ -618,7 +614,7 @@ public class HttpCaseWorkingApiAdapter(
         // status only, never the response body.
         response.EnsureSuccessStatusCode();
 
-        var detail = await response.Content.ReadFromJsonAsync<WorkItemChargeResponseDto>(
+        var detail = await response.Content.ReadFromJsonAsync<WorkItemCorrectionResponseDto>(
             JsonOptions,
             cancellationToken
         );
@@ -642,7 +638,155 @@ public class HttpCaseWorkingApiAdapter(
             && paymentDate.ValueKind != JsonValueKind.Null
             && paymentDate.ValueKind != JsonValueKind.Undefined;
 
-        return new CaseWorkingWorkItem(detail?.StateId, charge, dulyMade);
+        var overseasSites =
+            isObject && payload.TryGetProperty("overseasSites", out var overseasSitesElement)
+                ? ReadOverseasSiteIds(overseasSitesElement)
+                : null;
+
+        return new CaseWorkingWorkItem(detail?.StateId, charge, dulyMade, overseasSites);
+    }
+
+    // RA-768: the ids of payload.overseasSites.sites, or null when that is not a list of site
+    // objects whose orsId is a string (or null/absent) and whose siteId is a string or a number
+    // (or null/absent) - the caller must not read an unreadable list as "no sites". A site with
+    // neither id is kept with both null so the caller can refuse it.
+    private static List<CaseWorkingSiteIds>? ReadOverseasSiteIds(JsonElement overseasSites)
+    {
+        if (
+            overseasSites.ValueKind != JsonValueKind.Object
+            || !overseasSites.TryGetProperty("sites", out var sites)
+            || sites.ValueKind != JsonValueKind.Array
+        )
+        {
+            return null;
+        }
+
+        var ids = new List<CaseWorkingSiteIds>();
+        foreach (var site in sites.EnumerateArray())
+        {
+            if (site.ValueKind != JsonValueKind.Object)
+                return null;
+            if (
+                !TryReadId(site, "orsId", allowNumber: false, out var orsId)
+                || !TryReadId(site, "siteId", allowNumber: true, out var siteId)
+            )
+            {
+                return null;
+            }
+            ids.Add(new CaseWorkingSiteIds(orsId, siteId));
+        }
+        return ids;
+    }
+
+    // Blank reads as absent: ManagementBe treats an empty id as no id when it matches.
+    private static bool TryReadId(
+        JsonElement site,
+        string name,
+        bool allowNumber,
+        out string? value
+    )
+    {
+        value = null;
+        if (!site.TryGetProperty(name, out var element))
+            return true;
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Null:
+                return true;
+            case JsonValueKind.String:
+                var text = element.GetString();
+                value = string.IsNullOrWhiteSpace(text) ? null : text;
+                return true;
+            case JsonValueKind.Number when allowNumber:
+                value = element.GetRawText();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // RA-768: fixed, and recorded by ManagementBe on its overseas-sites-corrected audit entry.
+    public async Task<RemoveOverseasSitesResult> RemoveOverseasSitesAsync(
+        Guid workItemId,
+        IReadOnlyList<CaseWorkingSiteIds> sites,
+        string reason,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var endpoint =
+            $"{ConfiguredUrl()}/work-items/re-accreditation/{workItemId}/overseas-sites/remove";
+        var actor = CaseWorkingCorrectionActor.OverseasSitesCorrection;
+
+        using var request = BuildRequest(
+            HttpMethod.Post,
+            endpoint,
+            new RemoveOverseasSitesRequest { Sites = sites, Reason = reason },
+            actor.UserId,
+            actor.UserName
+        );
+        var client = httpClientFactory.CreateClient(BackgroundHttpClientName);
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            var conflict = await ReadConflictReasonAsync(response, cancellationToken);
+            if (conflict is { } refused)
+                return new RemoveOverseasSitesResult(refused, []);
+        }
+
+        // Any other non-success status throws, including a 409 for a work item that stayed busy
+        // after ManagementBe's retries (reason concurrency-conflict), so the migration counts it
+        // as failed.
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<RemoveOverseasSitesResponseDto>(
+            JsonOptions,
+            cancellationToken
+        );
+        if (result?.Removed is not { } removed)
+        {
+            // The body is never quoted: it can name sites.
+            throw new JsonException(
+                "ManagementBe's overseas-sites/remove response has no removed list."
+            );
+        }
+
+        return new RemoveOverseasSitesResult(
+            removed.Count > 0 ? RemoveOverseasSitesOutcome.Updated : RemoveOverseasSitesOutcome.Unchanged,
+            removed
+        );
+    }
+
+    // ManagementBe answers 409 for a decided work item (reason decided), a duly-made one (reason
+    // duly-made, checked after decided) and one that stayed busy after its retries (reason
+    // concurrency-conflict). Only the first two are a refusal; any other or no readable reason is
+    // left to throw, so the migration reports it as failed rather than skipping an item it did
+    // not correct.
+    internal const string DecidedConflictReason = "decided";
+    internal const string DulyMadeConflictReason = "duly-made";
+
+    private static async Task<RemoveOverseasSitesOutcome?> ReadConflictReasonAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            var problem = await response.Content.ReadFromJsonAsync<ProblemReasonDto>(
+                JsonOptions,
+                cancellationToken
+            );
+            return problem?.Reason switch
+            {
+                DecidedConflictReason => RemoveOverseasSitesOutcome.Decided,
+                DulyMadeConflictReason => RemoveOverseasSitesOutcome.DulyMade,
+                _ => null,
+            };
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     public async Task<SetChargeOutcome> SetChargeAsync(
@@ -657,8 +801,8 @@ public class HttpCaseWorkingApiAdapter(
             HttpMethod.Put,
             endpoint,
             new { chargeAmountPence },
-            ChargeCorrectionUserId,
-            ChargeCorrectionUserName
+            CaseWorkingCorrectionActor.ChargeCorrection.UserId,
+            CaseWorkingCorrectionActor.ChargeCorrection.UserName
         );
         var client = httpClientFactory.CreateClient(BackgroundHttpClientName);
 
@@ -1351,8 +1495,8 @@ public class HttpCaseWorkingApiAdapter(
         public string? PaymentReference { get; init; }
     }
 
-    // RA-766 (temporary): the subset of GET /work-items/{id} the charge correction reads.
-    internal sealed class WorkItemChargeResponseDto
+    // RA-766, RA-768 (temporary): the subset of GET /work-items/{id} the corrections read.
+    internal sealed class WorkItemCorrectionResponseDto
     {
         public string? StateId { get; init; }
         public JsonElement Payload { get; init; }
@@ -1362,6 +1506,26 @@ public class HttpCaseWorkingApiAdapter(
     internal sealed class ProblemErrorCodeDto
     {
         public string? ErrorCode { get; init; }
+    }
+
+    // RA-768 (temporary): the reason extension of a 409 ProblemDetails from
+    // .../overseas-sites/remove. Nothing else of the body is read.
+    internal sealed class ProblemReasonDto
+    {
+        public string? Reason { get; init; }
+    }
+
+    internal sealed class RemoveOverseasSitesRequest
+    {
+        public required IReadOnlyList<CaseWorkingSiteIds> Sites { get; init; }
+        public required string Reason { get; init; }
+    }
+
+    // RA-768 (temporary): only the removed list of the 200 response is read; alreadyAbsent is
+    // implied by it.
+    internal sealed class RemoveOverseasSitesResponseDto
+    {
+        public List<CaseWorkingSiteIds>? Removed { get; init; }
     }
 
     // RA-766 (temporary): the response of PUT .../charge ("updated" or "unchanged").

@@ -228,15 +228,14 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
-    /// RA-766: every application that is linked to a ManagementBe work item and is not Queried, and
-    /// not yet Approved, Rejected or Withdrawn, oldest first. A Queried application is left out: its
-    /// answer has not been sent, so any charge it now holds is a draft and must not reach ManagementBe
-    /// (resubmitting it sends the right one). Read straight from the legacy collection,
-    /// like every other read here, not from the domain model (DualWrite is off in prod). Used by
-    /// ChargeCorrectionMigration to find the work items whose charge may be stale.
-    /// RA-766 one-off; removed with ChargeCorrectionMigration - do not use elsewhere.
+    /// RA-766, RA-768: every application that is linked to a ManagementBe work item and is not yet
+    /// Approved, Rejected or Withdrawn, Queried ones included, oldest first. Read straight from the
+    /// legacy collection, like every other read here, not from the domain model (DualWrite is off
+    /// in prod). Used by ChargeCorrectionMigration (which leaves the Queried ones out) and
+    /// OverseasSitesCorrectionMigration (which reports them as skipped-queried).
+    /// One-off; removed with the last of those two migrations - do not use elsewhere.
     /// </summary>
-    Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenNotQueriedWithCaseManagementWorkItemAsync(
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     );
     /// <summary>

@@ -45,7 +45,11 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         );
 
         _caseWorking
-            .GetChargeStateAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .GetWorkItemAsync(
+                Arg.Any<Guid>(),
+                CaseWorkingCorrectionActor.ChargeCorrection,
+                Arg.Any<CancellationToken>()
+            )
             .Returns(call => _workItems[call.Arg<Guid>()]);
         _caseWorking
             .SetChargeAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
@@ -84,7 +88,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         };
         application.Prns.PlannedTonnageBand = band;
         await _persistence.CreateAsync(application);
-        _workItems[workItemId] = new CaseWorkingWorkItem(workItemState, storedPence, dulyMade);
+        _workItems[workItemId] = new CaseWorkingWorkItem(workItemState, storedPence, dulyMade, []);
         return (workItemId, application);
     }
 
@@ -136,7 +140,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
 
         summary.Mode.Should().Be(RunMode.Disabled);
         _logger.Entries.Should().BeEmpty();
-        await _caseWorking.DidNotReceive().GetChargeStateAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CaseWorkingCorrectionActor>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -252,7 +256,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         var summary = await RunAsync(apply: true);
 
         summary.SkippedNoBand.Should().Be(1);
-        await _caseWorking.DidNotReceive().GetChargeStateAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CaseWorkingCorrectionActor>(), Arg.Any<CancellationToken>());
         await DidNotWriteAsync();
         OutcomeLines()
             .Should()
@@ -322,7 +326,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         );
         // The exception message carries something that must never reach the logs.
         _caseWorking
-            .GetChargeStateAsync(failingId, Arg.Any<CancellationToken>())
+            .GetWorkItemAsync(failingId, Arg.Any<CaseWorkingCorrectionActor>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(
                 new HttpRequestException(
                     "body said jane.doe@example.com",
@@ -356,7 +360,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     {
         var (workItemId, _) = await SeedAsync();
         _caseWorking
-            .GetChargeStateAsync(workItemId, Arg.Any<CancellationToken>())
+            .GetWorkItemAsync(workItemId, Arg.Any<CaseWorkingCorrectionActor>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("CaseWorking API URL is not configured."));
 
         await RunAsync(apply: true);
@@ -378,7 +382,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
         var summary = await RunAsync(apply: true);
 
         summary.Candidates.Should().Be(0);
-        await _caseWorking.DidNotReceive().GetChargeStateAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _caseWorking.DidNotReceive().GetWorkItemAsync(Arg.Any<Guid>(), Arg.Any<CaseWorkingCorrectionActor>(), Arg.Any<CancellationToken>());
     }
 
     [Theory]
@@ -412,7 +416,7 @@ public sealed class ChargeCorrectionMigrationTests : IDisposable
     {
         var persistence = Substitute.For<IAccreditationApplicationPersistence>();
         persistence
-            .GetOpenNotQueriedWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
+            .GetOpenWithCaseManagementWorkItemAsync(Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("connection string with a secret"));
         var services = new ServiceCollection();
         services.AddSingleton(persistence);

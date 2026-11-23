@@ -174,22 +174,47 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new ResumeFromQueryResult(true));
     }
 
-    // RA-766 (temporary): the stub holds no work items, so the charge correction finds nothing to
-    // change.
-    public Task<CaseWorkingWorkItem> GetChargeStateAsync(
+    // RA-766, RA-768 (temporary): the stub holds no work items, so it answers with an empty one:
+    // no state, no charge, not duly made and no overseas sites. The charge correction then finds
+    // nothing it may not change, and the overseas sites correction finds nothing to remove.
+    public Task<CaseWorkingWorkItem> GetWorkItemAsync(
         Guid workItemId,
+        CaseWorkingCorrectionActor actor,
         CancellationToken cancellationToken = default
     )
     {
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "StubCaseWorkingApiAdapter.GetChargeStateAsync called for workItemId={WorkItemId}",
-                workItemId
+                "StubCaseWorkingApiAdapter.GetWorkItemAsync called for workItemId={WorkItemId} actor={Actor}",
+                workItemId,
+                actor.UserId
             );
         }
 
-        return Task.FromResult(new CaseWorkingWorkItem(null, null, false));
+        return Task.FromResult(new CaseWorkingWorkItem(null, null, false, []));
+    }
+
+    // RA-768 (temporary): the stub holds no sites, so every named site is already gone.
+    public Task<RemoveOverseasSitesResult> RemoveOverseasSitesAsync(
+        Guid workItemId,
+        IReadOnlyList<CaseWorkingSiteIds> sites,
+        string reason,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.RemoveOverseasSitesAsync called for workItemId={WorkItemId} sites={Sites}",
+                workItemId,
+                sites.Count
+            );
+        }
+
+        return Task.FromResult(
+            new RemoveOverseasSitesResult(RemoveOverseasSitesOutcome.Unchanged, [])
+        );
     }
 
     public Task<SetChargeOutcome> SetChargeAsync(

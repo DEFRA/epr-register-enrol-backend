@@ -580,25 +580,24 @@ public class AccreditationApplicationPersistence(
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);
 
-    // RA-766: the statuses ChargeCorrectionMigration leaves alone: the three an application can no
-    // longer leave, and Queried, whose answer (and so its charge) has not been sent yet.
-    internal static readonly ApplicationStatus[] ExcludedStatuses =
+    // RA-766, RA-768: the three statuses an application can no longer leave, which the one-off
+    // Case Management corrections leave alone.
+    internal static readonly ApplicationStatus[] ClosedStatuses =
     [
         ApplicationStatus.Approved,
         ApplicationStatus.Rejected,
         ApplicationStatus.Withdrawn,
-        ApplicationStatus.Queried,
     ];
 
     public async Task<
         IReadOnlyList<AccreditationApplicationModel>
-    > GetOpenNotQueriedWithCaseManagementWorkItemAsync(CancellationToken cancellationToken = default)
+    > GetOpenWithCaseManagementWorkItemAsync(CancellationToken cancellationToken = default)
     {
         var filter = Builders<AccreditationApplicationModel>.Filter;
         return await Collection
             .Find(
                 filter.Ne(a => a.CaseManagementWorkItemId, null)
-                    & filter.Nin(a => a.ApplicationStatus, ExcludedStatuses)
+                    & filter.Nin(a => a.ApplicationStatus, ClosedStatuses)
             )
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);

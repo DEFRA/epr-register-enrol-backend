@@ -301,9 +301,10 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         Assert.Equal(legacy.Id, model!.Id);
     }
 
-    // RA-766's charge correction: open applications with a work item, Queried left out, in id order.
+    // RA-766's and RA-768's corrections: open applications with a work item, Queried included,
+    // closed ones left out, in id order.
     [Fact]
-    public async Task GetOpenNotQueriedWithCaseManagementWorkItem_FindsTheSameApplications()
+    public async Task GetOpenWithCaseManagementWorkItem_FindsTheSameApplications()
     {
         var data = await LookupDataAsync();
         var queried = await MigratedAsync(
@@ -320,13 +321,27 @@ public sealed partial class ModelBackedApplicationPersistenceTests
                 OtherOrganisationId
             )
         );
+        var withdrawn = await MigratedAsync(
+            Variant(
+                Day1.AddDays(6),
+                a =>
+                {
+                    a.RegistrationId = OtherRegistrationId;
+                    a.RegistrationReference = "R27EX0000001P";
+                    a.Year = 2029;
+                    a.ApplicationStatus = ApplicationStatus.Withdrawn;
+                    a.CaseManagementWorkItemId = Guid.NewGuid();
+                },
+                OtherOrganisationId
+            )
+        );
 
-        var legacy = await _legacy.GetOpenNotQueriedWithCaseManagementWorkItemAsync(Ct);
-        var model = await _model.GetOpenNotQueriedWithCaseManagementWorkItemAsync(Ct);
+        var legacy = await _legacy.GetOpenWithCaseManagementWorkItemAsync(Ct);
+        var model = await _model.GetOpenWithCaseManagementWorkItemAsync(Ct);
 
-        Assert.Equal([data.OtherOrganisation.Id], Ids(legacy));
+        Assert.Equal([data.OtherOrganisation.Id, queried.Id], Ids(legacy));
         Assert.Equal(Ids(legacy), Ids(model));
-        Assert.DoesNotContain(queried.Id, Ids(model));
+        Assert.DoesNotContain(withdrawn.Id, Ids(model));
     }
 
     [Fact]

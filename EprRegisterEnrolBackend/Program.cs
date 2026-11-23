@@ -241,6 +241,14 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<ChargeCorrectionMigration>();
 
+    // RA-768: one-off removal, from Case Management work items, of the overseas sites the operator
+    // deselected in a query response before RA-557. Off by default; Enabled alone is a dry run
+    // (logs, writes nothing) and Apply needs SpotCheckConfirmedBy - see the class comment.
+    builder.Services.Configure<OverseasSitesCorrectionOptions>(
+        builder.Configuration.GetSection(OverseasSitesCorrectionOptions.SectionName)
+    );
+    builder.Services.AddHostedService<OverseasSitesCorrectionMigration>();
+
     // RA-788: one-off deletion of the duplicate 2027 Plastic application (INC2560371).
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
     builder.Services.Configure<DuplicateApplicationDeletionOptions>(

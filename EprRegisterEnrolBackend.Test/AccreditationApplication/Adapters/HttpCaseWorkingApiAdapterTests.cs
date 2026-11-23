@@ -2928,7 +2928,7 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task GetChargeStateAsync_ReadsStateChargeAndDulyMadeFromTheWorkItem()
+    public async Task GetWorkItemAsync_ReadsStateChargeAndDulyMadeFromTheWorkItem()
     {
         var workItemId = Guid.NewGuid();
         var (adapter, handler) = CreateAdapterResponding(
@@ -2941,12 +2941,15 @@ public class HttpCaseWorkingApiAdapterTests
             }
         );
 
-        var workItem = await adapter.GetChargeStateAsync(
+        var workItem = await adapter.GetWorkItemAsync(
             workItemId,
+            CaseWorkingCorrectionActor.ChargeCorrection,
             TestContext.Current.CancellationToken
         );
 
-        workItem.Should().Be(new CaseWorkingWorkItem("duly-made", 218_400, true));
+        workItem.StateId.Should().Be("duly-made");
+        workItem.ChargeAmountPence.Should().Be(218_400);
+        workItem.DulyMade.Should().BeTrue();
         handler.CapturedRequest!.Method.Should().Be(HttpMethod.Get);
         handler
             .CapturedRequest.RequestUri!.ToString()
@@ -2956,11 +2959,11 @@ public class HttpCaseWorkingApiAdapterTests
             .CapturedRequest.Headers.GetValues("x-cdp-user-id")
             .Single()
             .Should()
-            .Be(HttpCaseWorkingApiAdapter.ChargeCorrectionUserId);
+            .Be(CaseWorkingCorrectionActor.ChargeCorrection.UserId);
     }
 
     [Fact]
-    public async Task GetChargeStateAsync_ReadsNoChargeAndNotDulyMadeWhenThePayloadHasNeither()
+    public async Task GetWorkItemAsync_ReadsNoChargeAndNotDulyMadeWhenThePayloadHasNeither()
     {
         var (adapter, _) = CreateAdapterResponding(
             HttpStatusCode.OK,
@@ -2971,23 +2974,32 @@ public class HttpCaseWorkingApiAdapterTests
             }
         );
 
-        var workItem = await adapter.GetChargeStateAsync(
+        var workItem = await adapter.GetWorkItemAsync(
             Guid.NewGuid(),
+            CaseWorkingCorrectionActor.ChargeCorrection,
             TestContext.Current.CancellationToken
         );
 
-        workItem.Should().Be(new CaseWorkingWorkItem("queried", null, false));
+        workItem.StateId.Should().Be("queried");
+        workItem.ChargeAmountPence.Should().BeNull();
+        workItem.DulyMade.Should().BeFalse();
+        // No overseasSites in the payload: unreadable, not an empty list.
+        workItem.OverseasSites.Should().BeNull();
     }
 
     [Theory]
     [InlineData(HttpStatusCode.NotFound)]
     [InlineData(HttpStatusCode.InternalServerError)]
-    public async Task GetChargeStateAsync_ThrowsWithTheStatusForAFailureResponse(HttpStatusCode status)
+    public async Task GetWorkItemAsync_ThrowsWithTheStatusForAFailureResponse(HttpStatusCode status)
     {
         var (adapter, _) = CreateAdapterResponding(status, new { detail = "ignored" });
 
         var act = () =>
-            adapter.GetChargeStateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+            adapter.GetWorkItemAsync(
+                Guid.NewGuid(),
+                CaseWorkingCorrectionActor.OverseasSitesCorrection,
+                TestContext.Current.CancellationToken
+            );
 
         (await act.Should().ThrowAsync<HttpRequestException>())
             .Which.StatusCode.Should()
@@ -3027,7 +3039,7 @@ public class HttpCaseWorkingApiAdapterTests
             .CapturedRequest.Headers.GetValues("x-cdp-user-name")
             .Single()
             .Should()
-            .Be(HttpCaseWorkingApiAdapter.ChargeCorrectionUserName);
+            .Be(CaseWorkingCorrectionActor.ChargeCorrection.UserName);
     }
 
     [Fact]
@@ -3096,7 +3108,7 @@ public class HttpCaseWorkingApiAdapterTests
     }
 
     [Fact]
-    public async Task ChargeCorrectionCalls_ThrowWhenTheCaseWorkingUrlIsNotConfigured()
+    public async Task CorrectionCalls_ThrowWhenTheCaseWorkingUrlIsNotConfigured()
     {
         var handler = new CapturingHttpMessageHandler(HttpStatusCode.OK, new { });
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
@@ -3108,7 +3120,24 @@ public class HttpCaseWorkingApiAdapterTests
         );
 
         await adapter
-            .Invoking(a => a.GetChargeStateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken))
+            .Invoking(a =>
+                a.GetWorkItemAsync(
+                    Guid.NewGuid(),
+                    CaseWorkingCorrectionActor.ChargeCorrection,
+                    TestContext.Current.CancellationToken
+                )
+            )
+            .Should()
+            .ThrowAsync<InvalidOperationException>();
+        await adapter
+            .Invoking(a =>
+                a.RemoveOverseasSitesAsync(
+                    Guid.NewGuid(),
+                    [new CaseWorkingSiteIds("ORS-1", "1")],
+                    "reason",
+                    TestContext.Current.CancellationToken
+                )
+            )
             .Should()
             .ThrowAsync<InvalidOperationException>();
         await adapter
@@ -3118,6 +3147,353 @@ public class HttpCaseWorkingApiAdapterTests
             .Should()
             .ThrowAsync<InvalidOperationException>();
         handler.CapturedRequest.Should().BeNull();
+    }
+
+    // -- RA-768: temporary overseas sites correction calls ---------------------
+
+    private static (
+        HttpCaseWorkingApiAdapter adapter,
+        HttpMessageHandler handler
+    ) CreateAdapterWith(HttpMessageHandler handler, string? sharedSecret = null)
+    {
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("BackgroundClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            Options.Create(
+                new CaseWorkingApiConfig
+                {
+                    Url = TestUrl + "/",
+                    ClientId = TestClientId,
+                    SharedSecret = sharedSecret,
+                }
+            ),
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+        return (adapter, handler);
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_ReadsTheOverseasSiteIdsAsTheCaseManagementServiceHoldsThem()
+    {
+        var (adapter, handler) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new
+            {
+                stateId = "in-assessment",
+                payload = new
+                {
+                    overseasSites = new
+                    {
+                        sites = new object[]
+                        {
+                            new { orsId = "ORS-1", siteId = 1, siteName = "ignored" },
+                            new { orsId = (string?)null, siteId = "2" },
+                            new { orsId = " ", siteId = 3 },
+                            new { siteName = "no ids" },
+                        },
+                    },
+                },
+            }
+        );
+
+        var workItem = await adapter.GetWorkItemAsync(
+            Guid.NewGuid(),
+            CaseWorkingCorrectionActor.OverseasSitesCorrection,
+            TestContext.Current.CancellationToken
+        );
+
+        workItem
+            .OverseasSites.Should()
+            .Equal(
+                new CaseWorkingSiteIds("ORS-1", "1"),
+                new CaseWorkingSiteIds(null, "2"),
+                new CaseWorkingSiteIds(null, "3"),
+                new CaseWorkingSiteIds(null, null)
+            );
+        workItem.DulyMade.Should().BeFalse();
+        workItem.IsDecided.Should().BeFalse();
+        var request = ((CapturingHttpMessageHandler)handler).CapturedRequest!;
+        request.Headers.GetValues("x-cdp-user-id").Single().Should().Be("ra-768-overseas-sites-correction");
+        request.Headers.GetValues("x-cdp-user-name").Single().Should().Be("RA-768 overseas sites correction");
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_ReadsAnEmptySiteListAsEmpty()
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new { stateId = "submitted", payload = new { overseasSites = new { sites = Array.Empty<object>() } } }
+        );
+
+        var workItem = await adapter.GetWorkItemAsync(
+            Guid.NewGuid(),
+            CaseWorkingCorrectionActor.OverseasSitesCorrection,
+            TestContext.Current.CancellationToken
+        );
+
+        workItem.OverseasSites.Should().NotBeNull().And.BeEmpty();
+    }
+
+    public static TheoryData<string> UnreadableOverseasSites =>
+        new()
+        {
+            """{ "stateId": "submitted", "payload": { "overseasSites": null } }""",
+            """{ "stateId": "submitted", "payload": { "overseasSites": [] } }""",
+            """{ "stateId": "submitted", "payload": { "overseasSites": { } } }""",
+            """{ "stateId": "submitted", "payload": { "overseasSites": { "sites": {} } } }""",
+            """{ "stateId": "submitted", "payload": { "overseasSites": { "sites": [ "ORS-1" ] } } }""",
+            """{ "stateId": "submitted", "payload": { "overseasSites": { "sites": [ { "orsId": 7, "siteId": 1 } ] } } }""",
+            """{ "stateId": "submitted", "payload": { "overseasSites": { "sites": [ { "orsId": "ORS-1", "siteId": true } ] } } }""",
+            """{ "stateId": "submitted", "payload": "not an object" }""",
+            """{ "stateId": "submitted" }""",
+        };
+
+    [Theory]
+    [MemberData(nameof(UnreadableOverseasSites))]
+    public async Task GetWorkItemAsync_ReadsAMissingOrMalformedSiteListAsUnreadable(string body)
+    {
+        var (adapter, _) = CreateAdapterWith(new RawBodyHttpMessageHandler(HttpStatusCode.OK, body));
+
+        var workItem = await adapter.GetWorkItemAsync(
+            Guid.NewGuid(),
+            CaseWorkingCorrectionActor.OverseasSitesCorrection,
+            TestContext.Current.CancellationToken
+        );
+
+        workItem.OverseasSites.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("Rejected")]
+    [InlineData("withdrawn")]
+    [InlineData("approved-pending-contact")]
+    [InlineData("rejected-pending-contact")]
+    public void A_work_item_in_a_closed_state_is_decided(string stateId) =>
+        new CaseWorkingWorkItem(stateId, null, false, []).IsDecided.Should().BeTrue();
+
+    [Theory]
+    [InlineData("in-assessment")]
+    [InlineData("duly-made")]
+    [InlineData(null)]
+    public void A_work_item_in_any_other_state_is_not_decided(string? stateId) =>
+        new CaseWorkingWorkItem(stateId, null, true, []).IsDecided.Should().BeFalse();
+
+    [Fact]
+    public async Task RemoveOverseasSitesAsync_PostsTheSitesAndReasonAndReportsWhatWasRemoved()
+    {
+        var workItemId = Guid.NewGuid();
+        var (adapter, handler) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new
+            {
+                removed = new object[] { new { orsId = "ORS-1", siteId = "1" } },
+                alreadyAbsent = new object[] { new { orsId = (string?)null, siteId = "2" } },
+            }
+        );
+
+        var result = await adapter.RemoveOverseasSitesAsync(
+            workItemId,
+            [new CaseWorkingSiteIds("ORS-1", "1"), new CaseWorkingSiteIds(null, "2")],
+            "RA-768: reason",
+            TestContext.Current.CancellationToken
+        );
+
+        result.Outcome.Should().Be(RemoveOverseasSitesOutcome.Updated);
+        result.Removed.Should().Equal(new CaseWorkingSiteIds("ORS-1", "1"));
+        handler.CapturedRequest!.Method.Should().Be(HttpMethod.Post);
+        handler
+            .CapturedRequest.RequestUri!.ToString()
+            .Should()
+            .Be($"{TestUrl}/work-items/re-accreditation/{workItemId}/overseas-sites/remove");
+        var body = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+        body.GetProperty("reason").GetString().Should().Be("RA-768: reason");
+        var sites = body.GetProperty("sites").EnumerateArray().ToList();
+        sites.Should().HaveCount(2);
+        sites[0].GetProperty("orsId").GetString().Should().Be("ORS-1");
+        sites[0].GetProperty("siteId").GetString().Should().Be("1");
+        // No orsId: left out, so the Case Management service matches on siteId.
+        sites[1].TryGetProperty("orsId", out _).Should().BeFalse();
+        sites[1].GetProperty("siteId").ValueKind.Should().Be(JsonValueKind.String);
+        handler
+            .CapturedRequest.Headers.GetValues("x-cdp-user-id")
+            .Single()
+            .Should()
+            .Be(CaseWorkingCorrectionActor.OverseasSitesCorrection.UserId);
+        handler
+            .CapturedRequest.Headers.GetValues("x-cdp-client-id")
+            .Single()
+            .Should()
+            .Be(TestClientId);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSitesAsync_SignsTheRequestLikeEveryOtherCall()
+    {
+        var handler = new CapturingHttpMessageHandler(
+            HttpStatusCode.OK,
+            new { removed = Array.Empty<object>(), alreadyAbsent = Array.Empty<object>() }
+        );
+        var (adapter, _) = CreateAdapterWith(handler, sharedSecret: "test-secret");
+
+        await adapter.RemoveOverseasSitesAsync(
+            Guid.NewGuid(),
+            [new CaseWorkingSiteIds("ORS-1", "1")],
+            "RA-768: reason",
+            TestContext.Current.CancellationToken
+        );
+
+        var headers = handler.CapturedRequest!.Headers;
+        var actor = CaseWorkingCorrectionActor.OverseasSitesCorrection;
+        headers
+            .GetValues("x-cdp-auth-signature")
+            .Single()
+            .Should()
+            .Be(
+                HttpCaseWorkingApiAdapter.ComputeSignature(
+                    "test-secret",
+                    TestClientId,
+                    actor.UserId,
+                    actor.UserName,
+                    headers.GetValues("x-cdp-auth-timestamp").Single(),
+                    headers.GetValues("x-cdp-auth-nonce").Single()
+                )
+            );
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSitesAsync_ReportsUnchangedWhenEverySiteWasAlreadyGone()
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new
+            {
+                removed = Array.Empty<object>(),
+                alreadyAbsent = new object[] { new { orsId = "ORS-1", siteId = "1" } },
+            }
+        );
+
+        var result = await adapter.RemoveOverseasSitesAsync(
+            Guid.NewGuid(),
+            [new CaseWorkingSiteIds("ORS-1", "1")],
+            "RA-768: reason",
+            TestContext.Current.CancellationToken
+        );
+
+        result.Outcome.Should().Be(RemoveOverseasSitesOutcome.Unchanged);
+        result.Removed.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("decided", RemoveOverseasSitesOutcome.Decided)]
+    [InlineData("duly-made", RemoveOverseasSitesOutcome.DulyMade)]
+    public async Task RemoveOverseasSitesAsync_ReportsARefusalFor409WithItsReason(
+        string reason,
+        RemoveOverseasSitesOutcome expected
+    )
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.Conflict,
+            new { title = "Could not remove overseas sites", reason }
+        );
+
+        var result = await adapter.RemoveOverseasSitesAsync(
+            Guid.NewGuid(),
+            [new CaseWorkingSiteIds("ORS-1", "1")],
+            "RA-768: reason",
+            TestContext.Current.CancellationToken
+        );
+
+        result.Outcome.Should().Be(expected);
+        result.Removed.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("concurrency-conflict")]
+    [InlineData("something-new")]
+    [InlineData(null)]
+    public async Task RemoveOverseasSitesAsync_ThrowsForA409ThatIsNotARefusal(string? reason)
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.Conflict,
+            new { title = "Could not remove overseas sites", reason }
+        );
+
+        var act = () =>
+            adapter.RemoveOverseasSitesAsync(
+                Guid.NewGuid(),
+                [new CaseWorkingSiteIds("ORS-1", "1")],
+                "RA-768: reason",
+                TestContext.Current.CancellationToken
+            );
+
+        (await act.Should().ThrowAsync<HttpRequestException>())
+            .Which.StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSitesAsync_ThrowsForA409WithAnUnreadableBody()
+    {
+        var (adapter, _) = CreateAdapterWith(
+            new RawBodyHttpMessageHandler(HttpStatusCode.Conflict, "not json")
+        );
+
+        var act = () =>
+            adapter.RemoveOverseasSitesAsync(
+                Guid.NewGuid(),
+                [new CaseWorkingSiteIds("ORS-1", "1")],
+                "RA-768: reason",
+                TestContext.Current.CancellationToken
+            );
+
+        (await act.Should().ThrowAsync<HttpRequestException>())
+            .Which.StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task RemoveOverseasSitesAsync_ThrowsWithTheStatusForAnyOtherFailure(
+        HttpStatusCode status
+    )
+    {
+        var (adapter, _) = CreateAdapterResponding(status, new { detail = "ignored" });
+
+        var act = () =>
+            adapter.RemoveOverseasSitesAsync(
+                Guid.NewGuid(),
+                [new CaseWorkingSiteIds("ORS-1", "1")],
+                "RA-768: reason",
+                TestContext.Current.CancellationToken
+            );
+
+        (await act.Should().ThrowAsync<HttpRequestException>())
+            .Which.StatusCode.Should()
+            .Be(status);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSitesAsync_ThrowsWhenTheResponseHasNoRemovedList()
+    {
+        var (adapter, _) = CreateAdapterResponding(
+            HttpStatusCode.OK,
+            new { alreadyAbsent = Array.Empty<object>() }
+        );
+
+        var act = () =>
+            adapter.RemoveOverseasSitesAsync(
+                Guid.NewGuid(),
+                [new CaseWorkingSiteIds("ORS-1", "1")],
+                "RA-768: reason",
+                TestContext.Current.CancellationToken
+            );
+
+        await act.Should().ThrowAsync<JsonException>();
     }
 
     // -- RA-603 AC09: every interim site reaches case management ---------------

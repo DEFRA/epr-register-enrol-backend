@@ -449,15 +449,34 @@ public class StubCaseWorkingApiAdapterTests
         result.CaseReference.Should().Be("AP26EA5005001AAPL");
     }
 
-    // RA-766 (temporary): the stub holds no work items, so the charge correction finds a work
-    // item with nothing to change and never writes.
+    // RA-766, RA-768 (temporary): the stub holds no work items, so the corrections find a work
+    // item with nothing to change and never write.
     [Fact]
-    public async Task GetChargeStateAsync_ReturnsAnEmptyWorkItem()
+    public async Task GetWorkItemAsync_ReturnsAnEmptyWorkItem()
     {
         var workItem = await BuildSut()
-            .GetChargeStateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+            .GetWorkItemAsync(
+                Guid.NewGuid(),
+                CaseWorkingCorrectionActor.OverseasSitesCorrection,
+                TestContext.Current.CancellationToken
+            );
 
-        workItem.Should().Be(new CaseWorkingWorkItem(null, null, false));
+        workItem.Should().BeEquivalentTo(new CaseWorkingWorkItem(null, null, false, []));
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSitesAsync_ReportsUnchanged()
+    {
+        var result = await BuildSut()
+            .RemoveOverseasSitesAsync(
+                Guid.NewGuid(),
+                [new CaseWorkingSiteIds("ORS-1", "1")],
+                "reason",
+                TestContext.Current.CancellationToken
+            );
+
+        result.Outcome.Should().Be(RemoveOverseasSitesOutcome.Unchanged);
+        result.Removed.Should().BeEmpty();
     }
 
     [Fact]

@@ -31,7 +31,7 @@ public sealed class ChargeCorrectionOptions
 // or Withdrawn (a Queried application has not sent its answer, so any charge it holds is a draft
 // that must not reach the Case Management service; resubmitting it sends the right one):
 //   - no planned tonnage band                  -> skipped-no-band (no charge can be calculated)
-//   - work item already closed there           -> skipped-terminal (see ClosedWorkItemStates)
+//   - work item already closed there           -> skipped-terminal (see CaseWorkingWorkItem.DecidedStates)
 //   - work item already holds the charge       -> unchanged
 //   - otherwise: dry run logs would-update; apply sets it through the Case Management service's
 //     temporary PUT .../charge and logs updated.
@@ -59,25 +59,6 @@ public class ChargeCorrectionMigration(
     ILogger<ChargeCorrectionMigration> logger
 ) : BackgroundService
 {
-    // The Case Management service states a charge is never changed in. The two pending-contact
-    // states are not terminal there, but are already a decided outcome (this service shows them
-    // as AwaitingDecision, so the application status alone would not catch them).
-    //
-    // A copy: the source of truth is ReAccreditationChargeCorrectionService.IsClosed in
-    // epr-register-enrol-management-be (TerminalStates plus ReAccreditationConfirmContactGuard).
-    // The dry run needs it here because a dry run never sends the PUT. If either list changes
-    // before this migration is removed, change both.
-    internal static readonly IReadOnlySet<string> ClosedWorkItemStates = new HashSet<string>(
-        StringComparer.OrdinalIgnoreCase
-    )
-    {
-        "approved",
-        "rejected",
-        "withdrawn",
-        "approved-pending-contact",
-        "rejected-pending-contact",
-    };
-
     internal enum RunMode
     {
         Disabled,
@@ -140,9 +121,12 @@ public class ChargeCorrectionMigration(
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
         var caseWorking = serviceProvider.GetRequiredService<ICaseWorkingApiAdapter>();
 
-        var applications = await persistence.GetOpenNotQueriedWithCaseManagementWorkItemAsync(
-            cancellationToken
-        );
+        // Queried applications are left out: see the class comment.
+        var applications = (
+            await persistence.GetOpenWithCaseManagementWorkItemAsync(cancellationToken)
+        )
+            .Where(a => a.ApplicationStatus != ApplicationStatus.Queried)
+            .ToList();
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
@@ -210,12 +194,13 @@ public class ChargeCorrectionMigration(
 
         try
         {
-            var workItem = await caseWorking.GetChargeStateAsync(workItemId, cancellationToken);
+            var workItem = await caseWorking.GetWorkItemAsync(
+                workItemId,
+                CaseWorkingCorrectionActor.ChargeCorrection,
+                cancellationToken
+            );
 
-            if (
-                workItem.StateId is { } stateId
-                && ClosedWorkItemStates.Contains(stateId)
-            )
+            if (workItem.IsDecided)
             {
                 LogOutcome(
                     Outcome.SkippedTerminal,

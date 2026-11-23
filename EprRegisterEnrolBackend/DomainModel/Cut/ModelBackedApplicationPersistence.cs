@@ -724,14 +724,14 @@ public sealed class ModelBackedApplicationPersistence(
             .ToList();
     }
 
-    // RA-766's charge correction, as legacy's query: every open application with a work item, Queried left out.
+    // RA-766's and RA-768's corrections, as legacy's query: every open application with a work item.
     public async Task<
         IReadOnlyList<AccreditationApplicationModel>
-    > GetOpenNotQueriedWithCaseManagementWorkItemAsync(
+    > GetOpenWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     )
     {
-        var excluded = AccreditationApplicationPersistence.ExcludedStatuses;
+        var excluded = AccreditationApplicationPersistence.ClosedStatuses;
         var envelope =
             Builders<ApplicationEntity>.Filter.Ne(a => a.CaseManagementWorkItemId, null)
             & Builders<ApplicationEntity>.Filter.Nin(a => a.Status, excluded);

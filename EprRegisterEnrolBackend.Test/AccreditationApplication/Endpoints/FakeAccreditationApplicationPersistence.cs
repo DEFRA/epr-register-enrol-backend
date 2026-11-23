@@ -408,7 +408,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 .ToList()
         );
 
-    public Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenNotQueriedWithCaseManagementWorkItemAsync(
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetOpenWithCaseManagementWorkItemAsync(
         CancellationToken cancellationToken = default
     ) =>
         Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
@@ -420,7 +420,6 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                             ApplicationStatus.Approved
                             or ApplicationStatus.Rejected
                             or ApplicationStatus.Withdrawn
-                            or ApplicationStatus.Queried
                         )
                 )
                 .Select(ShallowCopy)
