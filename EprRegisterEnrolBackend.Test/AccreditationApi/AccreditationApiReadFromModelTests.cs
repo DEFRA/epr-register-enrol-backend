@@ -31,8 +31,8 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
     private const string Signatory = "Signatory In Both";
     private const string LegacyOnlySignatory = "Signatory Renamed In Legacy Only";
 
-    private const string RegistrationPath =
-        "/v1/organisations/500027/registrations/R27EX5000270012AL";
+    private static string RegistrationPath =>
+        $"/v1/organisations/{Org}/registrations/{Registration}";
 
     private static string AccreditationPath(string registration = Registration) =>
         $"/v1/organisations/{Org}/registrations/{registration}/accreditations/2027";

@@ -161,8 +161,8 @@ and phone number. Treat them as personal data.
 | `applications[].applicationStatus` | for example `Saved`, `Submitted`, `Approved` or `Rejected` |
 | `applications[].accreditationNumber` | present once the application holds one |
 | `applications[].overseasSites` | every overseas site on the application, selected or not, ordered by `orsId` with unnumbered sites first. Empty for a reprocessor. Not paged |
-| `overseasSites[].orsId` | always present, and `null` until one is issued |
-| `overseasSites[].selected` | whether the site is selected on the application. On an application not yet approved, a selected site is not yet accredited |
+| `applications[].overseasSites[].orsId` | always present, and `null` until one is issued |
+| `applications[].overseasSites[].selected` | whether the site is selected on the application. On an application not yet approved, a selected site is not yet accredited |
 
 A site on a registration also has `siteId`, `siteName`, `formattedAddress`, `address` and
 `coordinates`. `siteId` identifies the site within its application.
