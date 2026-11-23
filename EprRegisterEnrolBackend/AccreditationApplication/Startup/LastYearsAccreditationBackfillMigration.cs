@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
@@ -175,7 +176,7 @@ public class LastYearsAccreditationBackfillMigration(
         // they exist: a stall before this line is in creating them, a stall after it is in the read.
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation("RA-784 {Mode}: components ready", mode);
-        var applications = await ReadApplicationsAsync(persistence, cancellationToken);
+        var applications = await ReadApplicationsAsync(persistence, mode, cancellationToken);
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
                 "RA-784 {Mode}: read {Count} {Year} applications",
@@ -228,11 +229,17 @@ public class LastYearsAccreditationBackfillMigration(
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
 
+    // How often a read still in progress is logged.
+    internal TimeSpan ReadProgressInterval { get; init; } = TimeSpan.FromSeconds(15);
+
     // A read that doesn't finish in time fails the run, which ExecuteAsync logs, rather than waiting silently. The wait
-    // is abandoned when the limit passes even if the read itself ignores the token (a connection handshake, say); such a
-    // read carries on in the background until it ends on its own, which is fine for a one-off.
+    // is abandoned when the limit passes even if the read ignores the token or blocks before handing back its task: the
+    // call runs on the thread pool, so neither holds up the limit. Such a read carries on in the background until it ends
+    // on its own, which is fine for a one-off. On ext-test the run logged "components ready" and then nothing, not even
+    // the timeout, so each step of the read is logged, and a warning every ReadProgressInterval while it waits.
     private async Task<IReadOnlyList<AccreditationApplicationModel>> ReadApplicationsAsync(
         IAccreditationApplicationPersistence persistence,
+        string mode,
         CancellationToken cancellationToken
     )
     {
@@ -244,11 +251,51 @@ public class LastYearsAccreditationBackfillMigration(
             );
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(limit);
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "RA-784 {Mode}: reading the {Year} applications, limit {Limit}",
+                mode,
+                AccreditationYear,
+                limit
+            );
+        var started = Stopwatch.GetTimestamp();
+        var read = Task.Run(
+            async () =>
+            {
+                var pending = persistence.GetByYearAsync(AccreditationYear, timeout.Token);
+                // The call has handed back its task: anything after this is waiting on the database.
+                if (logger.IsEnabled(LogLevel.Information))
+                    logger.LogInformation("RA-784 {Mode}: read sent, waiting for the result", mode);
+                return await pending;
+            },
+            CancellationToken.None
+        );
         try
         {
-            return await persistence
-                .GetByYearAsync(AccreditationYear, timeout.Token)
-                .WaitAsync(timeout.Token);
+            while (true)
+            {
+                try
+                {
+                    var applications = await read.WaitAsync(ReadProgressInterval, timeout.Token);
+                    if (logger.IsEnabled(LogLevel.Information))
+                        logger.LogInformation(
+                            "RA-784 {Mode}: read finished in {Elapsed}",
+                            mode,
+                            Stopwatch.GetElapsedTime(started)
+                        );
+                    return applications;
+                }
+                catch (TimeoutException ex) when (ex != read.Exception?.InnerException)
+                {
+                    // Only the progress interval passing; a TimeoutException from the read itself carries on.
+                    logger.LogWarning(
+                        "RA-784 {Mode}: still reading the {Year} applications after {Elapsed}",
+                        mode,
+                        AccreditationYear,
+                        Stopwatch.GetElapsedTime(started)
+                    );
+                }
+            }
         }
         catch (OperationCanceledException)
             when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)

@@ -897,6 +897,9 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         Logged(LogLevel.Information)
             .Should()
             .Contain(m => m.Contains("components ready"))
+            .And.Contain(m => m.Contains("reading the 2027 applications, limit 00:02:00"))
+            .And.Contain(m => m.Contains("read sent, waiting for the result"))
+            .And.Contain(m => m.Contains("read finished in"))
             .And.Contain(m => m.Contains("read 2 2027 applications"))
             .And.Contain(m => m.Contains("planned 2 applications"));
     }
@@ -967,6 +970,60 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         await RunHostedAndExpectTimeoutAsync(stuck);
     }
 
+    // On ext-test the run logged "components ready" and then nothing, not even the timeout: a call that blocks before
+    // handing back its task must still be cut off, and the log must show it never got as far as sending the read.
+    [Fact]
+    public async Task A_read_that_blocks_before_returning_is_still_cut_off_and_logged_as_not_sent()
+    {
+        using var release = new ManualResetEventSlim();
+        var blocking = Substitute.For<IAccreditationApplicationPersistence>();
+        blocking.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                release.Wait(TimeSpan.FromSeconds(30));
+                return Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>([]);
+            });
+
+        try
+        {
+            await RunHostedAndExpectTimeoutAsync(blocking);
+            Logged(LogLevel.Information).Should().NotContain(m => m.Contains("read sent"));
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
+    public async Task A_read_still_waiting_is_logged_as_a_warning_until_it_ends()
+    {
+        var slow = Substitute.For<IAccreditationApplicationPersistence>();
+        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
+
+        await RunHostedAndExpectTimeoutAsync(slow, progressInterval: TimeSpan.FromMilliseconds(200));
+
+        _logger.Entries.Should()
+            .Contain(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("still reading the 2027 applications after"));
+        Logged(LogLevel.Information).Should().Contain(m => m.Contains("read sent, waiting for the result"));
+    }
+
+    // The progress warning comes from our own interval; a TimeoutException from the read itself fails the run as it is.
+    [Fact]
+    public async Task A_timeout_from_the_read_itself_fails_the_run_unchanged()
+    {
+        var timedOut = Substitute.For<IAccreditationApplicationPersistence>();
+        timedOut.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<AccreditationApplicationModel>>(new TimeoutException("selecting a server")));
+        var migration = HostedMigration(timedOut, lifetime: null);
+
+        var run = () => migration.RunAsync(Ct);
+
+        await run.Should().ThrowAsync<TimeoutException>().WithMessage("selecting a server");
+        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Warning);
+    }
+
     // Only the limit we set is reported as a timeout; the caller's own cancellation stays a cancellation.
     [Fact]
     public async Task The_callers_cancellation_is_not_reported_as_a_timeout()
@@ -1009,9 +1066,12 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         await run.Should().ThrowAsync<InvalidOperationException>().WithMessage("*ReadTimeout must be a positive duration as hh:mm:ss*");
     }
 
-    private async Task RunHostedAndExpectTimeoutAsync(IAccreditationApplicationPersistence persistence)
+    private async Task RunHostedAndExpectTimeoutAsync(
+        IAccreditationApplicationPersistence persistence,
+        TimeSpan? progressInterval = null
+    )
     {
-        var migration = HostedMigration(persistence, lifetime: null, readTimeout: TimeSpan.FromSeconds(1));
+        var migration = HostedMigration(persistence, lifetime: null, readTimeout: TimeSpan.FromSeconds(1), progressInterval);
 
         await migration.StartAsync(Ct);
         await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
@@ -1043,7 +1103,8 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     private Migration HostedMigration(
         IAccreditationApplicationPersistence persistence,
         IHostApplicationLifetime? lifetime,
-        TimeSpan? readTimeout = null
+        TimeSpan? readTimeout = null,
+        TimeSpan? progressInterval = null
     )
     {
         var services = new ServiceCollection();
@@ -1061,6 +1122,9 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 }
             ),
             _logger
-        );
+        )
+        {
+            ReadProgressInterval = progressInterval ?? TimeSpan.FromSeconds(15),
+        };
     }
 }
