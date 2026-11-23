@@ -11,6 +11,7 @@ using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -946,10 +947,18 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             .Which.Exception.Should().BeOfType<TimeoutException>();
     }
 
-    // A stop part-way is logged rather than swallowed, so the run never goes silent.
-    [Fact]
-    public async Task A_stop_part_way_is_logged_as_a_warning()
+    // A stop part-way is logged rather than swallowed, so the run never goes silent, and the log says whether the host
+    // itself was stopping or only this service was.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_stop_part_way_is_logged_as_a_warning_saying_whether_the_host_is_stopping(bool hostStopping)
     {
+        using var stopping = new CancellationTokenSource();
+        if (hostStopping)
+            await stopping.CancelAsync();
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        lifetime.ApplicationStopping.Returns(stopping.Token);
         var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var slow = Substitute.For<IAccreditationApplicationPersistence>();
         slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
@@ -961,6 +970,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             });
         var services = new ServiceCollection();
         services.AddSingleton(slow);
+        services.AddSingleton(lifetime);
         var migration = new Migration(
             services.BuildServiceProvider(),
             Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
@@ -972,7 +982,8 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         await migration.StopAsync(Ct);
 
         _logger.Entries.Should()
-            .ContainSingle(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("stopped part-way: the host is stopping"));
+            .ContainSingle(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("stopped part-way: its stop signal was set"))
+            .Which.Message.Should().Contain($"HostStopping={hostStopping}");
         _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 }

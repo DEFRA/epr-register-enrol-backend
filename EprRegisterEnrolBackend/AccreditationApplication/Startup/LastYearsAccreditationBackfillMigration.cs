@@ -130,10 +130,16 @@ public class LastYearsAccreditationBackfillMigration(
         catch (Exception ex) when (stoppingToken.IsCancellationRequested)
         {
             // Logged, not swallowed: on ext-test the run went silent part-way, and a stop is the one ending that would
-            // otherwise leave no trace.
+            // otherwise leave no trace. The stop signal is also set when only this service is stopped, so say whether
+            // the host itself is stopping rather than assume it.
+            var hostStopping = serviceProvider
+                .GetService<IHostApplicationLifetime>()
+                ?.ApplicationStopping.IsCancellationRequested;
             logger.LogWarning(
                 ex,
-                "RA-784 last year's accreditation backfill stopped part-way: the host is stopping ({Error})",
+                "RA-784 last year's accreditation backfill stopped part-way: its stop signal was set "
+                    + "(HostStopping={HostStopping}, {Error})",
+                hostStopping,
                 ex.GetType().Name
             );
         }
