@@ -696,9 +696,6 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             ? null
             : AddressFormatting.Join(addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode);
 
-    // RA-526: "mappable" means at least one field is non-null/non-empty - an address object
-    // with every field null or "" carries nothing worth mapping, and is treated the same as no
-    // address at all when deciding whether to fall back / abort.
     // RA-806: ReEx masters a registration's status, so there is no default. A missing or unknown one is logged at Error
     // and comes back null, which leaves the status the domain model holds as it is: a new Registration stays Created,
     // which refuses change requests. The application being started does not depend on it, so it does not fail the seed.
@@ -721,6 +718,9 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         return status;
     }
 
+    // RA-526: "mappable" means at least one field is non-null/non-empty - an address object
+    // with every field null or "" carries nothing worth mapping, and is treated the same as no
+    // address at all when deciding whether to fall back / abort.
     private static bool HasMappableFields(RegisteredAddressDto? addr) =>
         addr is not null
         && new[]
