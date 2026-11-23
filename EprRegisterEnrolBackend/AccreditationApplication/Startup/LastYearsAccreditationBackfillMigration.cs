@@ -23,8 +23,8 @@ public sealed class LastYearsAccreditationBackfillOptions
     // effect; logged with every applied change so the authorisation outlives the env var.
     public string? SpotCheckConfirmedBy { get; set; }
 
-    // How long the read of the year's applications may take before the run gives up and logs why, as a TimeSpan
-    // ("00:02:00"). Raise it if a legitimately slow read is cut short.
+    // How long the read of the year's applications may take before the run gives up and logs why, as hh:mm:ss
+    // ("00:02:00"; a bare "120" would mean 120 days). Raise it if a legitimately slow read is cut short.
     public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromMinutes(2);
 }
 
@@ -128,8 +128,8 @@ public class LastYearsAccreditationBackfillMigration(
         await Task.Yield();
         try
         {
-            // Run once start-up has finished, not during it: on ext-test the backfill stalled silently when its first
-            // Mongo read competed with the start-up work (index set-up, seeds, diagnostics) for the first connections.
+            // Run once start-up has finished, not during it: on ext-test the backfill stalled silently when it ran
+            // during start-up, alongside index set-up, seeds and diagnostics.
             await WaitForApplicationStartedAsync(stoppingToken);
             await RunAsync(stoppingToken);
         }
@@ -171,6 +171,10 @@ public class LastYearsAccreditationBackfillMigration(
         var persistence =
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
         var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
+        // Creating these builds the domain model stores, each of which ensures its indexes synchronously, so log once
+        // they exist: a stall before this line is in creating them, a stall after it is in the read.
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation("RA-784 {Mode}: components ready", mode);
         var applications = await ReadApplicationsAsync(persistence, cancellationToken);
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
@@ -225,13 +229,19 @@ public class LastYearsAccreditationBackfillMigration(
     }
 
     // A read that doesn't finish in time fails the run, which ExecuteAsync logs, rather than waiting silently. The wait
-    // is abandoned when the limit passes even if the read itself ignores the token (a connection handshake, say).
+    // is abandoned when the limit passes even if the read itself ignores the token (a connection handshake, say); such a
+    // read carries on in the background until it ends on its own, which is fine for a one-off.
     private async Task<IReadOnlyList<AccreditationApplicationModel>> ReadApplicationsAsync(
         IAccreditationApplicationPersistence persistence,
         CancellationToken cancellationToken
     )
     {
         var limit = options.Value.ReadTimeout;
+        if (limit <= TimeSpan.Zero)
+            throw new InvalidOperationException(
+                $"{LastYearsAccreditationBackfillOptions.SectionName}:ReadTimeout must be a positive duration as "
+                    + $"hh:mm:ss (for example 00:02:00), not {limit}"
+            );
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(limit);
         try

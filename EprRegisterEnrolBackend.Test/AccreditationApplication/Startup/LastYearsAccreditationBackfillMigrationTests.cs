@@ -896,7 +896,8 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         Logged(LogLevel.Information)
             .Should()
-            .Contain(m => m.Contains("read 2 2027 applications"))
+            .Contain(m => m.Contains("components ready"))
+            .And.Contain(m => m.Contains("read 2 2027 applications"))
             .And.Contain(m => m.Contains("planned 2 applications"));
     }
 
@@ -905,12 +906,19 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     public async Task The_backfill_reads_nothing_until_the_application_has_started()
     {
         using var started = new CancellationTokenSource();
+        var reachedWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var lifetime = Substitute.For<IHostApplicationLifetime>();
-        lifetime.ApplicationStarted.Returns(started.Token);
+        lifetime.ApplicationStarted.Returns(_ =>
+        {
+            reachedWait.TrySetResult();
+            return started.Token;
+        });
         var persistence = EmptyPersistence();
         var migration = HostedMigration(persistence, lifetime);
 
         await migration.StartAsync(Ct);
+        // The getter is only read by the wait, so without the wait this times out rather than passing vacuously.
+        await reachedWait.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
         migration.ExecuteTask!.IsCompleted.Should().BeFalse();
         await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
@@ -973,6 +981,32 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         var run = () => migration.RunAsync(caller.Token);
 
         await run.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    // A cancellation that is neither our limit nor the caller's (the driver's own, say) is not reported as a timeout.
+    [Fact]
+    public async Task A_cancellation_from_the_read_itself_is_not_reported_as_a_timeout()
+    {
+        var cancelled = Substitute.For<IAccreditationApplicationPersistence>();
+        cancelled.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromCanceled<IReadOnlyList<AccreditationApplicationModel>>(new CancellationToken(canceled: true)));
+        var migration = HostedMigration(cancelled, lifetime: null);
+
+        var run = () => migration.RunAsync(Ct);
+
+        (await run.Should().ThrowAsync<OperationCanceledException>()).Which.Should().NotBeOfType<TimeoutException>();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task A_read_limit_of_zero_or_less_fails_the_run_saying_how_to_set_it(int seconds)
+    {
+        var migration = HostedMigration(EmptyPersistence(), lifetime: null, readTimeout: TimeSpan.FromSeconds(seconds));
+
+        var run = () => migration.RunAsync(Ct);
+
+        await run.Should().ThrowAsync<InvalidOperationException>().WithMessage("*ReadTimeout must be a positive duration as hh:mm:ss*");
     }
 
     private async Task RunHostedAndExpectTimeoutAsync(IAccreditationApplicationPersistence persistence)
