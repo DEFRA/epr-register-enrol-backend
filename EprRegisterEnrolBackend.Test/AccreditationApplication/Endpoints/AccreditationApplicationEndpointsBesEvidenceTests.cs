@@ -316,6 +316,7 @@ public class AccreditationApplicationEndpointsBesEvidenceTests
             TestContext.Current.CancellationToken
         );
         body.Should().Contain("already been uploaded");
+        body.Should().Contain("\"code\":\"DuplicateFilename\"");
     }
 
     // RA-571 AC01/AC03: "within a single application submission" spans every overseas site,

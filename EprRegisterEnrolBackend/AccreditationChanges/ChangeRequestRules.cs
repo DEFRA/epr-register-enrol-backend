@@ -92,6 +92,18 @@ public static class ChangeRequestRules
     }
 
     /// <summary>
+    /// 3bb.13: what the operator supplied on the item, as Case Management marks it: the answers above, and
+    /// <see cref="BesEvidence"/> when the operator uploaded evidence on the request (sent as the site's BES evidence).
+    /// </summary>
+    public static List<string> SuppliedFields(ChangeRequestSite requestSite)
+    {
+        var supplied = SuppliedFields(requestSite.Answers);
+        if (requestSite.BesEvidence is { BesEvidenceUploads.Count: > 0 })
+            supplied.Add(BesEvidence);
+        return supplied;
+    }
+
+    /// <summary>
     /// Same rule as the application's BES section (SectionStatusService.IsBesEvidenceComplete):
     /// evidence is needed for a site outside the EU and OECD unless conditions of export are met.
     /// </summary>
@@ -104,6 +116,25 @@ public static class ChangeRequestRules
     {
         var uploads = evidence?.BesEvidenceUploads ?? [];
         return uploads.Count > 0 && uploads.All(u => u.ScanStatus == "Clean");
+    }
+
+    /// <summary>
+    /// 3bb.38: the BES evidence the site would hold once the item is granted: the site's own files on the
+    /// accreditation application, then the request's that it does not already hold (as <c>ChangeRequestGrant</c>
+    /// adds them). The request's upload applies the application's per-site file cap to this.
+    /// </summary>
+    public static BesEvidenceModel GrantedBesEvidence(OverseasSiteModel? site, BesEvidenceModel? requested)
+    {
+        var held = site?.BesEvidence?.BesEvidenceUploads ?? [];
+        var heldIds = held.Select(f => f.FileId).ToHashSet();
+        return new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                .. held,
+                .. (requested?.BesEvidenceUploads ?? []).Where(f => !heldIds.Contains(f.FileId)),
+            ],
+        };
     }
 
     public static List<string> MissingFields(OverseasSiteModel? site, ChangeRequestSite requestSite)

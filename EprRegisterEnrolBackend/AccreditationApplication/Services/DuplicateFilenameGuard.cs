@@ -46,12 +46,19 @@ public static class DuplicateFilenameGuard
         return samplingPlanFilenames.Concat(besEvidenceFilenames);
     }
 
-    public static bool IsDuplicate(string? filename, AccreditationApplicationModel application)
+    public static bool IsDuplicate(string? filename, AccreditationApplicationModel application) =>
+        IsDuplicate(filename, ExistingFilenames(application));
+
+    /// <summary>
+    /// The same rule against any set of filenames: 3bb.38's change request upload checks the accreditation
+    /// application's files and the request's together, as a grant puts the request's onto the application.
+    /// </summary>
+    public static bool IsDuplicate(string? filename, IEnumerable<string?> existingFilenames)
     {
         var key = NormaliseFilenameKey(filename);
         if (key.Length == 0)
             return false;
 
-        return ExistingFilenames(application).Any(existing => NormaliseFilenameKey(existing) == key);
+        return existingFilenames.Any(existing => NormaliseFilenameKey(existing) == key);
     }
 }

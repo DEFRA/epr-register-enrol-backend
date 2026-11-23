@@ -33,14 +33,29 @@ public interface IChangeRequestPersistence
         CancellationToken ct = default
     );
 
+    /// <summary>
+    /// RA-495: the request holding the add-ORS item whose Case Management work item this is, if any. Only site
+    /// items are sent to Case Management, so only they are searched. With a session, read in its transaction.
+    /// </summary>
+    Task<AccreditationChangeRequest?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        CancellationToken ct = default,
+        IClientSessionHandle? session = null
+    );
+
     /// <summary>False when another InProgress request already exists for the accreditation.</summary>
     Task<bool> InsertAsync(AccreditationChangeRequest request, CancellationToken ct = default);
 
     /// <summary>
     /// Replaces the request if nobody else changed it since it was read (optimistic
-    /// concurrency on <see cref="AccreditationChangeRequest.Version"/>); false otherwise.
+    /// concurrency on <see cref="AccreditationChangeRequest.Version"/>); false otherwise. RA-495: with a session,
+    /// written in its transaction, so it commits or rolls back with the other writes there.
     /// </summary>
-    Task<bool> UpdateAsync(AccreditationChangeRequest request, CancellationToken ct = default);
+    Task<bool> UpdateAsync(
+        AccreditationChangeRequest request,
+        CancellationToken ct = default,
+        IClientSessionHandle? session = null
+    );
 
     /// <summary>Deletes an InProgress request at the version read; false otherwise.</summary>
     Task<bool> DeleteDraftAsync(AccreditationChangeRequest request, CancellationToken ct = default);
@@ -109,6 +124,17 @@ public class ChangeRequestPersistence
             .SortByDescending(r => r.CreatedAt)
             .ToListAsync(ct);
 
+    public async Task<AccreditationChangeRequest?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        CancellationToken ct = default,
+        IClientSessionHandle? session = null
+    )
+    {
+        var filter = Filter.ElemMatch(r => r.Sites, s => s.CaseManagementWorkItemId == workItemId);
+        var find = session is null ? Collection.Find(filter) : Collection.Find(session, filter);
+        return await find.FirstOrDefaultAsync(ct);
+    }
+
     public async Task<bool> InsertAsync(
         AccreditationChangeRequest request,
         CancellationToken ct = default
@@ -128,20 +154,20 @@ public class ChangeRequestPersistence
 
     public async Task<bool> UpdateAsync(
         AccreditationChangeRequest request,
-        CancellationToken ct = default
+        CancellationToken ct = default,
+        IClientSessionHandle? session = null
     )
     {
         var readVersion = request.Version;
         request.Version = readVersion + 1;
         request.UpdatedAt = DateTime.UtcNow;
+        var filter =
+            Filter.Eq(r => r.RequestId, request.RequestId) & Filter.Eq(r => r.Version, readVersion);
         try
         {
-            var result = await Collection.ReplaceOneAsync(
-                Filter.Eq(r => r.RequestId, request.RequestId)
-                    & Filter.Eq(r => r.Version, readVersion),
-                request,
-                cancellationToken: ct
-            );
+            var result = session is null
+                ? await Collection.ReplaceOneAsync(filter, request, cancellationToken: ct)
+                : await Collection.ReplaceOneAsync(session, filter, request, cancellationToken: ct);
             if (result.MatchedCount == 1)
                 return true;
         }
@@ -207,6 +233,12 @@ public class ChangeRequestPersistence
                     .Ascending(r => r.RegistrationId)
                     .Descending(r => r.CreatedAt),
                 new CreateIndexOptions { Name = "by_registration_newest_first" }
+            ),
+            // RA-495: Case Management's status pushes find an item by its work item id. Not unique: items not yet
+            // submitted, or reopened, hold none, and a multikey unique index would make those collide.
+            new(
+                builder.Ascending("sites.caseManagementWorkItemId"),
+                new CreateIndexOptions { Name = "by_site_case_management_work_item" }
             ),
         ];
 }

@@ -260,4 +260,46 @@ public sealed class ChangeRequestPersistenceTests : IDisposable
         raw["tonnageBandUpgrade"]["requestedBand"].AsString.Should().Be("Over10000");
         raw["tonnageBandUpgrade"]["changeType"].AsString.Should().Be("upgrade-tonnage-band");
     }
+
+    // RA-495: Case Management's status pushes name an item by its own work item id, so the request that holds
+    // the item is found by it, through an index rather than a collection scan.
+    [Fact]
+    public async Task GetByCaseManagementWorkItemIdAsync_FindsTheRequestHoldingTheItem()
+    {
+        var workItemId = Guid.NewGuid();
+        var watermark = new DateTime(2026, 5, 1, 9, 30, 0, DateTimeKind.Utc);
+        var request = NewRequest();
+        request.Status = ChangeRequestStatus.Submitted;
+        request.Sites.Add(
+            new ChangeRequestSite
+            {
+                SiteId = 2,
+                OrsId = "002",
+                SiteName = "Site 2",
+                CaseManagementWorkItemId = workItemId,
+                CaseManagementStatusUpdatedAt = watermark,
+            }
+        );
+        await _persistence.InsertAsync(request, Ct);
+        await _persistence.InsertAsync(NewRequest("app-2"), Ct);
+
+        var found = await _persistence.GetByCaseManagementWorkItemIdAsync(workItemId, Ct);
+
+        found!.RequestId.Should().Be(request.RequestId);
+        found
+            .Sites.Single(s => s.CaseManagementWorkItemId == workItemId)
+            .CaseManagementStatusUpdatedAt.Should()
+            .Be(watermark);
+        (await _persistence.GetByCaseManagementWorkItemIdAsync(Guid.NewGuid(), Ct)).Should().BeNull();
+
+        var indexes = await (
+            await _factory
+                .GetCollection<MongoDB.Bson.BsonDocument>(ChangeRequestPersistence.CollectionName)
+                .Indexes.ListAsync(Ct)
+        ).ToListAsync(Ct);
+        indexes
+            .Select(index => index["key"].AsBsonDocument)
+            .Should()
+            .ContainEquivalentOf(new MongoDB.Bson.BsonDocument("sites.caseManagementWorkItemId", 1));
+    }
 }

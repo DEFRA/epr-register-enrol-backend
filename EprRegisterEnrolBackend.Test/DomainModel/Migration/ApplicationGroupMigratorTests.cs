@@ -969,6 +969,35 @@ public sealed class ApplicationGroupMigratorTests : IDisposable
         Assert.Equal(FirstApprovalSource.ThisService, site.FirstApprovalSource);
     }
 
+    // 3bb.44: a granted change request's date is served from its own Accreditation's entry, never from the ORS, so an
+    // application migrated later is served no validFrom for the site, and a copy holding that date is a difference.
+    [Fact]
+    public async Task Migrate_ACopyHoldingTheDateAChangeRequestGrantGaveTheSite_RecordsADateConflict()
+    {
+        var granted = new DateTime(2026, 4, 30, 9, 15, 0, DateTimeKind.Utc);
+        var ors = await SeededSiteAsync(await SeededRegistrationAsync());
+        ors.RecordFirstApproval(granted, FirstApprovalSource.ChangeRequest);
+        await _stores.OverseasSites.Versions.UpdateAsync(
+            ors,
+            ors.Version,
+            new ChangeInfo { Reason = ChangeReason.ChangeRequestGranted },
+            cancellationToken: Ct
+        );
+        var application = await ApplicationAsync(
+            ApplicationStatus.Started,
+            Day1,
+            ApprovedSite(SiteApprovalDate.Format(granted)!)
+        );
+
+        var result = await MigrateAsync(application);
+
+        var conflict = Assert.Single(
+            result.Conflicts,
+            c => c.Kind == MigrationConflictKind.SiteApprovalDatesDiffer
+        );
+        Assert.Equal([application.Id!.Value], conflict.ApplicationIds);
+    }
+
     [Fact]
     public async Task Migrate_ASiteNeverApproved_HasNoFirstApprovedDate()
     {
