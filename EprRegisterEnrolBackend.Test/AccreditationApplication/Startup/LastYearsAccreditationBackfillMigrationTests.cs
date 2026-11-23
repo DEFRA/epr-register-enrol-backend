@@ -897,6 +897,9 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         Logged(LogLevel.Information)
             .Should()
             .Contain(m => m.Contains("components ready"))
+            .And.Contain(m => m.Contains("reading the 2027 applications, limit 00:02:00"))
+            .And.Contain(m => m.Contains("read call returned, waiting for the result"))
+            .And.Contain(m => m.Contains("read finished in"))
             .And.Contain(m => m.Contains("read 2 2027 applications"))
             .And.Contain(m => m.Contains("planned 2 applications"));
     }
@@ -947,6 +950,43 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task The_backfill_waits_the_start_delay_before_reading()
+    {
+        var persistence = EmptyPersistence();
+        var migration = HostedMigration(persistence, lifetime: null, startDelay: TimeSpan.FromHours(1));
+
+        await migration.StartAsync(Ct);
+        await WaitForLogAsync("waiting 01:00:00 after start-up");
+
+        migration.ExecuteTask!.IsCompleted.Should().BeFalse();
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+
+        await migration.StopAsync(Ct);
+
+        migration.ExecuteTask.IsCompleted.Should().BeTrue();
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
+    }
+
+    [Theory]
+    [InlineData("-00:00:01")]
+    [InlineData("1.00:00:01")]
+    public async Task A_start_delay_below_zero_or_over_a_day_fails_the_run_saying_how_to_set_it(string delay)
+    {
+        var persistence = EmptyPersistence();
+        var migration = HostedMigration(persistence, lifetime: null, startDelay: TimeSpan.Parse(delay));
+
+        await migration.StartAsync(Ct);
+        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
+            .Which.Exception.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Contain("StartDelay must be from zero to a day as hh:mm:ss");
+        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
+    }
+
+    [Fact]
     public async Task A_read_that_takes_too_long_is_logged_as_a_failure_with_the_reason()
     {
         var slow = Substitute.For<IAccreditationApplicationPersistence>();
@@ -965,6 +1005,94 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             .Returns(_ => new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>().Task);
 
         await RunHostedAndExpectTimeoutAsync(stuck);
+    }
+
+    // On ext-test the run logged "components ready" and then nothing, not even the timeout: a call that blocks before
+    // handing back its task must still be cut off, and the log must show the call never returned.
+    [Fact]
+    public async Task A_read_that_blocks_before_returning_is_still_cut_off_and_logged_as_not_returned()
+    {
+        using var release = new ManualResetEventSlim();
+        var blocking = Substitute.For<IAccreditationApplicationPersistence>();
+        blocking.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                release.Wait(TimeSpan.FromSeconds(30));
+                return Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>([]);
+            });
+
+        try
+        {
+            await RunHostedAndExpectTimeoutAsync(blocking);
+            Logged(LogLevel.Information).Should().NotContain(m => m.Contains("read call returned"));
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
+    public async Task A_read_still_waiting_is_logged_as_a_warning()
+    {
+        var slow = Substitute.For<IAccreditationApplicationPersistence>();
+        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
+
+        await RunHostedAndExpectTimeoutAsync(slow, progressInterval: TimeSpan.FromMilliseconds(200));
+
+        _logger.Entries.Should()
+            .Contain(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("still reading the 2027 applications after"));
+        Logged(LogLevel.Information).Should().Contain(m => m.Contains("read call returned, waiting for the result"));
+    }
+
+    // The read that hit the limit may fail later on its own (server selection, a handshake); that error is the likeliest
+    // cause of the stall, so it is logged even though nothing awaits the read any more.
+    [Fact]
+    public async Task An_abandoned_read_that_fails_later_logs_its_error()
+    {
+        var late = new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>();
+        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
+        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(_ => late.Task);
+        await RunHostedAndExpectTimeoutAsync(stuck);
+        var serverSelection = new TimeoutException("selecting a server");
+
+        late.SetException(serverSelection);
+        await WaitForLogAsync("the abandoned read of the 2027 applications failed after");
+
+        _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("abandoned read"))
+            .Which.Exception.Should().BeSameAs(serverSelection);
+    }
+
+    [Fact]
+    public async Task An_abandoned_read_that_is_cancelled_later_logs_nothing_more()
+    {
+        var late = new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>();
+        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
+        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(_ => late.Task);
+        await RunHostedAndExpectTimeoutAsync(stuck);
+        var before = _logger.Entries.Count;
+
+        late.SetCanceled(Ct);
+        await Task.Delay(TimeSpan.FromMilliseconds(200), Ct);
+
+        _logger.Entries.Should().HaveCount(before);
+    }
+
+    // The progress warning comes from our own interval; a TimeoutException from the read itself fails the run as it is.
+    [Fact]
+    public async Task A_timeout_from_the_read_itself_fails_the_run_unchanged()
+    {
+        var timedOut = Substitute.For<IAccreditationApplicationPersistence>();
+        timedOut.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<AccreditationApplicationModel>>(new TimeoutException("selecting a server")));
+        var migration = HostedMigration(timedOut, lifetime: null);
+
+        var run = () => migration.RunAsync(Ct);
+
+        await run.Should().ThrowAsync<TimeoutException>().WithMessage("selecting a server");
+        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Warning);
     }
 
     // Only the limit we set is reported as a timeout; the caller's own cancellation stays a cancellation.
@@ -1009,9 +1137,12 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         await run.Should().ThrowAsync<InvalidOperationException>().WithMessage("*ReadTimeout must be a positive duration as hh:mm:ss*");
     }
 
-    private async Task RunHostedAndExpectTimeoutAsync(IAccreditationApplicationPersistence persistence)
+    private async Task RunHostedAndExpectTimeoutAsync(
+        IAccreditationApplicationPersistence persistence,
+        TimeSpan? progressInterval = null
+    )
     {
-        var migration = HostedMigration(persistence, lifetime: null, readTimeout: TimeSpan.FromSeconds(1));
+        var migration = HostedMigration(persistence, lifetime: null, readTimeout: TimeSpan.FromSeconds(1), progressInterval);
 
         await migration.StartAsync(Ct);
         await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
@@ -1022,6 +1153,14 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         failure.Exception.Should().BeOfType<TimeoutException>()
             .Which.Message.Should().Be("Reading the 2027 applications took longer than 00:00:01, so nothing was planned");
         Logged(LogLevel.Information).Should().NotContain(m => m.Contains("planned"));
+    }
+
+    private async Task WaitForLogAsync(string text)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(30));
+        while (!_logger.Entries.ToList().Exists(e => e.Message.Contains(text)))
+            await Task.Delay(TimeSpan.FromMilliseconds(20), limit.Token);
     }
 
     private static async Task<IReadOnlyList<AccreditationApplicationModel>> Never(CancellationToken ct)
@@ -1043,7 +1182,9 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     private Migration HostedMigration(
         IAccreditationApplicationPersistence persistence,
         IHostApplicationLifetime? lifetime,
-        TimeSpan? readTimeout = null
+        TimeSpan? readTimeout = null,
+        TimeSpan? progressInterval = null,
+        TimeSpan? startDelay = null
     )
     {
         var services = new ServiceCollection();
@@ -1058,9 +1199,13 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 {
                     Enabled = true,
                     ReadTimeout = readTimeout ?? TimeSpan.FromMinutes(2),
+                    StartDelay = startDelay ?? TimeSpan.Zero,
                 }
             ),
             _logger
-        );
+        )
+        {
+            ReadProgressInterval = progressInterval ?? TimeSpan.FromSeconds(15),
+        };
     }
 }
