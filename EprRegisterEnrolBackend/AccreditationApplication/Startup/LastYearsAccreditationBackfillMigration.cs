@@ -260,7 +260,7 @@ public class LastYearsAccreditationBackfillMigration(
     // A read that doesn't finish in time fails the run, which ExecuteAsync logs, rather than waiting silently. The wait
     // is abandoned when the limit passes even if the read ignores the token or blocks before handing back its task: the
     // call runs on the thread pool, so neither holds up the limit. Such a read carries on in the background until it ends
-    // on its own, which is fine for a one-off. On ext-test the run logged "components ready" and then nothing, not even
+    // on its own, and if it then fails, its error is logged: it is the likeliest explanation of the stall. On ext-test the run logged "components ready" and then nothing, not even
     // the timeout, so each step of the read is logged, and a warning every ReadProgressInterval while it waits.
     private async Task<IReadOnlyList<AccreditationApplicationModel>> ReadApplicationsAsync(
         IAccreditationApplicationPersistence persistence,
@@ -288,9 +288,10 @@ public class LastYearsAccreditationBackfillMigration(
             async () =>
             {
                 var pending = persistence.GetByYearAsync(AccreditationYear, timeout.Token);
-                // The call has handed back its task: anything after this is waiting on the database.
+                // The call has handed back its task, which only means it reached its first wait: after this it may still be
+                // selecting a server or getting a connection, not only waiting on the database.
                 if (logger.IsEnabled(LogLevel.Information))
-                    logger.LogInformation("RA-784 {Mode}: read sent, waiting for the result", mode);
+                    logger.LogInformation("RA-784 {Mode}: read call returned, waiting for the result", mode);
                 return await pending;
             },
             CancellationToken.None
@@ -325,6 +326,21 @@ public class LastYearsAccreditationBackfillMigration(
         catch (OperationCanceledException)
             when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
+            // Nothing awaits the abandoned read from here on, so log its error if it fails later. A cancellation is the
+            // limit itself, which the TimeoutException below already reports.
+            _ = read.ContinueWith(
+                abandoned =>
+                    logger.LogError(
+                        abandoned.Exception?.InnerException,
+                        "RA-784 {Mode}: the abandoned read of the {Year} applications failed after {Elapsed}",
+                        mode,
+                        AccreditationYear,
+                        Stopwatch.GetElapsedTime(started)
+                    ),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default
+            );
             throw new TimeoutException(
                 $"Reading the {AccreditationYear} applications took longer than {limit}, so nothing was planned"
             );

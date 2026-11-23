@@ -898,7 +898,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
             .Should()
             .Contain(m => m.Contains("components ready"))
             .And.Contain(m => m.Contains("reading the 2027 applications, limit 00:02:00"))
-            .And.Contain(m => m.Contains("read sent, waiting for the result"))
+            .And.Contain(m => m.Contains("read call returned, waiting for the result"))
             .And.Contain(m => m.Contains("read finished in"))
             .And.Contain(m => m.Contains("read 2 2027 applications"))
             .And.Contain(m => m.Contains("planned 2 applications"));
@@ -1008,9 +1008,9 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     }
 
     // On ext-test the run logged "components ready" and then nothing, not even the timeout: a call that blocks before
-    // handing back its task must still be cut off, and the log must show it never got as far as sending the read.
+    // handing back its task must still be cut off, and the log must show the call never returned.
     [Fact]
-    public async Task A_read_that_blocks_before_returning_is_still_cut_off_and_logged_as_not_sent()
+    public async Task A_read_that_blocks_before_returning_is_still_cut_off_and_logged_as_not_returned()
     {
         using var release = new ManualResetEventSlim();
         var blocking = Substitute.For<IAccreditationApplicationPersistence>();
@@ -1024,7 +1024,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         try
         {
             await RunHostedAndExpectTimeoutAsync(blocking);
-            Logged(LogLevel.Information).Should().NotContain(m => m.Contains("read sent"));
+            Logged(LogLevel.Information).Should().NotContain(m => m.Contains("read call returned"));
         }
         finally
         {
@@ -1033,7 +1033,7 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
     }
 
     [Fact]
-    public async Task A_read_still_waiting_is_logged_as_a_warning_until_it_ends()
+    public async Task A_read_still_waiting_is_logged_as_a_warning()
     {
         var slow = Substitute.For<IAccreditationApplicationPersistence>();
         slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
@@ -1043,7 +1043,41 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         _logger.Entries.Should()
             .Contain(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("still reading the 2027 applications after"));
-        Logged(LogLevel.Information).Should().Contain(m => m.Contains("read sent, waiting for the result"));
+        Logged(LogLevel.Information).Should().Contain(m => m.Contains("read call returned, waiting for the result"));
+    }
+
+    // The read that hit the limit may fail later on its own (server selection, a handshake); that error is the likeliest
+    // cause of the stall, so it is logged even though nothing awaits the read any more.
+    [Fact]
+    public async Task An_abandoned_read_that_fails_later_logs_its_error()
+    {
+        var late = new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>();
+        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
+        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(_ => late.Task);
+        await RunHostedAndExpectTimeoutAsync(stuck);
+        var serverSelection = new TimeoutException("selecting a server");
+
+        late.SetException(serverSelection);
+        await WaitForLogAsync("the abandoned read of the 2027 applications failed after");
+
+        _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("abandoned read"))
+            .Which.Exception.Should().BeSameAs(serverSelection);
+    }
+
+    [Fact]
+    public async Task An_abandoned_read_that_is_cancelled_later_logs_nothing_more()
+    {
+        var late = new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>();
+        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
+        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(_ => late.Task);
+        await RunHostedAndExpectTimeoutAsync(stuck);
+        var before = _logger.Entries.Count;
+
+        late.SetCanceled(Ct);
+        await Task.Delay(TimeSpan.FromMilliseconds(200), Ct);
+
+        _logger.Entries.Should().HaveCount(before);
     }
 
     // The progress warning comes from our own interval; a TimeoutException from the read itself fails the run as it is.
