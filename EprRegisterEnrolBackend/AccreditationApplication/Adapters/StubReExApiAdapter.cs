@@ -3,7 +3,6 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Config;
 using EprRegisterEnrolBackend.DomainModel.Entities;
-using EprRegisterEnrolBackend.Organisation.Models;
 using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Utils;
@@ -80,7 +79,7 @@ public class StubReExApiAdapter(
         // RA-806: a registration the stub has no fixture for (an E2E test organisation's, or one a fixture org does
         // not list) is one it makes up, as it does every other field of it, and an organisation with an
         // accreditation holds an approved registration in ReEx.
-        RegistrationStatus? registrationStatus = RegistrationStatus.Approved;
+        var registrationStatus = RegistrationStatus.Approved;
 
         if (int.TryParse(organisationId, out var orgIdInt))
         {
@@ -108,7 +107,21 @@ public class StubReExApiAdapter(
             );
             wasteProcessingType = registration?.WasteProcessingType;
             if (registration is not null)
-                registrationStatus = FixtureRegistrationStatus(registration, organisationId);
+            {
+                // Read as HttpReExApiAdapter reads ReEx's, so a fixture can hold any of ReEx's statuses.
+                var fixtureStatus = ReExRegistrationStatusMapper.Map(
+                    registration.Status,
+                    organisationId,
+                    registrationId,
+                    logger
+                );
+                if (!fixtureStatus.IsSuccess)
+                    return ReExResult<ReExAccreditationDto>.Fail(
+                        fixtureStatus.Error!,
+                        fixtureStatus.StatusCode
+                    );
+                registrationStatus = fixtureStatus.Value;
+            }
             if (
                 registration?.GlassRecyclingProcess is { } rawGlassRecyclingProcess
                 && GlassRecyclingProcessMap.TryGetValue(
@@ -251,27 +264,6 @@ public class StubReExApiAdapter(
         };
 
         return ReExResult<ReExAccreditationDto>.Success(fixture, 200);
-    }
-
-    // RA-806: the fixture registration's status, read as HttpReExApiAdapter reads ReEx's, so a fixture can hold a
-    // registration in any of ReEx's statuses. An unknown one is logged at Error and comes back null, as there.
-    private RegistrationStatus? FixtureRegistrationStatus(
-        RegistrationModel registration,
-        string organisationId
-    )
-    {
-        var status = ReExRegistrationStatusMapper.Map(registration.Status);
-        if (status is null)
-        {
-            logger.LogError(
-                "Stub ReEx registration status is missing or unrecognised for org={OrganisationId} reg={RegistrationId}: {RawStatus}",
-                organisationId,
-                registration.Id,
-                registration.Status
-            );
-        }
-
-        return status;
     }
 
     public Task<ReExResult<LinkedDefraOrganisationResult>> GetLinkedDefraOrganisationAsync(

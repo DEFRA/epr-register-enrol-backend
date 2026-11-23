@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -102,6 +103,7 @@ public class AccreditationApplicationEndpointsTests
         ReExResult<ReExAccreditationDto>.Success(
             new ReExAccreditationDto
             {
+                RegistrationStatus = RegistrationStatus.Approved,
                 AccreditationId = $"reex-acc-{orgId}-{material}-{year}",
                 OrganisationId = orgId,
                 MaterialType = material,
@@ -268,6 +270,7 @@ public class AccreditationApplicationEndpointsTests
                     ReExResult<ReExAccreditationDto>.Success(
                         new ReExAccreditationDto
                         {
+                            RegistrationStatus = RegistrationStatus.Approved,
                             AccreditationId = "reex-abc",
                             AccreditationNumber = "A25ER5000270063ST",
                             OrganisationId = "org-123",
@@ -329,6 +332,7 @@ public class AccreditationApplicationEndpointsTests
                     ReExResult<ReExAccreditationDto>.Success(
                         new ReExAccreditationDto
                         {
+                            RegistrationStatus = RegistrationStatus.Approved,
                             AccreditationId = "reex-abc",
                             OrganisationId = "org-123",
                             MaterialType = MaterialType.Steel,
@@ -370,6 +374,7 @@ public class AccreditationApplicationEndpointsTests
                     ReExResult<ReExAccreditationDto>.Success(
                         new ReExAccreditationDto
                         {
+                            RegistrationStatus = RegistrationStatus.Approved,
                             AccreditationId = "reex-abc",
                             OrganisationId = "org-123",
                             MaterialType = MaterialType.Steel,
@@ -523,6 +528,7 @@ public class AccreditationApplicationEndpointsTests
                     ReExResult<ReExAccreditationDto>.Success(
                         new ReExAccreditationDto
                         {
+                            RegistrationStatus = RegistrationStatus.Approved,
                             AccreditationId = "reex-acc-1",
                             OrganisationId = "org-123",
                             MaterialType = MaterialType.Steel,
@@ -1678,6 +1684,7 @@ public class AccreditationApplicationEndpointsTests
                     ReExResult<ReExAccreditationDto>.Success(
                         new ReExAccreditationDto
                         {
+                            RegistrationStatus = RegistrationStatus.Approved,
                             AccreditationId = "reex-abc",
                             OrganisationId = "org-123",
                             MaterialType = MaterialType.Steel,

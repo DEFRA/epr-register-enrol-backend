@@ -6,9 +6,10 @@ namespace EprRegisterEnrolBackend.Test.DomainModel.Seeding;
 
 // RA-806: the seed writes ReEx's registration status, and a later seed that finds it changed writes a new version,
 // like any other ReEx field (ReExRefresh). The migrator's ensure-migrated step runs in the same seed and keeps it.
+// A missing or unknown ReEx status never reaches the writer: GetAccreditationAsync fails, so the seed does.
 public sealed partial class SeedDualWriterTests
 {
-    private static ReExAccreditationDto ReExWithStatus(RegistrationStatus? status)
+    private static ReExAccreditationDto ReExWithStatus(RegistrationStatus status)
     {
         var reEx = ReEx();
         reEx.RegistrationStatus = status;
@@ -42,25 +43,13 @@ public sealed partial class SeedDualWriterTests
         Assert.Equal(ChangeReason.ReExRefresh, current.LastChange.Reason);
     }
 
-    // The application being started does not depend on the registration's status, so a seed without one still writes
-    // the model; the Registration stays Created, which refuses change requests.
     [Fact]
-    public async Task WriteAsync_NoReExRegistrationStatus_WritesTheModelWithTheRegistrationCreated()
-    {
-        await SeedAsync(ReExWithStatus(null));
-
-        var registration = Assert.Single(await RegistrationVersionsAsync());
-        Assert.Equal(RegistrationStatus.Created, registration.Status);
-        Assert.Equal(0, Interlocked.Read(ref _failures));
-    }
-
-    [Fact]
-    public async Task WriteAsync_NoReExRegistrationStatus_KeepsTheHeldStatusAndWritesNoNewVersion()
+    public async Task WriteAsync_SameReExRegistrationStatusAgain_WritesNoNewVersion()
     {
         await SeedAsync(ReExWithStatus(RegistrationStatus.Approved));
 
         _clock.Advance(TimeSpan.FromMinutes(5));
-        await SeedAsync(ReExWithStatus(null));
+        await SeedAsync(ReExWithStatus(RegistrationStatus.Approved));
 
         var registration = Assert.Single(await RegistrationVersionsAsync());
         Assert.Equal(RegistrationStatus.Approved, registration.Status);

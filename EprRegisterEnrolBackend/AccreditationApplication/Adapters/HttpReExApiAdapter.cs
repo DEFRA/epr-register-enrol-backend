@@ -160,7 +160,18 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
             );
         }
 
-        var registrationStatus = RegistrationStatusOf(registration, organisationId);
+        // RA-806: ReEx masters the registration's status; a missing or unknown one fails the seed.
+        var registrationStatus = ReExRegistrationStatusMapper.Map(
+            registration.Status,
+            organisationId,
+            registration.Id,
+            logger
+        );
+        if (!registrationStatus.IsSuccess)
+            return ReExResult<ReExAccreditationDto>.Fail(
+                registrationStatus.Error!,
+                registrationStatus.StatusCode
+            );
 
         string? siteAddress = registration is ReprocessorRegistrationDto reprocessor
             ? FormatAddress(reprocessor.Site?.Address)
@@ -346,7 +357,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 OrganisationName = org.CompanyDetails?.Name,
                 OrganisationNumber = org.OrgId,
                 RegistrationReference = registration.RegistrationNumber,
-                RegistrationStatus = registrationStatus,
+                RegistrationStatus = registrationStatus.Value,
                 SiteAddress = siteAddress,
                 IsExporter = isExporter,
                 Nation = nation,
@@ -695,28 +706,6 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
         addr is null
             ? null
             : AddressFormatting.Join(addr.Line1, addr.Line2, addr.Town, addr.County, addr.Postcode);
-
-    // RA-806: ReEx masters a registration's status, so there is no default. A missing or unknown one is logged at Error
-    // and comes back null, which leaves the status the domain model holds as it is: a new Registration stays Created,
-    // which refuses change requests. The application being started does not depend on it, so it does not fail the seed.
-    private RegistrationStatus? RegistrationStatusOf(
-        RegistrationBaseDto registration,
-        string organisationId
-    )
-    {
-        var status = ReExRegistrationStatusMapper.Map(registration.Status);
-        if (status is null)
-        {
-            logger.LogError(
-                "ReEx registration status is missing or unrecognised for org={OrganisationId} reg={RegistrationId}: {RawStatus}",
-                organisationId,
-                registration.Id,
-                registration.Status
-            );
-        }
-
-        return status;
-    }
 
     // RA-526: "mappable" means at least one field is non-null/non-empty - an address object
     // with every field null or "" carries nothing worth mapping, and is treated the same as no

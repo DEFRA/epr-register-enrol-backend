@@ -465,12 +465,14 @@ transactions are available in deployed environments. Local `compose.yml:34-43` r
    picks the registration by ReEx `id`, and follows `registration.accreditationId` to **one** ReEx
    accreditation, whose `validFrom.Year` must equal `year - 1`. For exporters it calls ORS-A
    (`GetOverseasSiteAsync`), and `MapOverseasSite` (lines 500-534) sets `Selected = validFrom != null`.
+   RA-806: it also carries the matched registration's `status` to the seed (`ReExRegistrationStatusMapper`), and fails,
+   like its other bad-ReEx-data checks, when that status is missing or not one of ReEx's registration statuses.
 3. It builds the application from the prior-year data, including the formatted address strings, and
    inserts it with status `Saved`.
 
 The ReEx DTOs are in `ReEx/Dtos/OrganisationDto.cs` and `ReEx/Dtos/OverseasSitesDto.cs`.
 `RegistrationBaseDto` carries `id`, `accreditationId` (one only), `registrationNumber`,
-`submittedToRegulator`, `noticeAddress`, `wasteManagementPermits` and `glassRecyclingProcess[]`; the
+`submittedToRegulator`, `status`, `noticeAddress`, `wasteManagementPermits` and `glassRecyclingProcess[]`; the
 reprocessor and exporter subtypes add site or ORS data.
 
 ### 2.3 Existing endpoints (must keep working)
@@ -888,13 +890,20 @@ current documents.
 Until this service implements new registrations, the status is ReEx's (RA-806): each seed copies the registration's
 ReEx `status` (`REGISTRATION_STATUS`: `created`, `approved`, `rejected`, `cancelled`, matched by name ignoring case)
 onto the Registration, a new one or the current version, and a change is a new version with `lastChange.reason =
-ReExRefresh`. A missing or unrecognised ReEx status is logged at Error and leaves the held status as it is (`created`
-on a new Registration), without failing the seed. The migration makes no ReEx calls, so a Registration it creates is
-`created` until the next seed for it, and nothing else writes the status.
+ReExRefresh`. A seeded status copies ReEx's and is not checked against `VALID_REG_TRANSITIONS`, because ReEx masters
+it: the transitions below are ReEx's, not ones this service enforces. A missing or unrecognised ReEx status is logged at
+Error and fails the seed (§2.2 step 2), so a held status is never kept as if ReEx still said so. The migration makes no
+ReEx calls, so a Registration it creates is `created` until the next seed for it. The only other writers are the
+Development-only dev seeds (`DevRegistrationSeedService` and `DevExporterAccreditationSeedService`, through
+`RegistrationVersionDevSeed`), which insert their fixed registrations `approved`.
 
 ```mermaid
 stateDiagram-v2
     [*] --> created : migrated from applications / (future) new registration
+    [*] --> created : seeded from ReEx (created)
+    [*] --> approved : seeded from ReEx (approved)
+    [*] --> rejected : seeded from ReEx (rejected)
+    [*] --> cancelled : seeded from ReEx (cancelled)
     created --> approved
     created --> rejected
     approved --> cancelled : cancellation cascades to accreditations

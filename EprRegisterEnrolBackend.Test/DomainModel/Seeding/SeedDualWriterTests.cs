@@ -114,6 +114,7 @@ public sealed partial class SeedDualWriterTests : IDisposable
     private static ReExAccreditationDto ReEx(string siteName = "Site One") =>
         new()
         {
+            RegistrationStatus = RegistrationStatus.Approved,
             OrganisationName = "Acme Recycling Ltd",
             RegistrationReference = "R26EX1234567P",
             IsExporter = true,

@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.ReEx;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
@@ -21,11 +22,35 @@ public static class ReExRegistrationStatusMapper
     };
 
     /// <summary>
-    /// The status <paramref name="reExStatus"/> names, or null when it is missing or names none of ReEx's
-    /// registration statuses. The caller logs that at Error: there is no default.
+    /// The status <paramref name="reExStatus"/> names. ReEx masters it, so there is no default: a missing status, or
+    /// one that is not a ReEx registration status, is logged at Error and fails as bad ReEx data, as the adapters'
+    /// other data-integrity failures do (<see cref="ReExErrorKind.ClientError"/>, 500), which fails the seed.
+    /// Success carries 200, the status of the ReEx response the value was read from.
     /// </summary>
-    public static RegistrationStatus? Map(string? reExStatus) =>
-        reExStatus is not null && NameToStatus.TryGetValue(reExStatus, out var status)
-            ? status
-            : null;
+    public static ReExResult<RegistrationStatus> Map(
+        string? reExStatus,
+        string organisationId,
+        string? registrationId,
+        ILogger logger
+    )
+    {
+        if (reExStatus is not null && NameToStatus.TryGetValue(reExStatus, out var status))
+        {
+            return ReExResult<RegistrationStatus>.Success(status, 200);
+        }
+
+        logger.LogError(
+            "ReEx registration status is missing or unrecognised for org={OrganisationId} reg={RegistrationId}: {RawStatus}",
+            organisationId,
+            registrationId,
+            reExStatus
+        );
+        return ReExResult<RegistrationStatus>.Fail(
+            new ReExError(
+                ReExErrorKind.ClientError,
+                "Registration status is missing or is not a ReEx registration status"
+            ),
+            500
+        );
+    }
 }

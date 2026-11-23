@@ -112,8 +112,8 @@ public class ReExAccreditationDto
     public string? RegistrationReference { get; set; }
 
     // RA-806: the matched registration's ReEx status, which the seed copies onto the domain model's Registration.
-    // Null when ReEx sent none or one that is not a registration status; the adapter has logged that at Error.
-    public RegistrationStatus? RegistrationStatus { get; set; }
+    // Required: a missing or unknown ReEx status fails GetAccreditationAsync instead, so there is no default.
+    public required RegistrationStatus RegistrationStatus { get; set; }
 
     public string? SiteAddress { get; set; }
     public bool IsExporter { get; set; }

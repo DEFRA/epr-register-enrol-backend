@@ -3,6 +3,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.Organisation.Models;
 using EprRegisterEnrolBackend.Organisation.Services;
+using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -10,26 +11,27 @@ using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 
-// RA-806: the stub carries its fixture registration's ReEx status, as HttpReExApiAdapter carries ReEx's.
+// RA-806: the stub carries its fixture registration's ReEx status, and fails on an unknown one, as
+// HttpReExApiAdapter does for ReEx's.
 public partial class StubReExApiAdapterTests
 {
-    private static async Task<ReExAccreditationDto> StubAccreditationAsync(
+    private static Task<ReExResult<ReExAccreditationDto>> StubLookupAsync(
         string organisationId,
         string registrationId,
         FakeOrganisationPersistence? fakeOrgs = null,
         CapturingLogger<StubReExApiAdapter>? logger = null
-    )
-    {
-        var sut = new StubReExApiAdapter(
+    ) =>
+        new StubReExApiAdapter(
             fakeOrgs ?? new FakeOrganisationPersistence(),
             logger ?? (ILogger<StubReExApiAdapter>)EnabledNullLogger<StubReExApiAdapter>.Instance
-        );
-        var result = await sut.GetAccreditationAsync(
-            organisationId,
-            registrationId,
-            MaterialType.Plastic,
-            2026
-        );
+        ).GetAccreditationAsync(organisationId, registrationId, MaterialType.Plastic, 2026);
+
+    private static async Task<ReExAccreditationDto> StubAccreditationAsync(
+        string organisationId,
+        string registrationId
+    )
+    {
+        var result = await StubLookupAsync(organisationId, registrationId);
         result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
         return result.Value!;
     }
@@ -69,10 +71,11 @@ public partial class StubReExApiAdapterTests
         dto.RegistrationStatus.Should().Be(RegistrationStatus.Approved);
     }
 
+    // Missing (blank) and malformed fixture statuses fail the lookup, as a bad ReEx one does.
     [Theory]
     [InlineData("suspended")]
     [InlineData("")]
-    public async Task GetAccreditationAsync_UnrecognisedFixtureRegistrationStatus_IsNullAndLoggedAtError(
+    public async Task GetAccreditationAsync_UnrecognisedFixtureRegistrationStatus_FailsWithOneErrorLog(
         string rawStatus
     )
     {
@@ -97,12 +100,12 @@ public partial class StubReExApiAdapterTests
         );
         var logger = new CapturingLogger<StubReExApiAdapter>();
 
-        var dto = await StubAccreditationAsync("70806", registrationId.ToString(), fakeOrgs, logger);
+        var result = await StubLookupAsync("70806", registrationId.ToString(), fakeOrgs, logger);
 
-        dto.RegistrationStatus.Should().BeNull();
+        result.IsSuccess.Should().BeFalse();
+        result.IsClientError.Should().BeTrue();
+        result.StatusCode.Should().Be(500);
         var entry = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Which;
-        entry.Message.Should().Contain("registration status is missing or unrecognised");
-        entry.Message.Should().Contain("70806");
-        entry.Message.Should().Contain(registrationId.ToString());
+        entry.Message.Should().Contain("70806").And.Contain(registrationId.ToString());
     }
 }

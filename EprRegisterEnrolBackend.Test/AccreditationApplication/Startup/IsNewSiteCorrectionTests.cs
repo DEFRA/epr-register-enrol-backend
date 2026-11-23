@@ -200,6 +200,7 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
                 ReExResult<ReExAccreditationDto>.Success(
                     new ReExAccreditationDto
                     {
+                        RegistrationStatus = RegistrationStatus.Approved,
                         OverseasSites =
                         [
                             IsNewSiteClassifierTests.Site(1, "Carried Over Ltd", false, "001"),

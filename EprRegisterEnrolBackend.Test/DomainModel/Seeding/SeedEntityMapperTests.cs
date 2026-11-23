@@ -12,6 +12,7 @@ public partial class SeedEntityMapperTests
     private static ReExAccreditationDto Dto() =>
         new()
         {
+            RegistrationStatus = RegistrationStatus.Approved,
             OrganisationName = "Acme Recycling Ltd",
             CompaniesHouseNumber = "01234567",
             RegistrationReference = "R26EX1234567P",
@@ -251,6 +252,7 @@ public partial class SeedEntityMapperTests
             target,
             new ReExAccreditationDto
             {
+                RegistrationStatus = RegistrationStatus.Approved,
                 CompanyRegisteredAddress = "1 High St, Leeds, LS1 1AA",
                 CompanyRegisterAddressPostcode = "LS1 1AA",
                 IsUkRegisteredAddress = true,
@@ -287,7 +289,10 @@ public partial class SeedEntityMapperTests
             SubmitterContactDetails = new ContactPerson { FullName = "Kept" },
         };
 
-        SeedEntityMapper.ApplyTo(target, new ReExAccreditationDto());
+        SeedEntityMapper.ApplyTo(
+            target,
+            new ReExAccreditationDto { RegistrationStatus = RegistrationStatus.Approved }
+        );
 
         Assert.Equal("Kept", target.FormattedRegisteredAddress);
         Assert.Equal("Kept", target.SubmitterContactDetails?.FullName);
@@ -302,6 +307,7 @@ public partial class SeedEntityMapperTests
             target,
             new ReExAccreditationDto
             {
+                RegistrationStatus = RegistrationStatus.Approved,
                 PermitNumbers = ["EPR/AB1234"],
                 SiteAddress = "2 Mill Rd, Leeds",
             },
@@ -316,7 +322,12 @@ public partial class SeedEntityMapperTests
     private static void ApplyAccreditation(RegistrationEntity target, int year, string? number) =>
         SeedEntityMapper.ApplyTo(
             target,
-            new ReExAccreditationDto { Year = year, AccreditationNumber = number },
+            new ReExAccreditationDto
+            {
+                Year = year,
+                AccreditationNumber = number,
+                RegistrationStatus = RegistrationStatus.Approved,
+            },
             "reg",
             MaterialType.Plastic
         );

@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -71,6 +72,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
         ReExResult<ReExAccreditationDto>.Success(
             new ReExAccreditationDto
             {
+                RegistrationStatus = RegistrationStatus.Approved,
                 AccreditationId = $"reex-acc-{orgId}-{material}-{year}",
                 OrganisationId = orgId,
                 MaterialType = material,
