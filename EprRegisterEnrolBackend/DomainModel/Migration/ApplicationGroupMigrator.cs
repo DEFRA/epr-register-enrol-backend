@@ -831,13 +831,14 @@ public sealed class ApplicationGroupMigrator(
 
         // The ORS keeps one ReEx date and serves it to every application, so an application whose copy of the site held
         // a different one would show validFrom as a difference with nothing to explain it.
-        // When the ORS's date isn't ReEx's (a site approved here that a later seed brought back with a ReEx date), it
-        // serves no validFrom at all, so every copy holding a ReEx date differs.
+        // When the ORS's date isn't one legacy holds (a site approved here that a later seed brought back with a ReEx
+        // date, or one a granted change request dated), it serves no validFrom at all, so every copy holding a date
+        // differs. As the read model serves it, less an Accreditation entry's own date (a grant's, 3bb.43): only a grant
+        // writes one, and only for a migrated application, never for one still being migrated here.
         private void RecordApprovalDateDifferences(SitePlan plan)
         {
             var ors = plan.Saved ?? plan.Existing!;
-            DateTime? served =
-                ors.FirstApprovalSource == FirstApprovalSource.ReEx ? ors.FirstApprovedAt : null;
+            DateTime? served = ors.LegacyValidFrom() is null ? null : ors.FirstApprovedAt;
 
             var differing = plan
                 .Holdings.Where(h =>

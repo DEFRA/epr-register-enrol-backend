@@ -1,6 +1,7 @@
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationChanges;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
@@ -84,6 +85,21 @@ public class FakeChangeRequestPersistence : IChangeRequestPersistence
             );
     }
 
+    public Task<AccreditationChangeRequest?> GetByCaseManagementWorkItemIdAsync(
+        Guid workItemId,
+        CancellationToken ct = default,
+        IClientSessionHandle? session = null
+    )
+    {
+        lock (_lock)
+        {
+            var request = _requests.Find(r =>
+                r.Sites.Exists(s => s.CaseManagementWorkItemId == workItemId)
+            );
+            return Task.FromResult(request is null ? null : Copy(request));
+        }
+    }
+
     public Task<bool> InsertAsync(AccreditationChangeRequest request, CancellationToken ct = default)
     {
         lock (_lock)
@@ -110,7 +126,11 @@ public class FakeChangeRequestPersistence : IChangeRequestPersistence
 
     public int UpdateCount { get; private set; }
 
-    public Task<bool> UpdateAsync(AccreditationChangeRequest request, CancellationToken ct = default)
+    public Task<bool> UpdateAsync(
+        AccreditationChangeRequest request,
+        CancellationToken ct = default,
+        IClientSessionHandle? session = null
+    )
     {
         // As the Mongo driver does, a cancelled token fails the write before it is made.
         ct.ThrowIfCancellationRequested();

@@ -49,6 +49,16 @@ public interface IReExApiAdapter
     );
 
     /// <summary>
+    /// As <see cref="GetRegistrationHolderNameAsync"/>, with the ids of the organisation ReEx found, so a caller
+    /// given the organisation's number can learn its ReEx id, and check that the number is the organisation's.
+    /// </summary>
+    Task<ReExResult<RegistrationHolder>> GetRegistrationHolderAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// RA-526: the Nation a single registration belongs to, derived from that
     /// registration's own <c>submittedToRegulator</c> via
     /// <see cref="EprRegisterEnrolBackend.AccreditationApplication.Models.RegulatorNationMapper"/>
@@ -73,6 +83,12 @@ public class LinkedDefraOrganisationResult
     public required string OrganisationId { get; set; }
     public string? LinkedDefraOrganisationId { get; set; }
 }
+
+/// <summary>
+/// The ReEx organisation holding a registration. <c>ReExOrganisationId</c> is ReEx's own id for it (internal, never
+/// shown to a person) and <c>OrganisationNumber</c> the number people see; either is null when ReEx records none.
+/// </summary>
+public sealed record RegistrationHolder(string? Name, string? ReExOrganisationId, int? OrganisationNumber);
 
 public class ReExAccreditationDto
 {

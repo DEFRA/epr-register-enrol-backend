@@ -256,6 +256,11 @@ public class StatusChangedFromCaseManagementRequest
     public required string ActionId { get; set; }
     public string? ActionDisplayName { get; set; }
     public DateTime OccurredAt { get; set; }
+
+    // RA-495 AC6: the date a determination takes effect from (yyyy-MM-dd), sent only for a type that
+    // records one. The change request route grants an add-ORS site from it, and refuses an approved push
+    // without it; the accreditation application route ignores it.
+    public DateOnly? EffectiveDate { get; set; }
 }
 
 // RA-448: GenerateOrUpdateRegistrationNumber's request. (RA-690: the accreditation-number

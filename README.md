@@ -265,6 +265,7 @@ With `AccreditationChanges__SubmitToCaseManagement` on, submit sends the request
 | `POST`   | `/requests/current/sites/{siteId}/bes-evidence/files` | Attach a scanned upload to a site in the draft |
 | `DELETE` | `/requests/current/sites/{siteId}/bes-evidence/files/{fileId}` | Remove a BES evidence file |
 | `POST`   | `/requests/current/submit` | Declaration (`fullName`, `jobTitle`, `paymentReference`); 400 without a payment reference (RA-739), 422 with per-site errors when incomplete, 503 if Case Management fails (the request is reopened), otherwise `Submitted` |
+| `POST`   | `api/v1/accreditation-changes/case-management/{workItemId}/status` (full path, not under the base path) | Case Management service caller (RA-495): push a work item's status change onto its change request item. `approved` grants an add-ORS site in the same unit of work, accredited from the body's `effectiveDate` (`yyyy-MM-dd`, required on `approved`: 400 without it). The same body, auth and ordering guards as the accreditation application's `/case-management/{workItemId}/status` |
 
 #### Seed request body
 

@@ -3081,7 +3081,7 @@ public static class AccreditationApplicationEndpoints
 
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
-            return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
+            return DuplicateFilenameRejection();
 
         var scanStatus = ScanStatusOf(scannedFile).ToString();
 
@@ -4140,9 +4140,7 @@ public static class AccreditationApplicationEndpoints
     /// BES upload and RA-492's change-request one, so the frontend recognises both the same way.
     /// </summary>
     internal static IResult? BesEvidenceFileCapRejection(BesEvidenceModel? evidence) =>
-        (evidence?.BesEvidenceUploads ?? []).Count(f =>
-            f.ScanStatus != nameof(FileScanStatus.Infected)
-        ) >= MaxBesEvidenceFiles
+        BesEvidenceFilesTowardsCap(evidence) >= MaxBesEvidenceFiles
             ? Results.Problem(
                 detail: MaxBesEvidenceFilesMessage,
                 statusCode: StatusCodes.Status422UnprocessableEntity,
@@ -4153,6 +4151,31 @@ public static class AccreditationApplicationEndpoints
                 }
             )
             : null;
+
+    /// <summary>
+    /// 3bb.49: whether <paramref name="evidence"/> already holds more files than the cap allows, as a change request
+    /// whose files were uploaded before 3bb.38 (or whose site's files changed since) may at Submit.
+    /// </summary>
+    internal static bool IsOverBesEvidenceFileCap(BesEvidenceModel? evidence) =>
+        BesEvidenceFilesTowardsCap(evidence) > MaxBesEvidenceFiles;
+
+    private static int BesEvidenceFilesTowardsCap(BesEvidenceModel? evidence) =>
+        (evidence?.BesEvidenceUploads ?? []).Count(f => f.ScanStatus != nameof(FileScanStatus.Infected));
+
+    internal const string DuplicateFilenameErrorCode = "DuplicateFilename";
+
+    /// <summary>
+    /// RA-571's 422 for an upload whose name a file already on the application (or change request) has. 3bb.48:
+    /// problem+json with a code, as <see cref="BesEvidenceFileCapRejection"/>, so the frontend can show its own
+    /// duplicate message rather than tell the refusals apart by wording.
+    /// </summary>
+    internal static IResult DuplicateFilenameRejection() =>
+        Results.Problem(
+            detail: DuplicateFilenameGuard.DuplicateFilenameMessage,
+            statusCode: StatusCodes.Status422UnprocessableEntity,
+            title: "Unprocessable Entity",
+            extensions: new Dictionary<string, object?> { ["code"] = DuplicateFilenameErrorCode }
+        );
 
     // RA-644 B8g: bundles AddFile's services under one [AsParameters] argument (S107) once it takes the unit of
     // work.
@@ -4237,7 +4260,7 @@ public static class AccreditationApplicationEndpoints
 
         // RA-571 AC01-AC03: no two files anywhere on the application may share a filename.
         if (DuplicateFilenameGuard.IsDuplicate(scannedFile.Filename, application))
-            return Results.UnprocessableEntity(DuplicateFilenameGuard.DuplicateFilenameMessage);
+            return DuplicateFilenameRejection();
 
         var file = new AccreditationApplicationFile
         {

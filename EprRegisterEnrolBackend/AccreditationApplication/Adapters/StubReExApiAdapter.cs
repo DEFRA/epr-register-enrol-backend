@@ -324,14 +324,34 @@ public class StubReExApiAdapter(
         CancellationToken cancellationToken = default
     )
     {
+        var holder = await GetRegistrationHolderAsync(organisationId, registrationId, cancellationToken);
+        return holder.IsSuccess
+            ? ReExResult<string?>.Success(holder.Value!.Name, 200)
+            : ReExResult<string?>.Fail(holder.Error!, holder.StatusCode);
+    }
+
+    // As elsewhere in the stub, the organisation's number is its id: a local organisation is known by it throughout.
+    public async Task<ReExResult<RegistrationHolder>> GetRegistrationHolderAsync(
+        string organisationId,
+        string registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
         if (TestOrganisationsConfig.IsTestOrganisation(organisationId))
-            return ReExResult<string?>.Success($"E2E Organisation {organisationId}", 200);
+            return ReExResult<RegistrationHolder>.Success(
+                new RegistrationHolder(
+                    $"E2E Organisation {organisationId}",
+                    organisationId,
+                    TestOrganisationNumber(organisationId)
+                ),
+                200
+            );
 
         var org = int.TryParse(organisationId, out var orgIdInt)
             ? await fakeOrgs.GetByOrgIdAsync(orgIdInt)
             : null;
         if (org?.Registrations?.Any(r => r.Id.ToString() == registrationId) != true)
-            return ReExResult<string?>.Fail(
+            return ReExResult<RegistrationHolder>.Fail(
                 new ReExError(
                     ReExErrorKind.NotFound,
                     $"Organisation {organisationId} does not hold registration {registrationId}"
@@ -339,7 +359,10 @@ public class StubReExApiAdapter(
                 404
             );
 
-        return ReExResult<string?>.Success(org.CompanyDetails?.Name, 200);
+        return ReExResult<RegistrationHolder>.Success(
+            new RegistrationHolder(org.CompanyDetails?.Name, organisationId, orgIdInt),
+            200
+        );
     }
 
     public async Task<ReExResult<Nation>> GetNationAsync(
