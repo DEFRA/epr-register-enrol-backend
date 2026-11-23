@@ -125,6 +125,174 @@ public class CaseManagementAccreditationSummaryEndpointTests
         plan.GetProperty("priceSupportPercent").GetInt32().Should().Be(40);
     }
 
+    private static OverseasSiteModel Site(int siteId, string? orsId, string name, bool selected = true) =>
+        new()
+        {
+            SiteId = siteId,
+            OrsId = orsId,
+            SiteName = name,
+            Selected = selected,
+        };
+
+    private async Task<JsonElement> GetBody(AccreditationApplicationModel app)
+    {
+        _factory.FakePersistence.Seed(app);
+        var response = await _client.GetAsync(Url(app.OrganisationId, app.ApplicationId!), Ct);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        return await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+    }
+
+    [Fact]
+    public async Task AnOverseasSite_AnswersItsDetails()
+    {
+        var app = ApprovedExporter();
+        app.OverseasSites = new() { Sites =
+        [
+            new OverseasSiteModel
+            {
+                SiteId = 7,
+                OrsId = "001",
+                SiteName = "Speira GmbH",
+                SiteAddress = "Flat line",
+                AddressLine1 = "1 Test Strasse",
+                AddressLine2 = "Block B",
+                TownOrCity = "Bremen",
+                Country = "Germany",
+                Coordinates = "51.847,7.123",
+                ContactName = "Hans Contact",
+                ContactEmail = "hans@example.de",
+                ContactPhone = "+49 123",
+                OperationCodes = ["R4", "R5"],
+                Code1 = "B1010",
+                Code2 = "B1020",
+                Code3 = "B1030",
+                RepatriatedLoads = "As per article 18",
+                ConditionsOfExport = true,
+                IsEu = true,
+                IsOecd = false,
+                Selected = true,
+            },
+        ] };
+
+        var body = await GetBody(app);
+
+        var site = body.GetProperty("overseasSites")[0];
+        site.GetProperty("siteId").GetInt32().Should().Be(7);
+        site.GetProperty("orsId").GetString().Should().Be("001");
+        site.GetProperty("siteName").GetString().Should().Be("Speira GmbH");
+        site.GetProperty("siteAddress").GetString().Should().Be("Flat line");
+        site.GetProperty("addressLine1").GetString().Should().Be("1 Test Strasse");
+        site.GetProperty("addressLine2").GetString().Should().Be("Block B");
+        site.GetProperty("townOrCity").GetString().Should().Be("Bremen");
+        site.GetProperty("country").GetString().Should().Be("Germany");
+        site.GetProperty("coordinates").GetString().Should().Be("51.847,7.123");
+        site.GetProperty("contactName").GetString().Should().Be("Hans Contact");
+        site.GetProperty("contactEmail").GetString().Should().Be("hans@example.de");
+        site.GetProperty("contactPhone").GetString().Should().Be("+49 123");
+        site.GetProperty("operationCodes").EnumerateArray().Select(e => e.GetString()).Should().Equal("R4", "R5");
+        site.GetProperty("code1").GetString().Should().Be("B1010");
+        site.GetProperty("code2").GetString().Should().Be("B1020");
+        site.GetProperty("code3").GetString().Should().Be("B1030");
+        site.GetProperty("repatriatedLoads").GetString().Should().Be("As per article 18");
+        site.GetProperty("conditionsOfExport").GetBoolean().Should().BeTrue();
+        site.GetProperty("isEu").GetBoolean().Should().BeTrue();
+        site.GetProperty("isOecd").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AnOverseasSite_CarriesOnlyTheAllowListedFields_NoNewSiteMarkers()
+    {
+        var app = ApprovedExporter();
+        app.OverseasSites = new() { Sites = [Site(1, "001", "Speira GmbH")] };
+        app.OverseasSites.Sites[0].IsNewSite = true;
+        app.OverseasSites.Sites[0].RegisteredNowAccredited = true;
+        app.OverseasSites.Sites[0].ValidFrom = "2026-01-01T00:00:00Z";
+
+        var body = await GetBody(app);
+
+        body.GetProperty("overseasSites")[0]
+            .EnumerateObject()
+            .Select(p => p.Name)
+            .Should()
+            .BeEquivalentTo(
+                "siteId",
+                "orsId",
+                "siteName",
+                "siteAddress",
+                "addressLine1",
+                "addressLine2",
+                "townOrCity",
+                "country",
+                "coordinates",
+                "contactName",
+                "contactEmail",
+                "contactPhone",
+                "operationCodes",
+                "code1",
+                "code2",
+                "code3",
+                "repatriatedLoads",
+                "conditionsOfExport",
+                "isEu",
+                "isOecd"
+            );
+        body.GetRawText()
+            .Should()
+            .NotContainEquivalentOf("isNewSite")
+            .And.NotContainEquivalentOf("registeredNowAccredited")
+            .And.NotContainEquivalentOf("validFrom")
+            .And.NotContainEquivalentOf("selected");
+    }
+
+    [Fact]
+    public async Task OnlySelectedSitesAreAnswered_ARequestedButUnselectedOrsIsAbsent()
+    {
+        var app = ApprovedExporter();
+        app.OverseasSites = new() { Sites =
+        [
+            Site(1, "001", "Granted site"),
+            Site(2, "002", "Requested, not yet granted", selected: false),
+            Site(3, "003", "Another granted site"),
+        ] };
+
+        var body = await GetBody(app);
+
+        body.GetProperty("overseasSites")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("siteName").GetString())
+            .Should()
+            .Equal("Granted site", "Another granted site");
+    }
+
+    [Fact]
+    public async Task Sites_AreOrderedByOrsIdThenSiteId_AsTheAccreditationApiOrdersThem()
+    {
+        var app = ApprovedExporter();
+        app.OverseasSites = new() { Sites =
+        [
+            Site(9, "002", "C"),
+            Site(5, "001", "B"),
+            Site(2, "002", "A"),
+            Site(3, "001", "D"),
+        ] };
+
+        var body = await GetBody(app);
+
+        body.GetProperty("overseasSites")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("siteId").GetInt32())
+            .Should()
+            .Equal(3, 5, 2, 9);
+    }
+
+    [Fact]
+    public async Task AnApplicationWithNoSites_AnswersAnEmptyList()
+    {
+        var body = await GetBody(ApprovedExporter());
+
+        body.GetProperty("overseasSites").GetArrayLength().Should().Be(0);
+    }
+
     [Fact]
     public async Task APrnsSection_CarriesOnlyTheBandAndAuthorisers_AndAnAuthoriserOnlyItsNameAndEmail()
     {
@@ -187,7 +355,8 @@ public class CaseManagementAccreditationSummaryEndpointTests
                 "siteAddress",
                 "companyRegisteredAddress",
                 "prns",
-                "businessPlan"
+                "businessPlan",
+                "overseasSites"
             );
         var raw = body.GetRawText();
         raw.Should().NotContain("SECRET").And.NotContain("submitter@example.com").And.NotContain("01234567");

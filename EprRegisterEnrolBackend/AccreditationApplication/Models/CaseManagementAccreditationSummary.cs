@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.AccreditationApi;
 namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 
 /// <summary>
@@ -18,7 +19,8 @@ public sealed record CaseManagementAccreditationSummary(
     string? SiteAddress,
     string? CompanyRegisteredAddress,
     CaseManagementSummaryPrns Prns,
-    CaseManagementSummaryBusinessPlan BusinessPlan
+    CaseManagementSummaryBusinessPlan BusinessPlan,
+    IReadOnlyList<CaseManagementSummarySite> OverseasSites
 )
 {
     public static CaseManagementAccreditationSummary From(AccreditationApplicationModel application) =>
@@ -34,7 +36,8 @@ public sealed record CaseManagementAccreditationSummary(
             application.SiteAddress,
             application.CompanyRegisteredAddress,
             CaseManagementSummaryPrns.From(application.Prns),
-            CaseManagementSummaryBusinessPlan.From(application.BusinessPlan)
+            CaseManagementSummaryBusinessPlan.From(application.BusinessPlan),
+            CaseManagementSummarySite.AccreditedFrom(application)
         );
 }
 
@@ -97,5 +100,73 @@ public sealed record CaseManagementSummaryBusinessPlan(
             plan.NewMarketsDetail,
             plan.NewUsesDetail,
             plan.OtherDetail
+        );
+}
+
+/// <summary>
+/// RA-769: an overseas reprocessing site of the summary, shaped like the work item payload's site (so Case
+/// Management reads it with the code it already has), minus everything that is not a fact about the accredited site:
+/// <c>IsNewSite</c> and <c>RegisteredNowAccredited</c> (both stay true for the whole year after grant, so would
+/// mark every site as new), <c>Selected</c> (only selected sites are returned) and the ReEx <c>ValidFrom</c>.
+/// Interim sites and BES evidence files are added by later tasks.
+/// </summary>
+public sealed record CaseManagementSummarySite(
+    int SiteId,
+    string? OrsId,
+    string SiteName,
+    string? SiteAddress,
+    string? AddressLine1,
+    string? AddressLine2,
+    string? TownOrCity,
+    string? Country,
+    string? Coordinates,
+    string? ContactName,
+    string? ContactEmail,
+    string? ContactPhone,
+    IReadOnlyList<string> OperationCodes,
+    string? Code1,
+    string? Code2,
+    string? Code3,
+    string? RepatriatedLoads,
+    bool? ConditionsOfExport,
+    bool IsEu,
+    bool IsOecd
+)
+{
+    /// <summary>
+    /// The sites on the accreditation: only those selected (a requested ORS is absent until it is granted),
+    /// ordered by ORS id then site id, which is how the Accreditation API orders and defines them.
+    /// </summary>
+    public static IReadOnlyList<CaseManagementSummarySite> AccreditedFrom(AccreditationApplicationModel application) =>
+        [
+            .. AccreditationApiMapper
+                .AccreditedSites(application)
+                .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+                .ThenBy(site => site.SiteId)
+                .Select(From),
+        ];
+
+    private static CaseManagementSummarySite From(OverseasSiteModel site) =>
+        new(
+            site.SiteId,
+            site.OrsId,
+            site.SiteName,
+            site.SiteAddress,
+            site.AddressLine1,
+            site.AddressLine2,
+            site.TownOrCity,
+            site.Country,
+            site.Coordinates,
+            site.ContactName,
+            site.ContactEmail,
+            site.ContactPhone,
+            [.. site.OperationCodes],
+            site.Code1,
+            site.Code2,
+            site.Code3,
+            site.RepatriatedLoads,
+            site.ConditionsOfExport,
+            site.IsEu,
+            site.IsOecd
         );
 }
