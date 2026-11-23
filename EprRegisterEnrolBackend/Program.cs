@@ -219,13 +219,6 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<AccreditationReferenceCorrectionMigration>();
 
-    // RA-764: one-off rename of organisation 500069 on its 2027 accreditation data.
-    // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
-    builder.Services.Configure<OrganisationNameCorrectionOptions>(
-        builder.Configuration.GetSection(OrganisationNameCorrectionOptions.SectionName)
-    );
-    builder.Services.AddHostedService<OrganisationNameCorrectionMigration>();
-
     // RA-784: one-off backfill of last year's accreditation number onto 2027 applications that don't
     // hold one, from the 2026 public register. It never replaces a number already held.
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.

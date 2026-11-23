@@ -544,39 +544,12 @@ public class AccreditationApplicationPersistence(
             .Find(a => a.AccreditationReference == accreditationReference)
             .ToListAsync(cancellationToken);
 
-    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndYearAsync(
-        int orgId,
-        int year,
-        CancellationToken cancellationToken = default
-    ) =>
-        await Collection
-            .Find(a => a.OrgId == orgId && a.Year == year)
-            .SortBy(a => a.Id)
-            .ToListAsync(cancellationToken);
-
     public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByYearAsync(
         int year,
         CancellationToken cancellationToken = default
     ) =>
         await Collection
             .Find(a => a.Year == year)
-            .SortBy(a => a.Id)
-            .ToListAsync(cancellationToken);
-
-    public async Task<
-        IReadOnlyList<AccreditationApplicationModel>
-    > GetByRegistrationReferencesAndYearAsync(
-        IReadOnlyCollection<string> registrationReferences,
-        int year,
-        CancellationToken cancellationToken = default
-    ) =>
-        await Collection
-            .Find(
-                Builders<AccreditationApplicationModel>.Filter.In(
-                    a => a.RegistrationReference,
-                    registrationReferences
-                ) & Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Year, year)
-            )
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);
 
