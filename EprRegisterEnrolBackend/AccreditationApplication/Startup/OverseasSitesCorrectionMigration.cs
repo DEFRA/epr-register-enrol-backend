@@ -260,31 +260,13 @@ public class OverseasSitesCorrectionMigration(
             if (workItem.StateId is null)
                 return Failed(application, workItemId, "state-missing", unmatchedCount);
 
-            var outcome = workItem.IsDecided ? Outcome.SkippedDecided
-                : workItem.DulyMade ? Outcome.SkippedDulyMade
-                : apply ? Outcome.Updated
-                : Outcome.WouldUpdate;
-            IReadOnlyList<CaseWorkingSiteIds> sites = toRemove;
-
-            if (outcome == Outcome.Updated)
-            {
-                var result = await caseWorking.RemoveOverseasSitesAsync(
-                    workItemId,
-                    toRemove,
-                    Reason,
-                    cancellationToken
-                );
-                (outcome, sites) = result.Outcome switch
-                {
-                    RemoveOverseasSitesOutcome.Updated => (Outcome.Updated, result.Removed),
-                    RemoveOverseasSitesOutcome.Unchanged => (Outcome.Unchanged, result.Removed),
-                    RemoveOverseasSitesOutcome.Decided => (Outcome.SkippedDecided, toRemove),
-                    RemoveOverseasSitesOutcome.DulyMade => (Outcome.SkippedDulyMade, toRemove),
-                    _ => throw new InvalidOperationException(
-                        $"Unhandled remove outcome {result.Outcome}"
-                    ),
-                };
-            }
+            var (outcome, sites) = await CorrectAsync(
+                caseWorking,
+                workItemId,
+                PlannedOutcome(workItem, apply),
+                toRemove,
+                cancellationToken
+            );
 
             LogOutcome(outcome, application, workItemId, sites);
             return new Result(outcome, unmatchedCount);
@@ -305,6 +287,45 @@ public class OverseasSitesCorrectionMigration(
             );
             return new Result(Outcome.Failed, unmatchedCount);
         }
+    }
+
+    // Decided is checked before duly made, as the Case Management service does.
+    private static Outcome PlannedOutcome(CaseWorkingWorkItem workItem, bool apply)
+    {
+        if (workItem.IsDecided)
+            return Outcome.SkippedDecided;
+        if (workItem.DulyMade)
+            return Outcome.SkippedDulyMade;
+        return apply ? Outcome.Updated : Outcome.WouldUpdate;
+    }
+
+    // Calls the endpoint only for a planned update; otherwise the plan stands, with the sites that
+    // would have been removed. Returns the outcome and the site ids to log.
+    private static async Task<(Outcome Outcome, IReadOnlyList<CaseWorkingSiteIds> Sites)> CorrectAsync(
+        ICaseWorkingApiAdapter caseWorking,
+        Guid workItemId,
+        Outcome planned,
+        List<CaseWorkingSiteIds> toRemove,
+        CancellationToken cancellationToken
+    )
+    {
+        if (planned != Outcome.Updated)
+            return (planned, toRemove);
+
+        var result = await caseWorking.RemoveOverseasSitesAsync(
+            workItemId,
+            toRemove,
+            Reason,
+            cancellationToken
+        );
+        return result.Outcome switch
+        {
+            RemoveOverseasSitesOutcome.Updated => (Outcome.Updated, result.Removed),
+            RemoveOverseasSitesOutcome.Unchanged => (Outcome.Unchanged, result.Removed),
+            RemoveOverseasSitesOutcome.Decided => (Outcome.SkippedDecided, toRemove),
+            RemoveOverseasSitesOutcome.DulyMade => (Outcome.SkippedDulyMade, toRemove),
+            _ => throw new InvalidOperationException($"Unhandled remove outcome {result.Outcome}"),
+        };
     }
 
     // Splits the sites the work item holds into those to remove (every matching site here is
