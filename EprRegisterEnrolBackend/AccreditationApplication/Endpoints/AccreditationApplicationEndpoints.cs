@@ -166,6 +166,8 @@ public static class AccreditationApplicationEndpoints
                     .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
                     .RequireAuthenticatedUser()
             );
+        // RA-769: the read-only accreditation summary for the case's Accreditation summary tab.
+        CaseManagementAccreditationSummaryEndpoint.Map(group);
         // RA-448: regulator/caseworker actions, same CaseManagement caller identity as the
         // two routes above - not something the operator-facing frontend calls (AC7).
         group

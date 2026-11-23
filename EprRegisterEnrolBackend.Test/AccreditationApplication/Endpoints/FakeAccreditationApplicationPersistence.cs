@@ -767,6 +767,11 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             // through this fake, latent until GetById's backfill-and-persist logic needed to see
             // a previously-stored value survive a round trip through this test double.
             OrgId = src.OrgId,
+            // RA-769: the same latent drop again - the case management accreditation summary reads these four.
+            OrganisationName = src.OrganisationName,
+            WasteProcessingType = src.WasteProcessingType,
+            SiteAddress = src.SiteAddress,
+            CompanyRegisteredAddress = src.CompanyRegisteredAddress,
             Year = src.Year,
             RegistrationId = src.RegistrationId,
             IsExporter = src.IsExporter,
