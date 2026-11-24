@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
@@ -24,13 +23,6 @@ public sealed class LastYearsAccreditationBackfillOptions
     // effect; logged with every applied change so the authorisation outlives the env var.
     public string? SpotCheckConfirmedBy { get; set; }
 
-    // How long the read of the year's applications may take before the run gives up and logs why, as hh:mm:ss
-    // ("00:02:00"; a bare "120" would mean 120 days). Raise it if a legitimately slow read is cut short.
-    public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromMinutes(2);
-
-    // How long to wait after the application has started before reading, as hh:mm:ss, up to a day. On ext-test the
-    // backfill's first read, straight after start-up, stalled, while the RA-651 check's, 30 seconds later, did not.
-    public TimeSpan StartDelay { get; set; } = TimeSpan.FromSeconds(30);
 }
 
 // RA-784: a 2027 renewal's accreditation number is last year's accreditation number with the year
@@ -133,50 +125,30 @@ public class LastYearsAccreditationBackfillMigration(
         await Task.Yield();
         try
         {
-            // Run once start-up has finished, not during it: on ext-test the backfill stalled silently when it ran
-            // during start-up, alongside index set-up, seeds and diagnostics.
-            await WaitForApplicationStartedAsync(stoppingToken);
-            await WaitTheStartDelayAsync(stoppingToken);
             await RunAsync(stoppingToken);
         }
-        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+        catch (Exception ex) when (stoppingToken.IsCancellationRequested)
+        {
+            // Logged, not swallowed: on ext-test the run went silent part-way, and a stop is the one ending that would
+            // otherwise leave no trace. The stop signal is also set when only this service is stopped, so say whether
+            // the host itself is stopping rather than assume it.
+            var hostStopping = serviceProvider
+                .GetService<IHostApplicationLifetime>()
+                ?.ApplicationStopping.IsCancellationRequested;
+            logger.LogWarning(
+                ex,
+                "RA-784 last year's accreditation backfill stopped part-way: its stop signal was set "
+                    + "(HostStopping={HostStopping}, {Error})",
+                hostStopping,
+                ex.GetType().Name
+            );
+        }
+        catch (Exception ex)
         {
             // Every plan runs before any write, and each write is independently guarded, so a
             // failure part-way leaves a state the next run re-plans from safely.
             logger.LogError(ex, "RA-784 last year's accreditation backfill failed");
         }
-    }
-
-    private async Task WaitForApplicationStartedAsync(CancellationToken stoppingToken)
-    {
-        var lifetime = serviceProvider.GetService<IHostApplicationLifetime>();
-        if (lifetime is null || lifetime.ApplicationStarted.IsCancellationRequested)
-            return;
-
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var onStarted = lifetime.ApplicationStarted.Register(() => started.TrySetResult());
-        await using var onStopping = stoppingToken.Register(() => started.TrySetCanceled(stoppingToken));
-        await started.Task;
-    }
-
-    // Only when enabled, so a switched-off backfill doesn't sit waiting.
-    private async Task WaitTheStartDelayAsync(CancellationToken stoppingToken)
-    {
-        if (!options.Value.Enabled)
-            return;
-
-        var delay = options.Value.StartDelay;
-        if (delay < TimeSpan.Zero || delay > TimeSpan.FromDays(1))
-            throw new InvalidOperationException(
-                $"{LastYearsAccreditationBackfillOptions.SectionName}:StartDelay must be from zero to a day as "
-                    + $"hh:mm:ss (for example 00:00:30), not {delay}"
-            );
-        if (delay == TimeSpan.Zero)
-            return;
-
-        if (logger.IsEnabled(LogLevel.Information))
-            logger.LogInformation("RA-784 last year's accreditation backfill: waiting {Delay} after start-up", delay);
-        await Task.Delay(delay, stoppingToken);
     }
 
     // Extracted so tests can await the run deterministically - BackgroundService's StartAsync only
@@ -196,12 +168,7 @@ public class LastYearsAccreditationBackfillMigration(
 
         var persistence =
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
-        var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
-        // Creating these builds the domain model stores, each of which ensures its indexes synchronously, so log once
-        // they exist: a stall before this line is in creating them, a stall after it is in the read.
-        if (logger.IsEnabled(LogLevel.Information))
-            logger.LogInformation("RA-784 {Mode}: components ready", mode);
-        var applications = await ReadApplicationsAsync(persistence, mode, cancellationToken);
+        var applications = await persistence.GetByYearAsync(AccreditationYear, cancellationToken);
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation(
                 "RA-784 {Mode}: read {Count} {Year} applications",
@@ -222,6 +189,9 @@ public class LastYearsAccreditationBackfillMigration(
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation("RA-784 {Mode}: planned {Count} applications", mode, plans.Count);
 
+        // Only an apply writes, so only an apply needs the unit of work.
+        var unitOfWork =
+            confirmedBy is null ? null : serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
         var writes = new List<Write>();
         var finished = false;
         try
@@ -252,99 +222,6 @@ public class LastYearsAccreditationBackfillMigration(
             ReportSummary(plans, writes, mode, finished);
         }
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
-    }
-
-    // How often a read still in progress is logged.
-    internal TimeSpan ReadProgressInterval { get; init; } = TimeSpan.FromSeconds(15);
-
-    // A read that doesn't finish in time fails the run, which ExecuteAsync logs, rather than waiting silently. The wait
-    // is abandoned when the limit passes even if the read ignores the token or blocks before handing back its task: the
-    // call runs on the thread pool, so neither holds up the limit. Such a read carries on in the background until it ends
-    // on its own, and if it then fails, its error is logged: it is the likeliest explanation of the stall. On ext-test the run logged "components ready" and then nothing, not even
-    // the timeout, so each step of the read is logged, and a warning every ReadProgressInterval while it waits.
-    private async Task<IReadOnlyList<AccreditationApplicationModel>> ReadApplicationsAsync(
-        IAccreditationApplicationPersistence persistence,
-        string mode,
-        CancellationToken cancellationToken
-    )
-    {
-        var limit = options.Value.ReadTimeout;
-        if (limit <= TimeSpan.Zero)
-            throw new InvalidOperationException(
-                $"{LastYearsAccreditationBackfillOptions.SectionName}:ReadTimeout must be a positive duration as "
-                    + $"hh:mm:ss (for example 00:02:00), not {limit}"
-            );
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(limit);
-        if (logger.IsEnabled(LogLevel.Information))
-            logger.LogInformation(
-                "RA-784 {Mode}: reading the {Year} applications, limit {Limit}",
-                mode,
-                AccreditationYear,
-                limit
-            );
-        var started = Stopwatch.GetTimestamp();
-        var read = Task.Run(
-            async () =>
-            {
-                var pending = persistence.GetByYearAsync(AccreditationYear, timeout.Token);
-                // The call has handed back its task, which only means it reached its first wait: after this it may still be
-                // selecting a server or getting a connection, not only waiting on the database.
-                if (logger.IsEnabled(LogLevel.Information))
-                    logger.LogInformation("RA-784 {Mode}: read call returned, waiting for the result", mode);
-                return await pending;
-            },
-            CancellationToken.None
-        );
-        try
-        {
-            while (true)
-            {
-                try
-                {
-                    var applications = await read.WaitAsync(ReadProgressInterval, timeout.Token);
-                    if (logger.IsEnabled(LogLevel.Information))
-                        logger.LogInformation(
-                            "RA-784 {Mode}: read finished in {Elapsed}",
-                            mode,
-                            Stopwatch.GetElapsedTime(started)
-                        );
-                    return applications;
-                }
-                catch (TimeoutException ex) when (ex != read.Exception?.InnerException)
-                {
-                    // Only the progress interval passing; a TimeoutException from the read itself carries on.
-                    logger.LogWarning(
-                        "RA-784 {Mode}: still reading the {Year} applications after {Elapsed}",
-                        mode,
-                        AccreditationYear,
-                        Stopwatch.GetElapsedTime(started)
-                    );
-                }
-            }
-        }
-        catch (OperationCanceledException)
-            when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-        {
-            // Nothing awaits the abandoned read from here on, so log its error if it fails later. A cancellation is the
-            // limit itself, which the TimeoutException below already reports.
-            _ = read.ContinueWith(
-                abandoned =>
-                    logger.LogError(
-                        abandoned.Exception?.InnerException,
-                        "RA-784 {Mode}: the abandoned read of the {Year} applications failed after {Elapsed}",
-                        mode,
-                        AccreditationYear,
-                        Stopwatch.GetElapsedTime(started)
-                    ),
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default
-            );
-            throw new TimeoutException(
-                $"Reading the {AccreditationYear} applications took longer than {limit}, so nothing was planned"
-            );
-        }
     }
 
     // Apply takes effect only with a named reviewer; otherwise the run stays a dry run.
@@ -499,7 +376,7 @@ public class LastYearsAccreditationBackfillMigration(
     // Null when no write was attempted: a dry run, or a plan that isn't Added.
     private async Task<Write?> ReportAndApplyAsync(
         IAccreditationApplicationPersistence persistence,
-        IDualWriteUnitOfWork unitOfWork,
+        IDualWriteUnitOfWork? unitOfWork,
         Plan plan,
         string mode,
         string? confirmedBy,
@@ -527,7 +404,7 @@ public class LastYearsAccreditationBackfillMigration(
             );
         }
 
-        if (confirmedBy is null || plan.Outcome != Outcome.Added)
+        if (confirmedBy is null || unitOfWork is null || plan.Outcome != Outcome.Added)
             return null;
 
         return await AddLastYearsAccreditationNumberAsync(
