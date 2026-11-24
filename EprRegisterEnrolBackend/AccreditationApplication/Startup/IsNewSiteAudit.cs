@@ -10,8 +10,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // Off unless Diagnostics:Ra292IsNewSiteAudit is true; then Diagnostics:Ra292DeployedAt is required.
 // Enable, boot, read the log, turn it off: docs/diagnostics/ra-794-isnewsite-correction.md.
 //
-// A BackgroundService like ChargeCorrectionMigration, so a Mongo or ReEx failure logs rather than
-// crash-looping the host. Nothing is resolved until it is enabled.
+// A BackgroundService, so a Mongo or ReEx failure logs rather than crash-looping the host.
+// Nothing is resolved until it is enabled.
 public sealed class IsNewSiteAudit(
     IServiceProvider serviceProvider,
     IConfiguration configuration,

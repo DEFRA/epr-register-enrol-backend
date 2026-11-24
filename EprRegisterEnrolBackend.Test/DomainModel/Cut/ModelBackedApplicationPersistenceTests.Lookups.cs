@@ -301,34 +301,6 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         Assert.Equal(legacy.Id, model!.Id);
     }
 
-    // RA-766's charge correction: open applications with a work item, Queried left out, in id order.
-    [Fact]
-    public async Task GetOpenNotQueriedWithCaseManagementWorkItem_FindsTheSameApplications()
-    {
-        var data = await LookupDataAsync();
-        var queried = await MigratedAsync(
-            Variant(
-                Day1.AddDays(5),
-                a =>
-                {
-                    a.RegistrationId = OtherRegistrationId;
-                    a.RegistrationReference = "R27EX0000001P";
-                    a.Year = 2028;
-                    a.ApplicationStatus = ApplicationStatus.Queried;
-                    a.CaseManagementWorkItemId = Guid.NewGuid();
-                },
-                OtherOrganisationId
-            )
-        );
-
-        var legacy = await _legacy.GetOpenNotQueriedWithCaseManagementWorkItemAsync(Ct);
-        var model = await _model.GetOpenNotQueriedWithCaseManagementWorkItemAsync(Ct);
-
-        Assert.Equal([data.OtherOrganisation.Id], Ids(legacy));
-        Assert.Equal(Ids(legacy), Ids(model));
-        Assert.DoesNotContain(queried.Id, Ids(model));
-    }
-
     [Fact]
     public async Task GetByCaseManagementWorkItemId_Unknown_IsNull()
     {
