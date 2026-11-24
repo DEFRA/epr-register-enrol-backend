@@ -213,6 +213,94 @@ six-digit org number (900000–999999) and GOV.UK Notify's
 `ENVIRONMENT` is the CDP platform environment name, and it is read straight
 from the process environment.
 
+### Logging
+
+Every log line goes through Serilog (`Serilog` in `appsettings.json`) and out to stdout as an Elastic Common Schema
+(ECS) JSON line, which CDP ships to OpenSearch. What CDP keeps of each line, and how to search it, is in
+[docs/monitoring.md](docs/monitoring.md).
+
+#### Burst smoothing
+
+Lines don't go straight to the console. `BurstSmoothingSink`
+([`Utils/Logging`](EprRegisterEnrolBackend/Utils/Logging/BurstSmoothingSink.cs)), the `SmoothBursts` entry in
+`Serilog:WriteTo`, queues every line and passes it on to the console sink at a steady rate, in order. Logging never
+waits for it.
+
+Why: CDP's log shipping looks to drop bursts. What was seen on ext-test, which logs at `Information` (CDP's
+`environments/ext-test/defaults.env` in cdp-app-config sets `Serilog__MinimumLevel__Default`, `__Override__Microsoft`
+and `__Override__System` to `Information` for every service, over this repo's `Warning`):
+
+- The 0.211.0 containers logged their start-up lines ("Now listening", "Application started", "Seeded 9 test
+  accreditations", "seed complete").
+- The 0.213.0 container ran the RA-784 backfill, which wrote about 400 lines (554 KB) in under 100 ms. Only its first
+  line, `starting`, reached OpenSearch. None of the start-up lines logged in the same second did, although the container
+  carried on serving requests and logged 256 request lines afterwards. None of them were in `cdp-broken-logs`, so they
+  were lost before indexing.
+- After #293 packed and paced the same backfill (50 lines, then a 500 ms pause), its next run on ext-test showed its
+  results in OpenSearch.
+
+The path is stdout, then Docker's `awsfirelens` log driver with its default buffer, then CDP's Fluent Bit sidecar (1 MB
+chunks, two retries before a chunk is discarded), then OpenSearch, and AWS warns that Docker "might run out of buffer
+memory and discard buffer messages". This is the working explanation, not a proven cause: the sidecar logs its drops
+to a CloudWatch group we can't see, and nobody has checked CDP's raw copy of the logs in S3. If the lost lines turn out
+to be in S3, they were lost after Fluent Bit, and smoothing stdout doesn't help. management-be got 534 lines through in
+one second, so it is the burst, not the count, that looks to matter.
+
+The settings are the `Args` of `Serilog:WriteTo:0` (`appsettings.json` sets them explicitly; the code falls back to the
+same values). Override one with an environment variable such as `Serilog__WriteTo__0__Args__linesPerSecond`. A value
+the sink can't run with (zero, negative, `burst` over `queueCapacity`, a flush timeout of zero or over 20 seconds) stops
+the service starting, with an error naming the setting. A `TimeSpan` is read with `TimeSpan.Parse`, so write
+`00:00:05`: a bare `5` means 5 days, and is refused.
+
+The defaults are judgements, not measured limits. `burst` 50 is what #293 wrote at a time on ext-test, and got through.
+`linesPerSecond` 200 is double #293's rate, to leave room for request logging, and well under the 534 lines a second
+management-be got through. The sink counts lines, not bytes, because it can't know a line's size before the console sink
+formats it. So a burst of 50 packed lines of about 10 KB is still about 500 KB at once, which is why one-off jobs must
+keep their output small too (below).
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `linesPerSecond` | `200` | The most lines written a second, sustained |
+| `burst` | `50` | Lines that go out at once after a quiet spell, before the rate applies (a token bucket). At most `queueCapacity` |
+| `queueCapacity` | `10000` | Lines waiting to be written. A line that finds the queue full is dropped |
+| `shutdownFlushTimeout` | `00:00:05` | How long shutdown waits for the queue to be written. At most `00:00:20`. Shutdown waits for the sink's reader for at most this plus 1 second (see below) |
+
+Nothing is dropped silently while the service is running or stopping normally. Dropped lines are counted, and the next
+line written is preceded by one Error line, `Dropped <n> log lines because the log queue was full or closed`. At shutdown, lines still queued after `shutdownFlushTimeout`
+are reported, with any refused lines not yet reported, in one final Error line, `Dropped <n> log lines at shutdown: ...`.
+Both have `log.logger` `EprRegisterEnrolBackend.Utils.Logging.BurstSmoothingSink`, and are at Error so that lost lines
+are noticed: the existing `5xx and Errors` alert reports them. If, after `shutdownFlushTimeout`, the console sink is still stuck
+writing a line 1 second after being told to stop (for example stdout has stopped draining), shutdown doesn't wait for
+it: the final report goes to stderr through Serilog's `SelfLog` instead, and nothing more is written to the console. So
+shutdown never waits for the sink's reader longer than `shutdownFlushTimeout` plus 1 second (6 seconds by default).
+Writing the final report and closing the console sink after that aren't timed, the same as with a plain console sink.
+The flush runs when the host disposes the logger, after the hosted services have stopped, inside ECS's 30-second stop
+timeout. If the console sink itself fails on a line, the line is lost, the failure goes to stderr through Serilog's
+`SelfLog`, and logging carries on.
+
+The trade-off: a line is on stdout only once the reader has written it, not when the code logs it. If the process dies
+without disposing the logger (an unhandled exception on a background thread, an out-of-memory kill, or ECS killing the
+task after its stop timeout), whatever is still queued is lost with no report, and those can be the lines that explain
+the crash. The queue is usually close to empty, so this is a few lines at most outside a burst.
+
+The console sink formats each line on the reader, not on the thread that logged it. The ECS formatter would read the
+trace and the thread from the thread formatting the line, so the formatter is `CdpEcsTextFormatter`
+([`Utils/Logging`](EprRegisterEnrolBackend/Utils/Logging/CdpEcsTextFormatter.cs)). It writes `trace.id` and `span.id`
+from what Serilog records on the line when it is logged, and `process.thread.id` and `process.thread.name` from the
+thread the sink records then. Everything else is the stock `EcsTextFormatter`.
+
+Development uses the same entry: `appsettings.Development.json` has no `WriteTo` of its own, because .NET merges arrays
+by index and one would merge into this entry. So `docker compose` and the end-to-end stacks smooth bursts too.
+
+#### Logging from one-off jobs, migrations and diagnostics
+
+The sink caps the rate, not the number of lines, and a long burst still fills the queue. So a job that logs a lot:
+
+- logs its summary (counts, outcome) first, so the result is in the log even if its detail is not;
+- packs detail into fewer lines, several records to a line, keeping each line well under the 16 KB at which the
+  container runtime splits a log line (aim for about 10 KB; the RA-784 backfill packs 40 register rows a line);
+- never writes hundreds of lines back to back.
+
 ### Accreditation Applications API
 
 RA-101 adds an `accreditationApplications` MongoDB collection and a full REST API for managing operator accreditation applications.

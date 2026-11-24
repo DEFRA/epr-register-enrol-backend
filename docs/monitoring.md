@@ -43,6 +43,7 @@ or status field of our own. The client name is also partly masked in the message
 | The check found nothing | same | info | message `Every approved accreditation from 2027 can be served...` |
 | The check itself failed (for example the database was unreachable) | same | warning | message starts `Checking for approved accreditations the accreditation API cannot serve failed`. This is **not** a data problem, and the next run retries, so keep it out of the "cannot serve" alert; it shares the logger and the words "cannot serve" with the error line |
 | A CDP Uploader scan callback for a `fileUploadId` with no pending-upload record | `EprRegisterEnrolBackend.CdpUploader.Services.PendingUploadService` | **error** | message starts `Upload <fileUploadId> completion rejected: no pending upload record`. The record expired (24 hours after the upload started) or the call was not a real CDP callback; nothing is stored and the callback gets a 404. CDP Uploader retries a non-2xx callback, so one expired upload can log this repeatedly; the existing `5xx and Errors` alert reports it |
+| Log lines dropped because the log queue was full or closed (see the README's Logging section) | `EprRegisterEnrolBackend.Utils.Logging.BurstSmoothingSink` | **error** | message starts `Dropped` and gives the count; at error so the existing `5xx and Errors` alert reports it. Counts and dashboards built from log lines undercount by that many |
 
 Auth failure codes: `missing_header`, `invalid_signature`, `expired_timestamp`, `reused_nonce` and
 the others in `docs/reex-api-onboarding.md`. They appear in the message text.
@@ -122,6 +123,7 @@ Queries in Lucene, using only fields CDP keeps. Check them in Explore first.
 | A record dropped from a response | `log.logger:"EprRegisterEnrolBackend.AccreditationApi" AND message:"Dropped a malformed accreditation"` |
 | Records the API cannot serve | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND message:"noOrganisationNumber"` (the counts are only in the error line, so this does not match the failure warning; add `AND log.level:error` once you have confirmed the exact value) |
 | The check failed to run | `log.logger:"EprRegisterEnrolBackend.AccreditationApi.UnservableAccreditationCheckService" AND message:"Checking for approved accreditations"` |
+| Dropped log lines | `log.logger:"EprRegisterEnrolBackend.Utils.Logging.BurstSmoothingSink"` |
 
 ## Dashboard: one row per consumer
 
@@ -147,7 +149,7 @@ window against a threshold, and fire at 1.
 
 | Alert | Fires when | Notes |
 | --- | --- | --- |
-| `5xx and Errors` (exists) | any 5xx or any error-level line | Also reports **records the API cannot serve**, since that check logs at error. Also reports a **CDP Uploader callback for an expired or unknown upload** (logged at error, answered 404). It repeats while CDP retries the 404, every SQS visibility timeout for up to a week |
+| `5xx and Errors` (exists) | any 5xx or any error-level line | Also reports **records the API cannot serve**, since that check logs at error. Also reports a **CDP Uploader callback for an expired or unknown upload** (logged at error, answered 404). It repeats while CDP retries the 404, every SQS visibility timeout for up to a week. Also reports **dropped log lines** (`Dropped <n> log lines ...`, logged at error by the burst smoothing sink) |
 | `Auth failures` (new) | more than 10 auth failure lines in 5 minutes | Filter by `message:"epr-ReEx-Client"` for one consumer. A burst usually means a wrong secret or a clock that is out |
 | `Slow requests` (new) | p95 of `event.duration` above 2,000,000,000 (2 seconds) for 5 minutes, per `user.id` | Only works after the deploy. Add a count condition (at least 20 requests) so a quiet period does not trigger it |
 | `Dropped records` (new, optional) | any dropped record line in 5 minutes | Rarely fires, because the query already leaves most such records out. The daily check is the main signal |

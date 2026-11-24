@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Elastic.CommonSchema.Serilog;
+using EprRegisterEnrolBackend.Utils.Logging;
 using FluentAssertions;
 using Serilog.Events;
 using Serilog.Parsing;
@@ -9,7 +9,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApi;
 // RA-651: CDP keeps only a fixed set of log fields in OpenSearch, and event.duration (nanoseconds)
 // is the one numeric field a latency panel or alert can use. The ECS formatter writes it only for a
 // property named ElapsedMilliseconds, so that name is pinned here: renaming it would empty every
-// latency panel without any error.
+// latency panel without any error. Formatted with the formatter appsettings.json ships.
 public class AccessLogEcsMappingTests
 {
     private static JsonElement Format(string property, object value)
@@ -23,7 +23,7 @@ public class AccessLogEcsMappingTests
             [new LogEventProperty(property, new ScalarValue(value))]
         );
         using var writer = new StringWriter();
-        new EcsTextFormatter().Format(logEvent, writer);
+        new CdpEcsTextFormatter().Format(logEvent, writer);
         return JsonDocument.Parse(writer.ToString()).RootElement.Clone();
     }
 
