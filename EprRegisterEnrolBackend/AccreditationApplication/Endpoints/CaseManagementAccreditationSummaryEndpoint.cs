@@ -22,11 +22,7 @@ internal static class CaseManagementAccreditationSummaryEndpoint
                 Get
             )
             .WithName("GetCaseManagementAccreditationSummary")
-            .RequireAuthorization(policy =>
-                policy
-                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
-            );
+            .RequireCaseManagementCaller();
 
     private static async Task<IResult> Get(
         string organisationId,
