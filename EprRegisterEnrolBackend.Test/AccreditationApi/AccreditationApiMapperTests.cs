@@ -177,6 +177,88 @@ public class AccreditationApiMapperTests
         logger.Entries.Should().BeEmpty();
     }
 
+    // ---- RA-802: overseas sites on each search item ----
+
+    private static JsonElement SearchItem(AccreditationApplicationModel application) =>
+        JsonSerializer.SerializeToElement(
+            AccreditationApiMapper
+                .ToSummaries([application], new CapturingLogger<AccreditationApiMapperTests>())
+                .Single(),
+            Web
+        );
+
+    private static AccreditationApplicationModel ExporterWithSites() =>
+        Application(
+            exporter: true,
+            configure: a =>
+                a.OverseasSites = new AccreditationApplicationOverseasSites
+                {
+                    Sites =
+                    [
+                        Site(s =>
+                        {
+                            s.SiteId = 3;
+                            s.OrsId = "002";
+                            s.InterimSites = [InterimSite(1, removed: false)];
+                        }),
+                        Site(s =>
+                        {
+                            s.SiteId = 9;
+                            s.OrsId = "003";
+                            s.Selected = false;
+                        }),
+                        Site(s =>
+                        {
+                            s.SiteId = 5;
+                            s.OrsId = "001";
+                        }),
+                    ],
+                }
+        );
+
+    [Fact]
+    public void SearchItem_ForAnExporter_HasTheSameOverseasSitesAsTheSingleAccreditation()
+    {
+        var application = ExporterWithSites();
+
+        var item = SearchItem(application).GetProperty("overseasSites");
+        var single = Accreditation(application).GetProperty("overseasSites");
+
+        item.GetRawText().Should().Be(single.GetRawText());
+        item.EnumerateArray()
+            .Select(site => site.GetProperty("orsId").GetString())
+            .Should()
+            .Equal("001", "002");
+    }
+
+    [Fact]
+    public void SearchItem_ForAnExporterWithNoSelectedSites_HasAnEmptyOverseasSites()
+    {
+        var json = SearchItem(Application(exporter: true));
+
+        json.GetProperty("overseasSites").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public void SearchItem_ForAReprocessor_HasNoOverseasSitesProperty()
+    {
+        SearchItem(Application()).TryGetProperty("overseasSites", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void SearchItem_KeepsEveryFieldTheSummaryHad()
+    {
+        var application = ExporterWithSites();
+
+        var item = SearchItem(application);
+        var summary = Summary(application);
+
+        foreach (var property in summary.EnumerateObject())
+        {
+            item.GetProperty(property.Name).GetRawText().Should().Be(property.Value.GetRawText());
+        }
+    }
+
     [Theory]
     [InlineData(GlassRecyclingProcess.Remelt, "glass_re_melt")]
     [InlineData(GlassRecyclingProcess.Other, "glass_other")]

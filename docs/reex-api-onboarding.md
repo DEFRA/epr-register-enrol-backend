@@ -92,7 +92,7 @@ registration and year. Accreditations for 2027 onwards are served.
 
 | Route | Returns |
 | --- | --- |
-| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditation summaries across all organisations (limit max 100). `year`, `organisationNumber`, `registrationNumber` and `status` (`approved`, `suspended`, `cancelled` or `withdrawn`) are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404. Results are ordered by accreditation number |
+| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditations across all organisations (limit max 100). An exporter's item carries its `overseasSites`, as getting one accreditation does; a reprocessor's has none. `year`, `organisationNumber`, `registrationNumber` and `status` (`approved`, `suspended`, `cancelled` or `withdrawn`) are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404. Results are ordered by accreditation number |
 | `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
@@ -100,7 +100,7 @@ registration and year. Accreditations for 2027 onwards are served.
 
 Notes: the shapes follow the v2 draft spec (`docs/openapi/registration-accreditation-api.v2.yaml`).
 `tonnageBand` is the operator's planned band. Signatories are returned only when getting one
-accreditation, never in search. BES evidence is not served. The
+accreditation, never in search. Search items carry `overseasSites` but no status or tonnage band history. BES evidence is not served. The
 [Response reference](#response-reference) and [Common questions](#common-questions) below give the fields and rules, including which overseas
 sites and interim sites are returned.
 
@@ -110,6 +110,8 @@ Lists are wrapped in a page: `pageNumber`, `limit`, `totalItems` and `items`. Fi
 are left out. The order of fields is not significant. **Ignore fields you do not know.**
 
 ### Accreditation (search items, and the base of the detail response)
+
+Search items also carry `overseasSites` for an exporter: see the table below.
 
 | Field | Meaning |
 | --- | --- |
@@ -122,6 +124,7 @@ are left out. The order of fields is not significant. **Ignore fields you do not
 | `wasteProcessingType` | `reprocessor` or `exporter` |
 | `latestStatus` | the latest entry of `statusHistory`, in the same shape (`status`, `effectiveFromDate`, `effectiveToDate`, `recordedAt`). It can be in the future: see below |
 | `tonnageBand` | `up_to_500`, `up_to_5000`, `up_to_10000` or `over_10000` |
+| `overseasSites` | **exporters only**: the accredited overseas sites, in the same shape and order (by `orsId`) as getting one accreditation. `[]` when none are selected; left out for a reprocessor |
 
 ### Accreditation detail: extra fields
 
@@ -339,7 +342,7 @@ are ordered by accreditation number, so the order is stable between pages.
 
 ### Which overseas sites are accredited for a registration?
 
-For an exporter, `overseasSites` in the detail response lists them. Use the site routes to page
+For an exporter, `overseasSites` on each search item and in the detail response lists them. Use the site routes to page
 them or to fetch one by `orsId`. Only sites included in the accreditation are returned: a site the
 organisation registered but did not accredit is a `404`. Withdrawn interim sites are included: see
 their `latestStatus`.
@@ -460,11 +463,16 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
 - Getting an accreditation now returns the complete accreditation: an exporter's accredited
   overseas sites, with their interim sites and status history, are in the same response under
   `overseasSites`, so one request is enough. The separate overseas-site routes are unchanged.
+- Each exporter item in `GET /v1/accreditations` now carries `overseasSites`, the same sites, order
+  and fields (with interim sites and status histories) as getting one accreditation. An exporter with
+  no selected sites has `[]`; a reprocessor item has no `overseasSites`. Paging through search once
+  therefore gives every accreditation with its sites, with no extra call per accreditation. Pages
+  can be larger, so use a smaller `limit` if you hit `503` (`query_timeout`).
 - A record that cannot be addressed by its organisation, registration and accreditation numbers is
   left out of the response and logged by us, so one bad record does not fail a page.
 
 Existing calls keep working. If your client rejects fields it does not know, allow `overseasSites`
-on the accreditation.
+on the accreditation and on search items.
 
 ## Test data
 

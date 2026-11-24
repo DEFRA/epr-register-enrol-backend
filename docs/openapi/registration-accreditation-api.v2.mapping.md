@@ -58,7 +58,7 @@ after the migration (domain model design, decision D3).
 
 ## Accreditation
 
-`AccreditationSummary` is returned by search; `Accreditation` adds the two histories.
+`AccreditationSearchItem` is returned by search: an `AccreditationSummary` plus `overseasSites[]` (RA-802). `Accreditation` adds the two histories.
 
 Search (`GET /v1/accreditations`) filters on `year`, `organisationNumber`, `registrationNumber` and
 `status`. They map to App `year`, `orgId`, `registrationReference` and `applicationStatus`, and
@@ -73,6 +73,13 @@ organisations.
 `status` maps only for `approved` today: it is the only API status with stored data. `suspended`,
 `cancelled` and `withdrawn` are valid values and always return an empty page (`totalItems` 0), until case management
 sends them and the filter has a source for them.
+
+Each search item for an exporter carries `overseasSites[]` (RA-802), built by the same code as the
+single accreditation's: only the sites selected for the accreditation, ordered by `orsId`, with the
+same fields, interim sites and status histories, so paging through search once gives ReEx every
+accreditation with its sites. An exporter with no selected sites has `overseasSites: []`; a
+reprocessor item has no `overseasSites` property. The sites come from the same source as the
+accreditation (`DomainModel:ReadFromModel`). Every other search field is unchanged.
 
 `Accreditation` also carries `overseasSites[]` (exporters only, omitted for a reprocessor): every
 accredited overseas site, as described in [Accredited overseas sites](#accredited-overseas-sites),

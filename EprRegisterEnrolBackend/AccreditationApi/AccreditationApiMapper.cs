@@ -24,12 +24,12 @@ public static class AccreditationApiMapper
     // the response and logged, and the rest of the page is still served. The persistence query
     // already leaves such records out, so this is the second line of defence, and the log line is
     // how an operator learns that one exists.
-    public static IReadOnlyList<AccreditationSummaryDto> ToSummaries(
+    public static IReadOnlyList<AccreditationSearchItemDto> ToSummaries(
         IEnumerable<AccreditationApplicationModel> applications,
         ILogger logger
     )
     {
-        var summaries = new List<AccreditationSummaryDto>();
+        var summaries = new List<AccreditationSearchItemDto>();
         foreach (var application in applications)
         {
             var problem = MalformedReason(application);
@@ -43,11 +43,45 @@ public static class AccreditationApiMapper
                 continue;
             }
 
-            summaries.Add(ToSummary(application));
+            summaries.Add(ToSearchItem(application));
         }
 
         return summaries;
     }
+
+    // RA-802: the summary plus the overseas sites, built by the code the single-accreditation
+    // response uses, so the two cannot drift apart.
+    private static AccreditationSearchItemDto ToSearchItem(
+        AccreditationApplicationModel application
+    )
+    {
+        var summary = ToSummary(application);
+        return new AccreditationSearchItemDto
+        {
+            OrganisationNumber = summary.OrganisationNumber,
+            RegistrationNumber = summary.RegistrationNumber,
+            AccreditationNumber = summary.AccreditationNumber,
+            AccreditationYear = summary.AccreditationYear,
+            Material = summary.Material,
+            GlassRecyclingProcess = summary.GlassRecyclingProcess,
+            WasteProcessingType = summary.WasteProcessingType,
+            LatestStatus = summary.LatestStatus,
+            TonnageBand = summary.TonnageBand,
+            OverseasSites = OverseasSitesFor(application),
+        };
+    }
+
+    // Exporters only: the selected sites, ordered by ORS id. Null (left out) for a reprocessor.
+    private static List<AccreditedOverseasSiteDto>? OverseasSitesFor(
+        AccreditationApplicationModel application
+    ) =>
+        IsExporter(application)
+            ? AccreditedSites(application)
+                .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+                .ThenBy(site => site.SiteId)
+                .Select(site => ToOverseasSite(application, site))
+                .ToList()
+            : null;
 
     private static string? MalformedReason(AccreditationApplicationModel application)
     {
@@ -91,13 +125,7 @@ public static class AccreditationApiMapper
                 })
                 .ToList(),
             StatusHistory = history,
-            OverseasSites = IsExporter(application)
-                ? AccreditedSites(application)
-                    .OrderBy(site => site.OrsId, StringComparer.Ordinal)
-                    .ThenBy(site => site.SiteId)
-                    .Select(site => ToOverseasSite(application, site))
-                    .ToList()
-                : null,
+            OverseasSites = OverseasSitesFor(application),
             TonnageBandHistory = summary.TonnageBand is null
                 ? []
                 :
