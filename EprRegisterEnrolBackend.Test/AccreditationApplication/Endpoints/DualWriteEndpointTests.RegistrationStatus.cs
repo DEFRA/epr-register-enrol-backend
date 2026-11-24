@@ -1,12 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
-using EprRegisterEnrolBackend.DomainModel.Persistence;
-using EprRegisterEnrolBackend.Utils.Mongo;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 using EprRegisterEnrolBackend.Organisation.Models;
 using EprRegisterEnrolBackend.Organisation.Services;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
+using EprRegisterEnrolBackend.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Driver;

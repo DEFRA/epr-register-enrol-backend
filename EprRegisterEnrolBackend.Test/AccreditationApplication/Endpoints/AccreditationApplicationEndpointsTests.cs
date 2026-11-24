@@ -1,4 +1,3 @@
-using EprRegisterEnrolBackend.DomainModel.Entities;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -8,6 +7,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.CdpUploader.Services;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
 using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;

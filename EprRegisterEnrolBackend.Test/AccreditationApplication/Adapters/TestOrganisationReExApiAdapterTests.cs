@@ -1,6 +1,6 @@
-using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using NSubstitute;
