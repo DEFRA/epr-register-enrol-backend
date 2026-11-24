@@ -13,6 +13,8 @@ public class AccreditationApplicationFile
     public string? S3Bucket { get; set; }
 }
 
+// Stored as a number. The Admin UI (epr-register-enrol-admin, record.js) keeps a copy of
+// these values in this order to show their names: change it there too.
 public enum FileScanStatus
 {
     Pending,
@@ -20,6 +22,8 @@ public enum FileScanStatus
     Infected,
 }
 
+// Stored as a number. The Admin UI (epr-register-enrol-admin, record.js) keeps a copy of
+// these values in this order to show their names: change it there too.
 public enum AccreditationFileDocumentType
 {
     SamplingPlan,

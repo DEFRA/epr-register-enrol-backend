@@ -5,6 +5,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Test.Auth;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Auth;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -485,6 +486,227 @@ public class AdminApiEndpointTests : IDisposable
             LegacyApplicationSearchCriteria search,
             long skip,
             int limit,
+            TimeSpan? maxTime = null,
+            CancellationToken cancellationToken = default
+        ) =>
+            throw (MongoExecutionTimeoutException)
+                System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+                    typeof(MongoExecutionTimeoutException)
+                );
+    }
+
+    // ---- RA-750: one application, as stored ----
+
+    private IMongoCollection<BsonDocument> RawApplications() =>
+        _factory
+            .Services.GetRequiredService<EprRegisterEnrolBackend.Utils.Mongo.IMongoDbClientFactory>()
+            .GetCollection<BsonDocument>(DomainModelCollections.LegacyApplications);
+
+    [Fact]
+    public async Task AnApplication_IsFoundByItsReference_AsStored()
+    {
+        var created = await Seed(a => a.ApplicationReference = "AP27EA500112ABPL");
+
+        var response = await Get($"{SearchPath}/AP27EA500112ABPL");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
+        var body = await Json(response);
+        body.GetProperty("_id").GetProperty("$oid").GetString().Should().Be(created.Id.ToString());
+        body.GetProperty("applicationReference").GetString().Should().Be("AP27EA500112ABPL");
+        body.GetProperty("organisationName").GetString().Should().Be("Harbourside Plastics Ltd");
+        body.GetProperty("updatedAt").GetProperty("$date").ValueKind.Should().Be(JsonValueKind.String);
+    }
+
+    [Fact]
+    public async Task ADraftWithNoReference_IsFoundByItsId()
+    {
+        var created = await Seed(a =>
+        {
+            a.ApplicationStatus = ApplicationStatus.Saved;
+            a.AccreditationReference = null;
+        });
+
+        var response = await Get($"{SearchPath}/{created.Id}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("_id").GetProperty("$oid").GetString().Should().Be(created.Id.ToString());
+        body.TryGetProperty("applicationReference", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TheDocument_KeepsFieldsTheModelDoesNotKnow_AndEnumsStoredAsNumbers()
+    {
+        var created = await Seed(a => a.ApplicationReference = "AP27EA500112ACPL");
+        await RawApplications().UpdateOneAsync(
+            new BsonDocument("_id", created.Id),
+            new BsonDocument("$set", new BsonDocument { { "retiredField", "kept" }, { "emptyText", "" } }),
+            cancellationToken: Ct
+        );
+
+        var body = await Json(await Get($"{SearchPath}/AP27EA500112ACPL"));
+
+        body.GetProperty("retiredField").GetString().Should().Be("kept");
+        body.GetProperty("emptyText").GetString().Should().BeEmpty();
+        body.GetProperty("prns").GetProperty("sectionStatus").ValueKind.Should().Be(JsonValueKind.Number);
+        body.GetProperty("applicationStatus").GetString().Should().Be("Submitted");
+    }
+
+    [Theory]
+    [InlineData("AP27EA599999ZZPL")]
+    [InlineData("6716a3c09e4b2d1f8a5c7e30")]
+    public async Task AnUnknownReferenceOrId_Is404_AsAProblem(string reference)
+    {
+        await Seed(a => a.ApplicationReference = "AP27EA500112ADPL");
+
+        var response = await Get($"{SearchPath}/{reference}");
+
+        await AssertProblem(response, HttpStatusCode.NotFound, "application_not_found");
+    }
+
+    // The numbers each enum is stored as, as the spec lists them. The Admin UI keeps a copy of these
+    // to show their names, so a reorder must fail here, not show the wrong name there.
+    [Theory]
+    [InlineData(SectionStatus.NotStarted, 0)]
+    [InlineData(SectionStatus.InProgress, 1)]
+    [InlineData(SectionStatus.Completed, 2)]
+    [InlineData(SectionStatus.Submitted, 3)]
+    [InlineData(SectionStatus.Queried, 4)]
+    public async Task SectionStatus_IsStoredAsTheNumberTheSpecLists(SectionStatus status, int stored)
+    {
+        await Seed(a =>
+        {
+            a.ApplicationReference = "AP27EA500112AFPL";
+            a.Prns.SectionStatus = status;
+        });
+
+        var body = await Json(await Get($"{SearchPath}/AP27EA500112AFPL"));
+
+        body.GetProperty("prns").GetProperty("sectionStatus").GetInt32().Should().Be(stored);
+    }
+
+    [Theory]
+    [InlineData(PlannedTonnageBand.UpTo500, 0)]
+    [InlineData(PlannedTonnageBand.UpTo5000, 1)]
+    [InlineData(PlannedTonnageBand.UpTo10000, 2)]
+    [InlineData(PlannedTonnageBand.Over10000, 3)]
+    public async Task PlannedTonnageBand_IsStoredAsTheNumberTheSpecLists(PlannedTonnageBand band, int stored)
+    {
+        await Seed(a =>
+        {
+            a.ApplicationReference = "AP27EA500112AGPL";
+            a.Prns.PlannedTonnageBand = band;
+        });
+
+        var body = await Json(await Get($"{SearchPath}/AP27EA500112AGPL"));
+
+        body.GetProperty("prns").GetProperty("plannedTonnageBand").GetInt32().Should().Be(stored);
+    }
+
+    [Theory]
+    [InlineData(FileScanStatus.Pending, AccreditationFileDocumentType.SamplingPlan, 0, 0)]
+    [InlineData(FileScanStatus.Clean, AccreditationFileDocumentType.SupportingEvidence, 1, 1)]
+    [InlineData(FileScanStatus.Infected, AccreditationFileDocumentType.SamplingPlan, 2, 0)]
+    public async Task AFilesScanStatusAndDocumentType_AreStoredAsTheNumbersTheSpecLists(
+        FileScanStatus scanStatus,
+        AccreditationFileDocumentType documentType,
+        int storedScanStatus,
+        int storedDocumentType
+    )
+    {
+        await Seed(a =>
+        {
+            a.ApplicationReference = "AP27EA500112AHPL";
+            a.SamplingPlan.Files.Add(
+                new AccreditationApplicationFile
+                {
+                    FileId = "file-1",
+                    Filename = "plan.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "user-1",
+                    S3Key = "plans/file-1",
+                    ScanStatus = scanStatus,
+                    DocumentType = documentType,
+                }
+            );
+        });
+
+        var body = await Json(await Get($"{SearchPath}/AP27EA500112AHPL"));
+
+        var file = body.GetProperty("samplingPlan").GetProperty("files")[0];
+        file.GetProperty("scanStatus").GetInt32().Should().Be(storedScanStatus);
+        file.GetProperty("documentType").GetInt32().Should().Be(storedDocumentType);
+    }
+
+    [Fact]
+    public async Task APaddedReference_IsStillFound()
+    {
+        await Seed(a => a.ApplicationReference = "AP27EA500112AJPL");
+
+        var response = await Get($"{SearchPath}/%20AP27EA500112AJPL%20");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("applicationReference").GetString().Should().Be("AP27EA500112AJPL");
+    }
+
+    [Fact]
+    public async Task AnEmptyReference_Is400()
+    {
+        var response = await Get($"{SearchPath}/%20");
+
+        await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_reference");
+    }
+
+    [Fact]
+    public async Task AReferenceOver100Characters_Is400()
+    {
+        var response = await Get($"{SearchPath}/{new string('A', 101)}");
+
+        await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_reference");
+    }
+
+    [Fact]
+    public async Task AReferenceWithAControlCharacter_Is400()
+    {
+        var response = await Get($"{SearchPath}/AP27%01");
+
+        await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_reference");
+    }
+
+    [Fact]
+    public async Task AnotherKnownClient_CannotReadAnApplication()
+    {
+        await Seed(a => a.ApplicationReference = "AP27EA500112AEPL");
+
+        var response = await Get($"{SearchPath}/AP27EA500112AEPL", ReExClientId, ReExSecret);
+
+        await AssertProblem(response, HttpStatusCode.Forbidden, "forbidden");
+    }
+
+    [Fact]
+    public async Task AReadTheDatabaseStopped_Is503_AsAProblem()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.AddSingleton<ILegacyApplicationRead, TimedOutRead>()
+            )
+        );
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            ServiceClientSigner.Request(HttpMethod.Get, $"{SearchPath}/AP27EA500112AFPL", AdminClientId, AdminSecret),
+            Ct
+        );
+
+        await AssertProblem(response, HttpStatusCode.ServiceUnavailable, "query_timeout");
+    }
+
+    private sealed class TimedOutRead : ILegacyApplicationRead
+    {
+        public Task<BsonDocument?> GetLegacyApplicationAsync(
+            string reference,
             TimeSpan? maxTime = null,
             CancellationToken cancellationToken = default
         ) =>
