@@ -758,6 +758,53 @@ public class AccreditationApiEndpointTests : IDisposable
         }
     }
 
+    // RA-802 AC6: a page of 100 exporters with realistic weight - 10 selected sites each, each with 3
+    // interim sites (one withdrawn, so it carries a longer status history) - is served well inside the
+    // service-client query timeout (5 seconds by default), and does not become a 503 query_timeout. Measured locally on 2026-11-24 (legacy source, ephemeral Mongo):
+    // about 0.6 s and 2 MB for the page.
+    [Fact]
+    public async Task Search_PageOf100HeavyExporters_IsServedWithinTheQueryTimeout()
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            await Seed(
+                accreditation: $"A27EX50002700{i:000}AL",
+                registration: $"R27EX50002700{i:000}AL",
+                configure: a =>
+                    a.OverseasSites = new AccreditationApplicationOverseasSites
+                    {
+                        Sites =
+                        [
+                            .. Enumerable
+                                .Range(1, 10)
+                                .Select(n =>
+                                {
+                                    var site = Site(n, n.ToString("000"), selected: true, validFrom: null);
+                                    site.InterimSites =
+                                    [
+                                        Interim(n * 10 + 1, removed: false),
+                                        Interim(n * 10 + 2, removed: false),
+                                        Interim(n * 10 + 3, removed: true),
+                                    ];
+                                    return site;
+                                }),
+                        ],
+                    }
+            );
+        }
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var response = await Get("/v1/accreditations?limit=100");
+        var text = await response.Content.ReadAsStringAsync(Ct);
+        stopwatch.Stop();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var items = JsonDocument.Parse(text).RootElement.GetProperty("items").EnumerateArray().ToList();
+        items.Should().HaveCount(100);
+        items.Should().OnlyContain(i => i.GetProperty("overseasSites").GetArrayLength() == 10);
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
     [Fact]
     public async Task Search_ReturnsEveryFieldItReturnedBeforeAlongsideTheSites()
     {
