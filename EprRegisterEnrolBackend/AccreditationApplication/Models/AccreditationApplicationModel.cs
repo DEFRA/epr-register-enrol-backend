@@ -222,6 +222,8 @@ public enum ApplicationStatus
     Withdrawn,
 }
 
+// Stored as a number. The Admin UI (epr-register-enrol-admin, record.js) keeps a copy of
+// these values in this order to show their names: change it there too.
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum SectionStatus
 {
