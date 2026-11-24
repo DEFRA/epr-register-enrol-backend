@@ -448,24 +448,4 @@ public class StubCaseWorkingApiAdapterTests
 
         result.CaseReference.Should().Be("AP26EA5005001AAPL");
     }
-
-    // RA-766 (temporary): the stub holds no work items, so the charge correction finds a work
-    // item with nothing to change and never writes.
-    [Fact]
-    public async Task GetChargeStateAsync_ReturnsAnEmptyWorkItem()
-    {
-        var workItem = await BuildSut()
-            .GetChargeStateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
-
-        workItem.Should().Be(new CaseWorkingWorkItem(null, null, false));
-    }
-
-    [Fact]
-    public async Task SetChargeAsync_ReportsUnchanged()
-    {
-        var outcome = await BuildSut()
-            .SetChargeAsync(Guid.NewGuid(), 327_600, TestContext.Current.CancellationToken);
-
-        outcome.Should().Be(SetChargeOutcome.Unchanged);
-    }
 }
