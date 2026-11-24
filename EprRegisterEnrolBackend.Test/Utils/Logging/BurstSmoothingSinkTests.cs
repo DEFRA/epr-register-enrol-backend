@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Time.Testing;
 using Serilog;
 using Serilog.Core;
+using Serilog.Debugging;
 using Serilog.Events;
 using Serilog.Parsing;
 
@@ -262,7 +263,7 @@ public class BurstSmoothingSinkTests
         inner.Disposed.Should().BeTrue();
     }
 
-    private static LogEvent Line(string text) =>
+    internal static LogEvent Line(string text) =>
         new(DateTimeOffset.UtcNow, LogEventLevel.Information, null, s_parser.Parse(text), []);
 
     // Disposal flushes at the sink's rate, so on a fake clock time has to be moved on until it finishes.
@@ -278,7 +279,7 @@ public class BurstSmoothingSinkTests
     }
 
     /// <summary>A fake clock that says when something starts waiting on it, so a test advances it only then.</summary>
-    private sealed class SignallingClock : FakeTimeProvider
+    internal sealed class SignallingClock : FakeTimeProvider
     {
         private readonly SemaphoreSlim _timers = new(0);
 
@@ -301,7 +302,7 @@ public class BurstSmoothingSinkTests
         }
     }
 
-    private sealed class RecordingSink : ILogEventSink, IDisposable
+    internal sealed class RecordingSink : ILogEventSink, IDisposable
     {
         private readonly Lock _lock = new();
         private readonly List<LogEvent> _events = [];
@@ -357,5 +358,53 @@ public class BurstSmoothingSinkTests
         }
 
         public void Dispose() => DisposeCount++;
+    }
+}
+
+// SelfLog is process-wide, so this runs with nothing alongside.
+[Collection(nameof(ProcessWideLogging))]
+public class BurstSmoothingSinkStuckWriterTests
+{
+    // The wrapped sink blocks in Emit (say, stdout has stopped draining), so cancelling the reader can't stop it.
+    // Disposal still returns after the flush timeout plus StopGrace, and the report goes to SelfLog.
+    [Fact]
+    public async Task Disposal_gives_up_on_a_stuck_wrapped_sink_and_reports_through_self_log()
+    {
+        var clock = new BurstSmoothingSinkTests.SignallingClock();
+        var inner = new BurstSmoothingSinkTests.RecordingSink();
+        var sink = new BurstSmoothingSink(inner, new(1_000, 10, 10, TimeSpan.FromSeconds(2)), clock);
+        using var selfLog = new StringWriter();
+        SelfLog.Enable(TextWriter.Synchronized(selfLog));
+        try
+        {
+            inner.BlockOn("stuck");
+            sink.Emit(BurstSmoothingSinkTests.Line("stuck"));
+            await inner.Blocked.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            sink.Emit(BurstSmoothingSinkTests.Line("queued 1"));
+            sink.Emit(BurstSmoothingSinkTests.Line("queued 2"));
+
+            var disposal = sink.DisposeAsync().AsTask();
+            await clock.WaitForTimerAsync(); // The flush timeout.
+            clock.Advance(TimeSpan.FromSeconds(2));
+            await clock.WaitForTimerAsync(); // The stop grace.
+            clock.Advance(BurstSmoothingSink.StopGrace);
+            await disposal.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+            selfLog
+                .ToString()
+                .Should()
+                .Contain(
+                    "EprRegisterEnrolBackend.Utils.Logging.BurstSmoothingSink: Dropped 3 log lines at shutdown: 3 were "
+                        + "still queued after 00:00:02 and 0 were refused because the log queue was full or closed. "
+                        + "The wrapped sink was still writing a line 00:00:01 after the flush timeout, so it was not "
+                        + "disposed"
+                );
+            inner.Disposed.Should().BeFalse();
+        }
+        finally
+        {
+            SelfLog.Disable();
+            inner.Release();
+        }
     }
 }

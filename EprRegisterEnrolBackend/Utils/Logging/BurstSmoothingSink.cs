@@ -18,11 +18,23 @@ namespace EprRegisterEnrolBackend.Utils.Logging;
 /// <see cref="BurstSmoothingSettings.ShutdownFlushTimeout"/>, and whatever could not be written is reported in one
 /// final Error line. Error, so that lost log lines are noticed: the "5xx and Errors" alert reports them.
 /// </para>
+/// <para>
+/// Disposal never waits longer than <see cref="BurstSmoothingSettings.ShutdownFlushTimeout"/> plus
+/// <see cref="StopGrace"/> (1 second). If the wrapped sink is still stuck writing a line by then, the final report goes
+/// to SelfLog (stderr) instead, and the wrapped sink is not disposed.
+/// </para>
 /// </summary>
 public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDisposable
 {
     /// <summary>The <c>log.logger</c> of the sink's own Error lines, to filter them in OpenSearch.</summary>
     public static readonly string SourceContext = typeof(BurstSmoothingSink).FullName!;
+
+    /// <summary>
+    /// How long disposal waits for the reader to stop once the flush timeout has run out and it has been told to. A
+    /// stopped reader only has to finish the line it is writing, so a write still going after this is stuck. Shutdown
+    /// therefore waits at most <see cref="BurstSmoothingSettings.ShutdownFlushTimeout"/> plus this.
+    /// </summary>
+    internal static readonly TimeSpan StopGrace = TimeSpan.FromSeconds(1);
 
     private static readonly MessageTemplateParser s_parser = new();
 
@@ -176,6 +188,7 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
             return;
 
         _queue.Writer.TryComplete();
+        var stuck = false;
         try
         {
             // Bounded only by the flush timeout: _stopWriting is what stops the reader once that runs out.
@@ -184,26 +197,39 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
         catch (TimeoutException)
         {
             await _stopWriting.CancelAsync();
-            await _reader;
+            stuck = !await StoppedWithinAsync(StopGrace);
         }
 
-        var unflushed = _heldWhenStopped;
-        while (_queue.Reader.TryRead(out _))
-            unflushed++;
+        // Counted, not read: a stuck reader may still take lines off the queue, and it is the only reader.
+        var unflushed = Volatile.Read(ref _heldWhenStopped) + _queue.Reader.Count;
         Volatile.Write(ref _finalReportTaken, 1);
         var refused = Interlocked.Exchange(ref _dropped, 0);
-        if (unflushed + refused > 0)
-        {
-            Write(
-                ErrorLine(
+        var report =
+            unflushed + refused > 0
+                ? ErrorLine(
                     s_shutdownTemplate,
                     Property("DroppedLogLines", unflushed + refused),
                     Property("UnflushedLogLines", unflushed),
                     Property("ShutdownFlushTimeout", _settings.ShutdownFlushTimeout),
                     Property("RefusedLogLines", refused)
                 )
+                : null;
+
+        if (stuck)
+        {
+            // The wrapped sink is blocked mid-write (say, stdout no longer draining), so it can neither take the report
+            // nor be disposed. The report goes to stderr instead, and shutdown carries on.
+            SelfLog.WriteLine(
+                "{0}: {1}. The wrapped sink was still writing a line {2} after the flush timeout, so it was not disposed",
+                SourceContext,
+                report?.RenderMessage() ?? "Dropped no log lines at shutdown",
+                StopGrace
             );
+            return;
         }
+
+        if (report is not null)
+            Write(report);
 
         _stopWriting.Dispose();
         switch (_inner)
@@ -214,6 +240,20 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
             case IDisposable disposable:
                 disposable.Dispose();
                 break;
+        }
+    }
+
+    private async Task<bool> StoppedWithinAsync(TimeSpan grace)
+    {
+        try
+        {
+            // Not cancellable: the grace is the bound.
+            await _reader.WaitAsync(grace, _clock, CancellationToken.None);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
         }
     }
 
