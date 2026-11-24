@@ -565,6 +565,100 @@ public class AdminApiEndpointTests : IDisposable
         await AssertProblem(response, HttpStatusCode.NotFound, "application_not_found");
     }
 
+    // The numbers each enum is stored as, as the spec lists them. The Admin UI keeps a copy of these
+    // to show their names, so a reorder must fail here, not show the wrong name there.
+    [Theory]
+    [InlineData(SectionStatus.NotStarted, 0)]
+    [InlineData(SectionStatus.InProgress, 1)]
+    [InlineData(SectionStatus.Completed, 2)]
+    [InlineData(SectionStatus.Submitted, 3)]
+    [InlineData(SectionStatus.Queried, 4)]
+    public async Task SectionStatus_IsStoredAsTheNumberTheSpecLists(SectionStatus status, int stored)
+    {
+        await Seed(a =>
+        {
+            a.ApplicationReference = "AP27EA500112AFPL";
+            a.Prns.SectionStatus = status;
+        });
+
+        var body = await Json(await Get($"{SearchPath}/AP27EA500112AFPL"));
+
+        body.GetProperty("prns").GetProperty("sectionStatus").GetInt32().Should().Be(stored);
+    }
+
+    [Theory]
+    [InlineData(PlannedTonnageBand.UpTo500, 0)]
+    [InlineData(PlannedTonnageBand.UpTo5000, 1)]
+    [InlineData(PlannedTonnageBand.UpTo10000, 2)]
+    [InlineData(PlannedTonnageBand.Over10000, 3)]
+    public async Task PlannedTonnageBand_IsStoredAsTheNumberTheSpecLists(PlannedTonnageBand band, int stored)
+    {
+        await Seed(a =>
+        {
+            a.ApplicationReference = "AP27EA500112AGPL";
+            a.Prns.PlannedTonnageBand = band;
+        });
+
+        var body = await Json(await Get($"{SearchPath}/AP27EA500112AGPL"));
+
+        body.GetProperty("prns").GetProperty("plannedTonnageBand").GetInt32().Should().Be(stored);
+    }
+
+    [Theory]
+    [InlineData(FileScanStatus.Pending, AccreditationFileDocumentType.SamplingPlan, 0, 0)]
+    [InlineData(FileScanStatus.Clean, AccreditationFileDocumentType.SupportingEvidence, 1, 1)]
+    [InlineData(FileScanStatus.Infected, AccreditationFileDocumentType.SamplingPlan, 2, 0)]
+    public async Task AFilesScanStatusAndDocumentType_AreStoredAsTheNumbersTheSpecLists(
+        FileScanStatus scanStatus,
+        AccreditationFileDocumentType documentType,
+        int storedScanStatus,
+        int storedDocumentType
+    )
+    {
+        await Seed(a =>
+        {
+            a.ApplicationReference = "AP27EA500112AHPL";
+            a.SamplingPlan.Files.Add(
+                new AccreditationApplicationFile
+                {
+                    FileId = "file-1",
+                    Filename = "plan.pdf",
+                    ContentType = "application/pdf",
+                    UploadedByUserId = "user-1",
+                    S3Key = "plans/file-1",
+                    ScanStatus = scanStatus,
+                    DocumentType = documentType,
+                }
+            );
+        });
+
+        var body = await Json(await Get($"{SearchPath}/AP27EA500112AHPL"));
+
+        var file = body.GetProperty("samplingPlan").GetProperty("files")[0];
+        file.GetProperty("scanStatus").GetInt32().Should().Be(storedScanStatus);
+        file.GetProperty("documentType").GetInt32().Should().Be(storedDocumentType);
+    }
+
+    [Fact]
+    public async Task APaddedReference_IsStillFound()
+    {
+        await Seed(a => a.ApplicationReference = "AP27EA500112AJPL");
+
+        var response = await Get($"{SearchPath}/%20AP27EA500112AJPL%20");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("applicationReference").GetString().Should().Be("AP27EA500112AJPL");
+    }
+
+    [Fact]
+    public async Task AnEmptyReference_Is400()
+    {
+        var response = await Get($"{SearchPath}/%20");
+
+        await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_reference");
+    }
+
     [Fact]
     public async Task AReferenceOver100Characters_Is400()
     {
