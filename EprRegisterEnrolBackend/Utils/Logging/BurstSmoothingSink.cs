@@ -73,7 +73,9 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
         );
         _bucket = settings.Burst * TimeSpan.TicksPerSecond;
         _lastRefill = clock.GetTimestamp();
-        _reader = Task.Run(ReadAsync);
+        // No token: ReadAsync watches _stopWriting itself, and a cancelled token here would only stop the reader ever
+        // starting, losing every line.
+        _reader = Task.Run(ReadAsync, CancellationToken.None);
     }
 
     public void Emit(LogEvent logEvent)
@@ -176,7 +178,8 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
         _queue.Writer.TryComplete();
         try
         {
-            await _reader.WaitAsync(_settings.ShutdownFlushTimeout, _clock);
+            // Bounded only by the flush timeout: _stopWriting is what stops the reader once that runs out.
+            await _reader.WaitAsync(_settings.ShutdownFlushTimeout, _clock, CancellationToken.None);
         }
         catch (TimeoutException)
         {
