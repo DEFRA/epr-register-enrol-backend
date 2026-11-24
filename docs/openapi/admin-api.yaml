@@ -110,7 +110,9 @@ paths:
         * Some enums are stored as numbers, not names: `sectionStatus` (0 NotStarted,
           1 InProgress, 2 Completed, 3 Submitted, 4 Queried), `plannedTonnageBand` (0 UpTo500,
           1 UpTo5000, 2 UpTo10000, 3 Over10000), a file's `scanStatus` (0 Pending, 1 Clean,
-          2 Infected) and `documentType` (0 SamplingPlan, 1 SupportingEvidence).
+          2 Infected) and `documentType` (0 SamplingPlan, 1 SupportingEvidence). The Admin UI
+          (epr-register-enrol-admin) keeps a copy of these numbers to show their names, so
+          adding or reordering a value means changing it there too.
 
         The document holds personal data and commercially sensitive data (see
         `LegacyAccreditationApplication`), which the caller must not log.

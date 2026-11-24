@@ -360,13 +360,8 @@ public class AccreditationApplicationPersistence(
         IReadOnlyCollection<LegacyApplicationSearchField>? fields
     )
     {
-        // The element OrgId is stored under, from the class map, so the $expr follows the naming
-        // convention the typed filters follow. Looked up here, not in a static field, so it can never
-        // run (and freeze the class map) before the convention is registered.
-        var orgIdElement = BsonClassMap
-            .LookupClassMap(typeof(AccreditationApplicationModel))
-            .GetMemberMap(nameof(AccreditationApplicationModel.OrgId))
-            .ElementName;
+        // The $expr needs OrgId's element name, as stored.
+        var orgIdElement = ElementName(nameof(AccreditationApplicationModel.OrgId));
         var pattern = Regex.Escape(text);
         var regex = new BsonRegularExpression(pattern, "i");
         var searched = fields is { Count: > 0 } ? fields : Enum.GetValues<LegacyApplicationSearchField>();

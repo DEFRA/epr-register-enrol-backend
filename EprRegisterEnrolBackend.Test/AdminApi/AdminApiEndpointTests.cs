@@ -5,6 +5,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Test.Auth;
 using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Auth;
+using EprRegisterEnrolBackend.DomainModel.Persistence;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -499,7 +500,7 @@ public class AdminApiEndpointTests : IDisposable
     private IMongoCollection<BsonDocument> RawApplications() =>
         _factory
             .Services.GetRequiredService<EprRegisterEnrolBackend.Utils.Mongo.IMongoDbClientFactory>()
-            .GetCollection<BsonDocument>("accreditationApplications");
+            .GetCollection<BsonDocument>(DomainModelCollections.LegacyApplications);
 
     [Fact]
     public async Task AnApplication_IsFoundByItsReference_AsStored()

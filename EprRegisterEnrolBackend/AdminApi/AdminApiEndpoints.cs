@@ -31,6 +31,7 @@ public static class AdminApiEndpoints
     private const int DefaultLimit = 50;
     private const int MaxLimit = 100;
     private const int MaxSearchLength = 100;
+    private const int MaxReferenceLength = 100;
     private const int MinYear = 2000;
 
     // The searchFields values, as named in the spec.
@@ -76,11 +77,11 @@ public static class AdminApiEndpoints
     )
     {
         var trimmed = reference.Trim();
-        if (trimmed.Length == 0 || trimmed.Length > MaxSearchLength || trimmed.Any(char.IsControl))
+        if (trimmed.Length == 0 || trimmed.Length > MaxReferenceLength || trimmed.Any(char.IsControl))
         {
             return Bad(
                 "invalid_reference",
-                $"reference must be 1 to {MaxSearchLength} characters, with no control characters."
+                $"reference must be 1 to {MaxReferenceLength} characters, with no control characters."
             );
         }
 
