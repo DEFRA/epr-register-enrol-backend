@@ -15,7 +15,7 @@ public class BurstSmoothingSinkTests
 
     // Fast enough that a test which isn't about the rate never waits on it.
     private static BurstSmoothingSettings Unthrottled(int queueCapacity = 10_000) =>
-        new(1_000_000, queueCapacity, queueCapacity, TimeSpan.FromSeconds(30));
+        new(1_000_000, queueCapacity, queueCapacity, TimeSpan.FromSeconds(20));
 
     [Fact]
     public async Task Lines_up_to_the_burst_go_out_at_once_then_at_the_sustained_rate()
@@ -52,14 +52,23 @@ public class BurstSmoothingSinkTests
         var inner = new RecordingSink();
         var sink = new BurstSmoothingSink(inner, new(10, 5, 100, TimeSpan.FromSeconds(5)), clock);
 
-        clock.Advance(TimeSpan.FromDays(1000));
-        for (var i = 0; i < 8; i++)
+        // Use up the burst, then wait out the rate for one more line, so the bucket is empty.
+        for (var i = 0; i < 6; i++)
             sink.Emit(Line($"line {i}"));
-
         await clock.WaitForTimerAsync();
         inner.Messages.Should().HaveCount(5);
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+        await inner.WaitForCountAsync(6);
+
+        // Long enough that the elapsed ticks times linesPerSecond would overflow a long without the cap.
+        clock.Advance(TimeSpan.FromDays(365.25 * 5_000));
+        for (var i = 6; i < 14; i++)
+            sink.Emit(Line($"line {i}"));
+        await clock.WaitForTimerAsync();
+        inner.Messages.Should().HaveCount(11, "the idle spell refills exactly the burst of 5");
 
         await DisposeAdvancingAsync(sink, clock);
+        inner.Messages.Should().Equal(Enumerable.Range(0, 14).Select(i => $"line {i}"));
     }
 
     [Fact]
@@ -92,7 +101,7 @@ public class BurstSmoothingSinkTests
 
         inner.Messages.Should().Equal(
             "held",
-            "Dropped 7 log lines because the log queue was full",
+            "Dropped 7 log lines because the log queue was full or closed",
             "line 1",
             "line 2",
             "line 3"
@@ -160,7 +169,7 @@ public class BurstSmoothingSinkTests
 
         inner.Messages.Should().Equal(
             "line 0",
-            "Dropped 3 log lines because the log queue was full",
+            "Dropped 3 log lines because the log queue was full or closed",
             "line 1",
             "line 2",
             "line 3",
@@ -223,7 +232,7 @@ public class BurstSmoothingSinkTests
     [InlineData(1, 11, 10, 1_000, "burst")]
     [InlineData(1, 1, 1, 0, "shutdownFlushTimeout")]
     [InlineData(1, 1, 1, -1, "shutdownFlushTimeout")]
-    [InlineData(1, 1, 1, 4_294_967_295, "shutdownFlushTimeout")]
+    [InlineData(1, 1, 1, 20_001, "shutdownFlushTimeout")]
     public void Invalid_settings_throw_naming_the_setting(
         int linesPerSecond,
         int burst,
@@ -245,7 +254,10 @@ public class BurstSmoothingSinkTests
             .Should()
             .Throw<ArgumentOutOfRangeException>()
             .Where(e => e.ParamName == setting)
-            .WithMessage($"The log burst smoothing setting {setting} (Serilog:WriteTo:SmoothBursts Args) *");
+            .WithMessage(
+                $"The log burst smoothing setting {setting} (Serilog:WriteTo:0:Args:{setting}, or the environment "
+                    + $"variable Serilog__WriteTo__0__Args__{setting}) *"
+            );
     }
 
     [Fact]
@@ -366,7 +378,8 @@ public class BurstSmoothingSinkTests
 public class BurstSmoothingSinkStuckWriterTests
 {
     // The wrapped sink blocks in Emit (say, stdout has stopped draining), so cancelling the reader can't stop it.
-    // Disposal still returns after the flush timeout plus StopGrace, and the report goes to SelfLog.
+    // Disposal still returns after the flush timeout plus StopGrace, and the report goes to SelfLog. Once the wrapped
+    // sink unblocks, the reader stops: the lines the report counted as dropped are never written after all.
     [Fact]
     public async Task Disposal_gives_up_on_a_stuck_wrapped_sink_and_reports_through_self_log()
     {
@@ -400,6 +413,10 @@ public class BurstSmoothingSinkStuckWriterTests
                         + "disposed"
                 );
             inner.Disposed.Should().BeFalse();
+
+            inner.Release();
+            await sink.Reader.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            inner.Messages.Should().Equal("stuck");
         }
         finally
         {

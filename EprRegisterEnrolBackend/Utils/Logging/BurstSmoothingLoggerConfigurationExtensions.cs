@@ -11,7 +11,7 @@ public static class BurstSmoothingLoggerConfigurationExtensions
     /// <summary>
     /// Writes to the sinks <paramref name="configure"/> sets up through a <see cref="BurstSmoothingSink"/>. Found by
     /// Serilog.Settings.Configuration through the <c>Using</c> entry in appsettings.json, the way Serilog.Sinks.Async
-    /// is. The defaults are the ones the README's Logging section names as correct.
+    /// is. The README's Logging section documents the defaults and where they come from.
     /// </summary>
     public static LoggerConfiguration SmoothBursts(
         this LoggerSinkConfiguration loggerSinkConfiguration,

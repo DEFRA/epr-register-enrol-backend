@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using EprRegisterEnrolBackend.Utils.Logging;
 using FluentAssertions;
@@ -20,7 +21,7 @@ public sealed class ProcessWideLogging;
 public class BurstSmoothingConfigurationTests
 {
     private const string EcsFormatter =
-        "Elastic.CommonSchema.Serilog.EcsTextFormatter, Elastic.CommonSchema.Serilog";
+        "EprRegisterEnrolBackend.Utils.Logging.CdpEcsTextFormatter, EprRegisterEnrolBackend";
 
     // appsettings.Development.json has no WriteTo of its own: .NET merges arrays by index, so one would merge into
     // the smoothing sink's entry. Development (and so the compose stack the end-to-end tests run against) smooths
@@ -57,12 +58,26 @@ public class BurstSmoothingConfigurationTests
     [InlineData("Development")]
     public void The_shipped_config_writes_ecs_json_lines_to_stdout(string environment)
     {
+        // The line is formatted on the sink's reader, so the trace and the thread must still be the logging thread's.
+        ActivityTraceId traceId = default;
+        ActivitySpanId spanId = default;
+        var loggingThreadId = 0;
         var output = CaptureConsole(() =>
         {
             using var logger = new LoggerConfiguration()
                 .ReadFrom.Configuration(AppSettings(environment))
                 .CreateLogger();
-            logger.ForContext("SourceContext", "BurstSmoothingConfigurationTests").Warning("smoothed {Number}", 42);
+            var loggingThread = new Thread(() =>
+            {
+                using var activity = new Activity("request").Start();
+                traceId = activity.TraceId;
+                spanId = activity.SpanId;
+                loggingThreadId = Environment.CurrentManagedThreadId;
+                logger.ForContext("SourceContext", "BurstSmoothingConfigurationTests").Warning("smoothed {Number}", 42);
+            });
+            loggingThread.Name = "logging thread";
+            loggingThread.Start();
+            loggingThread.Join();
         });
 
         var line = output
@@ -74,6 +89,14 @@ public class BurstSmoothingConfigurationTests
         json.RootElement.GetProperty("log").GetProperty("logger").GetString()
             .Should()
             .Be("BurstSmoothingConfigurationTests");
+        json.RootElement.GetProperty("trace.id").GetString().Should().Be(traceId.ToString());
+        json.RootElement.GetProperty("span.id").GetString().Should().Be(spanId.ToString());
+        var process = json.RootElement.GetProperty("process");
+        process.GetProperty("thread.id").GetInt32().Should().Be(loggingThreadId);
+        process.GetProperty("thread.name").GetString().Should().Be("logging thread");
+        json.RootElement.TryGetProperty("metadata", out var metadata).Should().BeTrue();
+        metadata.TryGetProperty("ThreadId", out _).Should().BeFalse("ECS reads the thread properties, adding no field");
+        metadata.TryGetProperty("ThreadName", out _).Should().BeFalse("ECS reads the thread properties, adding no field");
     }
 
     // Serilog.Settings.Configuration reports an entry it can't resolve (a sink or enricher whose package isn't
@@ -113,6 +136,7 @@ public class BurstSmoothingConfigurationTests
     [InlineData("burst", "20000")]
     [InlineData("queueCapacity", "0")]
     [InlineData("shutdownFlushTimeout", "00:00:00")]
+    [InlineData("shutdownFlushTimeout", "5")] // TimeSpan.Parse reads a bare 5 as 5 days.
     public void An_overriding_setting_that_is_invalid_stops_startup_naming_it(string setting, string value)
     {
         var configuration = new ConfigurationBuilder()
@@ -129,7 +153,7 @@ public class BurstSmoothingConfigurationTests
             .Throw<Exception>()
             .Which.ToString()
             .Should()
-            .Contain($"The log burst smoothing setting {setting} (Serilog:WriteTo:SmoothBursts Args)");
+            .Contain($"The log burst smoothing setting {setting} (Serilog:WriteTo:0:Args:{setting}, or the environment");
     }
 
     // Program.cs relies on UseSerilog disposing the logger, and so flushing the smoothing sink, when the host stops.

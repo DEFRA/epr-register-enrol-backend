@@ -11,6 +11,11 @@ namespace EprRegisterEnrolBackend.Utils.Logging;
 /// burst. CDP's log shipping looks to drop bursts: on ext-test ~400 lines in under 100 ms never reached OpenSearch,
 /// and nor did anything else logged in that second (RA-784). See the README's Logging section.
 /// <para>
+/// The wrapped sink formats each line on the reader, not on the thread that logged it, so <see cref="Emit"/> records the
+/// logging thread on the line (<see cref="CdpEcsTextFormatter.ThreadId"/>, <see cref="CdpEcsTextFormatter.ThreadName"/>)
+/// for <see cref="CdpEcsTextFormatter"/> to write. Serilog has already recorded the trace and span on it.
+/// </para>
+/// <para>
 /// A token bucket: up to <see cref="BurstSmoothingSettings.Burst"/> lines go out at once, then at most
 /// <see cref="BurstSmoothingSettings.LinesPerSecond"/> a second. <see cref="Emit"/> only queues the line, so logging
 /// never waits; one reader writes the queue in order. A line that finds the queue full is dropped and counted, and the
@@ -19,9 +24,10 @@ namespace EprRegisterEnrolBackend.Utils.Logging;
 /// final Error line. Error, so that lost log lines are noticed: the "5xx and Errors" alert reports them.
 /// </para>
 /// <para>
-/// Disposal never waits longer than <see cref="BurstSmoothingSettings.ShutdownFlushTimeout"/> plus
+/// Disposal waits for the reader for at most <see cref="BurstSmoothingSettings.ShutdownFlushTimeout"/> plus
 /// <see cref="StopGrace"/> (1 second). If the wrapped sink is still stuck writing a line by then, the final report goes
-/// to SelfLog (stderr) instead, and the wrapped sink is not disposed.
+/// to SelfLog (stderr) instead, and the wrapped sink is not disposed. Otherwise disposal then writes the report and
+/// disposes the wrapped sink, which isn't bounded: neither is a plain console sink's.
 /// </para>
 /// </summary>
 public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDisposable
@@ -30,16 +36,17 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
     public static readonly string SourceContext = typeof(BurstSmoothingSink).FullName!;
 
     /// <summary>
-    /// How long disposal waits for the reader to stop once the flush timeout has run out and it has been told to. A
-    /// stopped reader only has to finish the line it is writing, so a write still going after this is stuck. Shutdown
-    /// therefore waits at most <see cref="BurstSmoothingSettings.ShutdownFlushTimeout"/> plus this.
+    /// How long disposal waits for the reader to stop once the flush timeout has run out and it has been told to. The
+    /// reader checks for the stop before every line, so a stopped reader only has to finish the line it is writing,
+    /// and a write still going after this is stuck. Disposal therefore waits for the reader for at most
+    /// <see cref="BurstSmoothingSettings.ShutdownFlushTimeout"/> plus this.
     /// </summary>
     internal static readonly TimeSpan StopGrace = TimeSpan.FromSeconds(1);
 
     private static readonly MessageTemplateParser s_parser = new();
 
     private static readonly MessageTemplate s_droppedTemplate = s_parser.Parse(
-        "Dropped {DroppedLogLines} log lines because the log queue was full"
+        "Dropped {DroppedLogLines} log lines because the log queue was full or closed"
     );
 
     private static readonly MessageTemplate s_shutdownTemplate = s_parser.Parse(
@@ -59,8 +66,8 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
     private long _bucket;
     private long _lastRefill;
 
-    // Set by the reader when it is stopped holding a line it had taken off the queue but not yet written.
-    private int _heldWhenStopped;
+    // 1 while the reader holds a line it has taken off the queue but not yet written, so a stop counts it.
+    private int _holdingLine;
 
     private long _dropped;
     private int _disposed;
@@ -90,15 +97,22 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
         _reader = Task.Run(ReadAsync, CancellationToken.None);
     }
 
+    /// <summary>The reader, for tests: it ends once the queue is written out or the reader is stopped.</summary>
+    internal Task Reader => _reader;
+
     public void Emit(LogEvent logEvent)
     {
+        var thread = Thread.CurrentThread;
+        logEvent.AddPropertyIfAbsent(Property(CdpEcsTextFormatter.ThreadId, thread.ManagedThreadId));
+        if (thread.Name is { } threadName)
+            logEvent.AddPropertyIfAbsent(Property(CdpEcsTextFormatter.ThreadName, threadName));
         if (_queue.Writer.TryWrite(logEvent))
             return;
 
         Interlocked.Increment(ref _dropped);
         if (Volatile.Read(ref _finalReportTaken) != 0)
         {
-            // The final report has been written, so nothing would ever count this one.
+            // The final report has been taken, so nothing would ever count this one.
             SelfLog.WriteLine("{0}: a log line was written after disposal and is lost", SourceContext);
         }
     }
@@ -112,7 +126,7 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
             {
                 while (_queue.Reader.TryRead(out var logEvent))
                 {
-                    _heldWhenStopped = 1;
+                    _holdingLine = 1;
                     await TakeTokenAsync(stopping);
                     // Taken only once the line can go out, so a stop never loses the count.
                     var dropped = Interlocked.Exchange(ref _dropped, 0);
@@ -123,7 +137,7 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
                     }
 
                     Write(logEvent);
-                    _heldWhenStopped = 0;
+                    _holdingLine = 0;
                 }
             }
         }
@@ -137,6 +151,9 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
     {
         while (true)
         {
+            // Checked even when a token is free, so a stopped reader writes no more than the line it is on: with a slow
+            // console every write outlasts a token, and the cancellable delay below would never be reached.
+            stopping.ThrowIfCancellationRequested();
             var now = _clock.GetTimestamp();
             var elapsedTicks = _clock.GetElapsedTime(_lastRefill, now).Ticks;
             _lastRefill = now;
@@ -201,7 +218,7 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
         }
 
         // Counted, not read: a stuck reader may still take lines off the queue, and it is the only reader.
-        var unflushed = Volatile.Read(ref _heldWhenStopped) + _queue.Reader.Count;
+        var unflushed = Volatile.Read(ref _holdingLine) + _queue.Reader.Count;
         Volatile.Write(ref _finalReportTaken, 1);
         var refused = Interlocked.Exchange(ref _dropped, 0);
         var report =
