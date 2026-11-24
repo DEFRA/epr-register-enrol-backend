@@ -11,7 +11,7 @@ public interface ILegacyApplicationRead
 {
     /// <summary>
     /// The stored document for <paramref name="reference"/>, or null when there is none. The
-    /// reference is the application reference (<c>RA-…</c>), or, for an application that has not
+    /// reference is the application reference (<c>AP…</c>), or, for an application that has not
     /// been submitted and so has none, its <c>_id</c>. The document is read raw, not through the
     /// model, so fields the model doesn't know and enums stored as numbers come back as they are.
     /// Read-only.

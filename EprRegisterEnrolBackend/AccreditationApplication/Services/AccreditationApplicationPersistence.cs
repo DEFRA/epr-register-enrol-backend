@@ -333,7 +333,8 @@ public class AccreditationApplicationPersistence(
     )
     {
         // An _id for an application that has no reference yet (a draft); the application
-        // reference otherwise. References look like RA-000004561, so they can't be taken for an _id.
+        // reference otherwise. References look like AP27EA500500ABPL (management-be's
+        // ApplicationReferenceGenerator), so they can't be taken for an _id.
         var filter = ObjectId.TryParse(reference, out var id)
             ? new BsonDocument("_id", id)
             : new BsonDocument(ElementName(nameof(AccreditationApplicationModel.ApplicationReference)), reference);

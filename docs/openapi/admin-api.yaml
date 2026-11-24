@@ -95,7 +95,7 @@ paths:
       summary: Read one Legacy accreditation application, as stored
       description: |
         **Legacy.** One application from the Legacy `accreditationApplications` collection, found
-        by its application reference (`applicationReference`, for example `RA-000004561`), or by its
+        by its application reference (`applicationReference`, for example `AP27EA500500ABPL`), or by its
         `_id` when it has no reference. An application gets its reference when it is first
         submitted, so a draft can only be read by its `_id`. Any status, any year.
 
@@ -120,7 +120,7 @@ paths:
           required: true
           description: The application reference, or the `_id` (24 hex characters) of an application with none.
           schema: { type: string, minLength: 1, maxLength: 100 }
-          example: RA-000004561
+          example: AP27EA500500ABPL
       responses:
         '200':
           description: The stored document.

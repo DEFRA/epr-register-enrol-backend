@@ -504,15 +504,15 @@ public class AdminApiEndpointTests : IDisposable
     [Fact]
     public async Task AnApplication_IsFoundByItsReference_AsStored()
     {
-        var created = await Seed(a => a.ApplicationReference = "RA-000004561");
+        var created = await Seed(a => a.ApplicationReference = "AP27EA500112ABPL");
 
-        var response = await Get($"{SearchPath}/RA-000004561");
+        var response = await Get($"{SearchPath}/AP27EA500112ABPL");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
         var body = await Json(response);
         body.GetProperty("_id").GetProperty("$oid").GetString().Should().Be(created.Id.ToString());
-        body.GetProperty("applicationReference").GetString().Should().Be("RA-000004561");
+        body.GetProperty("applicationReference").GetString().Should().Be("AP27EA500112ABPL");
         body.GetProperty("organisationName").GetString().Should().Be("Harbourside Plastics Ltd");
         body.GetProperty("updatedAt").GetProperty("$date").ValueKind.Should().Be(JsonValueKind.String);
     }
@@ -537,14 +537,14 @@ public class AdminApiEndpointTests : IDisposable
     [Fact]
     public async Task TheDocument_KeepsFieldsTheModelDoesNotKnow_AndEnumsStoredAsNumbers()
     {
-        var created = await Seed(a => a.ApplicationReference = "RA-000000777");
+        var created = await Seed(a => a.ApplicationReference = "AP27EA500112ACPL");
         await RawApplications().UpdateOneAsync(
             new BsonDocument("_id", created.Id),
             new BsonDocument("$set", new BsonDocument { { "retiredField", "kept" }, { "emptyText", "" } }),
             cancellationToken: Ct
         );
 
-        var body = await Json(await Get($"{SearchPath}/RA-000000777"));
+        var body = await Json(await Get($"{SearchPath}/AP27EA500112ACPL"));
 
         body.GetProperty("retiredField").GetString().Should().Be("kept");
         body.GetProperty("emptyText").GetString().Should().BeEmpty();
@@ -553,11 +553,11 @@ public class AdminApiEndpointTests : IDisposable
     }
 
     [Theory]
-    [InlineData("RA-999999999")]
+    [InlineData("AP27EA599999ZZPL")]
     [InlineData("6716a3c09e4b2d1f8a5c7e30")]
     public async Task AnUnknownReferenceOrId_Is404_AsAProblem(string reference)
     {
-        await Seed(a => a.ApplicationReference = "RA-000000001");
+        await Seed(a => a.ApplicationReference = "AP27EA500112ADPL");
 
         var response = await Get($"{SearchPath}/{reference}");
 
@@ -575,7 +575,7 @@ public class AdminApiEndpointTests : IDisposable
     [Fact]
     public async Task AReferenceWithAControlCharacter_Is400()
     {
-        var response = await Get($"{SearchPath}/RA-1%01");
+        var response = await Get($"{SearchPath}/AP27%01");
 
         await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_reference");
     }
@@ -583,9 +583,9 @@ public class AdminApiEndpointTests : IDisposable
     [Fact]
     public async Task AnotherKnownClient_CannotReadAnApplication()
     {
-        await Seed(a => a.ApplicationReference = "RA-000000002");
+        await Seed(a => a.ApplicationReference = "AP27EA500112AEPL");
 
-        var response = await Get($"{SearchPath}/RA-000000002", ReExClientId, ReExSecret);
+        var response = await Get($"{SearchPath}/AP27EA500112AEPL", ReExClientId, ReExSecret);
 
         await AssertProblem(response, HttpStatusCode.Forbidden, "forbidden");
     }
@@ -601,7 +601,7 @@ public class AdminApiEndpointTests : IDisposable
         using var client = factory.CreateClient();
 
         var response = await client.SendAsync(
-            ServiceClientSigner.Request(HttpMethod.Get, $"{SearchPath}/RA-000000003", AdminClientId, AdminSecret),
+            ServiceClientSigner.Request(HttpMethod.Get, $"{SearchPath}/AP27EA500112AFPL", AdminClientId, AdminSecret),
             Ct
         );
 
