@@ -213,6 +213,58 @@ six-digit org number (900000–999999) and GOV.UK Notify's
 `ENVIRONMENT` is the CDP platform environment name, and it is read straight
 from the process environment.
 
+### Logging
+
+Every log line goes through Serilog (`Serilog` in `appsettings.json`) and out to stdout as an Elastic Common Schema
+(ECS) JSON line, which CDP ships to OpenSearch. What CDP keeps of each line, and how to search it, is in
+[docs/monitoring.md](docs/monitoring.md).
+
+#### Burst smoothing
+
+Lines don't go straight to the console. `BurstSmoothingSink`
+([`Utils/Logging`](EprRegisterEnrolBackend/Utils/Logging/BurstSmoothingSink.cs)), the `SmoothBursts` entry in
+`Serilog:WriteTo`, queues every line and passes it on to the console sink at a steady rate, in order. Logging never
+waits for it.
+
+Why: CDP's log shipping looks to drop bursts. On ext-test the RA-784 backfill wrote about 400 lines (554 KB) in under
+100 ms. None of them reached OpenSearch, and nor did anything else the service logged in that second ("Application
+started", "Now listening", the seeding lines), although the container carried on serving requests. They weren't in
+`cdp-broken-logs` either, so they were lost before indexing. The path is stdout, then Docker's `awsfirelens` log driver
+with its default buffer, then CDP's Fluent Bit sidecar (1 MB chunks, two retries before a chunk is discarded), then
+OpenSearch, and AWS warns that Docker "might run out of buffer memory and discard buffer messages". This is the working
+explanation, not a proven cause: management-be got 534 lines through in one second, so it is the burst, not the count,
+that looks to matter.
+
+The settings are the `Args` of `Serilog:WriteTo:0`, and these defaults are the correct values (`appsettings.json` sets
+them explicitly; the code falls back to the same values). Override one with an environment variable such as
+`Serilog__WriteTo__0__Args__linesPerSecond`. A value the sink can't run with (zero, negative, `burst` over
+`queueCapacity`, a zero timeout) stops the service starting, with an error naming the setting.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `linesPerSecond` | `200` | The most lines written a second, sustained |
+| `burst` | `50` | Lines that go out at once after a quiet spell, before the rate applies (a token bucket). At most `queueCapacity` |
+| `queueCapacity` | `10000` | Lines waiting to be written. A line that finds the queue full is dropped |
+| `shutdownFlushTimeout` | `00:00:05` | How long shutdown waits for the queue to be written |
+
+Nothing is dropped silently. Dropped lines are counted, and the next line written is preceded by one Warning,
+`Dropped <n> log lines because the log queue was full`. At shutdown, lines still queued after `shutdownFlushTimeout`
+are reported, with any refused lines not yet reported, in one final Warning, `Dropped <n> log lines at shutdown: ...`.
+Both have `log.logger` `EprRegisterEnrolBackend.Utils.Logging.BurstSmoothingSink`. If the console sink itself fails on
+a line, the line is lost, the failure goes to stderr through Serilog's `SelfLog`, and logging carries on.
+
+Development uses the same entry: `appsettings.Development.json` has no `WriteTo` of its own, because .NET merges arrays
+by index and one would merge into this entry. So `docker compose` and the end-to-end stacks smooth bursts too.
+
+#### Logging from one-off jobs, migrations and diagnostics
+
+The sink caps the rate, not the number of lines, and a long burst still fills the queue. So a job that logs a lot:
+
+- logs its summary (counts, outcome) first, so the result is in the log even if its detail is not;
+- packs detail into fewer lines, several records to a line, keeping each line well under the 16 KB at which the
+  container runtime splits a log line (aim for about 10 KB; the RA-784 backfill packs 40 register rows a line);
+- never writes hundreds of lines back to back.
+
 ### Accreditation Applications API
 
 RA-101 adds an `accreditationApplications` MongoDB collection and a full REST API for managing operator accreditation applications.

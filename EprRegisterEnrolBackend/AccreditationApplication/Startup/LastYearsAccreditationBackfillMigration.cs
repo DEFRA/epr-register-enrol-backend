@@ -119,29 +119,9 @@ public class LastYearsAccreditationBackfillMigration(
         string Detail
     );
 
-    // At most LinesBetweenPauses lines, then a pause of PauseBetweenLines (about 100 lines a second), because CDP's
-    // log shipping looks to drop bursts: on ext-test ~400 lines in under 100 ms never reached OpenSearch (RA-784).
-    // The pause ignores the stop signal, so the finally block's report still goes out when a run is stopped.
-    // Settable for tests.
-    internal int LinesBetweenPauses { get; init; } = 50;
-    internal TimeSpan PauseBetweenLines { get; init; } = TimeSpan.FromMilliseconds(500);
-    internal Func<TimeSpan, Task> Pause { get; init; } = delay => Task.Delay(delay);
-
     // Unused register rows per report line, so the ~400-row register is a handful of lines, not one each. 40 rows make
     // a line of about 10 KB, under the 16 KB at which the container runtime splits a log line.
     internal const int RegisterRowsPerLine = 40;
-
-    private int _linesSincePause;
-
-    // Called after each line the run logs.
-    private async Task PaceAsync()
-    {
-        if (++_linesSincePause < LinesBetweenPauses)
-            return;
-
-        _linesSincePause = 0;
-        await Pause(PauseBetweenLines);
-    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -182,7 +162,6 @@ public class LastYearsAccreditationBackfillMigration(
         if (!options.Value.Enabled)
             return RunResult.Disabled;
 
-        _linesSincePause = 0;
         var confirmedBy = AuthorisedReviewer(options.Value);
         var mode = confirmedBy is null ? "DRY RUN (nothing will be written)" : "APPLY";
         if (logger.IsEnabled(LogLevel.Information))
@@ -190,7 +169,6 @@ public class LastYearsAccreditationBackfillMigration(
                 "RA-784 last year's accreditation backfill starting. Mode={Mode}",
                 mode
             );
-        await PaceAsync();
 
         var persistence =
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
@@ -202,7 +180,6 @@ public class LastYearsAccreditationBackfillMigration(
                 applications.Count,
                 AccreditationYear
             );
-        await PaceAsync();
 
         // Organisation by organisation; a draft without its OrgId yet sorts by its ReEx id after the rest.
         var plans = applications
@@ -224,7 +201,6 @@ public class LastYearsAccreditationBackfillMigration(
                 OutcomeCounts(plans),
                 IssuedCounts(plans)
             );
-        await PaceAsync();
 
         // Only an apply writes, so only an apply needs the unit of work.
         var unitOfWork =
@@ -254,8 +230,8 @@ public class LastYearsAccreditationBackfillMigration(
         {
             // Cancelled or failed part-way: the report still says what was planned and what was written so far,
             // and the exception carries on.
-            await ReportNotOnTheRegisterAsync(plans, mode);
-            await ReportUnusedRegisterRowsAsync(plans, mode);
+            ReportNotOnTheRegister(plans, mode);
+            ReportUnusedRegisterRows(plans, mode);
             ReportSummary(plans, writes, mode, finished);
         }
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
@@ -440,7 +416,6 @@ public class LastYearsAccreditationBackfillMigration(
                 plan.Detail
             );
         }
-        await PaceAsync();
 
         if (confirmedBy is null || unitOfWork is null || plan.Outcome != Outcome.Added)
             return null;
@@ -453,7 +428,6 @@ public class LastYearsAccreditationBackfillMigration(
             confirmedBy,
             cancellationToken
         );
-        await PaceAsync();
         return write;
     }
 
@@ -540,7 +514,7 @@ public class LastYearsAccreditationBackfillMigration(
 
     // The end-of-run report, part 1: every application whose registration number isn't on the register, with the org
     // and registration number it holds, so each can be checked by hand.
-    private async Task ReportNotOnTheRegisterAsync(IReadOnlyList<Plan> plans, string mode)
+    private void ReportNotOnTheRegister(IReadOnlyList<Plan> plans, string mode)
     {
         var missing = plans
             .Where(p => p.Outcome is Outcome.NotOnTheRegister or Outcome.RegistrationNumberIncomplete)
@@ -553,7 +527,6 @@ public class LastYearsAccreditationBackfillMigration(
             mode,
             missing.Count
         );
-        await PaceAsync();
         foreach (var plan in missing)
         {
             if (plan.Application.PreviousRegistrationNumbers.Count == 0)
@@ -568,7 +541,6 @@ public class LastYearsAccreditationBackfillMigration(
                     plan.Id,
                     plan.Application.ApplicationReference
                 );
-                await PaceAsync();
                 continue;
             }
 
@@ -584,14 +556,13 @@ public class LastYearsAccreditationBackfillMigration(
                 plan.Id,
                 plan.Application.ApplicationReference
             );
-            await PaceAsync();
         }
     }
 
     // The end-of-run report, part 2: every register row no 2027 application matched, so whoever reviews the run can
     // see which 2026 registrations haven't applied for 2027 (or hold a registration number that doesn't match).
     // RegisterRowsPerLine rows to a line, so the whole register is a handful of lines.
-    private async Task ReportUnusedRegisterRowsAsync(IReadOnlyList<Plan> plans, string mode)
+    private void ReportUnusedRegisterRows(IReadOnlyList<Plan> plans, string mode)
     {
         var used = plans
             .Select(p => p.RegisterRegistrationNumber)
@@ -614,7 +585,6 @@ public class LastYearsAccreditationBackfillMigration(
             unused.Count(r => r.Value.AccreditationNumber is not null),
             unused.Count(r => r.Value.AccreditationNumber is null)
         );
-        await PaceAsync();
         var lines = unused.Chunk(RegisterRowsPerLine).ToList();
         for (var line = 0; line < lines.Count; line++)
         {
@@ -633,7 +603,6 @@ public class LastYearsAccreditationBackfillMigration(
                     )
                 )
             );
-            await PaceAsync();
         }
     }
 
