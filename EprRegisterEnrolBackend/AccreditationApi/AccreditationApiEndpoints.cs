@@ -139,7 +139,7 @@ public static partial class AccreditationApiEndpoints
         );
 
         return Results.Ok(
-            new PageDto<AccreditationSummaryDto>
+            new PageDto<AccreditationSearchItemDto>
             {
                 PageNumber = paging.PageNumber,
                 Limit = paging.Limit,

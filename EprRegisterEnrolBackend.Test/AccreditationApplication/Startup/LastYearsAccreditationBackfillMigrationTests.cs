@@ -137,7 +137,11 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 }
             ),
             _logger
-        );
+        )
+        {
+            // No real pauses in the suite; The_run_pauses_after_every_few_lines covers the pacing.
+            Pause = _ => Task.CompletedTask,
+        };
     }
 
     private Task<Migration.RunResult> ApplyAsync() =>
@@ -673,16 +677,21 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         await CreateMigration().RunAsync(Ct);
 
         var total = PublicRegister2026.ByRegistrationNumber.Count;
-        var unusedLines = Logged(LogLevel.Information).Where(m => m.Contains("register row not used")).ToList();
-        unusedLines.Should().HaveCount(total - 2);
+        var unused = total - 2;
+        var unusedLines = Logged(LogLevel.Information).Where(m => m.Contains("register rows not used")).ToList();
+        // RegisterRowsPerLine rows to a line, numbered, so the ~400 rows are a handful of lines.
+        unusedLines.Should().HaveCount((unused + Migration.RegisterRowsPerLine - 1) / Migration.RegisterRowsPerLine);
+        unusedLines[0].Should().Contain($"1-{Migration.RegisterRowsPerLine} of {unused}:");
+        unusedLines[^1].Should().Contain($"-{unused} of {unused}:");
+        unusedLines.Sum(m => m.Split("; ").Length).Should().Be(unused);
         unusedLines.Should().NotContain(m => m.Contains(EggerRegistration) || m.Contains(DtsRegistration));
-        unusedLines
-            .Should()
-            .Contain(m => m.Contains(ClearfieldRegistration) && m.Contains(ClearfieldAccreditation))
-            .And.Contain(m => m.Contains(JAndAYoungRegistration) && m.Contains("none (registered only)"));
+        var rows = unusedLines.SelectMany(m => m.Split("; ")).ToList();
+        rows.Should()
+            .Contain(r => r.Contains(ClearfieldRegistration) && r.Contains(ClearfieldAccreditation))
+            .And.Contain(r => r.Contains(JAndAYoungRegistration) && r.Contains("none (registered only)"));
         Logged(LogLevel.Information)
             .Should()
-            .ContainSingle(m => m.Contains($"{total - 2} of {total} register rows matched no 2027 application"));
+            .ContainSingle(m => m.Contains($"{unused} of {total} register rows matched no 2027 application"));
     }
 
     // Organisation by organisation, so the log reads one organisation at a time.
@@ -896,316 +905,166 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         Logged(LogLevel.Information)
             .Should()
-            .Contain(m => m.Contains("components ready"))
-            .And.Contain(m => m.Contains("reading the 2027 applications, limit 00:02:00"))
-            .And.Contain(m => m.Contains("read call returned, waiting for the result"))
-            .And.Contain(m => m.Contains("read finished in"))
-            .And.Contain(m => m.Contains("read 2 2027 applications"))
+            .Contain(m => m.Contains("read 2 2027 applications"))
             .And.Contain(m => m.Contains("planned 2 applications"));
     }
 
-    // Started during start-up, the backfill stalled on ext-test; it now waits until the application has started.
+    // The outcome counts go out before the per-application lines, so the run's result is logged even if the detail
+    // that follows is lost.
     [Fact]
-    public async Task The_backfill_reads_nothing_until_the_application_has_started()
+    public async Task The_planned_line_carries_the_outcome_counts_before_any_application_line()
     {
-        using var started = new CancellationTokenSource();
-        var reachedWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var lifetime = Substitute.For<IHostApplicationLifetime>();
-        lifetime.ApplicationStarted.Returns(_ =>
-        {
-            reachedWait.TrySetResult();
-            return started.Token;
-        });
-        var persistence = EmptyPersistence();
-        var migration = HostedMigration(persistence, lifetime);
+        await SeedAsync(Egger());
+        await SeedAsync(Application(DtsRegistration, 500237));
+        var clearfield = await SeedAsync(Clearfield());
 
-        await migration.StartAsync(Ct);
-        // The getter is only read by the wait, so without the wait this times out rather than passing vacuously.
-        await reachedWait.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        await CreateMigration().RunAsync(Ct);
 
-        migration.ExecuteTask!.IsCompleted.Should().BeFalse();
-        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
-
-        await started.CancelAsync();
-        await migration.ExecuteTask.WaitAsync(TimeSpan.FromSeconds(30), Ct);
-
-        await persistence.ReceivedWithAnyArgs(1).GetByYearAsync(0, Ct);
-        Logged(LogLevel.Information).Should().Contain(m => m.Contains("backfill complete"));
+        var lines = _logger.Entries.Select(e => e.Message).ToList();
+        var planned = lines.FindIndex(m => m.Contains("planned 3 applications"));
+        planned.Should().BeGreaterThanOrEqualTo(0);
+        lines[planned]
+            .Should()
+            .Contain("Last year's accreditation planned: Added=2, AlreadyHeld=0, RegisteredOnly=1")
+            .And.Contain("Issued numbers: NotIssued=2, FitsTheRegister=0, DoesNotFitTheRegister=1");
+        planned.Should().BeLessThan(lines.FindIndex(m => m.Contains(clearfield.ToString())));
     }
 
-    [Fact]
-    public async Task Shutting_down_before_the_application_has_started_reads_nothing()
-    {
-        var lifetime = Substitute.For<IHostApplicationLifetime>();
-        lifetime.ApplicationStarted.Returns(CancellationToken.None);
-        var persistence = EmptyPersistence();
-        var migration = HostedMigration(persistence, lifetime);
-
-        await migration.StartAsync(Ct);
-        await migration.StopAsync(Ct);
-
-        migration.ExecuteTask!.IsCompleted.Should().BeTrue();
-        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
-        _logger.Entries.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task The_backfill_waits_the_start_delay_before_reading()
-    {
-        var persistence = EmptyPersistence();
-        var migration = HostedMigration(persistence, lifetime: null, startDelay: TimeSpan.FromHours(1));
-
-        await migration.StartAsync(Ct);
-        await WaitForLogAsync("waiting 01:00:00 after start-up");
-
-        migration.ExecuteTask!.IsCompleted.Should().BeFalse();
-        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
-
-        await migration.StopAsync(Ct);
-
-        migration.ExecuteTask.IsCompleted.Should().BeTrue();
-        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
-        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
-    }
-
+    // The run never logs more than LinesBetweenPauses lines without a pause, in a dry run and in an APPLY run, where
+    // each Added application logs a second line for its write (RA-784: CDP's log shipping looks to drop bursts).
     [Theory]
-    [InlineData("-00:00:01")]
-    [InlineData("1.00:00:01")]
-    public async Task A_start_delay_below_zero_or_over_a_day_fails_the_run_saying_how_to_set_it(string delay)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_run_pauses_after_every_few_lines(bool apply)
     {
-        var persistence = EmptyPersistence();
-        var migration = HostedMigration(persistence, lifetime: null, startDelay: TimeSpan.Parse(delay));
-
-        await migration.StartAsync(Ct);
-        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
-
-        _logger.Entries.Should()
-            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
-            .Which.Exception.Should().BeOfType<InvalidOperationException>()
-            .Which.Message.Should().Contain("StartDelay must be from zero to a day as hh:mm:ss");
-        await persistence.DidNotReceiveWithAnyArgs().GetByYearAsync(0, Ct);
-    }
-
-    [Fact]
-    public async Task A_read_that_takes_too_long_is_logged_as_a_failure_with_the_reason()
-    {
-        var slow = Substitute.For<IAccreditationApplicationPersistence>();
-        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
-
-        await RunHostedAndExpectTimeoutAsync(slow);
-    }
-
-    // A read stuck somewhere that ignores the token (a connection handshake, say) still ends the wait.
-    [Fact]
-    public async Task A_read_that_ignores_the_token_is_still_cut_off()
-    {
-        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
-        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(_ => new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>().Task);
-
-        await RunHostedAndExpectTimeoutAsync(stuck);
-    }
-
-    // On ext-test the run logged "components ready" and then nothing, not even the timeout: a call that blocks before
-    // handing back its task must still be cut off, and the log must show the call never returned.
-    [Fact]
-    public async Task A_read_that_blocks_before_returning_is_still_cut_off_and_logged_as_not_returned()
-    {
-        using var release = new ManualResetEventSlim();
-        var blocking = Substitute.For<IAccreditationApplicationPersistence>();
-        blocking.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(_ =>
-            {
-                release.Wait(TimeSpan.FromSeconds(30));
-                return Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>([]);
-            });
-
-        try
-        {
-            await RunHostedAndExpectTimeoutAsync(blocking);
-            Logged(LogLevel.Information).Should().NotContain(m => m.Contains("read call returned"));
-        }
-        finally
-        {
-            release.Set();
-        }
-    }
-
-    [Fact]
-    public async Task A_read_still_waiting_is_logged_as_a_warning()
-    {
-        var slow = Substitute.For<IAccreditationApplicationPersistence>();
-        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
-
-        await RunHostedAndExpectTimeoutAsync(slow, progressInterval: TimeSpan.FromMilliseconds(200));
-
-        _logger.Entries.Should()
-            .Contain(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("still reading the 2027 applications after"));
-        Logged(LogLevel.Information).Should().Contain(m => m.Contains("read call returned, waiting for the result"));
-    }
-
-    // The read that hit the limit may fail later on its own (server selection, a handshake); that error is the likeliest
-    // cause of the stall, so it is logged even though nothing awaits the read any more.
-    [Fact]
-    public async Task An_abandoned_read_that_fails_later_logs_its_error()
-    {
-        var late = new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>();
-        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
-        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(_ => late.Task);
-        await RunHostedAndExpectTimeoutAsync(stuck);
-        var serverSelection = new TimeoutException("selecting a server");
-
-        late.SetException(serverSelection);
-        await WaitForLogAsync("the abandoned read of the 2027 applications failed after");
-
-        _logger.Entries.Should()
-            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("abandoned read"))
-            .Which.Exception.Should().BeSameAs(serverSelection);
-    }
-
-    [Fact]
-    public async Task An_abandoned_read_that_is_cancelled_later_logs_nothing_more()
-    {
-        var late = new TaskCompletionSource<IReadOnlyList<AccreditationApplicationModel>>();
-        var stuck = Substitute.For<IAccreditationApplicationPersistence>();
-        stuck.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(_ => late.Task);
-        await RunHostedAndExpectTimeoutAsync(stuck);
-        var before = _logger.Entries.Count;
-
-        late.SetCanceled(Ct);
-        await Task.Delay(TimeSpan.FromMilliseconds(200), Ct);
-
-        _logger.Entries.Should().HaveCount(before);
-    }
-
-    // The progress warning comes from our own interval; a TimeoutException from the read itself fails the run as it is.
-    [Fact]
-    public async Task A_timeout_from_the_read_itself_fails_the_run_unchanged()
-    {
-        var timedOut = Substitute.For<IAccreditationApplicationPersistence>();
-        timedOut.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<IReadOnlyList<AccreditationApplicationModel>>(new TimeoutException("selecting a server")));
-        var migration = HostedMigration(timedOut, lifetime: null);
-
-        var run = () => migration.RunAsync(Ct);
-
-        await run.Should().ThrowAsync<TimeoutException>().WithMessage("selecting a server");
-        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Warning);
-    }
-
-    // Only the limit we set is reported as a timeout; the caller's own cancellation stays a cancellation.
-    [Fact]
-    public async Task The_callers_cancellation_is_not_reported_as_a_timeout()
-    {
-        var slow = Substitute.For<IAccreditationApplicationPersistence>();
-        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(call => Never(call.ArgAt<CancellationToken>(1)));
-        var migration = HostedMigration(slow, lifetime: null);
-        using var caller = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        caller.CancelAfter(TimeSpan.FromMilliseconds(200));
-
-        var run = () => migration.RunAsync(caller.Token);
-
-        await run.Should().ThrowAsync<OperationCanceledException>();
-    }
-
-    // A cancellation that is neither our limit nor the caller's (the driver's own, say) is not reported as a timeout.
-    [Fact]
-    public async Task A_cancellation_from_the_read_itself_is_not_reported_as_a_timeout()
-    {
-        var cancelled = Substitute.For<IAccreditationApplicationPersistence>();
-        cancelled.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromCanceled<IReadOnlyList<AccreditationApplicationModel>>(new CancellationToken(canceled: true)));
-        var migration = HostedMigration(cancelled, lifetime: null);
-
-        var run = () => migration.RunAsync(Ct);
-
-        (await run.Should().ThrowAsync<OperationCanceledException>()).Which.Should().NotBeOfType<TimeoutException>();
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-5)]
-    public async Task A_read_limit_of_zero_or_less_fails_the_run_saying_how_to_set_it(int seconds)
-    {
-        var migration = HostedMigration(EmptyPersistence(), lifetime: null, readTimeout: TimeSpan.FromSeconds(seconds));
-
-        var run = () => migration.RunAsync(Ct);
-
-        await run.Should().ThrowAsync<InvalidOperationException>().WithMessage("*ReadTimeout must be a positive duration as hh:mm:ss*");
-    }
-
-    private async Task RunHostedAndExpectTimeoutAsync(
-        IAccreditationApplicationPersistence persistence,
-        TimeSpan? progressInterval = null
-    )
-    {
-        var migration = HostedMigration(persistence, lifetime: null, readTimeout: TimeSpan.FromSeconds(1), progressInterval);
-
-        await migration.StartAsync(Ct);
-        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
-
-        var failure = _logger.Entries.Should()
-            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
-            .Subject;
-        failure.Exception.Should().BeOfType<TimeoutException>()
-            .Which.Message.Should().Be("Reading the 2027 applications took longer than 00:00:01, so nothing was planned");
-        Logged(LogLevel.Information).Should().NotContain(m => m.Contains("planned"));
-    }
-
-    private async Task WaitForLogAsync(string text)
-    {
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        limit.CancelAfter(TimeSpan.FromSeconds(30));
-        while (!_logger.Entries.ToList().Exists(e => e.Message.Contains(text)))
-            await Task.Delay(TimeSpan.FromMilliseconds(20), limit.Token);
-    }
-
-    private static async Task<IReadOnlyList<AccreditationApplicationModel>> Never(CancellationToken ct)
-    {
-        await Task.Delay(Timeout.Infinite, ct);
-        return [];
-    }
-
-    private static IAccreditationApplicationPersistence EmptyPersistence()
-    {
-        var persistence = Substitute.For<IAccreditationApplicationPersistence>();
-        persistence.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>([]));
-        return persistence;
-    }
-
-    // A hosted (ExecuteAsync) migration over the given persistence and lifetime, unlike CreateMigration's, which tests
-    // call RunAsync on directly against the real Mongo persistence.
-    private Migration HostedMigration(
-        IAccreditationApplicationPersistence persistence,
-        IHostApplicationLifetime? lifetime,
-        TimeSpan? readTimeout = null,
-        TimeSpan? progressInterval = null,
-        TimeSpan? startDelay = null
-    )
-    {
+        for (var i = 0; i < 7; i++)
+            await SeedAsync(Application($"R26ER50099{i:D2}0001PL", 500990 + i));
+        await SeedAsync(Egger());
+        await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+        var linesAtEachPause = new List<int>();
         var services = new ServiceCollection();
-        services.AddSingleton(persistence);
+        services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
         services.AddSingleton<IDualWriteUnitOfWork>(new LegacyOnlyUnitOfWork());
-        if (lifetime is not null)
-            services.AddSingleton(lifetime);
-        return new Migration(
+        var migration = new Migration(
             services.BuildServiceProvider(),
             Options.Create(
                 new LastYearsAccreditationBackfillOptions
                 {
                     Enabled = true,
-                    ReadTimeout = readTimeout ?? TimeSpan.FromMinutes(2),
-                    StartDelay = startDelay ?? TimeSpan.Zero,
+                    Apply = apply,
+                    SpotCheckConfirmedBy = apply ? "A Reviewer" : null,
                 }
             ),
             _logger
         )
         {
-            ReadProgressInterval = progressInterval ?? TimeSpan.FromSeconds(15),
+            LinesBetweenPauses = 3,
+            PauseBetweenLines = TimeSpan.FromMilliseconds(250),
+            Pause = delay =>
+            {
+                delay.Should().Be(TimeSpan.FromMilliseconds(250));
+                linesAtEachPause.Add(_logger.Entries.Count);
+                return Task.CompletedTask;
+            },
         };
+
+        await migration.RunAsync(Ct);
+
+        // starting, read, planned, 9 applications (and, applying, 2 writes), 1 + 7 not on the register, the
+        // unused-row lines, summary. Every line but the summary is paced.
+        Logged(LogLevel.Information).Count(m => m.Contains("RA-784 APPLIED")).Should().Be(apply ? 2 : 0);
+        var lines = _logger.Entries.Count;
+        lines.Should().BeGreaterThan(20);
+        linesAtEachPause.Should().HaveCount((lines - 1) / 3);
+        linesAtEachPause.Zip(linesAtEachPause.Skip(1), (a, b) => b - a).Should().OnlyContain(gap => gap == 3);
+        linesAtEachPause[0].Should().Be(3);
+        (lines - linesAtEachPause[^1]).Should().BeLessThanOrEqualTo(3);
+    }
+
+    // A dry run writes nothing, so it never builds the unit of work.
+    [Fact]
+    public async Task A_dry_run_never_builds_the_unit_of_work()
+    {
+        await SeedAsync(Egger());
+        var built = false;
+        var services = new ServiceCollection();
+        services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
+        services.AddSingleton<IDualWriteUnitOfWork>(_ =>
+        {
+            built = true;
+            return new LegacyOnlyUnitOfWork();
+        });
+        var migration = new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            _logger
+        );
+
+        var result = await migration.RunAsync(Ct);
+
+        result.Should().Be(Migration.RunResult.DryRun);
+        built.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_failed_read_is_logged_as_the_backfill_failing()
+    {
+        var failing = Substitute.For<IAccreditationApplicationPersistence>();
+        failing.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<AccreditationApplicationModel>>(new TimeoutException("selecting a server")));
+        var services = new ServiceCollection();
+        services.AddSingleton(failing);
+        var migration = new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            _logger
+        );
+
+        await migration.StartAsync(Ct);
+        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
+            .Which.Exception.Should().BeOfType<TimeoutException>();
+    }
+
+    // A stop part-way is logged rather than swallowed, so the run never goes silent, and the log says whether the host
+    // itself was stopping or only this service was.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_stop_part_way_is_logged_as_a_warning_saying_whether_the_host_is_stopping(bool hostStopping)
+    {
+        using var stopping = new CancellationTokenSource();
+        if (hostStopping)
+            await stopping.CancelAsync();
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        lifetime.ApplicationStopping.Returns(stopping.Token);
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slow = Substitute.For<IAccreditationApplicationPersistence>();
+        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                reading.TrySetResult();
+                await Task.Delay(Timeout.Infinite, call.ArgAt<CancellationToken>(1));
+                return (IReadOnlyList<AccreditationApplicationModel>)[];
+            });
+        var services = new ServiceCollection();
+        services.AddSingleton(slow);
+        services.AddSingleton(lifetime);
+        var migration = new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            _logger
+        );
+
+        await migration.StartAsync(Ct);
+        await reading.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        await migration.StopAsync(Ct);
+
+        _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("stopped part-way: its stop signal was set"))
+            .Which.Message.Should().Contain($"HostStopping={hostStopping}");
+        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 }
