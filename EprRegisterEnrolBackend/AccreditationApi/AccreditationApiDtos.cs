@@ -46,6 +46,22 @@ public record AccreditationSummaryDto
 }
 
 /// <summary>
+/// A search result item (RA-802): the summary plus, for an exporter, the same <c>overseasSites</c>
+/// the single-accreditation response carries, so paging through search once gives every
+/// accreditation with its sites. Reprocessor items leave the property out. Only search uses it:
+/// the summary itself is unchanged.
+/// </summary>
+public sealed record AccreditationSearchItemDto : AccreditationSummaryDto
+{
+    /// <summary>
+    /// Exporters only, ordered by ORS id, as on <see cref="AccreditationDto"/>; <c>[]</c> when an
+    /// exporter has no selected sites. For a reprocessor the property is left out.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AccreditedOverseasSiteDto>? OverseasSites { get; init; }
+}
+
+/// <summary>
 /// The v2 <c>Accreditation</c>: a summary plus its histories (oldest first), PRN signatories and,
 /// for an exporter, every overseas site on the accreditation with its interim sites and status
 /// history (RA-647: one request returns the complete accreditation). Returned only when getting one

@@ -20,7 +20,8 @@ public class AccreditationApplicationPersistence(
         loggerFactory
     ),
         IAccreditationApplicationPersistence,
-        ILegacyApplicationSearch
+        ILegacyApplicationSearch,
+        ILegacyApplicationRead
 {
     /// <summary>
     /// The container uses this constructor (the legacy collection).
@@ -325,6 +326,33 @@ public class AccreditationApplicationPersistence(
         return (items, total);
     }
 
+    public async Task<BsonDocument?> GetLegacyApplicationAsync(
+        string reference,
+        TimeSpan? maxTime = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        // An _id for an application that has no reference yet (a draft); the application
+        // reference otherwise. References look like AP27EA500500ABPL (management-be's
+        // ApplicationReferenceGenerator), so they can't be taken for an _id.
+        var filter = ObjectId.TryParse(reference, out var id)
+            ? new BsonDocument("_id", id)
+            : new BsonDocument(ElementName(nameof(AccreditationApplicationModel.ApplicationReference)), reference);
+
+        // Raw, not through the model: the class map ignores elements it doesn't know, and the admin
+        // view is for seeing the document as it is.
+        var raw = Collection.Database.GetCollection<BsonDocument>(Collection.CollectionNamespace.CollectionName);
+        return await raw.Find(filter, new FindOptions { MaxTime = maxTime })
+            .Limit(1)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    // The element a model property is stored under, from the class map, so a raw filter follows the
+    // naming convention the typed filters follow. Looked up when called, never in a static field, so
+    // it can't freeze the class map before the convention is registered.
+    private static string ElementName(string property) =>
+        BsonClassMap.LookupClassMap(typeof(AccreditationApplicationModel)).GetMemberMap(property).ElementName;
+
     // The text as a literal (every regex metacharacter escaped), anywhere in the field, ignoring
     // case. OrgId is stored as a number, so it is turned into text on the server to be matched.
     private static FilterDefinition<AccreditationApplicationModel> TextMatches(
@@ -332,13 +360,8 @@ public class AccreditationApplicationPersistence(
         IReadOnlyCollection<LegacyApplicationSearchField>? fields
     )
     {
-        // The element OrgId is stored under, from the class map, so the $expr follows the naming
-        // convention the typed filters follow. Looked up here, not in a static field, so it can never
-        // run (and freeze the class map) before the convention is registered.
-        var orgIdElement = BsonClassMap
-            .LookupClassMap(typeof(AccreditationApplicationModel))
-            .GetMemberMap(nameof(AccreditationApplicationModel.OrgId))
-            .ElementName;
+        // The $expr needs OrgId's element name, as stored.
+        var orgIdElement = ElementName(nameof(AccreditationApplicationModel.OrgId));
         var pattern = Regex.Escape(text);
         var regex = new BsonRegularExpression(pattern, "i");
         var searched = fields is { Count: > 0 } ? fields : Enum.GetValues<LegacyApplicationSearchField>();
@@ -579,30 +602,6 @@ public class AccreditationApplicationPersistence(
             )
             .SortBy(a => a.Id)
             .ToListAsync(cancellationToken);
-
-    // RA-766: the statuses ChargeCorrectionMigration leaves alone: the three an application can no
-    // longer leave, and Queried, whose answer (and so its charge) has not been sent yet.
-    internal static readonly ApplicationStatus[] ExcludedStatuses =
-    [
-        ApplicationStatus.Approved,
-        ApplicationStatus.Rejected,
-        ApplicationStatus.Withdrawn,
-        ApplicationStatus.Queried,
-    ];
-
-    public async Task<
-        IReadOnlyList<AccreditationApplicationModel>
-    > GetOpenNotQueriedWithCaseManagementWorkItemAsync(CancellationToken cancellationToken = default)
-    {
-        var filter = Builders<AccreditationApplicationModel>.Filter;
-        return await Collection
-            .Find(
-                filter.Ne(a => a.CaseManagementWorkItemId, null)
-                    & filter.Nin(a => a.ApplicationStatus, ExcludedStatuses)
-            )
-            .SortBy(a => a.Id)
-            .ToListAsync(cancellationToken);
-    }
 
     public async Task<
         IReadOnlyList<AccreditationApplicationModel>

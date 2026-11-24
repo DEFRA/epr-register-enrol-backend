@@ -11,12 +11,14 @@ using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Diagnostics.Metrics;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using NSubstitute;
 using Migration = EprRegisterEnrolBackend.AccreditationApplication.Startup.LastYearsAccreditationBackfillMigration;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
@@ -135,7 +137,11 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 }
             ),
             _logger
-        );
+        )
+        {
+            // No real pauses in the suite; The_run_pauses_after_every_few_lines covers the pacing.
+            Pause = _ => Task.CompletedTask,
+        };
     }
 
     private Task<Migration.RunResult> ApplyAsync() =>
@@ -671,16 +677,21 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         await CreateMigration().RunAsync(Ct);
 
         var total = PublicRegister2026.ByRegistrationNumber.Count;
-        var unusedLines = Logged(LogLevel.Information).Where(m => m.Contains("register row not used")).ToList();
-        unusedLines.Should().HaveCount(total - 2);
+        var unused = total - 2;
+        var unusedLines = Logged(LogLevel.Information).Where(m => m.Contains("register rows not used")).ToList();
+        // RegisterRowsPerLine rows to a line, numbered, so the ~400 rows are a handful of lines.
+        unusedLines.Should().HaveCount((unused + Migration.RegisterRowsPerLine - 1) / Migration.RegisterRowsPerLine);
+        unusedLines[0].Should().Contain($"1-{Migration.RegisterRowsPerLine} of {unused}:");
+        unusedLines[^1].Should().Contain($"-{unused} of {unused}:");
+        unusedLines.Sum(m => m.Split("; ").Length).Should().Be(unused);
         unusedLines.Should().NotContain(m => m.Contains(EggerRegistration) || m.Contains(DtsRegistration));
-        unusedLines
-            .Should()
-            .Contain(m => m.Contains(ClearfieldRegistration) && m.Contains(ClearfieldAccreditation))
-            .And.Contain(m => m.Contains(JAndAYoungRegistration) && m.Contains("none (registered only)"));
+        var rows = unusedLines.SelectMany(m => m.Split("; ")).ToList();
+        rows.Should()
+            .Contain(r => r.Contains(ClearfieldRegistration) && r.Contains(ClearfieldAccreditation))
+            .And.Contain(r => r.Contains(JAndAYoungRegistration) && r.Contains("none (registered only)"));
         Logged(LogLevel.Information)
             .Should()
-            .ContainSingle(m => m.Contains($"{total - 2} of {total} register rows matched no 2027 application"));
+            .ContainSingle(m => m.Contains($"{unused} of {total} register rows matched no 2027 application"));
     }
 
     // Organisation by organisation, so the log reads one organisation at a time.
@@ -880,5 +891,180 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
                 && m.Contains("planned: Added=2")
                 && m.Contains("Written: Written=2, LostTheRace=0, Failed=0")
             );
+    }
+
+    // --- when it runs ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_read_and_the_plan_are_logged()
+    {
+        await SeedAsync(Egger());
+        await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+
+        await CreateMigration().RunAsync(Ct);
+
+        Logged(LogLevel.Information)
+            .Should()
+            .Contain(m => m.Contains("read 2 2027 applications"))
+            .And.Contain(m => m.Contains("planned 2 applications"));
+    }
+
+    // The outcome counts go out before the per-application lines, so the run's result is logged even if the detail
+    // that follows is lost.
+    [Fact]
+    public async Task The_planned_line_carries_the_outcome_counts_before_any_application_line()
+    {
+        await SeedAsync(Egger());
+        await SeedAsync(Application(DtsRegistration, 500237));
+        var clearfield = await SeedAsync(Clearfield());
+
+        await CreateMigration().RunAsync(Ct);
+
+        var lines = _logger.Entries.Select(e => e.Message).ToList();
+        var planned = lines.FindIndex(m => m.Contains("planned 3 applications"));
+        planned.Should().BeGreaterThanOrEqualTo(0);
+        lines[planned]
+            .Should()
+            .Contain("Last year's accreditation planned: Added=2, AlreadyHeld=0, RegisteredOnly=1")
+            .And.Contain("Issued numbers: NotIssued=2, FitsTheRegister=0, DoesNotFitTheRegister=1");
+        planned.Should().BeLessThan(lines.FindIndex(m => m.Contains(clearfield.ToString())));
+    }
+
+    // The run never logs more than LinesBetweenPauses lines without a pause, in a dry run and in an APPLY run, where
+    // each Added application logs a second line for its write (RA-784: CDP's log shipping looks to drop bursts).
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_run_pauses_after_every_few_lines(bool apply)
+    {
+        for (var i = 0; i < 7; i++)
+            await SeedAsync(Application($"R26ER50099{i:D2}0001PL", 500990 + i));
+        await SeedAsync(Egger());
+        await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
+        var linesAtEachPause = new List<int>();
+        var services = new ServiceCollection();
+        services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
+        services.AddSingleton<IDualWriteUnitOfWork>(new LegacyOnlyUnitOfWork());
+        var migration = new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(
+                new LastYearsAccreditationBackfillOptions
+                {
+                    Enabled = true,
+                    Apply = apply,
+                    SpotCheckConfirmedBy = apply ? "A Reviewer" : null,
+                }
+            ),
+            _logger
+        )
+        {
+            LinesBetweenPauses = 3,
+            PauseBetweenLines = TimeSpan.FromMilliseconds(250),
+            Pause = delay =>
+            {
+                delay.Should().Be(TimeSpan.FromMilliseconds(250));
+                linesAtEachPause.Add(_logger.Entries.Count);
+                return Task.CompletedTask;
+            },
+        };
+
+        await migration.RunAsync(Ct);
+
+        // starting, read, planned, 9 applications (and, applying, 2 writes), 1 + 7 not on the register, the
+        // unused-row lines, summary. Every line but the summary is paced.
+        Logged(LogLevel.Information).Count(m => m.Contains("RA-784 APPLIED")).Should().Be(apply ? 2 : 0);
+        var lines = _logger.Entries.Count;
+        lines.Should().BeGreaterThan(20);
+        linesAtEachPause.Should().HaveCount((lines - 1) / 3);
+        linesAtEachPause.Zip(linesAtEachPause.Skip(1), (a, b) => b - a).Should().OnlyContain(gap => gap == 3);
+        linesAtEachPause[0].Should().Be(3);
+        (lines - linesAtEachPause[^1]).Should().BeLessThanOrEqualTo(3);
+    }
+
+    // A dry run writes nothing, so it never builds the unit of work.
+    [Fact]
+    public async Task A_dry_run_never_builds_the_unit_of_work()
+    {
+        await SeedAsync(Egger());
+        var built = false;
+        var services = new ServiceCollection();
+        services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
+        services.AddSingleton<IDualWriteUnitOfWork>(_ =>
+        {
+            built = true;
+            return new LegacyOnlyUnitOfWork();
+        });
+        var migration = new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            _logger
+        );
+
+        var result = await migration.RunAsync(Ct);
+
+        result.Should().Be(Migration.RunResult.DryRun);
+        built.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_failed_read_is_logged_as_the_backfill_failing()
+    {
+        var failing = Substitute.For<IAccreditationApplicationPersistence>();
+        failing.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<AccreditationApplicationModel>>(new TimeoutException("selecting a server")));
+        var services = new ServiceCollection();
+        services.AddSingleton(failing);
+        var migration = new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            _logger
+        );
+
+        await migration.StartAsync(Ct);
+        await migration.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("backfill failed"))
+            .Which.Exception.Should().BeOfType<TimeoutException>();
+    }
+
+    // A stop part-way is logged rather than swallowed, so the run never goes silent, and the log says whether the host
+    // itself was stopping or only this service was.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_stop_part_way_is_logged_as_a_warning_saying_whether_the_host_is_stopping(bool hostStopping)
+    {
+        using var stopping = new CancellationTokenSource();
+        if (hostStopping)
+            await stopping.CancelAsync();
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        lifetime.ApplicationStopping.Returns(stopping.Token);
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slow = Substitute.For<IAccreditationApplicationPersistence>();
+        slow.GetByYearAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                reading.TrySetResult();
+                await Task.Delay(Timeout.Infinite, call.ArgAt<CancellationToken>(1));
+                return (IReadOnlyList<AccreditationApplicationModel>)[];
+            });
+        var services = new ServiceCollection();
+        services.AddSingleton(slow);
+        services.AddSingleton(lifetime);
+        var migration = new Migration(
+            services.BuildServiceProvider(),
+            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            _logger
+        );
+
+        await migration.StartAsync(Ct);
+        await reading.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        await migration.StopAsync(Ct);
+
+        _logger.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Warning && e.Message.Contains("stopped part-way: its stop signal was set"))
+            .Which.Message.Should().Contain($"HostStopping={hostStopping}");
+        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
     }
 }

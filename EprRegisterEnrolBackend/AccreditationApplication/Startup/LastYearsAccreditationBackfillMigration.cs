@@ -22,6 +22,7 @@ public sealed class LastYearsAccreditationBackfillOptions
     // Who reviewed the dry-run output against the live records. Required before Apply takes
     // effect; logged with every applied change so the authorisation outlives the env var.
     public string? SpotCheckConfirmedBy { get; set; }
+
 }
 
 // RA-784: a 2027 renewal's accreditation number is last year's accreditation number with the year
@@ -118,6 +119,30 @@ public class LastYearsAccreditationBackfillMigration(
         string Detail
     );
 
+    // At most LinesBetweenPauses lines, then a pause of PauseBetweenLines (about 100 lines a second), because CDP's
+    // log shipping looks to drop bursts: on ext-test ~400 lines in under 100 ms never reached OpenSearch (RA-784).
+    // The pause ignores the stop signal, so the finally block's report still goes out when a run is stopped.
+    // Settable for tests.
+    internal int LinesBetweenPauses { get; init; } = 50;
+    internal TimeSpan PauseBetweenLines { get; init; } = TimeSpan.FromMilliseconds(500);
+    internal Func<TimeSpan, Task> Pause { get; init; } = delay => Task.Delay(delay);
+
+    // Unused register rows per report line, so the ~400-row register is a handful of lines, not one each. 40 rows make
+    // a line of about 10 KB, under the 16 KB at which the container runtime splits a log line.
+    internal const int RegisterRowsPerLine = 40;
+
+    private int _linesSincePause;
+
+    // Called after each line the run logs.
+    private async Task PaceAsync()
+    {
+        if (++_linesSincePause < LinesBetweenPauses)
+            return;
+
+        _linesSincePause = 0;
+        await Pause(PauseBetweenLines);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Yield so host startup is never held up by anything below.
@@ -126,7 +151,23 @@ public class LastYearsAccreditationBackfillMigration(
         {
             await RunAsync(stoppingToken);
         }
-        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+        catch (Exception ex) when (stoppingToken.IsCancellationRequested)
+        {
+            // Logged, not swallowed: on ext-test the run went silent part-way, and a stop is the one ending that would
+            // otherwise leave no trace. The stop signal is also set when only this service is stopped, so say whether
+            // the host itself is stopping rather than assume it.
+            var hostStopping = serviceProvider
+                .GetService<IHostApplicationLifetime>()
+                ?.ApplicationStopping.IsCancellationRequested;
+            logger.LogWarning(
+                ex,
+                "RA-784 last year's accreditation backfill stopped part-way: its stop signal was set "
+                    + "(HostStopping={HostStopping}, {Error})",
+                hostStopping,
+                ex.GetType().Name
+            );
+        }
+        catch (Exception ex)
         {
             // Every plan runs before any write, and each write is independently guarded, so a
             // failure part-way leaves a state the next run re-plans from safely.
@@ -141,6 +182,7 @@ public class LastYearsAccreditationBackfillMigration(
         if (!options.Value.Enabled)
             return RunResult.Disabled;
 
+        _linesSincePause = 0;
         var confirmedBy = AuthorisedReviewer(options.Value);
         var mode = confirmedBy is null ? "DRY RUN (nothing will be written)" : "APPLY";
         if (logger.IsEnabled(LogLevel.Information))
@@ -148,11 +190,19 @@ public class LastYearsAccreditationBackfillMigration(
                 "RA-784 last year's accreditation backfill starting. Mode={Mode}",
                 mode
             );
+        await PaceAsync();
 
         var persistence =
             serviceProvider.GetRequiredService<IAccreditationApplicationPersistence>();
-        var unitOfWork = serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
         var applications = await persistence.GetByYearAsync(AccreditationYear, cancellationToken);
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "RA-784 {Mode}: read {Count} {Year} applications",
+                mode,
+                applications.Count,
+                AccreditationYear
+            );
+        await PaceAsync();
 
         // Organisation by organisation; a draft without its OrgId yet sorts by its ReEx id after the rest.
         var plans = applications
@@ -163,7 +213,22 @@ public class LastYearsAccreditationBackfillMigration(
             .ThenBy(a => a.Id)
             .Select(a => PlanFor(a, a.Id!.Value))
             .ToList();
+        // The outcome counts go out here, before the per-application lines, so the run's result is in the log even if
+        // its detail is not.
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation(
+                "RA-784 {Mode}: planned {Count} applications. Last year's accreditation planned: {Outcomes}. "
+                    + "Issued numbers: {Issued}",
+                mode,
+                plans.Count,
+                OutcomeCounts(plans),
+                IssuedCounts(plans)
+            );
+        await PaceAsync();
 
+        // Only an apply writes, so only an apply needs the unit of work.
+        var unitOfWork =
+            confirmedBy is null ? null : serviceProvider.GetRequiredService<IDualWriteUnitOfWork>();
         var writes = new List<Write>();
         var finished = false;
         try
@@ -189,8 +254,8 @@ public class LastYearsAccreditationBackfillMigration(
         {
             // Cancelled or failed part-way: the report still says what was planned and what was written so far,
             // and the exception carries on.
-            ReportNotOnTheRegister(plans, mode);
-            ReportUnusedRegisterRows(plans, mode);
+            await ReportNotOnTheRegisterAsync(plans, mode);
+            await ReportUnusedRegisterRowsAsync(plans, mode);
             ReportSummary(plans, writes, mode, finished);
         }
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
@@ -348,7 +413,7 @@ public class LastYearsAccreditationBackfillMigration(
     // Null when no write was attempted: a dry run, or a plan that isn't Added.
     private async Task<Write?> ReportAndApplyAsync(
         IAccreditationApplicationPersistence persistence,
-        IDualWriteUnitOfWork unitOfWork,
+        IDualWriteUnitOfWork? unitOfWork,
         Plan plan,
         string mode,
         string? confirmedBy,
@@ -375,17 +440,21 @@ public class LastYearsAccreditationBackfillMigration(
                 plan.Detail
             );
         }
+        await PaceAsync();
 
-        if (confirmedBy is null || plan.Outcome != Outcome.Added)
+        if (confirmedBy is null || unitOfWork is null || plan.Outcome != Outcome.Added)
             return null;
 
-        return await AddLastYearsAccreditationNumberAsync(
+        // The write logs a line of its own (applied, lost the race or failed).
+        var write = await AddLastYearsAccreditationNumberAsync(
             persistence,
             unitOfWork,
             plan,
             confirmedBy,
             cancellationToken
         );
+        await PaceAsync();
+        return write;
     }
 
     private static bool NeedsAPerson(Plan plan) =>
@@ -471,7 +540,7 @@ public class LastYearsAccreditationBackfillMigration(
 
     // The end-of-run report, part 1: every application whose registration number isn't on the register, with the org
     // and registration number it holds, so each can be checked by hand.
-    private void ReportNotOnTheRegister(IReadOnlyList<Plan> plans, string mode)
+    private async Task ReportNotOnTheRegisterAsync(IReadOnlyList<Plan> plans, string mode)
     {
         var missing = plans
             .Where(p => p.Outcome is Outcome.NotOnTheRegister or Outcome.RegistrationNumberIncomplete)
@@ -484,6 +553,7 @@ public class LastYearsAccreditationBackfillMigration(
             mode,
             missing.Count
         );
+        await PaceAsync();
         foreach (var plan in missing)
         {
             if (plan.Application.PreviousRegistrationNumbers.Count == 0)
@@ -498,6 +568,7 @@ public class LastYearsAccreditationBackfillMigration(
                     plan.Id,
                     plan.Application.ApplicationReference
                 );
+                await PaceAsync();
                 continue;
             }
 
@@ -513,12 +584,14 @@ public class LastYearsAccreditationBackfillMigration(
                 plan.Id,
                 plan.Application.ApplicationReference
             );
+            await PaceAsync();
         }
     }
 
     // The end-of-run report, part 2: every register row no 2027 application matched, so whoever reviews the run can
     // see which 2026 registrations haven't applied for 2027 (or hold a registration number that doesn't match).
-    private void ReportUnusedRegisterRows(IReadOnlyList<Plan> plans, string mode)
+    // RegisterRowsPerLine rows to a line, so the whole register is a handful of lines.
+    private async Task ReportUnusedRegisterRowsAsync(IReadOnlyList<Plan> plans, string mode)
     {
         var used = plans
             .Select(p => p.RegisterRegistrationNumber)
@@ -541,19 +614,34 @@ public class LastYearsAccreditationBackfillMigration(
             unused.Count(r => r.Value.AccreditationNumber is not null),
             unused.Count(r => r.Value.AccreditationNumber is null)
         );
-        foreach (var (registrationNumber, row) in unused)
+        await PaceAsync();
+        var lines = unused.Chunk(RegisterRowsPerLine).ToList();
+        for (var line = 0; line < lines.Count; line++)
         {
+            var first = line * RegisterRowsPerLine + 1;
             logger.LogInformation(
-                "RA-784 {Mode} report: register row not used: org {OrgId} {OrganisationName}, registration "
-                    + "{RegistrationNumber}, 2026 accreditation {AccreditationNumber}",
+                "RA-784 {Mode} report: register rows not used {First}-{Last} of {Count}: {Rows}",
                 mode,
-                row.OrgId,
-                row.OrganisationName,
-                registrationNumber,
-                row.AccreditationNumber ?? "none (registered only)"
+                first,
+                first + lines[line].Length - 1,
+                unused.Count,
+                string.Join(
+                    "; ",
+                    lines[line].Select(r =>
+                        $"org {r.Value.OrgId} {r.Value.OrganisationName}, registration {r.Key}, "
+                            + $"2026 accreditation {r.Value.AccreditationNumber ?? "none (registered only)"}"
+                    )
+                )
             );
+            await PaceAsync();
         }
     }
+
+    private static string OutcomeCounts(IReadOnlyList<Plan> plans) =>
+        string.Join(", ", Enum.GetValues<Outcome>().Select(o => $"{o}={plans.Count(p => p.Outcome == o)}"));
+
+    private static string IssuedCounts(IReadOnlyList<Plan> plans) =>
+        string.Join(", ", Enum.GetValues<IssuedNumber>().Select(i => $"{i}={plans.Count(p => p.Issued == i)}"));
 
     // Planned against actual: the outcomes are what the plan found; the writes are what an APPLY run did with the
     // Added ones (a dry run writes nothing). A run that stopped part-way says so, with the writes done so far.
@@ -566,23 +654,15 @@ public class LastYearsAccreditationBackfillMigration(
             ", ",
             Enum.GetValues<Write>().Select(w => $"{w}={writes.Count(x => x == w)}")
         );
-        var outcomes = string.Join(
-            ", ",
-            Enum.GetValues<Outcome>().Select(o => $"{o}={plans.Count(p => p.Outcome == o)}")
-        );
-        var issued = string.Join(
-            ", ",
-            Enum.GetValues<IssuedNumber>().Select(i => $"{i}={plans.Count(p => p.Issued == i)}")
-        );
         logger.LogInformation(
             "RA-784 last year's accreditation backfill {Ending}. Mode={Mode}, applications={Count}. "
                 + "Last year's accreditation planned: {Outcomes}. Written: {Written}. Issued numbers: {Issued}",
             finished ? "complete" : "stopped part-way",
             mode,
             plans.Count,
-            outcomes,
+            OutcomeCounts(plans),
             written,
-            issued
+            IssuedCounts(plans)
         );
     }
 }
