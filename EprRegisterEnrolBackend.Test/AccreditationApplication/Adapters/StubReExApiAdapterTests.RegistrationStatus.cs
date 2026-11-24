@@ -108,4 +108,21 @@ public partial class StubReExApiAdapterTests
         var entry = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Which;
         entry.Message.Should().Contain("70806").And.Contain(registrationId.ToString());
     }
+
+    // A fixture organisation's registration must be in its fixture: a mistyped id fails as ReEx's 404 does, with an
+    // Error log, rather than seeding a made-up approved registration.
+    [Fact]
+    public async Task GetAccreditationAsync_FixtureOrganisationWithoutThatRegistration_FailsNotFoundWithOneErrorLog()
+    {
+        var logger = new CapturingLogger<StubReExApiAdapter>();
+        var registrationId = ObjectId.GenerateNewId().ToString();
+
+        var result = await StubLookupAsync("50023", registrationId, logger: logger);
+
+        result.IsSuccess.Should().BeFalse();
+        result.IsNotFound.Should().BeTrue();
+        result.StatusCode.Should().Be(404);
+        var entry = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Which;
+        entry.Message.Should().Contain("50023").And.Contain(registrationId);
+    }
 }

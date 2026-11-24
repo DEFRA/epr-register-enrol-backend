@@ -76,9 +76,9 @@ public class StubReExApiAdapter(
         GlassRecyclingProcess? glassRecyclingProcess = null;
         List<OverseasSiteModel> overseasSites = [];
         string? submittedToRegulator = null;
-        // RA-806: a registration the stub has no fixture for (an E2E test organisation's, or one a fixture org does
-        // not list) is one it makes up, as it does every other field of it, and an organisation with an
-        // accreditation holds an approved registration in ReEx.
+        // RA-806: an organisation with no fixture (an E2E test organisation, or any other id the stub makes up) holds
+        // a made-up registration, as every other field of it is made up, and an organisation with an accreditation
+        // holds an approved registration in ReEx. A fixture organisation's registration must be in its fixture.
         var registrationStatus = RegistrationStatus.Approved;
 
         if (int.TryParse(organisationId, out var orgIdInt))
@@ -105,6 +105,20 @@ public class StubReExApiAdapter(
             var registration = org?.Registrations?.FirstOrDefault(r =>
                 r.Id.ToString() == registrationId
             );
+            // RA-806: as HttpReExApiAdapter does when ReEx's organisation has no such registration, so a mistyped
+            // fixture registration id fails rather than seeding a made-up registration.
+            if (org is not null && registration is null)
+            {
+                logger.LogError(
+                    "Stub ReEx organisation {OrganisationId} has no fixture registration {RegistrationId}",
+                    organisationId,
+                    registrationId
+                );
+                return ReExResult<ReExAccreditationDto>.Fail(
+                    new ReExError(ReExErrorKind.NotFound, $"Registration {registrationId} not found"),
+                    404
+                );
+            }
             wasteProcessingType = registration?.WasteProcessingType;
             if (registration is not null)
             {
