@@ -74,4 +74,33 @@ public class ReExRegistrationStatusMapperTests
                 $"ReEx registration status is missing or unrecognised for org={OrganisationId} reg={RegistrationId}: {reExStatus ?? "(null)"}"
             );
     }
+
+    // A long or multi-line value from ReEx is cut and has its control characters replaced before it is logged, so it
+    // can't flood the log or forge a log line.
+    [Fact]
+    public void Map_LongMultiLineStatus_LogsItCutWithoutControlCharacters()
+    {
+        var logger = new CapturingLogger<ReExRegistrationStatusMapperTests>();
+        var raw = "approved\nforged line" + new string('x', 500);
+
+        var result = ReExRegistrationStatusMapper.Map(raw, OrganisationId, RegistrationId, logger);
+
+        result.IsSuccess.Should().BeFalse();
+        var message = logger.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Which.Message;
+        message.Should().NotContain("\n").And.Contain("approved?forged line").And.NotContain(new string('x', 100));
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("suspended", "suspended")]
+    [InlineData("a\r\tb", "a??b")]
+    public void ForLog_ShortValue_KeepsItWithControlCharactersReplaced(string? raw, string? expected) =>
+        ReExRegistrationStatusMapper.ForLog(raw).Should().Be(expected);
+
+    [Fact]
+    public void ForLog_ValueOverTheLimit_IsCutToTheLimitAndMarked() =>
+        ReExRegistrationStatusMapper
+            .ForLog(new string('y', ReExRegistrationStatusMapper.MaxLoggedStatusLength + 1))
+            .Should()
+            .Be(new string('y', ReExRegistrationStatusMapper.MaxLoggedStatusLength) + "…");
 }

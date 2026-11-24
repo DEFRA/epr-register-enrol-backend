@@ -43,7 +43,7 @@ public static class ReExRegistrationStatusMapper
             "ReEx registration status is missing or unrecognised for org={OrganisationId} reg={RegistrationId}: {RawStatus}",
             organisationId,
             registrationId,
-            reExStatus
+            ForLog(reExStatus)
         );
         return ReExResult<RegistrationStatus>.Fail(
             new ReExError(
@@ -52,5 +52,20 @@ public static class ReExRegistrationStatusMapper
             ),
             500
         );
+    }
+
+    internal const int MaxLoggedStatusLength = 40;
+
+    /// <summary>
+    /// The raw value is ReEx's, not ours, so it is logged cut to <see cref="MaxLoggedStatusLength"/> characters with
+    /// control characters (newlines included) replaced by <c>?</c>: a long or multi-line value can't flood the log or
+    /// forge a log line. Every real status is far shorter, so the cut only ever hides junk.
+    /// </summary>
+    internal static string? ForLog(string? raw)
+    {
+        if (raw is null)
+            return null;
+        var cut = raw.Length > MaxLoggedStatusLength ? raw[..MaxLoggedStatusLength] + "…" : raw;
+        return string.Concat(cut.Select(c => char.IsControl(c) ? '?' : c));
     }
 }
