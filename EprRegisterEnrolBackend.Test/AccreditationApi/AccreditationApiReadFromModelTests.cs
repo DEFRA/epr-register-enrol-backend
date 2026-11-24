@@ -260,6 +260,28 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
         Assert.Equal([Registration], registrations);
     }
 
+    // RA-802: the sites on a search item come from the same source as the accreditation. Site 001 is
+    // renamed in legacy alone, so the model's name is served and the legacy app serves the rename.
+    [Fact]
+    public async Task Search_ServesTheOverseasSitesFromTheModel()
+    {
+        await MigratedThenSiteRenamedInLegacyAsync();
+        var path = $"/v1/accreditations?organisationNumber={Org}";
+
+        var fromModel = await JsonAsync(await GetAsync(path));
+        var fromLegacy = await JsonAsync(await GetLegacyAsync(path));
+
+        Assert.Equal("Site 001", FirstSiteName(fromModel));
+        Assert.Equal(LegacyOnlySiteName, FirstSiteName(fromLegacy));
+    }
+
+    private static string? FirstSiteName(JsonElement page) =>
+        Assert
+            .Single(page.GetProperty("items").EnumerateArray())
+            .GetProperty("overseasSites")[0]
+            .GetProperty("siteName")
+            .GetString();
+
     private Task<HttpResponseMessage> GetLegacyAsync(string path) =>
         _legacyClient.SendAsync(
             ServiceClientSigner.Request(HttpMethod.Get, path, ReExClientId, ReExSecret),
