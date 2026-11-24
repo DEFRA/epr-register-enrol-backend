@@ -33,7 +33,7 @@ public sealed record CaseManagementAccreditationSummary(
             application.AccreditationReference,
             application.RegistrationReference,
             application.Year,
-            application.WasteProcessingType,
+            AccreditationApiMapper.IsExporter(application) ? "exporter" : "reprocessor",
             application.MaterialType.ToString().ToLowerInvariant(),
             application.GlassRecyclingProcess,
             application.SiteAddress,

@@ -81,6 +81,29 @@ public class CaseManagementAccreditationSummaryEndpointTests
             },
         };
 
+    [Theory]
+    [InlineData(null, true, "exporter")]
+    [InlineData("", true, "exporter")]
+    [InlineData("  ", false, "reprocessor")]
+    [InlineData("Exporter", false, "exporter")]
+    public async Task AnApplicationWithoutAProcessingTypeString_AnswersItFromTheExporterFlag(
+        string? wasteProcessingType,
+        bool isExporter,
+        string expected
+    )
+    {
+        var app = ApprovedExporter();
+        app.WasteProcessingType = wasteProcessingType;
+        app.IsExporter = isExporter;
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.GetAsync(Url(app.OrganisationId, app.ApplicationId!), Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        body.GetProperty("wasteProcessingType").GetString().Should().Be(expected);
+    }
+
     [Fact]
     public async Task AnApprovedApplication_AnswersItsAccreditationDetails()
     {

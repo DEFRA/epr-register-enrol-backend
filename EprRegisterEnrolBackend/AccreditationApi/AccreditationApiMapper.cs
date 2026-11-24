@@ -287,7 +287,7 @@ public static class AccreditationApiMapper
             : contact;
     }
 
-    private static bool IsExporter(AccreditationApplicationModel application) =>
+    internal static bool IsExporter(AccreditationApplicationModel application) =>
         string.IsNullOrWhiteSpace(application.WasteProcessingType)
             ? application.IsExporter
             : string.Equals(
