@@ -918,6 +918,11 @@ accreditation version records `lastChange.reason = RegistrationCancelled`. Which
 affected: only **in-force** accreditations (approved or suspended, period not ended). Reinstating the
 registration does not reinstate them; each is reinstated manually (Q16).
 
+The cascade is part of the regulator's cancel action (B15), which is not built yet. A seed that copies ReEx's
+`cancelled` onto a Registration (RA-806) does not cascade: its accreditations keep their status. Nothing reads an
+Accreditation's status yet, and in-year changes already refuse a Registration that is not `approved`
+(`AccreditationChangeEndpoints`, 409). Whether a ReEx-driven cancellation should cascade is decided with B15.
+
 **ORS on the Registration, and each interim site embedded in it** (lifecycle of the registered site
 itself; each `status` is held separately, the interim one on its `interimSites[]` entry):
 
