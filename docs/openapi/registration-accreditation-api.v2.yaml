@@ -61,9 +61,11 @@ paths:
       operationId: searchAccreditations
       summary: Search accreditations across all organisations
       description: |
-        Returns `AccreditationSummary` items, which carry the `latestStatus` and `tonnageBand`
-        but no history, so the response stays small. Results are ordered by accreditation number,
-        so the order is the same from one page to the next.
+        Returns `AccreditationSearchItem` items: an `AccreditationSummary` (the `latestStatus` and
+        `tonnageBand`, but no history) plus, for an exporter, its `overseasSites`, in the same shape
+        as getting one accreditation. Paging through search once therefore gives every accreditation
+        with its sites. A reprocessor item has no `overseasSites`. Results are ordered by
+        accreditation number, so the order is the same from one page to the next.
 
         Only accreditation years from 2027 are served. A search for an earlier year, such as
         `year=2026`, is a valid request and returns an empty page (`totalItems` 0), even where
@@ -78,7 +80,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: A page of accreditation summaries. Filters combine with AND, and a filter that matches nothing is an empty page, not a 404.
+          description: A page of accreditations. Filters combine with AND, and a filter that matches nothing is an empty page, not a 404.
           content:
             application/json:
               schema:
@@ -89,7 +91,7 @@ paths:
                     properties:
                       items:
                         type: array
-                        items: { $ref: '#/components/schemas/AccreditationSummary' }
+                        items: { $ref: '#/components/schemas/AccreditationSearchItem' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -386,7 +388,7 @@ components:
     AccreditationSummary:
       type: object
       description: |
-        The accreditation without its history; returned by search. `latestStatus` is the latest
+        The accreditation without its history; the base of `AccreditationSearchItem` (returned by search) and `Accreditation`. `latestStatus` is the latest
         status history entry, the same entry in the same shape, so it always matches the history.
         It can be future-dated: a 2027 accreditation approved in November 2026 has a `latestStatus`
         of `approved` with an `effectiveFromDate` of 2027-01-01, which has not arrived yet. Use its
@@ -414,6 +416,22 @@ components:
           type: string
           allOf: [{ $ref: '#/components/schemas/TonnageBand' }]
           nullable: true
+    AccreditationSearchItem:
+      description: |
+        An `AccreditationSummary` plus, for an exporter, its accredited overseas sites, each with
+        its interim sites and status history: the same sites, order and fields as `overseasSites`
+        on `Accreditation`. Returned by search.
+      allOf:
+        - $ref: '#/components/schemas/AccreditationSummary'
+        - type: object
+          properties:
+            overseasSites:
+              type: array
+              description: |
+                Exporters only, ordered by `orsId`. `[]` for an exporter with no selected overseas
+                sites. Omitted for a reprocessor, which has a site, not overseas sites. Each
+                site's `interimSites` includes the withdrawn ones.
+              items: { $ref: '#/components/schemas/AccreditedOverseasSite' }
     Accreditation:
       description: |
         An `AccreditationSummary` plus its full status and tonnage band history (oldest first),

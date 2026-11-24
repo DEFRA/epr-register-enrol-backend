@@ -613,6 +613,177 @@ public class AccreditationApiEndpointTests : IDisposable
         item.TryGetProperty("businessPlan", out _).Should().BeFalse();
     }
 
+    // ---- RA-802: overseas sites on each search item ----
+
+    private async Task<JsonElement> SingleSites(string registration, string accreditation) =>
+        (
+            await Json(
+                await Get(
+                    $"/v1/organisations/{Org}/registrations/{registration}/accreditations/2027"
+                )
+            )
+        ).GetProperty("overseasSites");
+
+    [Theory]
+    [InlineData("/v1/accreditations")]
+    [InlineData("/v1/accreditations?organisationNumber=500027")]
+    public async Task Search_ExporterItem_CarriesTheSameOverseasSitesAsTheSingleAccreditation(
+        string url
+    )
+    {
+        await Seed(
+            configure: a =>
+            {
+                a.OverseasSites!.Sites.Reverse();
+                a.OverseasSites.Sites[^1].InterimSites =
+                [
+                    Interim(11, removed: false),
+                    Interim(12, removed: true),
+                ];
+            }
+        );
+
+        var item = (await Json(await Get(url))).GetProperty("items").EnumerateArray().Single();
+        var single = await SingleSites(Registration, "A27EX5000270012AL");
+
+        var sites = item.GetProperty("overseasSites");
+        sites.GetRawText().Should().Be(single.GetRawText());
+        sites
+            .EnumerateArray()
+            .Select(s => s.GetProperty("orsId").GetString())
+            .Should()
+            .Equal("001", "002");
+        sites[0]
+            .GetProperty("interimSites")
+            .EnumerateArray()
+            .Select(i => i.GetProperty("siteId").GetInt32())
+            .Should()
+            .Equal(11, 12);
+        sites[0].GetProperty("statusHistory").GetArrayLength().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Search_ExporterWithNoSelectedSites_HasAnEmptyOverseasSites()
+    {
+        await Seed(configure: a => a.OverseasSites!.Sites.ForEach(s => s.Selected = false));
+
+        var item = (await Json(await Get("/v1/accreditations")))
+            .GetProperty("items")
+            .EnumerateArray()
+            .Single();
+
+        item.GetProperty("overseasSites").ValueKind.Should().Be(JsonValueKind.Array);
+        item.GetProperty("overseasSites").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Search_ReprocessorItem_HasNoOverseasSitesProperty()
+    {
+        await Seed(
+            configure: a =>
+            {
+                a.IsExporter = false;
+                a.WasteProcessingType = "reprocessor";
+                a.OverseasSites = null;
+            }
+        );
+
+        var item = (await Json(await Get("/v1/accreditations")))
+            .GetProperty("items")
+            .EnumerateArray()
+            .Single();
+
+        item.TryGetProperty("overseasSites", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Search_CarriesOverseasSites_OnEveryPage()
+    {
+        await Seed(accreditation: "A27EX5000270011AL", registration: "R27EX5000270011AL");
+        await Seed(accreditation: "A27EX5000270012AL", registration: "R27EX5000270012AL");
+        await Seed(accreditation: "A27EX5000270013AL", registration: "R27EX5000270013AL");
+
+        foreach (var page in new[] { 1, 2 })
+        {
+            var items = (await Json(await Get($"/v1/accreditations?pageNumber={page}&limit=2")))
+                .GetProperty("items")
+                .EnumerateArray()
+                .ToList();
+
+            items.Should().NotBeEmpty();
+            foreach (var item in items)
+            {
+                item.GetProperty("overseasSites").GetArrayLength().Should().Be(2);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Search_PageOf100_WithExportersAndReprocessors_IsServedWithTheirSites()
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            var exporter = i % 4 != 0;
+            await Seed(
+                accreditation: $"A27EX50002700{i:000}AL",
+                registration: $"R27EX50002700{i:000}AL",
+                configure: a =>
+                {
+                    if (!exporter)
+                    {
+                        a.IsExporter = false;
+                        a.WasteProcessingType = "reprocessor";
+                        a.OverseasSites = null;
+                    }
+                }
+            );
+        }
+
+        var response = await Get("/v1/accreditations?limit=100");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var items = (await Json(response)).GetProperty("items").EnumerateArray().ToList();
+        items.Should().HaveCount(100);
+        items
+            .Where(i => i.GetProperty("wasteProcessingType").GetString() == "exporter")
+            .Should()
+            .OnlyContain(i => i.GetProperty("overseasSites").GetArrayLength() == 2);
+        foreach (
+            var reprocessor in items.Where(i =>
+                i.GetProperty("wasteProcessingType").GetString() == "reprocessor"
+            )
+        )
+        {
+            reprocessor.TryGetProperty("overseasSites", out _).Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task Search_ReturnsEveryFieldItReturnedBeforeAlongsideTheSites()
+    {
+        await Seed(configure: a => a.Prns.PlannedTonnageBand = PlannedTonnageBand.UpTo5000);
+
+        var item = (await Json(await Get("/v1/accreditations")))
+            .GetProperty("items")
+            .EnumerateArray()
+            .Single();
+
+        item.EnumerateObject()
+            .Select(p => p.Name)
+            .Should()
+            .BeEquivalentTo(
+                "organisationNumber",
+                "registrationNumber",
+                "accreditationNumber",
+                "accreditationYear",
+                "material",
+                "wasteProcessingType",
+                "latestStatus",
+                "tonnageBand",
+                "overseasSites"
+            );
+    }
+
     [Fact]
     public async Task Search_FiltersByYear()
     {
