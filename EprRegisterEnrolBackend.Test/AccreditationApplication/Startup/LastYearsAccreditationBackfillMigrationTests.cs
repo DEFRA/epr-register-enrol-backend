@@ -930,19 +930,31 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
         planned.Should().BeLessThan(lines.FindIndex(m => m.Contains(clearfield.ToString())));
     }
 
-    // CDP's log shipping lost a burst of ~400 lines logged in under 100 ms, so the run never logs more than
-    // LinesBetweenPauses lines without a pause.
-    [Fact]
-    public async Task The_run_pauses_after_every_few_lines()
+    // The run never logs more than LinesBetweenPauses lines without a pause, in a dry run and in an APPLY run, where
+    // each Added application logs a second line for its write (RA-784: CDP's log shipping looks to drop bursts).
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_run_pauses_after_every_few_lines(bool apply)
     {
         for (var i = 0; i < 7; i++)
             await SeedAsync(Application($"R26ER50099{i:D2}0001PL", 500990 + i));
+        await SeedAsync(Egger());
+        await SeedAsync(Application(GapRegistration, 500308, isExporter: true));
         var linesAtEachPause = new List<int>();
         var services = new ServiceCollection();
         services.AddSingleton<IAccreditationApplicationPersistence>(_persistence);
+        services.AddSingleton<IDualWriteUnitOfWork>(new LegacyOnlyUnitOfWork());
         var migration = new Migration(
             services.BuildServiceProvider(),
-            Options.Create(new LastYearsAccreditationBackfillOptions { Enabled = true }),
+            Options.Create(
+                new LastYearsAccreditationBackfillOptions
+                {
+                    Enabled = true,
+                    Apply = apply,
+                    SpotCheckConfirmedBy = apply ? "A Reviewer" : null,
+                }
+            ),
             _logger
         )
         {
@@ -958,7 +970,9 @@ public sealed class LastYearsAccreditationBackfillMigrationTests : IDisposable
 
         await migration.RunAsync(Ct);
 
-        // starting, read, planned, 7 applications, 1 + 7 not on the register, the unused-row lines, summary.
+        // starting, read, planned, 9 applications (and, applying, 2 writes), 1 + 7 not on the register, the
+        // unused-row lines, summary. Every line but the summary is paced.
+        Logged(LogLevel.Information).Count(m => m.Contains("RA-784 APPLIED")).Should().Be(apply ? 2 : 0);
         var lines = _logger.Entries.Count;
         lines.Should().BeGreaterThan(20);
         linesAtEachPause.Should().HaveCount((lines - 1) / 3);

@@ -119,11 +119,9 @@ public class LastYearsAccreditationBackfillMigration(
         string Detail
     );
 
-    // The run's lines are spread out, not logged back to back. On ext-test a run logged about 400 lines in under
-    // 100 ms, and none of them reached OpenSearch, along with every other line the backend logged in that second
-    // ("Application started" included), while the backend itself carried on serving. So at most LinesBetweenPauses
-    // lines go out before a pause of PauseBetweenLines: about 100 lines a second. The pause ignores the stop signal,
-    // so the report in the finally block still goes out when a run is stopped; it is half a second at most.
+    // At most LinesBetweenPauses lines, then a pause of PauseBetweenLines (about 100 lines a second), because CDP's
+    // log shipping looks to drop bursts: on ext-test ~400 lines in under 100 ms never reached OpenSearch (RA-784).
+    // The pause ignores the stop signal, so the finally block's report still goes out when a run is stopped.
     // Settable for tests.
     internal int LinesBetweenPauses { get; init; } = 50;
     internal TimeSpan PauseBetweenLines { get; init; } = TimeSpan.FromMilliseconds(500);
