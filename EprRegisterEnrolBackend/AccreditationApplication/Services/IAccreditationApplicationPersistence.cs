@@ -105,13 +105,15 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
-    /// Every application, of any status and year, for an organisation's registration (by its visible
-    /// organisation number and registration number), ordered by year. This backend holds no
-    /// registration of its own, so these applications are the registration. Read-only.
+    /// Every application, of any status, for an organisation's registration (by its visible
+    /// organisation number and registration number), from <paramref name="firstYear"/> on, ordered
+    /// by year. This backend holds no registration of its own, so these applications are the
+    /// registration. Read-only.
     /// </summary>
     Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
         int orgId,
         string registrationNumber,
+        int firstYear,
         TimeSpan? maxTime = null
     );
 

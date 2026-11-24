@@ -547,11 +547,11 @@ public class AccreditationApiEndpointTests : IDisposable
     // ---- GET registration ----
 
     [Fact]
-    public async Task Registration_ServesEveryApplication_WhateverItsStatusOrYear()
+    public async Task Registration_ServesEveryApplication_WhateverItsStatus()
     {
-        await Seed(year: 2028, status: ApplicationStatus.Saved, accreditation: null);
+        await Seed(year: 2029, status: ApplicationStatus.Saved, accreditation: null);
         await Seed();
-        await Seed(year: 2026, status: ApplicationStatus.Rejected, accreditation: null);
+        await Seed(year: 2028, status: ApplicationStatus.Rejected, accreditation: null);
 
         var response = await Get(RegistrationPath);
 
@@ -560,13 +560,53 @@ public class AccreditationApiEndpointTests : IDisposable
         body.GetProperty("organisationNumber").GetInt32().Should().Be(Org);
         body.GetProperty("registrationNumber").GetString().Should().Be(Registration);
         var applications = body.GetProperty("applications").EnumerateArray().ToList();
-        applications.Select(a => a.GetProperty("year").GetInt32()).Should().Equal(2026, 2027, 2028);
+        applications.Select(a => a.GetProperty("year").GetInt32()).Should().Equal(2027, 2028, 2029);
         applications
             .Select(a => a.GetProperty("applicationStatus").GetString())
             .Should()
-            .Equal("Rejected", "Approved", "Saved");
-        applications[1].GetProperty("accreditationNumber").GetString().Should().Be("A27EX5000270012AL");
-        applications[0].TryGetProperty("accreditationNumber", out _).Should().BeFalse();
+            .Equal("Approved", "Rejected", "Saved");
+        applications[0].GetProperty("accreditationNumber").GetString().Should().Be("A27EX5000270012AL");
+        applications[1].TryGetProperty("accreditationNumber", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Registration_LeavesOutApplicationsBeforeTheFirstAccreditationYear()
+    {
+        await Seed(year: 2026, accreditation: "A26EX5000270012AL");
+        await Seed();
+
+        var body = await Json(await Get(RegistrationPath));
+
+        body.GetProperty("applications")
+            .EnumerateArray()
+            .Select(a => a.GetProperty("year").GetInt32())
+            .Should()
+            .Equal(2027);
+    }
+
+    [Fact]
+    public async Task Registration_WithApplicationsOnlyBeforeTheFirstAccreditationYear_Is404()
+    {
+        await Seed(year: 2026, accreditation: "A26EX5000270012AL");
+
+        var response = await Get(RegistrationPath);
+
+        await AssertProblem(response, HttpStatusCode.NotFound, "registration_not_found");
+    }
+
+    [Fact]
+    public async Task Registration_ServesEachApplicationsReference_OnceItHasOne()
+    {
+        await Seed(configure: a => a.ApplicationReference = "ACC-500027-0012");
+        await Seed(year: 2028, status: ApplicationStatus.Saved, accreditation: null);
+
+        var applications = (await Json(await Get(RegistrationPath)))
+            .GetProperty("applications")
+            .EnumerateArray()
+            .ToList();
+
+        applications[0].GetProperty("applicationReference").GetString().Should().Be("ACC-500027-0012");
+        applications[1].TryGetProperty("applicationReference", out _).Should().BeFalse();
     }
 
     [Fact]

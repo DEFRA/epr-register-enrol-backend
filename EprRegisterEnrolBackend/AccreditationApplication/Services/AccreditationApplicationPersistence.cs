@@ -235,13 +235,15 @@ public class AccreditationApplicationPersistence(
     public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
         int orgId,
         string registrationNumber,
+        int firstYear,
         TimeSpan? maxTime = null
     )
     {
         var filters = Builders<AccreditationApplicationModel>.Filter;
         var filter = filters.And(
             filters.Eq(a => a.OrgId, orgId),
-            filters.Eq(a => a.RegistrationReference, registrationNumber)
+            filters.Eq(a => a.RegistrationReference, registrationNumber),
+            filters.Gte(a => a.Year, firstYear)
         );
 
         return await Collection

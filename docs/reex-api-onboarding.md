@@ -96,7 +96,7 @@ registration and year. Accreditations for 2027 onwards are served.
 | `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
-| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` | every application for the registration, whatever its status or year, with every overseas site on it. Needs no granted accreditation |
+| `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` | every application for the registration from 2027 on, whatever its status, with every overseas site on it. Needs no granted accreditation |
 
 Notes: the shapes follow the v2 draft spec (`docs/openapi/registration-accreditation-api.v2.yaml`).
 `tonnageBand` is the operator's planned band. Signatories are returned only when getting one
@@ -159,8 +159,9 @@ and phone number. Treat them as personal data.
 | --- | --- |
 | `organisationNumber` | the numeric organisation number |
 | `registrationNumber` | the registration's number |
-| `applications` | every application for the registration, whatever its status, ordered by year. A year can hold more than one application, such as a rejected one and its resubmission |
+| `applications` | every application for the registration from 2027 on, whatever its status, ordered by year. A year can hold more than one application, such as a rejected one and its resubmission |
 | `applications[].year` | the scheme year the application is for |
+| `applications[].applicationReference` | the application's case reference, present once the application is submitted. It tells apart two applications in the same year |
 | `applications[].applicationStatus` | for example `Saved`, `Submitted`, `Approved` or `Rejected` |
 | `applications[].accreditationNumber` | present once the application holds one |
 | `applications[].overseasSites` | every overseas site on the application, selected or not, ordered by `orsId` with unnumbered sites first. Empty for a reprocessor. Not paged |
@@ -382,7 +383,7 @@ Errors are `application/problem+json` with `status`, `detail`, a stable `code` a
 | 403 | `forbidden` | the client is known but not allowed to make this request |
 | 404 | `accreditation_not_found` | no granted accreditation for that organisation, registration and year |
 | 404 | `overseas_site_not_found` | no such overseas site on the accreditation |
-| 404 | `registration_not_found` | no application for that organisation and registration |
+| 404 | `registration_not_found` | no application from 2027 on for that organisation and registration |
 | 404 | `not_found` | no such route |
 | 400 | `invalid_organisation_number`, `invalid_registration_number`, `invalid_year`, `invalid_ors_id`, `invalid_paging`, `invalid_status` | bad input |
 | 405 | `method_not_allowed` | any method other than GET |
@@ -427,9 +428,10 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
 ## What's new
 
 - `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` returns every
-  application for a registration, whatever its status, with every overseas site on it, its `orsId`
-  and whether it is `selected`. It needs no granted accreditation. A registration with no
-  application is a `404` with `registration_not_found`.
+  application for a registration from 2027 on, whatever its status, with its case reference and
+  every overseas site on it, its `orsId` and whether it is `selected`. It needs no granted
+  accreditation. A registration with no application from 2027 on is a `404` with
+  `registration_not_found`.
 - Each interim site has `statusHistory` and `latestStatus`, in the same shape as an accreditation's
   and an overseas site's. It is `approved` from when its overseas site was approved and `withdrawn`
   from when it was withdrawn. Withdrawn interim sites are always returned, so `removedAt` and the
@@ -488,7 +490,7 @@ and are put back to this state whenever the service starts. Do not rely on them 
 | `990005` | `R26EX9900050002WD` | `A27EX9900050002WD` | 2027 | exporter, wood, 3 registered overseas sites of which only `001` and `002` are accredited, and a withdrawn interim site on `001`. `003` is a 404 on the accreditation routes, and getting the registration shows it with `selected` false |
 | `990006` | `R26ER9900060000AL` | `A27ER9900060000AL` and `A28ER9900060000AL` | 2027 and 2028 | reprocessor, aluminium, one registration accredited in two years. Search by `registrationNumber` or `organisationNumber` returns both |
 | `990007` | `R26ER9900070000PL` | none | 2027 | an application that was submitted but never granted. The accreditation routes do not serve it: a lookup is a 404 and a search finds nothing. Getting the registration returns the application as `Submitted` |
-| `990008` | `R26ER9900080000ST` | `A26ER9900080000ST` | 2026 | approved, but before 2027, so the accreditation routes do not serve it: a lookup is a 404. Getting the registration returns the application |
+| `990008` | `R26ER9900080000ST` | `A26ER9900080000ST` | 2026 | approved, but before 2027, so no route serves it: a lookup and getting the registration are both a 404 |
 
 For example: `GET /v1/organisations/990002/registrations/R26EX9900020002FB/accreditations/2027/overseas-sites`.
 

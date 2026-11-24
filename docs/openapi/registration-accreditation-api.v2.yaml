@@ -10,11 +10,12 @@ info:
     * **Accreditation is the main resource.** An accreditation exists only once its application
       has been approved. Organisation is internal (we do not own it). The organisation and
       application endpoints, and the registration search, have been removed.
-    * **Getting a registration returns the overseas sites on every application for it**, whatever
-      the application's status or year, so their ORS ids can be reconciled before ORS management
-      moves to the registration. This backend holds no registration record, so the registration is
-      served as its applications, each with its year, status, accreditation number if it has one,
-      and overseas sites with their `selected` flag. Nothing else about an application is exposed.
+    * **Getting a registration returns the overseas sites on every application for it** from 2027
+      on, whatever the application's status, so their ORS ids can be reconciled before ORS
+      management moves to the registration. This backend holds no registration record, so the
+      registration is served as its applications, each with its year, case reference once it has
+      one, status, accreditation number if it has one, and overseas sites with their `selected`
+      flag. Nothing else about an application is exposed.
     * **Application-only data is not exposed** on an accreditation. That means application status,
       section statuses, uploaded files, sampling and inspection plans, `formSubmissionTime`, and
       the site flags `isNewSite` and `selected`.
@@ -588,7 +589,7 @@ components:
     Registration:
       type: object
       description: |
-        A registration, served as every application for it, of any status and year. This backend
+        A registration, served as every application for it from 2027 on, of any status. This backend
         holds no registration record, so the applications are all there is.
       required: [organisationNumber, registrationNumber, applications]
       properties:
@@ -605,6 +606,9 @@ components:
       required: [year, applicationStatus, overseasSites]
       properties:
         year: { type: integer, format: int32 }
+        applicationReference:
+          type: string
+          description: The application's case reference, present once the application is submitted.
         applicationStatus: { $ref: '#/components/schemas/ApplicationStatus' }
         accreditationNumber:
           type: string

@@ -187,6 +187,7 @@ public static class AccreditationApiMapper
         new()
         {
             Year = application.Year,
+            ApplicationReference = Blank(application.ApplicationReference),
             ApplicationStatus = application.ApplicationStatus.ToString(),
             AccreditationNumber = Blank(application.AccreditationReference),
             OverseasSites = (application.OverseasSites?.Sites ?? [])

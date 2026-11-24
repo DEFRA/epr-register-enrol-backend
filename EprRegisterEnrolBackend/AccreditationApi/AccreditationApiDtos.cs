@@ -240,8 +240,8 @@ public sealed record PageDto<T>
 }
 
 /// <summary>
-/// The v2 <c>Registration</c>: every application for it, of any status and year. This backend holds
-/// no registration record, so the applications are all there is to serve.
+/// The v2 <c>Registration</c>: every application for it from the first accreditation year on, of any
+/// status. This backend holds no registration record, so the applications are all there is to serve.
 /// </summary>
 public sealed record RegistrationDto
 {
@@ -263,6 +263,10 @@ public sealed record RegistrationDto
 public sealed record RegistrationApplicationDto
 {
     public required int Year { get; init; }
+
+    /// <summary>The application's case reference, present once the application is submitted.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ApplicationReference { get; init; }
 
     /// <summary>The application's status, such as <c>Saved</c>, <c>Submitted</c> or <c>Approved</c>.</summary>
     public required string ApplicationStatus { get; init; }

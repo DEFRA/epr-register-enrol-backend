@@ -8,8 +8,8 @@ namespace EprRegisterEnrolBackend.AccreditationApi;
 
 /// <summary>
 /// The applications the service-client API serves as a registration: every application for the
-/// organisation's registration, whatever its status or year, found and served as
-/// <see cref="GrantedAccreditations"/> finds and serves a granted one.
+/// organisation's registration from the first accreditation year on, whatever its status, found and
+/// served as <see cref="GrantedAccreditations"/> finds and serves a granted one.
 /// </summary>
 public sealed class RegistrationApplications(
     IAccreditationApplicationPersistence persistence,
@@ -29,6 +29,7 @@ public sealed class RegistrationApplications(
         var applications = await persistence.GetByOrgIdAndRegistrationNumberAsync(
             organisationNumber,
             registrationNumber,
+            config.Value.FirstAccreditationYear,
             QueryTimeout
         );
 

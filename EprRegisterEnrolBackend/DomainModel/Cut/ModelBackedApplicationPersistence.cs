@@ -494,6 +494,7 @@ public sealed class ModelBackedApplicationPersistence(
     public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
         int orgId,
         string registrationNumber,
+        int firstYear,
         TimeSpan? maxTime = null
     )
     {
@@ -511,7 +512,11 @@ public sealed class ModelBackedApplicationPersistence(
         );
 
         return results
-            .Where(a => a.OrgId == orgId && a.RegistrationReference == registrationNumber)
+            .Where(a =>
+                a.OrgId == orgId
+                && a.RegistrationReference == registrationNumber
+                && a.Year >= firstYear
+            )
             .OrderBy(a => a.Year)
             .ThenBy(a => a.Id)
             .ToList();
