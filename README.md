@@ -248,6 +248,7 @@ Base path: `api/v1/accreditation-applications/{organisationId}`
 | `DELETE` | `/{organisationId}/{applicationId}/files/{fileId}` | Remove a file from the sampling plan                                                                             |
 | `POST`   | `/{organisationId}/{applicationId}/submit`         | Submit the application (requires all sections `Completed`)                                                       |
 | `POST`   | `/case-management/{workItemId}/status`             | Push a Case Management service work-item status change onto `ApplicationStatus` (Case Management service caller) |
+| `GET`    | `/case-management/{organisationId}/{applicationId}/accreditation-summary` | Read-only accreditation summary of an Approved application for the Case Management service's Accreditation summary tab (RA-769): an allow-list of the application, selected overseas sites and their active interim sites, sampling plan and BES files (Case Management service caller) |
 
 #### In-year change requests (RA-492)
 

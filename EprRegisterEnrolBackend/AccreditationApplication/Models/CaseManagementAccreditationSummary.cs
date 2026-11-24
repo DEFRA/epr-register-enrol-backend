@@ -189,11 +189,7 @@ public sealed record CaseManagementSummarySite(
     /// </summary>
     public static IReadOnlyList<CaseManagementSummarySite> AccreditedFrom(AccreditationApplicationModel application) =>
         [
-            .. AccreditationApiMapper
-                .AccreditedSites(application)
-                .OrderBy(site => site.OrsId, StringComparer.Ordinal)
-                .ThenBy(site => site.SiteId)
-                .Select(From),
+            .. AccreditationApiMapper.OrderedAccreditedSites(application).Select(From),
         ];
 
     private static CaseManagementSummarySite From(OverseasSiteModel site) =>

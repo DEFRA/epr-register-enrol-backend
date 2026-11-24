@@ -66,6 +66,14 @@ public static class AccreditationApiMapper
         AccreditationApplicationModel application
     ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
 
+    // The accredited sites in ORS id then site id order: how the accreditation lists them.
+    public static IEnumerable<OverseasSiteModel> OrderedAccreditedSites(
+        AccreditationApplicationModel application
+    ) =>
+        AccreditedSites(application)
+            .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+            .ThenBy(site => site.SiteId);
+
     public static AccreditationDto ToAccreditation(AccreditationApplicationModel application)
     {
         var history = StatusHistory(application);
@@ -92,9 +100,7 @@ public static class AccreditationApiMapper
                 .ToList(),
             StatusHistory = history,
             OverseasSites = IsExporter(application)
-                ? AccreditedSites(application)
-                    .OrderBy(site => site.OrsId, StringComparer.Ordinal)
-                    .ThenBy(site => site.SiteId)
+                ? OrderedAccreditedSites(application)
                     .Select(site => ToOverseasSite(application, site))
                     .ToList()
                 : null,

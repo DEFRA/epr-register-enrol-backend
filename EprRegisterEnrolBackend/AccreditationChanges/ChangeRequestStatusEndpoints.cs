@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
@@ -27,12 +28,7 @@ public static class ChangeRequestStatusEndpoints
     private const string Operation = "ChangeRequestStatusChangedFromCaseManagement";
 
     public static void UseChangeRequestStatusEndpoints(this IEndpointRouteBuilder app) =>
-        app.MapPost(Route, StatusChangedFromCaseManagement)
-            .RequireAuthorization(policy =>
-                policy
-                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
-            );
+        app.MapPost(Route, StatusChangedFromCaseManagement).RequireCaseManagementCaller();
 
     /// <summary>
     /// A Case Management state id to the item status it projects onto, as for an application, minus the statuses an
