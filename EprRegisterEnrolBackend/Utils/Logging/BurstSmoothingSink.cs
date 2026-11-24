@@ -14,14 +14,14 @@ namespace EprRegisterEnrolBackend.Utils.Logging;
 /// A token bucket: up to <see cref="BurstSmoothingSettings.Burst"/> lines go out at once, then at most
 /// <see cref="BurstSmoothingSettings.LinesPerSecond"/> a second. <see cref="Emit"/> only queues the line, so logging
 /// never waits; one reader writes the queue in order. A line that finds the queue full is dropped and counted, and the
-/// count goes out as one Warning line before the next line written. On disposal the queue is flushed for up to
+/// count goes out as one Error line before the next line written. On disposal the queue is flushed for up to
 /// <see cref="BurstSmoothingSettings.ShutdownFlushTimeout"/>, and whatever could not be written is reported in one
-/// final Warning line.
+/// final Error line. Error, so that lost log lines are noticed: the "5xx and Errors" alert reports them.
 /// </para>
 /// </summary>
 public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDisposable
 {
-    /// <summary>The <c>log.logger</c> of the sink's own Warning lines, to filter them in OpenSearch.</summary>
+    /// <summary>The <c>log.logger</c> of the sink's own Error lines, to filter them in OpenSearch.</summary>
     public static readonly string SourceContext = typeof(BurstSmoothingSink).FullName!;
 
     private static readonly MessageTemplateParser s_parser = new();
@@ -104,7 +104,7 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
                     var dropped = Interlocked.Exchange(ref _dropped, 0);
                     if (dropped > 0)
                     {
-                        Write(Warning(s_droppedTemplate, Property("DroppedLogLines", dropped)));
+                        Write(ErrorLine(s_droppedTemplate, Property("DroppedLogLines", dropped)));
                         await TakeTokenAsync(stopping);
                     }
 
@@ -156,10 +156,10 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
         }
     }
 
-    private LogEvent Warning(MessageTemplate template, params LogEventProperty[] properties) =>
+    private LogEvent ErrorLine(MessageTemplate template, params LogEventProperty[] properties) =>
         new(
             _clock.GetUtcNow(),
-            LogEventLevel.Warning,
+            LogEventLevel.Error,
             null,
             template,
             [.. properties, Property("SourceContext", SourceContext)]
@@ -192,7 +192,7 @@ public sealed class BurstSmoothingSink : ILogEventSink, IDisposable, IAsyncDispo
         if (unflushed + refused > 0)
         {
             Write(
-                Warning(
+                ErrorLine(
                     s_shutdownTemplate,
                     Property("DroppedLogLines", unflushed + refused),
                     Property("UnflushedLogLines", unflushed),

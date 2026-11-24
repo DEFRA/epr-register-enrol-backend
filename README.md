@@ -247,10 +247,11 @@ them explicitly; the code falls back to the same values). Override one with an e
 | `queueCapacity` | `10000` | Lines waiting to be written. A line that finds the queue full is dropped |
 | `shutdownFlushTimeout` | `00:00:05` | How long shutdown waits for the queue to be written |
 
-Nothing is dropped silently. Dropped lines are counted, and the next line written is preceded by one Warning,
+Nothing is dropped silently. Dropped lines are counted, and the next line written is preceded by one Error line,
 `Dropped <n> log lines because the log queue was full`. At shutdown, lines still queued after `shutdownFlushTimeout`
-are reported, with any refused lines not yet reported, in one final Warning, `Dropped <n> log lines at shutdown: ...`.
-Both have `log.logger` `EprRegisterEnrolBackend.Utils.Logging.BurstSmoothingSink`. If the console sink itself fails on
+are reported, with any refused lines not yet reported, in one final Error line, `Dropped <n> log lines at shutdown: ...`.
+Both have `log.logger` `EprRegisterEnrolBackend.Utils.Logging.BurstSmoothingSink`, and are at Error so that lost lines
+are noticed: the existing `5xx and Errors` alert reports them. If the console sink itself fails on
 a line, the line is lost, the failure goes to stderr through Serilog's `SelfLog`, and logging carries on.
 
 Development uses the same entry: `appsettings.Development.json` has no `WriteTo` of its own, because .NET merges arrays

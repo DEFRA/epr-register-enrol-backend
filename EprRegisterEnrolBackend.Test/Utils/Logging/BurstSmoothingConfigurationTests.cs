@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using Serilog.Core;
+using Serilog.Debugging;
 using Serilog.Events;
 
 namespace EprRegisterEnrolBackend.Test.Utils.Logging;
@@ -73,6 +74,36 @@ public class BurstSmoothingConfigurationTests
         json.RootElement.GetProperty("log").GetProperty("logger").GetString()
             .Should()
             .Be("BurstSmoothingConfigurationTests");
+    }
+
+    // Serilog.Settings.Configuration reports an entry it can't resolve (a sink or enricher whose package isn't
+    // referenced) only through SelfLog, which CdpLogging sends to stderr. The shipped config must resolve cleanly.
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Development")]
+    public void The_shipped_config_resolves_every_entry_with_nothing_on_self_log(string environment)
+    {
+        var originalError = Console.Error;
+        using var captured = new StringWriter();
+        Console.SetError(captured);
+        try
+        {
+            var context = new HostBuilderContext(new Dictionary<object, object>())
+            {
+                Configuration = AppSettings(environment),
+            };
+            var config = new LoggerConfiguration();
+            CdpLogging.Configuration(context, config);
+            using var logger = config.CreateLogger();
+            logger.Warning("resolved {Number}", 1);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+            SelfLog.Enable(originalError);
+        }
+
+        captured.ToString().Should().BeEmpty();
     }
 
     // An environment variable such as Serilog__WriteTo__0__Args__linesPerSecond overrides a setting, and a bad

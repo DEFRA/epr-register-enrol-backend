@@ -75,7 +75,7 @@ public class BurstSmoothingSinkTests
     }
 
     [Fact]
-    public async Task A_full_queue_never_holds_up_the_caller_and_its_dropped_lines_are_reported_before_the_next_line()
+    public async Task A_full_queue_never_holds_up_the_caller_and_its_dropped_lines_are_reported_at_error_before_the_next_line()
     {
         var inner = new RecordingSink();
         var sink = new BurstSmoothingSink(inner, Unthrottled(queueCapacity: 3), TimeProvider.System);
@@ -96,12 +96,12 @@ public class BurstSmoothingSinkTests
             "line 2",
             "line 3"
         );
-        var warning = inner.Events[1];
-        warning.Level.Should().Be(LogEventLevel.Warning);
-        warning.Properties["SourceContext"]
+        var dropLine = inner.Events[1];
+        dropLine.Level.Should().Be(LogEventLevel.Error);
+        dropLine.Properties["SourceContext"]
             .Should()
             .Be(new ScalarValue("EprRegisterEnrolBackend.Utils.Logging.BurstSmoothingSink"));
-        warning.Properties["DroppedLogLines"].Should().Be(new ScalarValue(7L));
+        dropLine.Properties["DroppedLogLines"].Should().Be(new ScalarValue(7L));
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class BurstSmoothingSinkTests
     }
 
     [Fact]
-    public async Task Disposal_reports_the_lines_it_could_not_flush_in_time_in_one_final_warning()
+    public async Task Disposal_reports_the_lines_it_could_not_flush_in_time_in_one_final_error()
     {
         var clock = new SignallingClock();
         var inner = new RecordingSink();
@@ -166,7 +166,7 @@ public class BurstSmoothingSinkTests
             "Dropped 3 log lines at shutdown: 3 were still queued after 00:00:04.5000000 and 0 were refused "
                 + "because the log queue was full or closed"
         );
-        inner.Events[^1].Level.Should().Be(LogEventLevel.Warning);
+        inner.Events[^1].Level.Should().Be(LogEventLevel.Error);
         inner.Events[^1].Properties["SourceContext"]
             .Should()
             .Be(new ScalarValue(BurstSmoothingSink.SourceContext));
@@ -174,7 +174,7 @@ public class BurstSmoothingSinkTests
     }
 
     [Fact]
-    public async Task The_final_warning_also_counts_drops_not_yet_reported()
+    public async Task The_final_error_also_counts_drops_not_yet_reported()
     {
         var clock = new SignallingClock();
         var inner = new RecordingSink();
