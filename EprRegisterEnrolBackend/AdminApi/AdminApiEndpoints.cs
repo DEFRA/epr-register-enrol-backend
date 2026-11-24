@@ -7,6 +7,8 @@ using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
+using MongoDB.Bson;
+using MongoDB.Bson.IO;
 using HttpJsonOptions = Microsoft.AspNetCore.Http.Json.JsonOptions;
 
 namespace EprRegisterEnrolBackend.AdminApi;
@@ -56,6 +58,51 @@ public static class AdminApiEndpoints
         group
             .MapGet("/accreditation-applications", SearchLegacyAccreditationApplications)
             .WithName("SearchLegacyAccreditationApplications");
+
+        group
+            .MapGet("/accreditation-applications/{reference}", GetLegacyAccreditationApplication)
+            .WithName("GetLegacyAccreditationApplication");
+    }
+
+    /// <summary>
+    /// RA-750: one Legacy application, as stored in Mongo (relaxed extended JSON), found by its
+    /// application reference, or by its <c>_id</c> when it has no reference yet.
+    /// </summary>
+    private static async Task<IResult> GetLegacyAccreditationApplication(
+        string reference,
+        ILegacyApplicationRead applications,
+        IOptions<ServiceClientsConfig> config,
+        CancellationToken cancellationToken
+    )
+    {
+        var trimmed = reference.Trim();
+        if (trimmed.Length == 0 || trimmed.Length > MaxSearchLength || trimmed.Any(char.IsControl))
+        {
+            return Bad(
+                "invalid_reference",
+                $"reference must be 1 to {MaxSearchLength} characters, with no control characters."
+            );
+        }
+
+        var stored = await applications.GetLegacyApplicationAsync(
+            trimmed,
+            config.Value.QueryTimeout,
+            cancellationToken
+        );
+        if (stored is null)
+        {
+            return new ServiceProblemResult(
+                StatusCodes.Status404NotFound,
+                "application_not_found",
+                "No accreditation application has that reference or id."
+            );
+        }
+
+        return Results.Text(
+            stored.ToJson(new JsonWriterSettings { OutputMode = JsonOutputMode.RelaxedExtendedJson }),
+            "application/json",
+            System.Text.Encoding.UTF8
+        );
     }
 
     private static async Task<IResult> SearchLegacyAccreditationApplications(

@@ -175,6 +175,10 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<ILegacyApplicationSearch>(sp =>
         sp.GetRequiredService<AccreditationApplicationPersistence>()
     );
+    // RA-750: and reads one Legacy application, raw, for the same reason.
+    builder.Services.AddSingleton<ILegacyApplicationRead>(sp =>
+        sp.GetRequiredService<AccreditationApplicationPersistence>()
+    );
 
     // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a
     // DomainModel:* flag, off by default; phase 1 "Expand" adds the domain-model-schema readiness check.
