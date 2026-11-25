@@ -41,8 +41,8 @@ public sealed class DuplicateApplicationDeletionOptions
 // backup copy: a restore comes from the CDP backup.
 //
 // Group: live (not Withdrawn) applications are grouped on organisationId, organisationName,
-// materialType, registrationReference and year. A record with any of the four text fields null or
-// empty is not grouped (counted as ungrouped-missing-key). Groups of one are not duplicates.
+// materialType and year. Records with different registration references still group. A record with
+// organisationId or organisationName null or empty is not grouped (counted as ungrouped-missing-key). Groups of one are not duplicates.
 //
 // Candidate: no OrgId and status Saved. Keeper: every other record in the group. A group's
 // candidates are deleted only when it also has a keeper (skipped-no-keeper otherwise); a group with
@@ -52,7 +52,7 @@ public sealed class DuplicateApplicationDeletionOptions
 // ExpectedDeletions equal to the number of candidates found this run.
 //
 // Delete: one transaction per group. Each candidate is DeleteOne'd guarded on its scanned Version,
-// Saved, OrgId null and the five key values, and must delete exactly 1; then every keeper must
+// Saved, OrgId null and the four key values, and must delete exactly 1; then every keeper must
 // still be live and the group must hold exactly as many live records as it has keepers. Any failure
 // rolls that group back and the run moves on. Each delete is guarded, so a re-run or a second
 // instance finds nothing left to delete in a finished group.
@@ -249,12 +249,12 @@ public class DuplicateApplicationDeletionMigration(
         NoCandidate,
     }
 
-    // The five fields that make two applications duplicates. Never logged in full.
+    // The four fields that make two applications duplicates. The registration reference is not one:
+    // records with different references still group, and each line logs its own.
     private sealed record GroupKey(
         string OrganisationId,
         string OrganisationName,
         MaterialType MaterialType,
-        string RegistrationReference,
         int Year
     );
 
@@ -282,11 +282,10 @@ public class DuplicateApplicationDeletionMigration(
 
     private static bool HasKey(AccreditationApplicationModel a) =>
         !string.IsNullOrEmpty(a.OrganisationId)
-        && !string.IsNullOrEmpty(a.OrganisationName)
-        && !string.IsNullOrEmpty(a.RegistrationReference);
+        && !string.IsNullOrEmpty(a.OrganisationName);
 
     private static GroupKey KeyOf(AccreditationApplicationModel a) =>
-        new(a.OrganisationId, a.OrganisationName!, a.MaterialType, a.RegistrationReference!, a.Year);
+        new(a.OrganisationId, a.OrganisationName!, a.MaterialType, a.Year);
 
     // Only the fields the rule and the logs need are read, with a maxTime. The grouping is done in
     // memory rather than in an aggregation: this is a one-off startup scan, and it keeps the key
@@ -342,12 +341,11 @@ public class DuplicateApplicationDeletionMigration(
 
         logger.LogInformation(
             "RA-788 {Mode:l}: group organisationId={OrganisationId} organisationName={OrganisationName} "
-                + "registration={Registration} material={Material} year={Year} "
+                + "material={Material} year={Year} "
                 + "outcome={Outcome:l} candidates={Candidates} keepers={Keepers}",
             mode,
             group.Key.OrganisationId,
             group.Key.OrganisationName,
-            group.Key.RegistrationReference,
             group.Key.MaterialType,
             group.Key.Year,
             group.Outcome switch
@@ -367,10 +365,11 @@ public class DuplicateApplicationDeletionMigration(
 
     private void LogCandidate(string mode, AccreditationApplicationModel c) =>
         logger.LogInformation(
-            "RA-788 {Mode:l}: candidate {Id} status={Status} version={Version} "
+            "RA-788 {Mode:l}: candidate {Id} registration={Registration} status={Status} version={Version} "
                 + "createdAt={CreatedAt:O} dateLastEdited={DateLastEdited:O}",
             mode,
             c.Id,
+            c.RegistrationReference,
             c.ApplicationStatus,
             c.Version,
             c.CreatedAt,
@@ -379,9 +378,10 @@ public class DuplicateApplicationDeletionMigration(
 
     private void LogKeeper(string mode, AccreditationApplicationModel k) =>
         logger.LogInformation(
-            "RA-788 {Mode:l}: keeper {Id} status={Status} hasOrgId={HasOrgId}",
+            "RA-788 {Mode:l}: keeper {Id} registration={Registration} status={Status} hasOrgId={HasOrgId}",
             mode,
             k.Id,
+            k.RegistrationReference,
             k.ApplicationStatus,
             k.OrgId is not null
         );
@@ -654,7 +654,6 @@ public class DuplicateApplicationDeletionMigration(
             Filters.Eq(a => a.OrganisationId, key.OrganisationId),
             Filters.Eq(a => a.OrganisationName, key.OrganisationName),
             Filters.Eq(a => a.MaterialType, key.MaterialType),
-            Filters.Eq(a => a.RegistrationReference, key.RegistrationReference),
             Filters.Eq(a => a.Year, key.Year)
         );
 

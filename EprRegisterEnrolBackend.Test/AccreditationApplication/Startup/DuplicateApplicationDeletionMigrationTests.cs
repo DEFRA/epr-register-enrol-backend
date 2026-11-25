@@ -77,15 +77,12 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             },
         };
 
-    private static AccreditationApplicationModel Candidate(
-        string? registration = Registration,
-        int year = 2027
-    ) => App(ApplicationStatus.Saved, null, registration: registration, year: year);
+    // The year separates groups in the tests that seed several.
+    private static AccreditationApplicationModel Candidate(int year = 2027) =>
+        App(ApplicationStatus.Saved, null, year: year);
 
-    private static AccreditationApplicationModel Keeper(
-        string? registration = Registration,
-        int year = 2027
-    ) => App(ApplicationStatus.Updated, 500131, registration: registration, year: year);
+    private static AccreditationApplicationModel Keeper(int year = 2027) =>
+        App(ApplicationStatus.Updated, 500131, year: year);
 
     private async Task SeedAsync(params AccreditationApplicationModel[] applications)
     {
@@ -166,16 +163,16 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             .Should()
             .Contain(m =>
                 m.StartsWith("RA-788 DRY RUN")
-                && m.Contains($"candidate {candidate.Id} status=Saved version=3")
+                && m.Contains($"candidate {candidate.Id} registration={Registration} status=Saved version=3")
                 && m.Contains("createdAt=")
                 && m.Contains("dateLastEdited=")
             )
             .And.Contain(m =>
                 m.StartsWith("RA-788 DRY RUN")
-                && m.Contains($"keeper {keeper.Id} status=Updated hasOrgId=True")
+                && m.Contains($"keeper {keeper.Id} registration={Registration} status=Updated hasOrgId=True")
             )
             .And.Contain(m =>
-                m.Contains("registration=REG-0001 material=Plastic year=2027")
+                m.Contains("material=Plastic year=2027")
                 && m.Contains("outcome=would-delete")
             )
             .And.Contain(m => m.Contains("summary groups=1 candidates=1 would-delete=1 deleted=0"));
@@ -237,7 +234,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     }
 
     public static TheoryData<string> Differences =>
-        ["organisationId", "organisationName", "material", "registration", "year"];
+        ["organisationId", "organisationName", "material", "year"];
 
     [Theory]
     [MemberData(nameof(Differences))]
@@ -254,8 +251,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                     organisationName: "Other Ltd"
                 ),
                 "material" => App(ApplicationStatus.Updated, 500131, material: MaterialType.Glass),
-                "registration" => App(ApplicationStatus.Updated, 500131, registration: "REG-0002"),
-                // The same registration carries across years: an abandoned draft for one year is
+                // The same organisation carries across years: an abandoned draft for one year is
                 // not a duplicate of a live application for another.
                 _ => App(ApplicationStatus.Updated, 500131, year: 2026),
             }
@@ -303,7 +299,6 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             Candidate(),
             Keeper(),
             App(ApplicationStatus.Saved, null, organisationName: blank),
-            App(ApplicationStatus.Saved, null, registration: blank),
             App(ApplicationStatus.Saved, null, organisationId: blank)
         );
 
@@ -311,7 +306,23 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
 
         result.Groups.Should().Be(1);
         result.Candidates.Should().Be(1);
-        result.UngroupedMissingKey.Should().Be(3);
+        result.UngroupedMissingKey.Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData("REG-0002")]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task The_registration_reference_is_not_a_grouping_attribute(string? other)
+    {
+        var candidate = Candidate();
+        await SeedAsync(candidate, App(ApplicationStatus.Updated, 500131, registration: other));
+
+        var result = await Applying(1).RunAsync(Ct);
+
+        result.Groups.Should().Be(1);
+        result.Deleted.Should().Be(1);
+        (await ExistsAsync(candidate.Id)).Should().BeFalse();
     }
 
     // --- Outcomes ---
@@ -420,16 +431,16 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     [Fact]
     public async Task Several_groups_are_handled_independently()
     {
-        var other = Candidate("REG-0002");
+        var other = Candidate(2028);
         await SeedAsync(
             Candidate(),
             Keeper(),
             other,
-            Keeper("REG-0002"),
-            Candidate("REG-0003"),
-            Candidate("REG-0003"),
-            Keeper("REG-0004"),
-            Keeper("REG-0004")
+            Keeper(2028),
+            Candidate(2029),
+            Candidate(2029),
+            Keeper(2030),
+            Keeper(2030)
         );
 
         var result = await Applying(2).RunAsync(Ct);
@@ -448,8 +459,8 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     public async Task A_candidate_edited_between_scan_and_delete_rolls_that_group_back()
     {
         var edited = Candidate();
-        var untouched = Candidate("REG-0002");
-        await SeedAsync(edited, Keeper(), untouched, Keeper("REG-0002"));
+        var untouched = Candidate(2028);
+        await SeedAsync(edited, Keeper(), untouched, Keeper(2028));
         var migration = Applying(2);
         migration.BeforeDeleteForTest = async (ids, token) =>
         {
@@ -475,8 +486,8 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     {
         var candidate = Candidate();
         var keeper = Keeper();
-        var other = Candidate("REG-0002");
-        await SeedAsync(candidate, keeper, other, Keeper("REG-0002"));
+        var other = Candidate(2028);
+        await SeedAsync(candidate, keeper, other, Keeper(2028));
         var migration = Applying(2);
         migration.AfterDeleteForTest = async (ids, session, token) =>
         {
@@ -534,8 +545,8 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     public async Task A_fault_after_a_delete_rolls_that_group_back_and_the_others_go_ahead()
     {
         var faulty = Candidate();
-        var fine = Candidate("REG-0002");
-        await SeedAsync(faulty, Keeper(), fine, Keeper("REG-0002"));
+        var fine = Candidate(2028);
+        await SeedAsync(faulty, Keeper(), fine, Keeper(2028));
         var migration = Applying(2);
         migration.AfterDeleteForTest = (ids, _, _) =>
             ids.Contains(faulty.Id!.Value)
@@ -611,7 +622,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     [Fact]
     public async Task Every_line_is_prefixed_states_its_mode_and_logs_no_applicant_or_reviewer_data()
     {
-        await SeedAsync(Candidate(), Keeper(), Candidate("REG-0002"));
+        await SeedAsync(Candidate(), Keeper(), Candidate(2028));
 
         await DryRun().RunAsync(Ct);
         await CreateMigration(true, apply: true, confirmedBy: Reviewer, expected: 5).RunAsync(Ct);
@@ -641,7 +652,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             .Should()
             .ContainSingle(m =>
                 m.Contains("group organisationId=" + ReExOrganisationId + " ")
-                && m.Contains("organisationName=" + OrganisationName + " registration=")
+                && m.Contains("organisationName=" + OrganisationName + " material=")
             );
     }
 
