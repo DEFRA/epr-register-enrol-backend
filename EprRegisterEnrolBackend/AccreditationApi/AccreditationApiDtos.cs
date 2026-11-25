@@ -238,3 +238,74 @@ public sealed record PageDto<T>
 
     public required IReadOnlyList<T> Items { get; init; }
 }
+
+/// <summary>
+/// The v2 <c>Registration</c>: every application for it from the first accreditation year on, of any
+/// status. This backend holds no registration record, so the applications are all there is to serve.
+/// </summary>
+public sealed record RegistrationDto
+{
+    public required int OrganisationNumber { get; init; }
+
+    public required string RegistrationNumber { get; init; }
+
+    /// <summary>
+    /// Ordered by year. A year can hold more than one application, such as a rejected one and its
+    /// resubmission.
+    /// </summary>
+    public required IReadOnlyList<RegistrationApplicationDto> Applications { get; init; }
+}
+
+/// <summary>
+/// The v2 <c>RegistrationApplication</c>: one application for a registration, with every overseas
+/// site on it.
+/// </summary>
+public sealed record RegistrationApplicationDto
+{
+    public required int Year { get; init; }
+
+    /// <summary>The application's case reference, present once the application is submitted.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ApplicationReference { get; init; }
+
+    /// <summary>The application's status, such as <c>Saved</c>, <c>Submitted</c> or <c>Approved</c>.</summary>
+    public required string ApplicationStatus { get; init; }
+
+    /// <summary>Present once the application holds an accreditation number.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AccreditationNumber { get; init; }
+
+    /// <summary>
+    /// Every overseas site on the application, whether or not it is selected. Ordered by ORS id, with
+    /// sites that have none first. Empty for a reprocessor.
+    /// </summary>
+    public required IReadOnlyList<RegistrationOverseasSiteDto> OverseasSites { get; init; }
+}
+
+/// <summary>
+/// The v2 <c>RegistrationOverseasSite</c>: an overseas site as it stands on an application.
+/// </summary>
+public sealed record RegistrationOverseasSiteDto
+{
+    public required int SiteId { get; init; }
+
+    /// <summary>The site's ORS id. Always present, and <c>null</c> until one is issued.</summary>
+    public required string? OrsId { get; init; }
+
+    public required string SiteName { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FormattedAddress { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AddressDto? Address { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Coordinates { get; init; }
+
+    /// <summary>
+    /// Whether the site is selected on the application. On an application that is not yet approved
+    /// this is the operator's choice, not an accredited site.
+    /// </summary>
+    public required bool Selected { get; init; }
+}

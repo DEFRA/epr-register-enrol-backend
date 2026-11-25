@@ -105,6 +105,19 @@ public interface IAccreditationApplicationPersistence
     );
 
     /// <summary>
+    /// Every application, of any status, for an organisation's registration (by its visible
+    /// organisation number and registration number), from <paramref name="firstYear"/> on, ordered
+    /// by year. This backend holds no registration of its own, so these applications are the
+    /// registration. Read-only.
+    /// </summary>
+    Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
+        int orgId,
+        string registrationNumber,
+        int firstYear,
+        TimeSpan? maxTime = null
+    );
+
+    /// <summary>
     /// How many approved applications from <paramref name="firstYear"/> on cannot be served by the
     /// accreditation API, by reason: no organisation, registration or accreditation number. Counts
     /// only, so nothing about an application leaves the database. Read-only.
