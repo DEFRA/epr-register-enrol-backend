@@ -1,4 +1,5 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Dtos;
 
@@ -109,6 +110,11 @@ public class ReExAccreditationDto
     public int? OrganisationNumber { get; set; }
 
     public string? RegistrationReference { get; set; }
+
+    // RA-806: the matched registration's ReEx status, which the seed copies onto the domain model's Registration.
+    // Required: a missing or unknown ReEx status fails GetAccreditationAsync instead, so there is no default.
+    public required RegistrationStatus RegistrationStatus { get; set; }
+
     public string? SiteAddress { get; set; }
     public bool IsExporter { get; set; }
 

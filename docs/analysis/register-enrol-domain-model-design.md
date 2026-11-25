@@ -465,12 +465,14 @@ transactions are available in deployed environments. Local `compose.yml:34-43` r
    picks the registration by ReEx `id`, and follows `registration.accreditationId` to **one** ReEx
    accreditation, whose `validFrom.Year` must equal `year - 1`. For exporters it calls ORS-A
    (`GetOverseasSiteAsync`), and `MapOverseasSite` (lines 500-534) sets `Selected = validFrom != null`.
+   RA-806: it also carries the matched registration's `status` to the seed (`ReExRegistrationStatusMapper`), and fails,
+   like its other bad-ReEx-data checks, when that status is missing or not one of ReEx's registration statuses.
 3. It builds the application from the prior-year data, including the formatted address strings, and
    inserts it with status `Saved`.
 
 The ReEx DTOs are in `ReEx/Dtos/OrganisationDto.cs` and `ReEx/Dtos/OverseasSitesDto.cs`.
 `RegistrationBaseDto` carries `id`, `accreditationId` (one only), `registrationNumber`,
-`submittedToRegulator`, `noticeAddress`, `wasteManagementPermits` and `glassRecyclingProcess[]`; the
+`submittedToRegulator`, `status`, `noticeAddress`, `wasteManagementPermits` and `glassRecyclingProcess[]`; the
 reprocessor and exporter subtypes add site or ORS data.
 
 ### 2.3 Existing endpoints (must keep working)
@@ -885,9 +887,23 @@ current documents.
 **Registration.** This also adopts ReEx's lifecycle (Q4), from `VALID_REG_TRANSITIONS`. Registrations
 **cannot be suspended** (PAE-1705).
 
+Until this service implements new registrations, the status is ReEx's (RA-806): each seed copies the registration's
+ReEx `status` (`REGISTRATION_STATUS`: `created`, `approved`, `rejected`, `cancelled`, matched by name ignoring case)
+onto the Registration, a new one or the current version, and a change is a new version with `lastChange.reason =
+ReExRefresh`. A seeded status copies ReEx's and is not checked against `VALID_REG_TRANSITIONS`, because ReEx masters
+it: the transitions below are ReEx's, not ones this service enforces. A missing or unrecognised ReEx status is logged at
+Error and fails the seed (§2.2 step 2), so a held status is never kept as if ReEx still said so. The migration makes no
+ReEx calls, so a Registration it creates is `created` until the next seed for it. The only other writers are the
+Development-only dev seeds (`DevRegistrationSeedService` and `DevExporterAccreditationSeedService`, through
+`RegistrationVersionDevSeed`), which insert their fixed registrations `approved`.
+
 ```mermaid
 stateDiagram-v2
     [*] --> created : migrated from applications / (future) new registration
+    [*] --> created : seeded from ReEx (created)
+    [*] --> approved : seeded from ReEx (approved)
+    [*] --> rejected : seeded from ReEx (rejected)
+    [*] --> cancelled : seeded from ReEx (cancelled)
     created --> approved
     created --> rejected
     approved --> cancelled : cancellation cascades to accreditations
@@ -901,6 +917,11 @@ transaction. This bypasses the "cancelled only via suspended" rule, exactly as R
 accreditation version records `lastChange.reason = RegistrationCancelled`. Which accreditations are
 affected: only **in-force** accreditations (approved or suspended, period not ended). Reinstating the
 registration does not reinstate them; each is reinstated manually (Q16).
+
+The cascade is part of the regulator's cancel action (B15), which is not built yet. A seed that copies ReEx's
+`cancelled` onto a Registration (RA-806) does not cascade: its accreditations keep their status. Nothing reads an
+Accreditation's status yet, and in-year changes already refuse a Registration that is not `approved`
+(`AccreditationChangeEndpoints`, 409). Whether a ReEx-driven cancellation should cascade is decided with B15.
 
 **ORS on the Registration, and each interim site embedded in it** (lifecycle of the registered site
 itself; each `status` is held separately, the interim one on its `interimSites[]` entry):
@@ -1271,7 +1292,7 @@ pending uploads and nonces are **unchanged**.
 | `Organisation.submitterContactDetails`, `users[]` | Organisation | ✚ `users` is not in `OrganisationDto` |
 | `Organisation.registrations[]` | Registration (by `organisationId`) | |
 | `Organisation.accreditations[]` | ⚠ **Conflicts with fixed decision 3** | Recommend removing it, or nesting accreditations under each registration in this response |
-| `Registration.registrationNumber`, `status`, `material`, `wasteProcessingType`, `glassRecyclingProcess`, `siteAddress`, `noticeAddress`, `recyclingProcess`, `exportPorts`, `wasteManagementPermits`, `approvedPersons`, `yearlyMetrics`, `contactDetails`, `submitterContactDetails`, `samplingInspectionPlan`, `gridReference`, `suppliers`, `plantEquipmentDetails`, `siteId`, `formSubmissionTime` | Registration | ✚ Several are not on `RegistrationBaseDto` today: `recyclingProcess`, `approvedPersons`, `contactDetails`, `samplingInspectionPlan`, `suppliers` and `formSubmissionTime` |
+| `Registration.registrationNumber`, `status`, `material`, `wasteProcessingType`, `glassRecyclingProcess`, `siteAddress`, `noticeAddress`, `recyclingProcess`, `exportPorts`, `wasteManagementPermits`, `approvedPersons`, `yearlyMetrics`, `contactDetails`, `submitterContactDetails`, `samplingInspectionPlan`, `gridReference`, `suppliers`, `plantEquipmentDetails`, `siteId`, `formSubmissionTime` | Registration | ✚ Several are not on `RegistrationBaseDto` today: `recyclingProcess`, `approvedPersons`, `contactDetails`, `samplingInspectionPlan`, `suppliers` and `formSubmissionTime`. `status` is read and copied at seed since RA-806 (§3.4) |
 | `Registration.yearlyMetrics` (object) | Registration.`yearlyMetrics[]` | ⚠ ReEx sends a **list** (`ReprocessorRegistrationDto.YearlyMetrics`); the PR has a single object |
 | `WasteManagementPermit.authorisedWeight`, `permitWindow` | Registration permits | ⚠ ReEx has `authorisedMaterials[]{material, authorisedWeightInTonnes, timeScale}`. Reshape it or change the PR |
 | `Registration.accreditationReference` (single) | ⚠ Many accreditations per registration (one per year) | Replace with the `…/accreditations` sub-resource, or `currentAccreditationNumber` |

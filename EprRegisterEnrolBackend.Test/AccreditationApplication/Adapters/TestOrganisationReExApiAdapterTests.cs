@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using NSubstitute;
@@ -33,7 +34,10 @@ public class TestOrganisationReExApiAdapterTests
     [MemberData(nameof(Routes))]
     public async Task GetAccreditationAsync_RoutesByPrefix(string organisationId, bool toStub)
     {
-        var expected = ReExResult<ReExAccreditationDto>.Success(new ReExAccreditationDto(), 200);
+        var expected = ReExResult<ReExAccreditationDto>.Success(
+            new ReExAccreditationDto { RegistrationStatus = RegistrationStatus.Approved },
+            200
+        );
         Chosen(toStub)
             .GetAccreditationAsync(organisationId, "reg", MaterialType.Plastic, 2025)
             .Returns(expected);
