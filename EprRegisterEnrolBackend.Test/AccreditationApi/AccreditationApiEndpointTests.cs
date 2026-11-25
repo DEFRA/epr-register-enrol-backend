@@ -29,6 +29,8 @@ public class AccreditationApiEndpointTests : IDisposable
     private const string Registration = "R27EX5000270012AL";
     private const string AccreditationPath =
         "/v1/organisations/500027/registrations/R27EX5000270012AL/accreditations/2027";
+    private const string RegistrationPath =
+        "/v1/organisations/500027/registrations/R27EX5000270012AL";
 
     private readonly EphemeralMongoTestFactory _factory;
     private readonly HttpClient _client;
@@ -540,6 +542,143 @@ public class AccreditationApiEndpointTests : IDisposable
         var response = await Get($"{AccreditationPath}/overseas-sites/{orsId}");
 
         await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_ors_id");
+    }
+
+    // ---- GET registration ----
+
+    [Fact]
+    public async Task Registration_ServesEveryApplication_WhateverItsStatus()
+    {
+        await Seed(year: 2029, status: ApplicationStatus.Saved, accreditation: null);
+        await Seed();
+        await Seed(year: 2028, status: ApplicationStatus.Rejected, accreditation: null);
+
+        var response = await Get(RegistrationPath);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("organisationNumber").GetInt32().Should().Be(Org);
+        body.GetProperty("registrationNumber").GetString().Should().Be(Registration);
+        var applications = body.GetProperty("applications").EnumerateArray().ToList();
+        applications.Select(a => a.GetProperty("year").GetInt32()).Should().Equal(2027, 2028, 2029);
+        applications
+            .Select(a => a.GetProperty("applicationStatus").GetString())
+            .Should()
+            .Equal("Approved", "Rejected", "Saved");
+        applications[0].GetProperty("accreditationNumber").GetString().Should().Be("A27EX5000270012AL");
+        applications[1].TryGetProperty("accreditationNumber", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Registration_LeavesOutApplicationsBeforeTheFirstAccreditationYear()
+    {
+        await Seed(year: 2026, accreditation: "A26EX5000270012AL");
+        await Seed();
+
+        var body = await Json(await Get(RegistrationPath));
+
+        body.GetProperty("applications")
+            .EnumerateArray()
+            .Select(a => a.GetProperty("year").GetInt32())
+            .Should()
+            .Equal(2027);
+    }
+
+    [Fact]
+    public async Task Registration_WithApplicationsOnlyBeforeTheFirstAccreditationYear_Is404()
+    {
+        await Seed(year: 2026, accreditation: "A26EX5000270012AL");
+
+        var response = await Get(RegistrationPath);
+
+        await AssertProblem(response, HttpStatusCode.NotFound, "registration_not_found");
+    }
+
+    [Fact]
+    public async Task Registration_ServesEachApplicationsReference_OnceItHasOne()
+    {
+        await Seed(configure: a => a.ApplicationReference = "ACC-500027-0012");
+        await Seed(year: 2028, status: ApplicationStatus.Saved, accreditation: null);
+
+        var applications = (await Json(await Get(RegistrationPath)))
+            .GetProperty("applications")
+            .EnumerateArray()
+            .ToList();
+
+        applications[0].GetProperty("applicationReference").GetString().Should().Be("ACC-500027-0012");
+        applications[1].TryGetProperty("applicationReference", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Registration_ServesEverySite_SelectedOrNot_InOrsIdOrder()
+    {
+        await Seed(
+            configure: a =>
+            {
+                a.OverseasSites!.Sites.Reverse();
+                a.OverseasSites.Sites.Add(Site(4, "004", selected: true, validFrom: null));
+                a.OverseasSites.Sites[^1].OrsId = null;
+            }
+        );
+
+        var body = await Json(await Get(RegistrationPath));
+
+        var sites = body.GetProperty("applications")[0].GetProperty("overseasSites").EnumerateArray().ToList();
+        sites.Select(s => s.GetProperty("siteId").GetInt32()).Should().Equal(4, 1, 2, 3);
+        sites[0].GetProperty("orsId").ValueKind.Should().Be(JsonValueKind.Null);
+        sites[1].GetProperty("orsId").GetString().Should().Be("001");
+        sites.Select(s => s.GetProperty("selected").GetBoolean()).Should().Equal(true, true, true, false);
+    }
+
+    [Fact]
+    public async Task Registration_OfAReprocessor_HasNoOverseasSites()
+    {
+        await Seed(
+            configure: a =>
+            {
+                a.IsExporter = false;
+                a.WasteProcessingType = "reprocessor";
+                a.OverseasSites = null;
+            }
+        );
+
+        var body = await Json(await Get(RegistrationPath));
+
+        body.GetProperty("applications")[0].GetProperty("overseasSites").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Registration_ServesOnlyThatOrganisationsRegistration()
+    {
+        await Seed();
+        await Seed(registration: "R27EX5000270099AL");
+        await Seed(orgId: 500099, accreditation: "A27EX5000990012AL");
+
+        var body = await Json(await Get(RegistrationPath));
+
+        body.GetProperty("applications").GetArrayLength().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Registration_WithNoApplications_Is404()
+    {
+        await Seed(registration: "R27EX5000270099AL");
+
+        var response = await Get(RegistrationPath);
+
+        await AssertProblem(response, HttpStatusCode.NotFound, "registration_not_found");
+        var detail = (await Json(response)).GetProperty("detail").GetString();
+        detail.Should().Contain($"{Org}").And.Contain(Registration);
+    }
+
+    [Theory]
+    [InlineData("/v1/organisations/abc/registrations/R27EX5000270012AL", "invalid_organisation_number")]
+    [InlineData("/v1/organisations/500027/registrations/R27EX!", "invalid_registration_number")]
+    public async Task Registration_InvalidPath_Is400(string path, string code)
+    {
+        var response = await Get(path);
+
+        await AssertProblem(response, HttpStatusCode.BadRequest, code);
     }
 
     // ---- search ----
@@ -1094,6 +1233,7 @@ public class AccreditationApiEndpointTests : IDisposable
             AccreditationPath,
             $"{AccreditationPath}/overseas-sites",
             $"{AccreditationPath}/overseas-sites/001",
+            RegistrationPath,
         };
         foreach (var path in paths)
         {
@@ -1152,6 +1292,7 @@ public class AccreditationApiEndpointTests : IDisposable
             AccreditationPath,
             $"{AccreditationPath}/overseas-sites",
             $"{AccreditationPath}/overseas-sites/001",
+            RegistrationPath,
         };
 
     [Theory]

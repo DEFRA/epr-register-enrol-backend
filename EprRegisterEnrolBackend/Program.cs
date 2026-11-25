@@ -248,6 +248,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
         builder.Configuration.GetSection(TestDataConfig.SectionName)
     );
     builder.Services.AddSingleton<GrantedAccreditations>();
+    builder.Services.AddSingleton<RegistrationApplications>();
     builder.Services.AddSingleton<AccreditationApiTestDataSeeder>();
     builder.Services.AddHostedService<AccreditationApiTestDataSeedingService>();
 

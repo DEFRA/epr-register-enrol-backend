@@ -31,6 +31,9 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
     private const string Signatory = "Signatory In Both";
     private const string LegacyOnlySignatory = "Signatory Renamed In Legacy Only";
 
+    private static string RegistrationPath =>
+        $"/v1/organisations/{Org}/registrations/{Registration}";
+
     private static string AccreditationPath(string registration = Registration) =>
         $"/v1/organisations/{Org}/registrations/{registration}/accreditations/2027";
 
@@ -202,6 +205,22 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
         Assert.Equal(["Site 001", "Site 002"], names);
     }
 
+    [Fact]
+    public async Task GetRegistration_ServesTheModel()
+    {
+        await MigratedThenSiteRenamedInLegacyAsync();
+
+        var registration = await JsonAsync(await GetAsync(RegistrationPath));
+
+        var names = Assert
+            .Single(registration.GetProperty("applications").EnumerateArray())
+            .GetProperty("overseasSites")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("siteName").GetString())
+            .ToList();
+        Assert.Equal(["Site 001", "Site 002"], names);
+    }
+
     // The accreditation itself carries no site names, so the signatory (a field it does carry) is renamed in legacy
     // alone: the model's name is served, and the legacy app serves the rename, so the test can tell the two apart.
     [Fact]
@@ -294,14 +313,17 @@ public sealed class AccreditationApiReadFromModelTests : IDisposable
     [InlineData("/overseas-sites")]
     [InlineData("/overseas-sites/001")]
     [InlineData("search")]
+    [InlineData("registration")]
     public async Task Parity_SameJsonFromBothSources(string route)
     {
         var application = await GrantedAsync();
         await MigrateAsync(application);
-        var path =
-            route == "search"
-                ? $"/v1/accreditations?organisationNumber={Org}"
-                : AccreditationPath() + route;
+        var path = route switch
+        {
+            "search" => $"/v1/accreditations?organisationNumber={Org}",
+            "registration" => RegistrationPath,
+            _ => AccreditationPath() + route,
+        };
 
         var fromLegacy = (await JsonAsync(await GetLegacyAsync(path))).GetRawText();
         var fromModel = (await JsonAsync(await GetAsync(path))).GetRawText();
