@@ -542,6 +542,61 @@ public class AccreditationApiEndpointTests : IDisposable
         await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_ors_id");
     }
 
+    // ---- RA-809: statusTimeline beside every statusHistory ----
+
+    [Theory]
+    [InlineData("/v1/accreditations", 2 + 1)]
+    [InlineData(AccreditationPath, 1 + 2 + 1)]
+    [InlineData(AccreditationPath + "/overseas-sites", 2 + 1)]
+    [InlineData(AccreditationPath + "/overseas-sites/001", 1 + 1)]
+    public async Task EveryRecordWithAStatusHistory_AlsoHasAStatusTimeline(
+        string path,
+        int expectedRecords
+    )
+    {
+        // Site 001 has an interim site that is withdrawn, so its history has two entries on one day.
+        await Seed(
+            configure: a =>
+                a.OverseasSites!.Sites[0].InterimSites = [Interim(11, removed: true)]
+        );
+
+        var records = RecordsWithAHistory(await Json(await Get(path))).ToList();
+
+        records.Should().HaveCount(expectedRecords);
+        foreach (var record in records)
+        {
+            var timeline = record.GetProperty("statusTimeline").EnumerateArray().ToList();
+            timeline.Should().NotBeEmpty();
+            timeline[^1].GetProperty("effectiveToDate").ValueKind.Should().Be(JsonValueKind.Null);
+            timeline[^1]
+                .GetProperty("status")
+                .GetString()
+                .Should()
+                .Be(record.GetProperty("latestStatus").GetProperty("status").GetString());
+            timeline[^1]
+                .EnumerateObject()
+                .Select(property => property.Name)
+                .Should()
+                .BeEquivalentTo("status", "effectiveFromDate", "effectiveToDate");
+        }
+    }
+
+    private static IEnumerable<JsonElement> RecordsWithAHistory(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            return element.EnumerateArray().SelectMany(RecordsWithAHistory);
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return [];
+        }
+
+        var nested = element.EnumerateObject().SelectMany(p => RecordsWithAHistory(p.Value));
+        return element.TryGetProperty("statusHistory", out _) ? nested.Prepend(element) : nested;
+    }
+
     // ---- search ----
 
     [Fact]

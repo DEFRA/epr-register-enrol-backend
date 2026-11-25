@@ -73,6 +73,9 @@ public sealed record AccreditationDto : AccreditationSummaryDto
 
     public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
 
+    /// <summary>The <c>statusHistory</c> as periods that don't overlap: use it for the status on a date.</summary>
+    public required IReadOnlyList<StatusTimelinePeriodDto> StatusTimeline { get; init; }
+
     public required IReadOnlyList<TonnageBandHistoryEntryDto> TonnageBandHistory { get; init; }
 
     /// <summary>
@@ -110,6 +113,23 @@ public sealed record StatusHistoryEntryDto
     public required DateOnly? EffectiveToDate { get; init; }
 
     public required DateTime RecordedAt { get; init; }
+}
+
+/// <summary>
+/// One period of a <c>statusTimeline</c> (RA-809): the history flattened so that each date has one status.
+/// </summary>
+public sealed record StatusTimelinePeriodDto
+{
+    public required string Status { get; init; }
+
+    /// <summary>The first day of the period (UK date, <c>yyyy-MM-dd</c>). May be in the future.</summary>
+    public required DateOnly EffectiveFromDate { get; init; }
+
+    /// <summary>
+    /// The last day of the period: the day before the next starts. Always present, and <c>null</c> on the
+    /// last period.
+    /// </summary>
+    public required DateOnly? EffectiveToDate { get; init; }
 }
 
 public sealed record TonnageBandHistoryEntryDto
@@ -181,6 +201,9 @@ public sealed record InterimSiteDto
     public required StatusHistoryEntryDto LatestStatus { get; init; }
 
     public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
+
+    /// <summary>The <c>statusHistory</c> as periods that don't overlap: see the accreditation's.</summary>
+    public required IReadOnlyList<StatusTimelinePeriodDto> StatusTimeline { get; init; }
 }
 
 /// <summary>
@@ -223,6 +246,9 @@ public sealed record AccreditedOverseasSiteDto
     public required StatusHistoryEntryDto LatestStatus { get; init; }
 
     public required IReadOnlyList<StatusHistoryEntryDto> StatusHistory { get; init; }
+
+    /// <summary>The <c>statusHistory</c> as periods that don't overlap: see the accreditation's.</summary>
+    public required IReadOnlyList<StatusTimelinePeriodDto> StatusTimeline { get; init; }
 
     /// <summary>Every interim site on the site, withdrawn ones included.</summary>
     public required IReadOnlyList<InterimSiteDto> InterimSites { get; init; }

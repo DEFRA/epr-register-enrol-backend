@@ -102,6 +102,55 @@ not served.
 | `tonnageBand` | as above | Accreditation `tonnageBand` | the current value, which is also the latest history entry. Included in search because it is on the public register |
 | `signatories[]` | App `Prns.Authorisers` → `prns.authorisers` (`fullName`, `email`; `isNew` not exposed). Seeded: Org `PrnIssuance.Signatories` → `prnIssuance.signatories` | Accreditation | get-one only, never in search. Personal data. When both exist, the application's list replaces the seed's (no merge) |
 
+### Status timeline and the status on a date (RA-809)
+
+Every record with a `statusHistory` (the accreditation, each overseas site and each interim site) also
+has a `statusTimeline`. It is not a full history: it is the history flattened into periods that don't
+overlap, so each date has exactly one status. It is built when the response is, never stored, and
+`statusHistory` and `latestStatus` are unchanged by it.
+
+1. An empty history gives an empty timeline.
+2. Sort the entries by `effectiveFromDate`, then `recordedAt`, oldest first. Entries sharing both keep
+   their order in the history.
+3. For each `effectiveFromDate`, keep only the last entry: the one recorded latest. The others are
+   overruled on their first day and never apply on their own.
+4. Make one period for each entry kept, from its `effectiveFromDate` to the day before the next kept
+   entry's. The last period's `effectiveToDate` is `null`.
+5. Merge adjacent periods with the same status: the first one's start, the last one's end.
+
+**The status on date D.** If D is before the first period's `effectiveFromDate`, there is no status on
+D. Otherwise it is the status of the period where `effectiveFromDate` <= D and either `effectiveToDate`
+is `null` or D <= `effectiveToDate`. The history gives the same answer: of the entries with
+`effectiveFromDate` <= D, take the latest `effectiveFromDate`, then the latest `recordedAt`. A period
+can start in the future, so apply this rule to today's date to find the status in effect today. The
+last period's status is `latestStatus.status`.
+
+**Worked example.** The history of a 2027 accreditation:
+
+| Status | `recordedAt` | `effectiveFromDate` | `effectiveToDate` |
+|---|---|---|---|
+| approved | 2026-11-10 | 2027-01-01 | 2027-01-01 |
+| suspended | 2026-12-15 | 2027-01-01 | 2027-03-31 |
+| approved | 2027-04-01 | 2027-04-01 | 2027-06-09 |
+| approved | 2027-06-10 | 2027-06-10 | 2027-08-31 |
+| cancelled | 2027-09-01 | 2027-09-01 | `null` |
+
+Its timeline. On 1 January 2027 the first two entries both apply, and step 3 keeps the suspension,
+recorded later. Step 5 merges the two approvals:
+
+| Status | `effectiveFromDate` | `effectiveToDate` |
+|---|---|---|
+| suspended | 2027-01-01 | 2027-03-31 |
+| approved | 2027-04-01 | 2027-08-31 |
+| cancelled | 2027-09-01 | `null` |
+
+The status on 2027-01-01 is `suspended`, not `approved`. There is none on 2026-12-31: the
+accreditation is not in effect yet.
+
+A change recorded later but effective earlier than an existing one (a backdated correction) cannot
+happen today, as the effective date comes from the recorded date. If it ever can, this rule does not let
+it overrule later-starting entries: see Open items.
+
 ### Tonnage band values
 
 The API uses the ReEx values. App `PlannedTonnageBand` is stored as int32, so the mapper converts:
@@ -197,6 +246,9 @@ does not lose the withdrawal: `statusHistory`, a list of `{ status, recordedAt }
 
 ## Open items
 
+- **Backdated corrections (RA-809).** If a later-recorded entry can ever have an earlier
+  `effectiveFromDate`, decide whether it should overrule later-starting entries recorded before it. The
+  timeline rule says it does not.
 - **Tonnage band dating (working assumption).** Bands cannot be forward-dated or backdated, so
   history entries carry only `recordedAt`. If the business later says otherwise, add
   `effectiveFromDate` and `effectiveToDate` as on status history.
