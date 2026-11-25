@@ -76,9 +76,7 @@ public static class AccreditationApiMapper
         AccreditationApplicationModel application
     ) =>
         IsExporter(application)
-            ? AccreditedSites(application)
-                .OrderBy(site => site.OrsId, StringComparer.Ordinal)
-                .ThenBy(site => site.SiteId)
+            ? OrderedAccreditedSites(application)
                 .Select(site => ToOverseasSite(application, site))
                 .ToList()
             : null;
@@ -99,6 +97,14 @@ public static class AccreditationApiMapper
     public static IEnumerable<OverseasSiteModel> AccreditedSites(
         AccreditationApplicationModel application
     ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
+
+    // The accredited sites in ORS id then site id order: how the accreditation lists them.
+    public static IEnumerable<OverseasSiteModel> OrderedAccreditedSites(
+        AccreditationApplicationModel application
+    ) =>
+        AccreditedSites(application)
+            .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+            .ThenBy(site => site.SiteId);
 
     public static AccreditationDto ToAccreditation(AccreditationApplicationModel application)
     {
@@ -355,7 +361,7 @@ public static class AccreditationApiMapper
             : contact;
     }
 
-    private static bool IsExporter(AccreditationApplicationModel application) =>
+    internal static bool IsExporter(AccreditationApplicationModel application) =>
         string.IsNullOrWhiteSpace(application.WasteProcessingType)
             ? application.IsExporter
             : string.Equals(
@@ -364,5 +370,7 @@ public static class AccreditationApiMapper
                 StringComparison.OrdinalIgnoreCase
             );
 
-    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+    // The empty-string-to-null rule for an optional text field. Shared with the Case Management
+    // accreditation summary (RA-769), so the two mappings of an accredited site treat blanks alike.
+    internal static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 }
