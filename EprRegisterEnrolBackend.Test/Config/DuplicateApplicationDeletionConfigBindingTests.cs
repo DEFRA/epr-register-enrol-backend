@@ -28,6 +28,7 @@ public class DuplicateApplicationDeletionConfigBindingTests(MongoIntegrationFixt
         options.Enabled.Should().BeFalse();
         options.Apply.Should().BeFalse();
         options.SpotCheckConfirmedBy.Should().BeNullOrEmpty();
+        options.ExpectedDeletions.Should().BeNull();
         scope
             .ServiceProvider.GetServices<IHostedService>()
             .Should()
@@ -47,6 +48,7 @@ public class DuplicateApplicationDeletionConfigBindingTests(MongoIntegrationFixt
                 ["Migrations:Ra788DuplicateApplicationDeletion:Apply"] = "true",
                 ["Migrations:Ra788DuplicateApplicationDeletion:SpotCheckConfirmedBy"] =
                     "A Reviewer",
+                ["Migrations:Ra788DuplicateApplicationDeletion:ExpectedDeletions"] = "7",
             }
         );
         using var scope = factory.Services.CreateScope();
@@ -58,5 +60,6 @@ public class DuplicateApplicationDeletionConfigBindingTests(MongoIntegrationFixt
         options.Enabled.Should().BeTrue();
         options.Apply.Should().BeTrue();
         options.SpotCheckConfirmedBy.Should().Be("A Reviewer");
+        options.ExpectedDeletions.Should().Be(7);
     }
 }
