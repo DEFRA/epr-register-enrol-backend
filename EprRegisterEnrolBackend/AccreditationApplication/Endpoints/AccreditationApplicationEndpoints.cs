@@ -154,18 +154,12 @@ public static class AccreditationApplicationEndpoints
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/withdraw", Withdraw));
         group
             .MapPost("case-management/{workItemId}/query", QueryFromCaseManagement)
-            .RequireAuthorization(policy =>
-                policy
-                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
-            );
+            .RequireCaseManagementCaller();
         group
             .MapPost("case-management/{workItemId}/status", StatusChangedFromCaseManagement)
-            .RequireAuthorization(policy =>
-                policy
-                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
-            );
+            .RequireCaseManagementCaller();
+        // RA-769: the read-only accreditation summary for the case's Accreditation summary tab.
+        CaseManagementAccreditationSummaryEndpoint.Map(group);
         // RA-448: regulator/caseworker actions, same CaseManagement caller identity as the
         // two routes above - not something the operator-facing frontend calls (AC7).
         group
@@ -173,21 +167,13 @@ public static class AccreditationApplicationEndpoints
                 "{organisationId}/{applicationId}/registration-number",
                 GenerateOrUpdateRegistrationNumber
             )
-            .RequireAuthorization(policy =>
-                policy
-                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
-            );
+            .RequireCaseManagementCaller();
         group
             .MapPost(
                 "{organisationId}/{applicationId}/accreditation-number",
                 AccreditationNumberEndpoint.GenerateOrUpdateAccreditationNumber
             )
-            .RequireAuthorization(policy =>
-                policy
-                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
-            );
+            .RequireCaseManagementCaller();
         // RA-469 AC18: regulator-scoped correction of one overseas site's recycling operation
         // codes, called by management-be (never the operator frontend) - same CaseManagement
         // caller identity as registration-number/accreditation-number above, not FrontendOnly.
@@ -196,11 +182,7 @@ public static class AccreditationApplicationEndpoints
                 "{organisationId}/{applicationId}/overseas-sites/{siteId}/recycling-operations",
                 PatchRecyclingOperations
             )
-            .RequireAuthorization(policy =>
-                policy
-                    .AddAuthenticationSchemes(CaseManagementAuthenticationHandler.SchemeName)
-                    .RequireAuthenticatedUser()
-            );
+            .RequireCaseManagementCaller();
         FrontendOnly(group.MapPost("{organisationId}/{applicationId}/files", AddFile));
         FrontendOnly(
             group.MapDelete("{organisationId}/{applicationId}/files/{fileId}", DeleteFile)

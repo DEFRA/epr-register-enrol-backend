@@ -31,17 +31,17 @@ after the migration (domain model design, decision D3).
 | Removed | Reason (architecture review) |
 | --- | --- |
 | `/organisations`, `/organisations/{organisationNumber}` | We do not own Organisation. It is an internal data model only. |
-| `/organisations/.../registrations[...]`, `/registrations` search | Registration endpoints are dropped for now. |
+| `/organisations/.../registrations[...]`, `/registrations` search | Registration endpoints are dropped for now. Getting one registration came back to serve its applications' overseas sites, with their ORS ids. |
 | Registered overseas-site and interim-site endpoints | Dropped until ORS management and its migration plan are worked out. |
-| `.../applications[...]`, `AccreditationApplication` schema | Application is not for external use. Only the Accreditation is exposed. |
-| `ApplicationStatus`, `applicationStatus` | Application-specific. Replaced by `Accreditation.status`. |
+| `.../applications[...]`, `AccreditationApplication` schema | Application is not for external use, and the application endpoints stay removed. Getting a registration exposes only each application's year, case reference, status, accreditation number and overseas sites: see [Registration](#registration). |
+| `ApplicationStatus`, `applicationStatus` | Application-specific. Replaced by `Accreditation.status`. Getting a registration serves it on each application. |
 | `SectionStatus` | Application-specific, not accreditation-specific. |
 | `UploadedFile`, `samplingPlan`, `besEvidence` | Uploaded files only matter to the application. |
 | `samplingInspectionPlan` | Hidden. |
 | `formSubmissionTime` | Application data. |
 | `businessPlan`, `prnIssuance.prnIncomeBusinessPlan` | Commercially sensitive. Not available through this API at all. |
 | Overseas site `code1`, `code2`, `code3` | Duplicates of `operationCodes`. |
-| Overseas site `isNewSite`, `selected`, `registeredNowAccredited` | Application-time flags. The application holds every registered site, with `selected` marking those chosen for accreditation. The API returns only the chosen ones, so the flag is not needed. |
+| Overseas site `isNewSite`, `selected`, `registeredNowAccredited` | Application-time flags. The application holds every registered site, with `selected` marking those chosen for accreditation. The accreditation routes return only the chosen ones, so they do not need the flag. Getting a registration returns every site with `selected`. |
 | Interim site `isNewSite` | Application-time flag. |
 | Interim-site endpoints, `interimSiteIds` | Interim sites are returned inside their overseas site (`interimSites[]`). |
 | `material` filter on search | Search is by year only. |
@@ -194,6 +194,45 @@ does not lose the withdrawal: `statusHistory`, a list of `{ status, recordedAt }
   it: its history starts as if it had never been withdrawn;
 - the client cannot write the history: a merge of the site list keeps what is stored, and a site the
   client adds starts its own.
+
+## Registration
+
+Source: every App for the organisation number and registration number from `FirstAccreditationYear`
+on, whatever its status, ordered by year. This backend holds no registration record, so a
+`Registration` is served as these applications. It differs from the accreditation routes in three
+ways, marked **exception** below.
+
+| API field | C# | Mongo field | Notes |
+| --- | --- | --- | --- |
+| `organisationNumber` | App `OrgId` | `orgId` | path id |
+| `registrationNumber` | App `RegistrationReference` | `registrationReference` | path id |
+
+### Registration applications
+
+One `RegistrationApplication` per App.
+
+| API field | C# | Mongo field | Notes |
+| --- | --- | --- | --- |
+| `year` | `Year` | `year` | |
+| `applicationReference` | `ApplicationReference` | `applicationReference` | the case reference, set on submission. Omitted until then |
+| `applicationStatus` | `ApplicationStatus` | `applicationStatus` | **exception**: served as the enum member name, such as `Submitted`, as it is stored, not as int32 |
+| `accreditationNumber` | `AccreditationReference` | `accreditationReference` | omitted until the application holds one |
+| `overseasSites[]` | `OverseasSites.Sites` | `overseasSites.sites` | **exception**: every site, not only `selected == true`. Ordered by `orsId`, sites without one first. Empty for a reprocessor |
+
+### Registration overseas sites
+
+Source: App `OverseasSiteModel` at `overseasSites.sites[]`, every site. Paths are relative to
+`overseasSites.sites[].`.
+
+| API field | C# | Mongo field | Notes |
+| --- | --- | --- | --- |
+| `siteId` | `SiteId` | `siteId` | |
+| `orsId` | `OrsId` | `orsId` | **exception**: always sent, and `null` until one is issued, where other null fields are omitted |
+| `siteName` | `SiteName` | `siteName` | |
+| `formattedAddress` | `SiteAddress` | `siteAddress` | **renamed** |
+| `address.line1` / `line2` / `town` / `country` | `AddressLine1` / `AddressLine2` / `TownOrCity` / `Country` | `addressLine1` / `addressLine2` / `townOrCity` / `country` | **restructured** from flat fields |
+| `coordinates` | `Coordinates` | `coordinates` | |
+| `selected` | `Selected` | `selected` | whether the site is selected on the application |
 
 ## Open items
 

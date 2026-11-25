@@ -7,13 +7,17 @@ info:
     (first consumer: Re-Ex), not a public one. It replaces the v0.1 draft
     (removed from the repository; see git history) after architecture review. The changes are:
 
-    * **Accreditation is the only top-level resource.** An accreditation exists only once its
-      application has been approved. Organisation is internal (we do not own it). Registration
-      and Application are not exposed: the organisation, registration and application endpoints,
-      and the registration search, have been removed. Registration endpoints and registered
-      overseas sites may come back once ORS management and its migration plan are worked out.
-    * **Application-only data is not exposed.** That means application status, section statuses,
-      uploaded files, sampling and inspection plans, `formSubmissionTime`, and
+    * **Accreditation is the main resource.** An accreditation exists only once its application
+      has been approved. Organisation is internal (we do not own it). The organisation and
+      application endpoints, and the registration search, have been removed.
+    * **Getting a registration returns the overseas sites on every application for it** from 2027
+      on, whatever the application's status, so their ORS ids can be reconciled before ORS
+      management moves to the registration. This backend holds no registration record, so the
+      registration is served as its applications, each with its year, case reference once it has
+      one, status, accreditation number if it has one, and overseas sites with their `selected`
+      flag. Nothing else about an application is exposed.
+    * **Application-only data is not exposed** on an accreditation. That means application status,
+      section statuses, uploaded files, sampling and inspection plans, `formSubmissionTime`, and
       the site flags `isNewSite` and `selected`.
     * **Status is a history with effective periods.** `statusHistory[]` records each status with
       the period it applies: `effectiveFromDate` (which may be in the future) and `effectiveToDate`
@@ -53,6 +57,7 @@ servers:
 tags:
   - name: Accreditations
   - name: Accredited overseas sites
+  - name: Registrations
 
 paths:
   /v1/accreditations:
@@ -174,6 +179,28 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AccreditedOverseasSite' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /v1/organisations/{organisationNumber}/registrations/{registrationNumber}:
+    get:
+      tags: [Registrations]
+      operationId: getRegistration
+      summary: Get a registration, with the overseas sites on every application for it
+      parameters:
+        - $ref: '#/components/parameters/OrganisationNumber'
+        - $ref: '#/components/parameters/RegistrationNumber'
+      responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '200':
+          description: The registration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Registration' }
         '404': { $ref: '#/components/responses/NotFound' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -553,3 +580,67 @@ components:
           type: array
           description: Every interim site on the overseas site, withdrawn ones included.
           items: { $ref: '#/components/schemas/InterimSite' }
+
+    # ---- registration ---------------------------------------------------------------------
+    ApplicationStatus:
+      type: string
+      description: Mirrors the `ApplicationStatus` enum.
+      enum: [Saved, Started, Submitted, DulyMade, Queried, Updated, AwaitingDecision, Approved, Rejected, Withdrawn]
+    Registration:
+      type: object
+      description: |
+        A registration, served as every application for it from 2027 on, of any status. This backend
+        holds no registration record, so the applications are all there is.
+      required: [organisationNumber, registrationNumber, applications]
+      properties:
+        organisationNumber: { type: integer, format: int32, description: ReEx numeric organisation number (`OrgId`). }
+        registrationNumber: { type: string }
+        applications:
+          type: array
+          minItems: 1
+          description: Ordered by year. A year can hold more than one application, such as a rejected one and its resubmission.
+          items: { $ref: '#/components/schemas/RegistrationApplication' }
+    RegistrationApplication:
+      type: object
+      description: One application for a registration, with every overseas site on it.
+      required: [year, applicationStatus, overseasSites]
+      properties:
+        year: { type: integer, format: int32 }
+        applicationReference:
+          type: string
+          description: The application's case reference, present once the application is submitted.
+        applicationStatus: { $ref: '#/components/schemas/ApplicationStatus' }
+        accreditationNumber:
+          type: string
+          description: Present once the application holds an accreditation number.
+        overseasSites:
+          type: array
+          description: >-
+            Every overseas site on the application, whether or not it is selected. Ordered by ORS
+            id, with sites that have none first. Empty for a reprocessor.
+          items: { $ref: '#/components/schemas/RegistrationOverseasSite' }
+    RegistrationOverseasSite:
+      type: object
+      description: |
+        An overseas site as it stands on an application, selected or not. It carries what is needed
+        to tell the site apart and match its ORS id; the rest of the site is served on the
+        accreditation once the site is accredited.
+      required: [siteId, orsId, siteName, selected]
+      properties:
+        siteId:
+          type: integer
+          format: int32
+          description: Identifies the site within its application. Not a database id.
+        orsId: { type: string, nullable: true, example: '001', description: '`null` until one is issued.' }
+        siteName: { type: string }
+        formattedAddress: { type: string, nullable: true, description: Pre-formatted single-line address. }
+        address:
+          allOf: [{ $ref: '#/components/schemas/Address' }]
+          type: object
+          nullable: true
+        coordinates: { type: string, nullable: true }
+        selected:
+          type: boolean
+          description: >-
+            Whether the site is selected on the application. On an application that is not yet
+            approved this is the operator's choice, not an accredited site.
