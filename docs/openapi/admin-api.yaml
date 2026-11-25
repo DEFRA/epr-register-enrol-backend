@@ -88,6 +88,66 @@ paths:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
+  /admin/accreditation-applications/{reference}:
+    get:
+      tags: [Legacy accreditation applications]
+      operationId: getLegacyAccreditationApplication
+      summary: Read one Legacy accreditation application, as stored
+      description: |
+        **Legacy.** One application from the Legacy `accreditationApplications` collection, found
+        by its application reference (`applicationReference`, for example `AP27EA500500ABPL`), or by its
+        `_id` when it has no reference. An application gets its reference when it is first
+        submitted, so a draft can only be read by its `_id`. Any status, any year.
+
+        **The document exactly as stored.** Unlike the search, which returns the application as
+        the service's model reads it, this returns the raw Mongo document, in
+        [relaxed extended JSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/):
+        element names as stored (camelCase), every field including ones the service no longer
+        reads, and no nulls (the service doesn't store them). So:
+
+        * `_id` is `{ "$oid": "…" }`, dates are `{ "$date": "…" }`, and GUIDs (such as
+          `caseManagementWorkItemId`) are `{ "$binary": { "base64": "…", "subType": "04" } }`.
+        * Some enums are stored as numbers, not names: `sectionStatus` (0 NotStarted,
+          1 InProgress, 2 Completed, 3 Submitted, 4 Queried), `plannedTonnageBand` (0 UpTo500,
+          1 UpTo5000, 2 UpTo10000, 3 Over10000), a file's `scanStatus` (0 Pending, 1 Clean,
+          2 Infected) and `documentType` (0 SamplingPlan, 1 SupportingEvidence). The Admin UI
+          (epr-register-enrol-admin) keeps a copy of these numbers to show their names, so
+          adding or reordering a value means changing it there too.
+
+        The document holds personal data and commercially sensitive data (see
+        `LegacyAccreditationApplication`), which the caller must not log.
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          description: The application reference, or the `_id` (24 hex characters) of an application with none.
+          schema: { type: string, minLength: 1, maxLength: 100 }
+          example: AP27EA500500ABPL
+      responses:
+        '200':
+          description: The stored document.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The raw Mongo document in relaxed extended JSON. Its fields are those of `LegacyAccreditationApplication`, as stored.
+                additionalProperties: true
+        '400':
+          description: The reference is empty, longer than 100 characters, or holds a control character (`code` `invalid_reference`).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No application has that reference or `_id` (`code` `application_not_found`).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
 components:
   parameters:
     Search:
