@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.ReEx;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -71,6 +72,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
         ReExResult<ReExAccreditationDto>.Success(
             new ReExAccreditationDto
             {
+                RegistrationStatus = RegistrationStatus.Approved,
                 AccreditationId = $"reex-acc-{orgId}-{material}-{year}",
                 OrganisationId = orgId,
                 MaterialType = material,

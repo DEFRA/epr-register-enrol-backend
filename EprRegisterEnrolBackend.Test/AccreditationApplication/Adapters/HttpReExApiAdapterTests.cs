@@ -20,7 +20,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 /// mocks IReExApiAdapter entirely, so nothing previously exercised this adapter's own mapping
 /// logic against realistic ReEx JSON shape.
 /// </summary>
-public class HttpReExApiAdapterTests
+public partial class HttpReExApiAdapterTests
 {
     private static HttpReExApiAdapter BuildSut(
         string organisationJson,
