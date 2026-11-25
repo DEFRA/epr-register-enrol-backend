@@ -495,7 +495,7 @@ Behaviours the facade must preserve:
   - Saved → Started on the first section write (`:972`, `:1033` …)
   - Started → Submitted (`:2614-2639`)
   - Queried by the query push (`:3068`), then Queried → Updated on resubmit (`:2743-2747`)
-  - CM states mapped in `MapCaseManagementStateToApplicationStatus` (`:3232-3243`)
+  - CM states mapped in `CaseManagementStatusMapping.StatusPush` (`AccreditationApplication/Services/CaseManagementStatusMapping.cs`)
   - approve or reject only from Submitted, Updated, DulyMade or AwaitingDecision (`:3356-3378`)
   - Withdraw only from Submitted, DulyMade, Queried, Updated or AwaitingDecision (`:3420-3443`)
   - Approved, Rejected and Withdrawn are terminal (`RejectIfTerminal`, `:231-239`)

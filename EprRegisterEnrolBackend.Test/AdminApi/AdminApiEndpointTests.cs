@@ -4,6 +4,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Test.Auth;
 using EprRegisterEnrolBackend.Test.TestSupport;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DomainModel.Persistence;
 using FluentAssertions;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using static EprRegisterEnrolBackend.Test.TestSupport.ProblemAssertions;
@@ -709,11 +711,279 @@ public class AdminApiEndpointTests : IDisposable
             string reference,
             TimeSpan? maxTime = null,
             CancellationToken cancellationToken = default
-        ) =>
-            throw (MongoExecutionTimeoutException)
+        ) => throw TimedOut();
+
+        public Task<IReadOnlyList<LegacyApplicationStatus>> GetLegacyApplicationStatusesAsync(
+            IReadOnlyCollection<Guid> workItemIds,
+            TimeSpan? maxTime = null,
+            CancellationToken cancellationToken = default
+        ) => throw TimedOut();
+
+        private static MongoExecutionTimeoutException TimedOut() =>
+            (MongoExecutionTimeoutException)
                 System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
                     typeof(MongoExecutionTimeoutException)
                 );
+    }
+
+    // ---- RA-751: the Legacy status of each of a page of work items ----
+
+    private const string StatusesPath = "/admin/accreditation-application-statuses";
+    private const string MappingPath = "/admin/case-management-status-mapping";
+
+    private static string StatusesQuery(params Guid[] workItemIds) =>
+        $"{StatusesPath}?{string.Join("&", workItemIds.Select(id => $"workItemId={id}"))}";
+
+    [Fact]
+    public async Task EachWorkItem_IsListedInTheOrderAsked_WithItsLinkedApplicationsStatus_OrAsNotFound()
+    {
+        var updated = await Seed(a =>
+        {
+            a.CaseManagementWorkItemId = Guid.NewGuid();
+            a.ApplicationStatus = ApplicationStatus.Updated;
+        });
+        var queried = await Seed(a =>
+        {
+            a.CaseManagementWorkItemId = Guid.NewGuid();
+            a.ApplicationStatus = ApplicationStatus.Queried;
+            a.RegistrationReference = "R25ER5001120019PL";
+        });
+        await Seed(a => a.RegistrationReference = "R25ER5001120020PL"); // linked to no work item
+        var notInLegacy = Guid.NewGuid();
+
+        var response = await Get(
+            StatusesQuery(queried.CaseManagementWorkItemId!.Value, notInLegacy, updated.CaseManagementWorkItemId!.Value)
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var items = (await Json(response)).GetProperty("items");
+        items.GetArrayLength().Should().Be(3);
+
+        items[0].GetProperty("workItemId").GetString().Should().Be(queried.CaseManagementWorkItemId.ToString());
+        items[0].GetProperty("found").GetBoolean().Should().BeTrue();
+        items[0].GetProperty("applicationId").GetString().Should().Be(queried.Id.ToString());
+        items[0].GetProperty("applicationStatus").GetString().Should().Be("Queried");
+
+        items[1].GetProperty("workItemId").GetString().Should().Be(notInLegacy.ToString());
+        items[1].GetProperty("found").GetBoolean().Should().BeFalse();
+        items[1].GetProperty("applicationId").ValueKind.Should().Be(JsonValueKind.Null);
+        items[1].GetProperty("applicationStatus").ValueKind.Should().Be(JsonValueKind.Null);
+
+        items[2].GetProperty("workItemId").GetString().Should().Be(updated.CaseManagementWorkItemId.ToString());
+        items[2].GetProperty("applicationStatus").GetString().Should().Be("Updated");
+    }
+
+    [Fact]
+    public async Task NoWorkItemFound_IsEveryItemNotFound_NotAnError()
+    {
+        var response = await Get(StatusesQuery(Guid.NewGuid(), Guid.NewGuid()));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var items = (await Json(response)).GetProperty("items");
+        items.EnumerateArray().Select(i => i.GetProperty("found").GetBoolean()).Should().Equal(false, false);
+    }
+
+    [Fact]
+    public async Task EachItem_HoldsTheIdsAndStatusOnly_NoPersonalData()
+    {
+        var workItem = Guid.NewGuid();
+        await Seed(a =>
+        {
+            a.CaseManagementWorkItemId = workItem;
+            a.SubmittedBy = new SubmittedByModel { FullName = "Jo Bloggs", JobTitle = "Director" };
+        });
+
+        var response = await Get(StatusesQuery(workItem));
+
+        var body = await response.Content.ReadAsStringAsync(Ct);
+        body.Should().NotContain("Jo Bloggs").And.NotContain("Harbourside");
+        var item = (await Json(response)).GetProperty("items")[0];
+        item.EnumerateObject()
+            .Select(p => p.Name)
+            .Should()
+            .BeEquivalentTo("workItemId", "found", "applicationId", "applicationStatus");
+    }
+
+    [Fact]
+    public async Task OneResultsPageOf50WorkItems_IsAnswered()
+    {
+        var ids = Enumerable.Range(0, 50).Select(_ => Guid.NewGuid()).ToArray();
+
+        var response = await Get(StatusesQuery(ids));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(response)).GetProperty("items").GetArrayLength().Should().Be(50);
+    }
+
+    [Fact]
+    public async Task AnUppercaseWorkItemId_FindsItsApplication()
+    {
+        var workItem = Guid.NewGuid();
+        await Seed(a => a.CaseManagementWorkItemId = workItem);
+
+        var item = (await Json(await Get($"{StatusesPath}?workItemId={workItem.ToString().ToUpperInvariant()}")))
+            .GetProperty("items")[0];
+
+        item.GetProperty("workItemId").GetString().Should().Be(workItem.ToString());
+        item.GetProperty("found").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task TheLookup_UsesTheIndexOnTheWorkItemLink()
+    {
+        await Seed(a => a.CaseManagementWorkItemId = Guid.NewGuid());
+        var filter = new BsonDocument(
+            "caseManagementWorkItemId",
+            new BsonDocument(
+                "$in",
+                new BsonArray { new BsonBinaryData(Guid.NewGuid(), GuidRepresentation.Standard) }
+            )
+        );
+
+        var explain = await RawApplications()
+            .Database.RunCommandAsync<BsonDocument>(
+                new BsonDocument
+                {
+                    {
+                        "explain",
+                        new BsonDocument
+                        {
+                            { "find", DomainModelCollections.LegacyApplications },
+                            { "filter", filter },
+                        }
+                    },
+                    { "verbosity", "queryPlanner" },
+                },
+                cancellationToken: Ct
+            );
+
+        var plan = explain["queryPlanner"]["winningPlan"].ToJson();
+        plan.Should().Contain("IXSCAN").And.Contain("caseManagementWorkItemId");
+    }
+
+    public static TheoryData<string, string> InvalidWorkItemIds()
+    {
+        var id = Guid.NewGuid();
+        return new()
+        {
+            { "", "workItemId is required" },
+            { "other=1", "workItemId is required" },
+            { "workItemId=", "a GUID" },
+            { "workItemId", "a GUID" },
+            { "workItemId=not-a-guid", "a GUID" },
+            { $"workItemId={id:N}", "a GUID" },
+            { $"workItemId={id:B}", "a GUID" },
+            { $"workItemId={id}%20", "a GUID" },
+            { $"workItemId={id},{Guid.NewGuid()}", "a GUID" },
+            { $"workItemId={id}&workItemId={id}", "more than once" },
+            { $"workItemId={id}&workItemId={id.ToString().ToUpperInvariant()}", "more than once" },
+            {
+                string.Join("&", Enumerable.Range(0, 51).Select(_ => $"workItemId={Guid.NewGuid()}")),
+                "at most 50"
+            },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidWorkItemIds))]
+    public async Task AMissingMalformedDuplicateOrTooManyWorkItemIds_Is400(string queryString, string detail)
+    {
+        var response = await Get($"{StatusesPath}?{queryString}");
+
+        await AssertProblem(response, HttpStatusCode.BadRequest, "invalid_work_item_id");
+        (await Json(response)).GetProperty("detail").GetString().Should().Contain(detail);
+    }
+
+    public static TheoryData<string> UnreadableStatuses() => new() { "unset", "Granted", "99" };
+
+    [Theory]
+    [MemberData(nameof(UnreadableStatuses))]
+    public async Task ALinkedApplicationWithNoReadableStatus_Is500_AndLoggedAsAnError_NeverAMadeUpStatus(
+        string stored
+    )
+    {
+        var workItem = Guid.NewGuid();
+        var application = await Seed(a => a.CaseManagementWorkItemId = workItem);
+        var update = stored switch
+        {
+            "unset" => new BsonDocument("$unset", new BsonDocument("applicationStatus", "")),
+            "99" => new BsonDocument("$set", new BsonDocument("applicationStatus", 99)),
+            _ => new BsonDocument("$set", new BsonDocument("applicationStatus", stored)),
+        };
+        await RawApplications().UpdateOneAsync(new BsonDocument("_id", application.Id), update, cancellationToken: Ct);
+        var logs = new CapturingLoggerFactory();
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services => services.AddSingleton<ILoggerFactory>(logs))
+        );
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            ServiceClientSigner.Request(HttpMethod.Get, StatusesQuery(workItem), AdminClientId, AdminSecret),
+            Ct
+        );
+
+        await AssertProblem(response, HttpStatusCode.InternalServerError, "invalid_stored_application");
+        var error = logs.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.StartsWith("Admin Legacy status lookup"))
+            .Subject;
+        error.Properties["ApplicationId"].Should().Be(application.Id.ToString());
+        error.Properties["WorkItemId"].Should().Be(workItem);
+        error.Message.Should().NotContain("Harbourside");
+    }
+
+    [Fact]
+    public async Task AStatusLookupTheDatabaseStopped_Is503_AsAProblem()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.AddSingleton<ILegacyApplicationRead, TimedOutRead>()
+            )
+        );
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            ServiceClientSigner.Request(HttpMethod.Get, StatusesQuery(Guid.NewGuid()), AdminClientId, AdminSecret),
+            Ct
+        );
+
+        await AssertProblem(response, HttpStatusCode.ServiceUnavailable, "query_timeout");
+    }
+
+    [Theory]
+    [InlineData(StatusesPath + "?workItemId=3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f")]
+    [InlineData(MappingPath)]
+    public async Task AnotherKnownClient_CannotReadStatusesOrTheMapping(string path)
+    {
+        var response = await Get(path, ReExClientId, ReExSecret);
+
+        await AssertProblem(response, HttpStatusCode.Forbidden, "forbidden");
+    }
+
+    // ---- RA-751: how each work item state is pushed as an application status ----
+
+    [Fact]
+    public async Task TheStatusMapping_IsHowEachPushedStateLandsOnTheApplicationStatus()
+    {
+        var response = await Get(MappingPath);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(response);
+        body.GetProperty("statusPush")
+            .EnumerateArray()
+            .Select(p => $"{p.GetProperty("stateId").GetString()}={p.GetProperty("applicationStatus").GetString()}")
+            .Should()
+            .Equal(
+                "submitted=Submitted",
+                "duly-made=DulyMade",
+                "assessment-started=DulyMade",
+                // RA-751 AC6: assessment-in-progress and updated both push Updated.
+                "assessment-in-progress=Updated",
+                "updated=Updated",
+                "awaiting-decision=AwaitingDecision",
+                "approved=Approved",
+                "rejected=Rejected"
+            );
+        body.GetProperty("queryPush").GetProperty("applicationStatus").GetString().Should().Be("Queried");
     }
 
     [Fact]

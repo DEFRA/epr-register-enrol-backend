@@ -421,6 +421,13 @@ organisation name, and by `status` and `year`, most recently updated first. Each
 stored application, including personal and commercially sensitive data, so neither may be logged
 by the caller.
 
+For the Admin UI's case management search (RA-751), `GET /admin/accreditation-application-statuses`
+gives the status of the Legacy application linked to each of up to 50 Case Management work items
+(by `workItemId`, matched against the stored `caseManagementWorkItemId`), listing a work item with
+no linked application as not found. `GET /admin/case-management-status-mapping` serves the table
+the Case Management push receivers apply, which maps each pushed work item state to the
+application status it sets.
+
 ### Testing
 
 Tests run a full `WebApplication` backed by [Ephemeral MongoDB](https://github.com/asimmon/ephemeral-mongo). No mocking — tests read and write from an in-memory database.

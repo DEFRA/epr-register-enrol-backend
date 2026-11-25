@@ -368,6 +368,80 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<LegacyApplicationStatus>> GetLegacyApplicationStatusesAsync(
+        IReadOnlyCollection<Guid> workItemIds,
+        TimeSpan? maxTime = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var linkElement = ElementName(nameof(AccreditationApplicationModel.CaseManagementWorkItemId));
+        var statusElement = ElementName(nameof(AccreditationApplicationModel.ApplicationStatus));
+        // Raw, so a document with no status is seen as such: read through the model it would
+        // silently become the model's default, Saved.
+        var raw = Collection.Database.GetCollection<BsonDocument>(Collection.CollectionNamespace.CollectionName);
+        var filter = new BsonDocument(
+            linkElement,
+            new BsonDocument(
+                "$in",
+                new BsonArray(workItemIds.Select(id => new BsonBinaryData(id, GuidRepresentation.Standard)))
+            )
+        );
+        var projection = new BsonDocument { { "_id", 1 }, { linkElement, 1 }, { statusElement, 1 } };
+        var documents = await raw.Find(filter, new FindOptions { MaxTime = maxTime })
+            .Project(projection)
+            .ToListAsync(cancellationToken);
+
+        var statuses = documents.Select(document => ReadStatus(document, linkElement, statusElement)).ToList();
+        // The unique index on the link means this can't happen; if it ever does, neither is "the" one.
+        var shared = statuses.GroupBy(s => s.WorkItemId).FirstOrDefault(g => g.Count() > 1);
+        if (shared is not null)
+        {
+            throw new LegacyApplicationStatusUnreadableException(
+                shared.Key,
+                shared.Last().ApplicationId,
+                $"another application ({shared.First().ApplicationId}) is linked to the same work item"
+            );
+        }
+
+        return statuses;
+    }
+
+    // The status as the model reads it (so a status stored as a number reads as it does everywhere
+    // else), but only when one is stored, and only when it is one of the enum's values.
+    private static LegacyApplicationStatus ReadStatus(BsonDocument document, string linkElement, string statusElement)
+    {
+        var applicationId = document["_id"].AsObjectId;
+        var workItemId = document[linkElement].AsBsonBinaryData.ToGuid(GuidRepresentation.Standard);
+        if (!document.Contains(statusElement) || document[statusElement].IsBsonNull)
+            throw new LegacyApplicationStatusUnreadableException(workItemId, applicationId, "it has no applicationStatus");
+
+        ApplicationStatus status;
+        try
+        {
+            status = BsonSerializer.Deserialize<AccreditationApplicationModel>(document).ApplicationStatus;
+        }
+        catch (Exception ex) when (ex is FormatException or BsonException)
+        {
+            throw new LegacyApplicationStatusUnreadableException(
+                workItemId,
+                applicationId,
+                "its applicationStatus is not an ApplicationStatus",
+                ex
+            );
+        }
+
+        if (!Enum.IsDefined(status))
+        {
+            throw new LegacyApplicationStatusUnreadableException(
+                workItemId,
+                applicationId,
+                "its applicationStatus is not an ApplicationStatus"
+            );
+        }
+
+        return new LegacyApplicationStatus(workItemId, applicationId, status);
+    }
+
     // The element a model property is stored under, from the class map, so a raw filter follows the
     // naming convention the typed filters follow. Looked up when called, never in a static field, so
     // it can't freeze the class map before the convention is registered.

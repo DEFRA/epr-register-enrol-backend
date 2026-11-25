@@ -19,7 +19,8 @@ info:
       phone numbers and addresses) and **commercially sensitive data** (the business plan).
       Fields holding either are marked `x-personal-data` or `x-commercially-sensitive`. The admin
       service masks personal data on screen, and neither may be logged by the caller.
-    * **Legacy data.** `/admin/accreditation-applications` reads the Legacy
+    * **Legacy data.** `/admin/accreditation-applications` and
+      `/admin/accreditation-application-statuses` read the Legacy
       `accreditationApplications` collection, which stays the source of truth until RA-677 moves
       it to the new domain model. It is then retired or repointed; the new collections get their
       own endpoints (RA-753, RA-754).
@@ -32,6 +33,7 @@ servers:
   - url: /
 tags:
   - name: Legacy accreditation applications
+  - name: Case management
 
 paths:
   /admin/accreditation-applications:
@@ -147,6 +149,118 @@ paths:
         '405': { $ref: '#/components/responses/MethodNotAllowed' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /admin/accreditation-application-statuses:
+    get:
+      tags: [Legacy accreditation applications, Case management]
+      operationId: getLegacyAccreditationApplicationStatuses
+      summary: The Legacy application status of each of a page of Case Management work items
+      description: |
+        **Legacy.** For each Case Management work item named, the Legacy application linked to it,
+        and that application's status, read in one query. Built for the Admin UI's case management
+        search (RA-751), which sets a page of up to 50 work items beside the status their
+        applications hold and flags where they disagree with `/admin/case-management-status-mapping`.
+
+        A work item is linked to the application whose stored `caseManagementWorkItemId` is its
+        id. This is the link the Case Management status and query pushes use, and it is unique
+        and indexed. Only the application's `_id`, the link and the status are read, so no
+        personal data is returned.
+
+        **Every work item named is listed, in the order named.** A work item with no linked Legacy
+        application (one that is not a re-accreditation, or whose application is in no Legacy
+        record) is listed with `found: false`; it is never left out.
+
+        **Never a made-up status.** If a linked application has no status stored, or one that is
+        not an `ApplicationStatus`, the whole request fails with `500` (`code`
+        `invalid_stored_application`) and the service logs it as an error, naming the application
+        and work item.
+      parameters:
+        - name: workItemId
+          in: query
+          required: true
+          description: |
+            A Case Management work item id, as a GUID in its 36-character hyphenated form, case
+            ignored. Repeat it for each work item (`?workItemId=…&workItemId=…`): 1 to 50, each
+            once.
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 50
+            uniqueItems: true
+            items: { type: string, format: uuid }
+          style: form
+          explode: true
+          example: [3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f]
+      responses:
+        '200':
+          description: One item per work item named, in the order named.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/LegacyApplicationStatus' }
+        '400':
+          description: |
+            `workItemId` is missing, empty or not a GUID in its hyphenated form, is named more than
+            once, or is given more than 50 times (`code` `invalid_work_item_id`; `detail` says which).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500':
+          description: A linked application has no status the service can read (`code` `invalid_stored_application`).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /admin/case-management-status-mapping:
+    get:
+      tags: [Case management]
+      operationId: getCaseManagementStatusMapping
+      summary: How each Case Management push sets the application status
+      description: |
+        The table the Case Management push receivers
+        (`POST /api/v1/accreditation-applications/case-management/{workItemId}/status` and
+        `…/query`) apply, served from the same code, so a caller compares a work item's state with
+        its application's status exactly as the receivers set it (RA-751).
+
+        * `statusPush`: each work item state a status push can carry, and the status it sets. Two
+          states can set the same status (for example `assessment-in-progress` and `updated` both
+          set `Updated`). A status push for a state not listed changes no status.
+        * `queryPush`: the status a query push sets.
+
+        A state Case Management never pushes is not here: management-be's
+        `GET /work-items/re-accreditation/states` says which states are pushed, and how.
+        Takes no parameters.
+      responses:
+        '200':
+          description: The mapping.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaseManagementStatusMapping' }
+              example:
+                statusPush:
+                  - { stateId: submitted, applicationStatus: Submitted }
+                  - { stateId: duly-made, applicationStatus: DulyMade }
+                  - { stateId: assessment-started, applicationStatus: DulyMade }
+                  - { stateId: assessment-in-progress, applicationStatus: Updated }
+                  - { stateId: updated, applicationStatus: Updated }
+                  - { stateId: awaiting-decision, applicationStatus: AwaitingDecision }
+                  - { stateId: approved, applicationStatus: Approved }
+                  - { stateId: rejected, applicationStatus: Rejected }
+                queryPush: { applicationStatus: Queried }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
 components:
   parameters:
@@ -272,6 +386,46 @@ components:
         `registrationNumber` (`registrationReference`), `organisationNumber` (`orgId`, as text) or
         `organisationName`.
       enum: [accreditationNumber, registrationNumber, organisationNumber, organisationName]
+
+    # ---- Case management ----------------------------------------------------------------
+    LegacyApplicationStatus:
+      type: object
+      description: The Legacy application linked to a work item, or `found` false when none is.
+      required: [workItemId, found, applicationId, applicationStatus]
+      properties:
+        workItemId:
+          type: string
+          format: uuid
+          description: The work item id named, lowercase.
+        found:
+          type: boolean
+          description: Whether a Legacy application is linked to the work item.
+        applicationId:
+          type: string
+          nullable: true
+          description: The linked application's Mongo `_id`, which `/admin/accreditation-applications/{reference}` reads. Null when not found.
+          example: 1c3e5a7b9d0f4b2c8e4a6c8e
+        applicationStatus:
+          allOf: [{ $ref: '#/components/schemas/ApplicationStatus' }]
+          nullable: true
+          description: The linked application's status, as stored. Null when not found.
+    CaseManagementStatusMapping:
+      type: object
+      required: [statusPush, queryPush]
+      properties:
+        statusPush:
+          type: array
+          items:
+            type: object
+            required: [stateId, applicationStatus]
+            properties:
+              stateId: { type: string, description: The Case Management state id a status push carries (`toStateId`). }
+              applicationStatus: { $ref: '#/components/schemas/ApplicationStatus' }
+        queryPush:
+          type: object
+          required: [applicationStatus]
+          properties:
+            applicationStatus: { $ref: '#/components/schemas/ApplicationStatus' }
 
     # ---- Legacy accreditation application ---------------------------------------------------
     ApplicationStatus:
