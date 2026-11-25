@@ -24,6 +24,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     private const string PersonalEmail = "jane.personal@example.com";
     private const string OrganisationName = "Personal Plastics Ltd";
     private const string Registration = "REG-0001";
+    private const string RegistrationId = "reg-id-1";
     private const string Reviewer = "A Reviewer";
 
     private readonly string _databaseName;
@@ -55,6 +56,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
         string? organisationId = ReExOrganisationId,
         string? organisationName = OrganisationName,
         string? registration = Registration,
+        string? registrationId = RegistrationId,
         MaterialType material = MaterialType.Plastic,
         int year = 2027,
         long version = 3
@@ -66,6 +68,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             OrgId = orgId,
             OrganisationName = organisationName,
             RegistrationReference = registration,
+            RegistrationId = registrationId,
             Year = year,
             MaterialType = material,
             ApplicationStatus = status,
@@ -234,7 +237,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     }
 
     public static TheoryData<string> Differences =>
-        ["organisationId", "organisationName", "material", "year"];
+        ["organisationId", "organisationName", "registrationId", "material", "year"];
 
     [Theory]
     [MemberData(nameof(Differences))]
@@ -250,6 +253,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                     500131,
                     organisationName: "Other Ltd"
                 ),
+                "registrationId" => App(ApplicationStatus.Updated, 500131, registrationId: "reg-id-2"),
                 "material" => App(ApplicationStatus.Updated, 500131, material: MaterialType.Glass),
                 // The same organisation carries across years: an abandoned draft for one year is
                 // not a duplicate of a live application for another.
@@ -299,14 +303,15 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             Candidate(),
             Keeper(),
             App(ApplicationStatus.Saved, null, organisationName: blank),
-            App(ApplicationStatus.Saved, null, organisationId: blank)
+            App(ApplicationStatus.Saved, null, organisationId: blank),
+            App(ApplicationStatus.Saved, null, registrationId: blank)
         );
 
         var result = await DryRun().RunAsync(Ct);
 
         result.Groups.Should().Be(1);
         result.Candidates.Should().Be(1);
-        result.UngroupedMissingKey.Should().Be(2);
+        result.UngroupedMissingKey.Should().Be(3);
     }
 
     [Theory]
@@ -652,7 +657,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             .Should()
             .ContainSingle(m =>
                 m.Contains("group organisationId=" + ReExOrganisationId + " ")
-                && m.Contains("organisationName=" + OrganisationName + " material=")
+                && m.Contains("organisationName=" + OrganisationName + " registrationId=")
             );
     }
 
