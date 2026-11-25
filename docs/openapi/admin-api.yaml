@@ -171,7 +171,8 @@ paths:
         record) is listed with `found: false`; it is never left out.
 
         **Never a made-up status.** If a linked application has no status stored, or one that is
-        not an `ApplicationStatus`, the whole request fails with `500` (`code`
+        not an `ApplicationStatus`, or two applications are linked to the same work item (which
+        the unique index prevents), the whole request fails with `500` (`code`
         `invalid_stored_application`) and the service logs it as an error, naming the application
         and work item.
       parameters:
@@ -215,7 +216,7 @@ paths:
         '405': { $ref: '#/components/responses/MethodNotAllowed' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '500':
-          description: A linked application has no status the service can read (`code` `invalid_stored_application`).
+          description: A linked application has no status the service can read, or two applications are linked to the same work item, which the unique index prevents (`code` `invalid_stored_application`).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
