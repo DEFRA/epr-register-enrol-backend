@@ -330,5 +330,7 @@ public static class AccreditationApiMapper
                 StringComparison.OrdinalIgnoreCase
             );
 
-    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+    // The empty-string-to-null rule for an optional text field. Shared with the Case Management
+    // accreditation summary (RA-769), so the two mappings of an accredited site treat blanks alike.
+    internal static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 }

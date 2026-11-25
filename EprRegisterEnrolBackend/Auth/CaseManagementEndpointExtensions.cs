@@ -1,6 +1,4 @@
-using EprRegisterEnrolBackend.Auth;
-
-namespace EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
+namespace EprRegisterEnrolBackend.Auth;
 
 internal static class CaseManagementEndpointExtensions
 {

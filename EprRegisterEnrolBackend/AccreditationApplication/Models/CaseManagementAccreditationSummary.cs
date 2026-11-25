@@ -7,7 +7,8 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Models;
 /// RA-769: the response of the case management accreditation summary read: an explicit allow-list of what an
 /// Approved application shows a caseworker. Shaped like the work item payload an application is submitted
 /// with (lower-case material, glass process wire value), so the Case Management service reads it with the same code.
-/// Never the persistence model, and never the S3 details of a file or the new-site markers.
+/// Never the persistence model, and never the new-site markers. The S3 location of each file (key and bucket) is
+/// carried, for the server side only (see <see cref="CaseManagementSummaryFile"/>).
 /// </summary>
 public sealed record CaseManagementAccreditationSummary(
     string? OrganisationName,
@@ -28,20 +29,20 @@ public sealed record CaseManagementAccreditationSummary(
 {
     public static CaseManagementAccreditationSummary From(AccreditationApplicationModel application) =>
         new(
-            application.OrganisationName,
-            application.OrgId,
-            application.AccreditationReference,
-            application.RegistrationReference,
-            application.Year,
-            AccreditationApiMapper.IsExporter(application) ? "exporter" : "reprocessor",
-            application.MaterialType.ToString().ToLowerInvariant(),
-            application.GlassRecyclingProcess,
-            application.SiteAddress,
-            application.CompanyRegisteredAddress,
-            CaseManagementSummaryPrns.From(application.Prns),
-            CaseManagementSummaryBusinessPlan.From(application.BusinessPlan),
-            CaseManagementSummaryFiles.From(application.SamplingPlan.Files),
-            CaseManagementSummarySite.AccreditedFrom(application)
+            OrganisationName: application.OrganisationName,
+            OrganisationNumber: application.OrgId,
+            AccreditationNumber: application.AccreditationReference,
+            RegistrationNumber: application.RegistrationReference,
+            AccreditationYear: application.Year,
+            WasteProcessingType: AccreditationApiMapper.IsExporter(application) ? "exporter" : "reprocessor",
+            Material: application.MaterialType.ToString().ToLowerInvariant(),
+            GlassRecyclingProcess: application.GlassRecyclingProcess,
+            SiteAddress: application.SiteAddress,
+            CompanyRegisteredAddress: application.CompanyRegisteredAddress,
+            Prns: CaseManagementSummaryPrns.From(application.Prns),
+            BusinessPlan: CaseManagementSummaryBusinessPlan.From(application.BusinessPlan),
+            SamplingPlan: CaseManagementSummaryFiles.From(application.SamplingPlan.Files),
+            OverseasSites: CaseManagementSummarySite.AccreditedFrom(application)
         );
 }
 
@@ -59,9 +60,9 @@ public sealed record CaseManagementSummaryFiles(IReadOnlyList<CaseManagementSumm
 }
 
 /// <summary>
-/// RA-769: one document, with what management-be needs to serve it from S3 on a download: its id, name, content
-/// type, scan result and S3 location. The S3 details are for the server side only and are never rendered to a
-/// browser. Who uploaded it, when, the BES validity dates and the document type are not carried. A scan result that
+/// RA-769: one document, with what is needed to serve it from S3 on a download: its id, name, content type, scan
+/// result and S3 location (<c>S3Key</c> and <c>S3Bucket</c>). The S3 location is for the server side only:
+/// management-be passes it on to management-fe, which serves the file, and it is never rendered to a browser. Who uploaded it, when, the BES validity dates and the document type are not carried. A scan result that
 /// is missing (BES evidence can lack one) is answered as <c>Pending</c>: not a clean file.
 /// </summary>
 public sealed record CaseManagementSummaryFile(
@@ -76,16 +77,23 @@ public sealed record CaseManagementSummaryFile(
     private const string Pending = nameof(FileScanStatus.Pending);
 
     public static CaseManagementSummaryFile From(AccreditationApplicationFile file) =>
-        new(file.FileId, file.Filename, file.ContentType, file.ScanStatus.ToString(), file.S3Key, file.S3Bucket);
+        new(
+            FileId: file.FileId,
+            Filename: file.Filename,
+            ContentType: file.ContentType,
+            ScanStatus: file.ScanStatus.ToString(),
+            S3Key: file.S3Key,
+            S3Bucket: file.S3Bucket
+        );
 
     public static CaseManagementSummaryFile From(BesEvidenceFileModel file) =>
         new(
-            file.FileId,
-            file.Filename,
-            file.ContentType,
-            string.IsNullOrWhiteSpace(file.ScanStatus) ? Pending : file.ScanStatus,
-            file.S3Key,
-            file.S3Bucket
+            FileId: file.FileId,
+            Filename: file.Filename,
+            ContentType: file.ContentType,
+            ScanStatus: string.IsNullOrWhiteSpace(file.ScanStatus) ? Pending : file.ScanStatus,
+            S3Key: file.S3Key,
+            S3Bucket: file.S3Bucket
         );
 }
 
@@ -100,8 +108,8 @@ public sealed record CaseManagementSummaryPrns(
 {
     public static CaseManagementSummaryPrns From(AccreditationApplicationPrns prns) =>
         new(
-            prns.PlannedTonnageBand,
-            [.. prns.Authorisers.Select(a => new CaseManagementSummaryAuthoriser(a.FullName, a.Email))]
+            PlannedTonnageBand: prns.PlannedTonnageBand,
+            Authorisers: [.. prns.Authorisers.Select(a => new CaseManagementSummaryAuthoriser(a.FullName, a.Email))]
         );
 }
 
@@ -134,20 +142,20 @@ public sealed record CaseManagementSummaryBusinessPlan(
 {
     public static CaseManagementSummaryBusinessPlan From(AccreditationApplicationBusinessPlan plan) =>
         new(
-            plan.NewInfrastructurePercent,
-            plan.PriceSupportPercent,
-            plan.BusinessCollectionsPercent,
-            plan.CommunicationsPercent,
-            plan.NewMarketsPercent,
-            plan.NewUsesPercent,
-            plan.OtherPercent,
-            plan.NewInfrastructureDetail,
-            plan.PriceSupportDetail,
-            plan.BusinessCollectionsDetail,
-            plan.CommunicationsDetail,
-            plan.NewMarketsDetail,
-            plan.NewUsesDetail,
-            plan.OtherDetail
+            NewInfrastructurePercent: plan.NewInfrastructurePercent,
+            PriceSupportPercent: plan.PriceSupportPercent,
+            BusinessCollectionsPercent: plan.BusinessCollectionsPercent,
+            CommunicationsPercent: plan.CommunicationsPercent,
+            NewMarketsPercent: plan.NewMarketsPercent,
+            NewUsesPercent: plan.NewUsesPercent,
+            OtherPercent: plan.OtherPercent,
+            NewInfrastructureDetail: plan.NewInfrastructureDetail,
+            PriceSupportDetail: plan.PriceSupportDetail,
+            BusinessCollectionsDetail: plan.BusinessCollectionsDetail,
+            CommunicationsDetail: plan.CommunicationsDetail,
+            NewMarketsDetail: plan.NewMarketsDetail,
+            NewUsesDetail: plan.NewUsesDetail,
+            OtherDetail: plan.OtherDetail
         );
 }
 
@@ -157,6 +165,16 @@ public sealed record CaseManagementSummaryBusinessPlan(
 /// <c>IsNewSite</c> and <c>RegisteredNowAccredited</c> (both stay true for the whole year after grant, so would
 /// mark every site as new), <c>Selected</c> (only selected sites are returned) and the ReEx <c>ValidFrom</c>.
 /// Its interim sites are the active ones only, and its BES evidence is the files alone.
+///
+/// This is the second mapping of an accredited site, next to <c>AccreditationApiMapper.ToOverseasSite</c>. What is
+/// shared: which sites (<c>AccreditationApiMapper.OrderedAccreditedSites</c>), the empty-string-to-null rule
+/// (<c>AccreditationApiMapper.Blank</c>) and the exporter rule (<c>AccreditationApiMapper.IsExporter</c>, which
+/// answers <see cref="CaseManagementAccreditationSummary.WasteProcessingType"/>). What intentionally differs, for
+/// Case Management: only the active interim sites are returned (the Accreditation API returns the withdrawn ones
+/// too, with their status history); there is no status or history at all; and the sites are returned for whatever
+/// the processing type is (the Accreditation API serves sites for exporters only): the summary shows
+/// whatever sites the Approved application holds, and only an exporter is expected to hold any. A change to the shared rules
+/// reaches both mappings; a change to a field of one needs the other considered.
 /// </summary>
 public sealed record CaseManagementSummarySite(
     int SiteId,
@@ -194,28 +212,28 @@ public sealed record CaseManagementSummarySite(
 
     private static CaseManagementSummarySite From(OverseasSiteModel site) =>
         new(
-            site.SiteId,
-            site.OrsId,
-            site.SiteName,
-            site.SiteAddress,
-            site.AddressLine1,
-            site.AddressLine2,
-            site.TownOrCity,
-            site.Country,
-            site.Coordinates,
-            site.ContactName,
-            site.ContactEmail,
-            site.ContactPhone,
-            [.. site.OperationCodes],
-            site.Code1,
-            site.Code2,
-            site.Code3,
-            site.RepatriatedLoads,
-            site.ConditionsOfExport,
-            site.IsEu,
-            site.IsOecd,
-            [.. InterimSiteSync.Active(site).Select(CaseManagementSummaryInterimSite.From)],
-            CaseManagementSummaryFiles.From(site.BesEvidence)
+            SiteId: site.SiteId,
+            OrsId: site.OrsId,
+            SiteName: site.SiteName,
+            SiteAddress: AccreditationApiMapper.Blank(site.SiteAddress),
+            AddressLine1: AccreditationApiMapper.Blank(site.AddressLine1),
+            AddressLine2: AccreditationApiMapper.Blank(site.AddressLine2),
+            TownOrCity: AccreditationApiMapper.Blank(site.TownOrCity),
+            Country: AccreditationApiMapper.Blank(site.Country),
+            Coordinates: AccreditationApiMapper.Blank(site.Coordinates),
+            ContactName: AccreditationApiMapper.Blank(site.ContactName),
+            ContactEmail: AccreditationApiMapper.Blank(site.ContactEmail),
+            ContactPhone: AccreditationApiMapper.Blank(site.ContactPhone),
+            OperationCodes: [.. site.OperationCodes],
+            Code1: site.Code1,
+            Code2: site.Code2,
+            Code3: site.Code3,
+            RepatriatedLoads: AccreditationApiMapper.Blank(site.RepatriatedLoads),
+            ConditionsOfExport: site.ConditionsOfExport,
+            IsEu: site.IsEu,
+            IsOecd: site.IsOecd,
+            InterimSites: [.. InterimSiteSync.Active(site).Select(CaseManagementSummaryInterimSite.From)],
+            BesEvidence: CaseManagementSummaryFiles.From(site.BesEvidence)
         );
 }
 
@@ -223,7 +241,9 @@ public sealed record CaseManagementSummarySite(
 /// RA-769: an interim site of an overseas site, shaped like the work item payload's interim site. Only active
 /// interim sites are ever built (a withdrawn one, with <c>RemovedAt</c> set, is not returned), so neither
 /// <c>RemovedAt</c> nor the status history is carried. <c>IsNewSite</c> and <c>CreatedAt</c> are not carried
-/// either: the former stays true for the year after grant.
+/// either: the former stays true for the year after grant. The empty-string-to-null rule is the Accreditation API's
+/// (<c>AccreditationApiMapper.Blank</c>, on the optional fields it applies it to); unlike the API, which returns
+/// withdrawn interim sites with their status history, only the active ones are returned and no status is carried.
 /// </summary>
 public sealed record CaseManagementSummaryInterimSite(
     int SiteId,
@@ -243,18 +263,18 @@ public sealed record CaseManagementSummaryInterimSite(
 {
     public static CaseManagementSummaryInterimSite From(InterimSiteModel interim) =>
         new(
-            interim.SiteId,
-            interim.SiteNumber,
-            interim.SiteName,
-            interim.AddressLine1,
-            interim.AddressLine2,
-            interim.TownOrCity,
-            interim.StateOrRegion,
-            interim.Postcode,
-            interim.Country,
-            interim.ContactName,
-            interim.ContactEmail,
-            interim.ContactPhone,
-            [.. interim.OperationCodes]
+            SiteId: interim.SiteId,
+            SiteNumber: interim.SiteNumber,
+            SiteName: interim.SiteName,
+            AddressLine1: interim.AddressLine1,
+            AddressLine2: AccreditationApiMapper.Blank(interim.AddressLine2),
+            TownOrCity: interim.TownOrCity,
+            StateOrRegion: AccreditationApiMapper.Blank(interim.StateOrRegion),
+            Postcode: AccreditationApiMapper.Blank(interim.Postcode),
+            Country: interim.Country,
+            ContactName: interim.ContactName,
+            ContactEmail: interim.ContactEmail,
+            ContactPhone: interim.ContactPhone,
+            OperationCodes: [.. interim.OperationCodes]
         );
 }

@@ -3,7 +3,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.Auth;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Endpoints;
@@ -49,14 +53,6 @@ public class CaseManagementAccreditationSummaryEndpointTests
             SiteAddress = "1 High Street, Leeds, LS1 1AA",
             CompanyRegisteredAddress = "2 Registered Road, York, YO1 1AA",
             ApplicationStatus = status,
-            // Everything below is persistence detail the summary must never return.
-            ApplicationReference = "AP-SECRET-REF",
-            PaymentReference = "PR/SECRET",
-            CaseManagementReference = "CASEREF-SECRET",
-            CompaniesHouseNumber = "01234567",
-            PermitNumbers = ["PERMIT-SECRET"],
-            SubmittedBy = new SubmittedByModel { FullName = "Sam Submitter", JobTitle = "Director" },
-            SubmitterContactDetails = new SubmitterContactDetailsModel { Email = "submitter@example.com" },
             Prns = new AccreditationApplicationPrns
             {
                 PlannedTonnageBand = PlannedTonnageBand.UpTo5000,
@@ -70,15 +66,35 @@ public class CaseManagementAccreditationSummaryEndpointTests
                     },
                     new PrnsAuthoriser { FullName = "Bob Signer", Email = "bob@example.com" },
                 ],
+                // Persistence detail the summary must never return.
                 Versions = [new PrnsSnapshot { VersionedAt = DateTime.UtcNow }],
             },
+            // Distinct values for every category, so a swap of two of them is caught.
             BusinessPlan = new AccreditationApplicationBusinessPlan
             {
-                NewInfrastructurePercent = 60,
+                NewInfrastructurePercent = 30,
+                PriceSupportPercent = 20,
+                BusinessCollectionsPercent = 15,
+                CommunicationsPercent = 12,
+                NewMarketsPercent = 10,
+                NewUsesPercent = 8,
+                OtherPercent = 5,
                 NewInfrastructureDetail = "A new sorting line",
-                PriceSupportPercent = 40,
-                PriceSupportDetail = null,
+                PriceSupportDetail = "Support for the gate fee",
+                BusinessCollectionsDetail = "More business collection rounds",
+                CommunicationsDetail = "A public awareness campaign",
+                NewMarketsDetail = "Entering the Dutch market",
+                NewUsesDetail = "Glass for insulation",
+                OtherDetail = "Staff training",
             },
+            // Everything below is persistence detail the summary must never return.
+            ApplicationReference = "AP-SECRET-REF",
+            PaymentReference = "PR/SECRET",
+            CaseManagementReference = "CASEREF-SECRET",
+            CompaniesHouseNumber = "01234567",
+            PermitNumbers = ["PERMIT-SECRET"],
+            SubmittedBy = new SubmittedByModel { FullName = "Sam Submitter", JobTitle = "Director" },
+            SubmitterContactDetails = new SubmitterContactDetailsModel { Email = "submitter@example.com" },
         };
 
     [Theory]
@@ -86,7 +102,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
     [InlineData("", true, "exporter")]
     [InlineData("  ", false, "reprocessor")]
     [InlineData("Exporter", false, "exporter")]
-    public async Task AnApplicationWithoutAProcessingTypeString_AnswersItFromTheExporterFlag(
+    public async Task TheProcessingType_IsTheStringWhenThereIsOne_AndTheExporterFlagWhenThereIsNot(
         string? wasteProcessingType,
         bool isExporter,
         string expected
@@ -143,9 +159,39 @@ public class CaseManagementAccreditationSummaryEndpointTests
         authorisers[0].GetProperty("email").GetString().Should().Be("ada@example.com");
         authorisers[1].GetProperty("fullName").GetString().Should().Be("Bob Signer");
         var plan = body.GetProperty("businessPlan");
-        plan.GetProperty("newInfrastructurePercent").GetInt32().Should().Be(60);
+        plan.EnumerateObject()
+            .Select(p => p.Name)
+            .Should()
+            .BeEquivalentTo(
+                "newInfrastructurePercent",
+                "priceSupportPercent",
+                "businessCollectionsPercent",
+                "communicationsPercent",
+                "newMarketsPercent",
+                "newUsesPercent",
+                "otherPercent",
+                "newInfrastructureDetail",
+                "priceSupportDetail",
+                "businessCollectionsDetail",
+                "communicationsDetail",
+                "newMarketsDetail",
+                "newUsesDetail",
+                "otherDetail"
+            );
+        plan.GetProperty("newInfrastructurePercent").GetInt32().Should().Be(30);
+        plan.GetProperty("priceSupportPercent").GetInt32().Should().Be(20);
+        plan.GetProperty("businessCollectionsPercent").GetInt32().Should().Be(15);
+        plan.GetProperty("communicationsPercent").GetInt32().Should().Be(12);
+        plan.GetProperty("newMarketsPercent").GetInt32().Should().Be(10);
+        plan.GetProperty("newUsesPercent").GetInt32().Should().Be(8);
+        plan.GetProperty("otherPercent").GetInt32().Should().Be(5);
         plan.GetProperty("newInfrastructureDetail").GetString().Should().Be("A new sorting line");
-        plan.GetProperty("priceSupportPercent").GetInt32().Should().Be(40);
+        plan.GetProperty("priceSupportDetail").GetString().Should().Be("Support for the gate fee");
+        plan.GetProperty("businessCollectionsDetail").GetString().Should().Be("More business collection rounds");
+        plan.GetProperty("communicationsDetail").GetString().Should().Be("A public awareness campaign");
+        plan.GetProperty("newMarketsDetail").GetString().Should().Be("Entering the Dutch market");
+        plan.GetProperty("newUsesDetail").GetString().Should().Be("Glass for insulation");
+        plan.GetProperty("otherDetail").GetString().Should().Be("Staff training");
     }
 
     private static OverseasSiteModel Site(int siteId, string? orsId, string name, bool selected = true) =>
@@ -175,7 +221,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
             {
                 SiteId = 7,
                 OrsId = "001",
-                SiteName = "Speira GmbH",
+                SiteName = "Example Recycling GmbH",
                 SiteAddress = "Flat line",
                 AddressLine1 = "1 Test Strasse",
                 AddressLine2 = "Block B",
@@ -202,7 +248,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
         var site = body.GetProperty("overseasSites")[0];
         site.GetProperty("siteId").GetInt32().Should().Be(7);
         site.GetProperty("orsId").GetString().Should().Be("001");
-        site.GetProperty("siteName").GetString().Should().Be("Speira GmbH");
+        site.GetProperty("siteName").GetString().Should().Be("Example Recycling GmbH");
         site.GetProperty("siteAddress").GetString().Should().Be("Flat line");
         site.GetProperty("addressLine1").GetString().Should().Be("1 Test Strasse");
         site.GetProperty("addressLine2").GetString().Should().Be("Block B");
@@ -226,7 +272,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
     public async Task AnOverseasSite_CarriesOnlyTheAllowListedFields_NoNewSiteMarkers()
     {
         var app = ApprovedExporter();
-        app.OverseasSites = new() { Sites = [Site(1, "001", "Speira GmbH")] };
+        app.OverseasSites = new() { Sites = [Site(1, "001", "Example Recycling GmbH")] };
         app.OverseasSites.Sites[0].IsNewSite = true;
         app.OverseasSites.Sites[0].RegisteredNowAccredited = true;
         app.OverseasSites.Sites[0].ValidFrom = "2026-01-01T00:00:00Z";
@@ -279,7 +325,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
             AddressLine1 = "2 Interim Strasse",
             AddressLine2 = "Unit 4",
             TownOrCity = "Hamburg",
-            StateOrRegion = "Hamburg",
+            StateOrRegion = "Free and Hanseatic City",
             Postcode = "20095",
             ContactName = "Ines Interim",
             ContactEmail = "ines@example.de",
@@ -294,7 +340,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
     public async Task AnInterimSite_AnswersItsDetails_AndNothingElse()
     {
         var app = ApprovedExporter();
-        var site = Site(1, "001", "Speira GmbH");
+        var site = Site(1, "001", "Example Recycling GmbH");
         site.InterimSites = [Interim(11, "Hamburg Interim")];
         app.OverseasSites = new() { Sites = [site] };
 
@@ -307,7 +353,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
         interim.GetProperty("addressLine1").GetString().Should().Be("2 Interim Strasse");
         interim.GetProperty("addressLine2").GetString().Should().Be("Unit 4");
         interim.GetProperty("townOrCity").GetString().Should().Be("Hamburg");
-        interim.GetProperty("stateOrRegion").GetString().Should().Be("Hamburg");
+        interim.GetProperty("stateOrRegion").GetString().Should().Be("Free and Hanseatic City");
         interim.GetProperty("postcode").GetString().Should().Be("20095");
         interim.GetProperty("country").GetString().Should().Be("Germany");
         interim.GetProperty("contactName").GetString().Should().Be("Ines Interim");
@@ -339,6 +385,38 @@ public class CaseManagementAccreditationSummaryEndpointTests
             .And.NotContainEquivalentOf("removedAt")
             .And.NotContainEquivalentOf("createdAt")
             .And.NotContainEquivalentOf("statusHistory");
+    }
+
+    // The empty-string-to-null rule is the Accreditation API's (AccreditationApiMapper.Blank).
+    [Fact]
+    public async Task BlankOptionalFields_AreAnsweredAsNull_AsTheAccreditationApiAnswersThem()
+    {
+        var app = ApprovedExporter();
+        var site = Site(1, "001", "Blank fields");
+        site.SiteAddress = "";
+        site.AddressLine2 = "  ";
+        site.Coordinates = "";
+        site.ContactPhone = "";
+        site.RepatriatedLoads = "";
+        var interim = Interim(11, "Blank interim");
+        interim.AddressLine2 = "";
+        interim.StateOrRegion = " ";
+        interim.Postcode = "";
+        site.InterimSites = [interim];
+        app.OverseasSites = new() { Sites = [site] };
+
+        var body = await GetBody(app);
+
+        var answered = body.GetProperty("overseasSites")[0];
+        answered.GetProperty("siteAddress").ValueKind.Should().Be(JsonValueKind.Null);
+        answered.GetProperty("addressLine2").ValueKind.Should().Be(JsonValueKind.Null);
+        answered.GetProperty("coordinates").ValueKind.Should().Be(JsonValueKind.Null);
+        answered.GetProperty("contactPhone").ValueKind.Should().Be(JsonValueKind.Null);
+        answered.GetProperty("repatriatedLoads").ValueKind.Should().Be(JsonValueKind.Null);
+        var answeredInterim = answered.GetProperty("interimSites")[0];
+        answeredInterim.GetProperty("addressLine2").ValueKind.Should().Be(JsonValueKind.Null);
+        answeredInterim.GetProperty("stateOrRegion").ValueKind.Should().Be(JsonValueKind.Null);
+        answeredInterim.GetProperty("postcode").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
@@ -550,7 +628,7 @@ public class CaseManagementAccreditationSummaryEndpointTests
     public async Task ASitesBesEvidence_AnswersEachFileWithWhatADownloadNeeds_AndNothingElse()
     {
         var app = ApprovedExporter();
-        var site = Site(1, "001", "Speira GmbH");
+        var site = Site(1, "001", "Example Recycling GmbH");
         site.BesEvidence = new BesEvidenceModel
         {
             BesEvidenceUploads = [BesFile("bes-1"), BesFile("bes-2", scanStatus: null)],
@@ -682,6 +760,88 @@ public class CaseManagementAccreditationSummaryEndpointTests
     }
 }
 
+// A 404 on this route is logged as a warning with the ids, so a wrong application id sent by Case Management is
+// visible rather than a bare 404.
+public class CaseManagementAccreditationSummaryNotFoundLoggingTests
+    : IClassFixture<CaseManagementAccreditationSummaryNotFoundLoggingTests.LoggingTestFactory>
+{
+    public sealed class LoggingTestFactory : AccreditationApplicationTestFactory
+    {
+        public CapturingLoggerFactory LogCapture { get; } = new();
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.ConfigureServices(services => services.AddSingleton<ILoggerFactory>(LogCapture));
+        }
+    }
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private readonly LoggingTestFactory _factory;
+    private readonly HttpClient _client;
+
+    public CaseManagementAccreditationSummaryNotFoundLoggingTests(LoggingTestFactory factory)
+    {
+        _factory = factory;
+        _client = factory.CreateClient();
+    }
+
+    [Fact]
+    public async Task AnUnknownApplication_Answers404_AndLogsAWarningWithTheIds()
+    {
+        _factory.LogCapture.Clear();
+        var unknownId = ObjectId.GenerateNewId().ToString();
+
+        var response = await _client.GetAsync(
+            CaseManagementAccreditationSummaryEndpointTests.Url("org-123", unknownId),
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var warning = _factory.LogCapture.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Warning).Subject;
+        warning.Properties["OrganisationId"].Should().Be("org-123");
+        warning.Properties["ApplicationId"].Should().Be(unknownId);
+    }
+
+    [Fact]
+    public async Task AnApplicationThatIsNotApproved_Answers404_AndLogsAWarningWithTheIdsAndStatus()
+    {
+        _factory.LogCapture.Clear();
+        var app = CaseManagementAccreditationSummaryEndpointTests.ApprovedExporter(
+            status: ApplicationStatus.Submitted
+        );
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.GetAsync(
+            CaseManagementAccreditationSummaryEndpointTests.Url(app.OrganisationId, app.ApplicationId!),
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var warning = _factory.LogCapture.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Warning).Subject;
+        warning.Properties["OrganisationId"].Should().Be(app.OrganisationId);
+        warning.Properties["ApplicationId"].Should().Be(app.ApplicationId);
+        warning.Properties["ApplicationStatus"].Should().Be(ApplicationStatus.Submitted);
+    }
+
+    [Fact]
+    public async Task AnApprovedApplication_IsServed_WithoutAWarning()
+    {
+        _factory.LogCapture.Clear();
+        var app = CaseManagementAccreditationSummaryEndpointTests.ApprovedExporter();
+        _factory.FakePersistence.Seed(app);
+
+        var response = await _client.GetAsync(
+            CaseManagementAccreditationSummaryEndpointTests.Url(app.OrganisationId, app.ApplicationId!),
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        _factory.LogCapture.Entries.Should().NotContain(e => e.LogLevel >= LogLevel.Warning);
+    }
+}
+
 // The route outside Development, where the CaseManagement scheme checks management-be's v3 signature: a signed
 // request is served, and every other caller (unsigned, the operator frontend's bearer token) is rejected.
 public class SignedCaseManagementAccreditationSummaryEndpointTests
@@ -698,7 +858,7 @@ public class SignedCaseManagementAccreditationSummaryEndpointTests
         _client = factory.CreateClient();
     }
 
-    private HttpRequestMessage Request(AccreditationApplicationModel app, bool signed)
+    private static HttpRequestMessage Request(AccreditationApplicationModel app, bool signed)
     {
         var request = new HttpRequestMessage(
             HttpMethod.Get,
