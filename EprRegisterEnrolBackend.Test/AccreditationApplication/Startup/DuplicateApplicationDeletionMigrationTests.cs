@@ -402,6 +402,22 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Saved_record_with_an_orgId_or_a_Submitted_record_is_kept_beside_a_candidate()
+    {
+        var candidate = Candidate();
+        var savedWithOrgId = App(ApplicationStatus.Saved, 500131);
+        var submitted = App(ApplicationStatus.Submitted, null);
+        await SeedAsync(candidate, savedWithOrgId, submitted);
+
+        var result = await Applying(1).RunAsync(Ct);
+
+        result.Deleted.Should().Be(1);
+        (await ExistsAsync(candidate.Id)).Should().BeFalse();
+        (await ExistsAsync(savedWithOrgId.Id)).Should().BeTrue();
+        (await ExistsAsync(submitted.Id)).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Several_groups_are_handled_independently()
     {
         var other = Candidate("REG-0002");
