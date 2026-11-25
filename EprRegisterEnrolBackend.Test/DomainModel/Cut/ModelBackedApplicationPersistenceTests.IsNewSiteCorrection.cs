@@ -86,6 +86,7 @@ public sealed partial class ModelBackedApplicationPersistenceTests
                 ReExResult<ReExAccreditationDto>.Success(
                     new ReExAccreditationDto
                     {
+                        RegistrationStatus = RegistrationStatus.Approved,
                         OverseasSites =
                         [
                             new OverseasSiteModel { SiteId = 1, SiteName = "Carried Over Ltd", OrsId = "001" },

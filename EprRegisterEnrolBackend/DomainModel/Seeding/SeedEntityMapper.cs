@@ -8,8 +8,9 @@ namespace EprRegisterEnrolBackend.DomainModel.Seeding;
 /// <summary>
 /// Copies what a seed's ReEx response holds onto the domain model entities (design doc §6, phase 2). Each
 /// <c>ApplyTo</c> writes only the fields ReEx sent, onto a new entity or the current version alike, so a
-/// re-seed never clears data this service owns (status, history, interim sites) or that enrichment added.
-/// Unknown values stay as they are: data is never invented.
+/// re-seed never clears data this service owns (an ORS's status, history, interim sites) or that enrichment added.
+/// A Registration's status is ReEx's (RA-806, design doc §3.4) and always present, as GetAccreditationAsync fails without
+/// it, so a seed always writes it. Other values ReEx did not send stay as they are: data is never invented.
 /// </summary>
 public static class SeedEntityMapper
 {
@@ -70,6 +71,7 @@ public static class SeedEntityMapper
             ? WasteProcessingKind.Exporter
             : WasteProcessingKind.Reprocessor;
         ApplyNumber(target, dto.RegistrationReference);
+        target.Status = dto.RegistrationStatus;
         ApplyAccreditationNumber(target, dto.Year, dto.AccreditationNumber);
 
         if (dto.PermitNumbers.Count > 0)

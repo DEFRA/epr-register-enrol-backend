@@ -200,6 +200,7 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
                 ReExResult<ReExAccreditationDto>.Success(
                     new ReExAccreditationDto
                     {
+                        RegistrationStatus = RegistrationStatus.Approved,
                         OverseasSites =
                         [
                             IsNewSiteClassifierTests.Site(1, "Carried Over Ltd", false, "001"),
@@ -237,26 +238,26 @@ public sealed class IsNewSiteCorrectionTests : IDisposable
     )
     {
         var application = new AccreditationApplicationModel
-                {
-                    Id = ObjectId.GenerateNewId(),
-                    OrganisationId = ReExOrganisationId,
-                    OrganisationName = "Acme Recycling Ltd",
-                    RegistrationId = ReExRegistrationId,
-                    IsExporter = true,
-                    Nation = Nation.England,
-                    MaterialType = MaterialType.Plastic,
-                    Year = 2027,
-                    ApplicationStatus = status,
-                    ApplicationReference = $"APP-{Guid.NewGuid():N}",
-                    CaseManagementWorkItemId = Guid.NewGuid(),
-                    CreatedAt = createdAt,
-                    UpdatedAt = createdAt,
-                    DateLastEdited = createdAt,
-                    OverseasSites = new AccreditationApplicationOverseasSites
-                    {
-                        Sites = sites ?? MixedSites(),
-                    },
-                };
+        {
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = ReExOrganisationId,
+            OrganisationName = "Acme Recycling Ltd",
+            RegistrationId = ReExRegistrationId,
+            IsExporter = true,
+            Nation = Nation.England,
+            MaterialType = MaterialType.Plastic,
+            Year = 2027,
+            ApplicationStatus = status,
+            ApplicationReference = $"APP-{Guid.NewGuid():N}",
+            CaseManagementWorkItemId = Guid.NewGuid(),
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            DateLastEdited = createdAt,
+            OverseasSites = new AccreditationApplicationOverseasSites
+            {
+                Sites = sites ?? MixedSites(),
+            },
+        };
         configure?.Invoke(application);
         return (await _applications.CreateAsync(application))!;
     }

@@ -19,7 +19,7 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolBackend.Test.DomainModel.Seeding;
 
 /// <summary>Phase 2 seed dual-write against a real single-node replica set, so the transaction is real.</summary>
-public sealed class SeedDualWriterTests : IDisposable
+public sealed partial class SeedDualWriterTests : IDisposable
 {
     private const string ReExOrganisationId = "6512a0f0c0ffee0000000001";
     private const string ReExRegistrationId = "6512a0f0c0ffee0000000002";
@@ -114,6 +114,7 @@ public sealed class SeedDualWriterTests : IDisposable
     private static ReExAccreditationDto ReEx(string siteName = "Site One") =>
         new()
         {
+            RegistrationStatus = RegistrationStatus.Approved,
             OrganisationName = "Acme Recycling Ltd",
             RegistrationReference = "R26EX1234567P",
             IsExporter = true,

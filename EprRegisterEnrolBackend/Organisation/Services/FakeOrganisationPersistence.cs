@@ -12,6 +12,10 @@ public class FakeOrganisationPersistence
     private const string WasteProcessingTypeReprocessor = "reprocessor";
     private const string NationEngland = "england";
     private const string RoleDirector = "Director";
+
+    // RA-806: ReEx's registration statuses, which StubReExApiAdapter carries to the seed. Every fixture registration is
+    // approved, as one holding or applying for an accreditation is in ReEx; 50024 is created, for the refusal case.
+    private const string RegistrationStatusApproved = "approved";
     private const string RegistrationStatusCreated = "created";
 
     public static readonly ObjectId Reg50001 = ObjectId.Parse("aaa000000000000000050001");
@@ -25,6 +29,8 @@ public class FakeOrganisationPersistence
     public static readonly ObjectId Reg50015 = ObjectId.Parse("aaa000000000000000050015");
     public static readonly ObjectId Reg50016 = ObjectId.Parse("aaa000000000000000050016");
     public static readonly ObjectId Reg50017 = ObjectId.Parse("aaa000000000000000050017");
+    public static readonly ObjectId Reg50023 = ObjectId.Parse("aaa000000000000000050023");
+    public static readonly ObjectId Reg50024 = ObjectId.Parse("aaa000000000000000050024");
 
     // RA-690: each material's registration reference code. Perftest glass registrations have no
     // GlassRecyclingProcess, so they take "other" (GO), as StubReExApiAdapter does.
@@ -215,7 +221,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50001,
                         SiteId = "REG001",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeReprocessor,
                         SiteAddress = new SiteAddressModel
@@ -268,7 +274,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50002,
                         SiteId = "REG002",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "glass",
                         // RA-307: local-dev/e2e coverage for the "Glass - Remelt"
                         // display suffix, mapped to the enum by StubReExApiAdapter.
@@ -324,7 +330,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50005,
                         SiteId = "REG005",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = ["900010", "900011"],
@@ -373,7 +379,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50006,
                         SiteId = "REG006",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "glass",
                         WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = ["900001", "900002", "900003", "900004"],
@@ -437,7 +443,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50013,
                         SiteId = "REG013",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = ["900010", "900011"],
@@ -498,7 +504,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50014,
                         SiteId = "REG014",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = [],
@@ -564,7 +570,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50015,
                         SiteId = "REG015",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = ["900010", "900011"],
@@ -623,7 +629,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50016,
                         SiteId = "REG016",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeReprocessor,
                         SiteAddress = new SiteAddressModel
@@ -683,7 +689,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = Reg50017,
                         SiteId = "REG017",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeExporter,
                         OverseasSites = [],
@@ -741,6 +747,27 @@ public class FakeOrganisationPersistence
             ("Unit 11", "Wigan", "WN1 1AB"),
             "info@appdevrecycling.co.uk"
         );
+
+        // RA-806: two exporters no dev seed touches, so only the seed dual-write writes their Registration, with the
+        // status the stub carries from here: approved for 50023, whose manage pages open, and created for 50024,
+        // whose change requests are refused. RegistrationNumber is the stub's derived value for a 2027 application, as
+        // for 50003 above.
+        AddPlasticExporter(
+            50023,
+            Reg50023,
+            "RA-806 Approved Exporter Ltd",
+            "R26EX0500230938PL",
+            RegistrationStatusApproved,
+            ["902301", "902302"]
+        );
+        AddPlasticExporter(
+            50024,
+            Reg50024,
+            "RA-806 Created Exporter Ltd",
+            "R26EX0500242843PL",
+            RegistrationStatusCreated,
+            ["902401", "902402"]
+        );
     }
 
     // RA-425 orgs: a dedicated exporter, 50018 for the material dashboard pages (/manage) and
@@ -792,7 +819,7 @@ public class FakeOrganisationPersistence
                 {
                     Id = org.RegistrationId,
                     SiteId = "REG018",
-                    Status = RegistrationStatusCreated,
+                    Status = RegistrationStatusApproved,
                     Material = DevExporterOrg.Material.ToString().ToLowerInvariant(),
                     WasteProcessingType = WasteProcessingTypeExporter,
                     OverseasSites = overseasSiteIds,
@@ -818,7 +845,7 @@ public class FakeOrganisationPersistence
                 {
                     Id = reprocessor.RegistrationId,
                     SiteId = $"REG{org.OrgId % 1000:D3}R",
-                    Status = RegistrationStatusCreated,
+                    Status = RegistrationStatusApproved,
                     Material = reprocessor.Material.ToString().ToLowerInvariant(),
                     WasteProcessingType = WasteProcessingTypeReprocessor,
                     SiteAddress = new SiteAddressModel
@@ -833,6 +860,65 @@ public class FakeOrganisationPersistence
                     ],
                 },
             ];
+
+    private void AddPlasticExporter(
+        int orgId,
+        ObjectId registrationId,
+        string name,
+        string registrationNumber,
+        string registrationStatus,
+        List<string> overseasSiteIds
+    )
+    {
+        _store.Add(
+            new OrganisationModel
+            {
+                OrgId = orgId,
+                SchemaVersion = 1,
+                Version = 1,
+                BusinessType = BusinessTypeUnincorporated,
+                WasteProcessingTypes = [WasteProcessingTypeExporter],
+                ReprocessingNations = [NationEngland],
+                SubmittedToRegulator = "ea",
+                CompanyDetails = new CompanyDetailsModel
+                {
+                    Name = name,
+                    TradingName = name,
+                    RegistrationNumber = registrationNumber,
+                    CompaniesHouseNumber = $"12345{orgId % 1000:D3}",
+                    RegisteredAddress = new RegisteredAddressModel
+                    {
+                        Line1 = $"{orgId % 1000} Export Quay",
+                        Town = "Hull",
+                        Postcode = "HU1 1AA",
+                    },
+                },
+                ContactDetails = new ContactDetailsModel
+                {
+                    FullName = "Export Manager",
+                    Email = $"exports{orgId}@example.com",
+                },
+                Users = [],
+                Accreditations = [],
+                Registrations =
+                [
+                    new RegistrationModel
+                    {
+                        Id = registrationId,
+                        SiteId = $"REG{orgId % 1000:D3}",
+                        Status = registrationStatus,
+                        Material = "plastic",
+                        WasteProcessingType = WasteProcessingTypeExporter,
+                        OverseasSites = overseasSiteIds,
+                        WasteManagementPermits =
+                        [
+                            new WasteManagementPermitModel { PermitNumber = $"WML{orgId}" },
+                        ],
+                    },
+                ],
+            }
+        );
+    }
 
     private void AddPlasticReprocessor(
         int orgId,
@@ -874,7 +960,7 @@ public class FakeOrganisationPersistence
                     {
                         Id = registrationId,
                         SiteId = $"REG{orgId % 1000:D3}",
-                        Status = RegistrationStatusCreated,
+                        Status = RegistrationStatusApproved,
                         Material = "plastic",
                         WasteProcessingType = WasteProcessingTypeReprocessor,
                         SiteAddress = new SiteAddressModel
@@ -940,7 +1026,7 @@ public class FakeOrganisationPersistence
                         {
                             Id = registrationId,
                             SiteId = $"REG{orgId}",
-                            Status = RegistrationStatusCreated,
+                            Status = RegistrationStatusApproved,
                             Material = material,
                             WasteProcessingType = WasteProcessingTypeReprocessor,
                             SiteAddress = new SiteAddressModel
@@ -1012,7 +1098,7 @@ public class FakeOrganisationPersistence
                         {
                             Id = registrationId,
                             SiteId = $"REG{orgId}",
-                            Status = RegistrationStatusCreated,
+                            Status = RegistrationStatusApproved,
                             Material = material,
                             WasteProcessingType = WasteProcessingTypeExporter,
                             OverseasSites = overseasSites,

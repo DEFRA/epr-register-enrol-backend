@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.ReEx.Dtos;
 using EprRegisterEnrolBackend.Utils;
@@ -158,6 +159,19 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 registrationId
             );
         }
+
+        // RA-806: ReEx masters the registration's status; a missing or unknown one fails the seed.
+        var registrationStatus = ReExRegistrationStatusMapper.Map(
+            registration.Status,
+            organisationId,
+            registration.Id,
+            logger
+        );
+        if (!registrationStatus.IsSuccess)
+            return ReExResult<ReExAccreditationDto>.Fail(
+                registrationStatus.Error!,
+                registrationStatus.StatusCode
+            );
 
         string? siteAddress = registration is ReprocessorRegistrationDto reprocessor
             ? FormatAddress(reprocessor.Site?.Address)
@@ -343,6 +357,7 @@ public class HttpReExApiAdapter(IReExClient reExClient, ILogger<HttpReExApiAdapt
                 OrganisationName = org.CompanyDetails?.Name,
                 OrganisationNumber = org.OrgId,
                 RegistrationReference = registration.RegistrationNumber,
+                RegistrationStatus = registrationStatus.Value,
                 SiteAddress = siteAddress,
                 IsExporter = isExporter,
                 Nation = nation,

@@ -664,6 +664,7 @@ public sealed partial class DualWriteEndpointTests
     private static ReExAccreditationDto SeededReEx() =>
         new()
         {
+            RegistrationStatus = RegistrationStatus.Approved,
             AccreditationId = "reex-accreditation",
             OrganisationId = OrganisationId,
             MaterialType = MaterialType.Steel,

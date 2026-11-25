@@ -15,7 +15,7 @@ namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Adapters;
 /// true — indistinguishable from a wizard-added site. Registry/prior-year sites must report
 /// IsNewSite = false, matching HttpReExApiAdapter's live-API mapping.
 /// </summary>
-public class StubReExApiAdapterTests
+public partial class StubReExApiAdapterTests
 {
     [Fact]
     public async Task GetAccreditationAsync_SeededOverseasSites_AreFlaggedIsNewSiteFalse()
@@ -139,38 +139,6 @@ public class StubReExApiAdapterTests
         result.Value!.WasteProcessingType.Should().Be("reprocessor");
         result.Value!.SiteAddress.Should().Be("1 Stub Lane, Stubton, ST1 1AB");
         result.Value!.PermitNumbers.Should().BeEmpty();
-        result.Value!.OverseasSites.Should().BeEmpty();
-    }
-
-    // Org id resolves to a real seeded org, but the registrationId supplied doesn't match any of
-    // that org's registrations — org-level fields (name) must still come from the found org, while
-    // every registration-derived field (site address, permits, waste processing type) falls back.
-    [Fact]
-    public async Task GetAccreditationAsync_RegistrationIdNotFound_OrgFieldsPopulatedButRegistrationFieldsFallBack()
-    {
-        var sut = new StubReExApiAdapter(
-            new FakeOrganisationPersistence(),
-            EnabledNullLogger<StubReExApiAdapter>.Instance
-        );
-
-        var result = await sut.GetAccreditationAsync(
-            "50001",
-            "not-a-real-registration-id",
-            MaterialType.Plastic,
-            2027
-        );
-
-        result.IsSuccess.Should().BeTrue(because: result.Error?.Message);
-        result.Value!.OrganisationName.Should().Be("NEWDEV RECYCLING LIMITED");
-        result
-            .Value!.SiteAddress.Should()
-            .Be(
-                "1 Stub Lane, Stubton, ST1 1AB",
-                because: "no matching registration means SiteAddress falls back, not to null (that's the exporter-only path)"
-            );
-        result.Value!.WasteProcessingType.Should().Be("reprocessor");
-        result.Value!.PermitNumbers.Should().BeEmpty();
-        result.Value!.GlassRecyclingProcess.Should().BeNull();
         result.Value!.OverseasSites.Should().BeEmpty();
     }
 
@@ -777,9 +745,9 @@ public class StubReExApiAdapterTests
         2026,
         "R26EX0500051670PL"
     )]
-    [InlineData("60002", "reg-1", MaterialType.Paper, 2026, "R26SR0600022731PA")]
-    [InlineData("60004", "reg-1", MaterialType.Aluminium, 2100, "R00NR0600042731AL")]
-    [InlineData("60003", "reg-1", MaterialType.Steel, 2009, "R09WR0600032731ST")]
+    [InlineData("60002", "aaa000000000000000060002", MaterialType.Paper, 2026, "R26SR0600022898PA")]
+    [InlineData("60004", "aaa000000000000000060004", MaterialType.Aluminium, 2100, "R00NR0600047184AL")]
+    [InlineData("60003", "aaa000000000000000060003", MaterialType.Steel, 2009, "R09WR0600030517ST")]
     [InlineData("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Glass, 2027, "R27ER9730739108GO")]
     [InlineData(
         "c14854d9-e20a-41b3-87d5-a1fd4bbe2153",
