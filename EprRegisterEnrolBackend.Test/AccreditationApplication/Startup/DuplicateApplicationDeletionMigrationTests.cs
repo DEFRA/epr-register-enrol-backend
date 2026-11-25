@@ -175,7 +175,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                 && m.Contains($"keeper {keeper.Id} status=Updated hasOrgId=True")
             )
             .And.Contain(m =>
-                m.Contains("group registration=REG-0001 material=Plastic year=2027")
+                m.Contains("registration=REG-0001 material=Plastic year=2027")
                 && m.Contains("outcome=would-delete")
             )
             .And.Contain(m => m.Contains("summary groups=1 candidates=1 would-delete=1 deleted=0"));
@@ -609,7 +609,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     // --- Logging ---
 
     [Fact]
-    public async Task Every_line_is_prefixed_states_its_mode_and_logs_no_personal_data()
+    public async Task Every_line_is_prefixed_states_its_mode_and_logs_no_applicant_or_reviewer_data()
     {
         await SeedAsync(Candidate(), Keeper(), Candidate("REG-0002"));
 
@@ -626,17 +626,23 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                 || m.StartsWith("RA-788 APPLY:")
                 || m.StartsWith("RA-788 APPLIED:")
             );
-        foreach (
-            var personal in new[]
-            {
-                PersonalName,
-                PersonalEmail,
-                OrganisationName,
-                ReExOrganisationId,
-                Reviewer,
-            }
-        )
+        foreach (var personal in new[] { PersonalName, PersonalEmail, Reviewer })
             Messages.Should().NotContain(m => m.Contains(personal));
+    }
+
+    [Fact]
+    public async Task Each_group_line_names_the_organisation_so_the_deletion_can_be_reviewed()
+    {
+        await SeedAsync(Candidate(), Keeper());
+
+        await DryRun().RunAsync(Ct);
+
+        Messages
+            .Should()
+            .ContainSingle(m =>
+                m.Contains("group organisationId=" + ReExOrganisationId + " ")
+                && m.Contains("organisationName=" + OrganisationName + " registration=")
+            );
     }
 
     // The failure is recorded with its mode on a dry run and an apply alike.

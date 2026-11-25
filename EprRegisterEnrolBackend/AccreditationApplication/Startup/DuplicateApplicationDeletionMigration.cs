@@ -61,9 +61,10 @@ public sealed class DuplicateApplicationDeletionOptions
 // group's candidates are re-read: all gone means the delete committed, all present means it rolled
 // back, anything else - or a failed re-read, or a cancellation - is outcome unknown.
 //
-// Logging: every line starts RA-788 and states the mode. organisationName and organisationId are
-// never logged (a business name can be a sole trader's own name), nor the reviewer. An exception is
-// logged by its type only, as its message could carry personal data.
+// Logging: every line starts RA-788 and states the mode. Each group line carries the group's
+// organisationId and organisationName so the set to be deleted can be reviewed. The reviewer and
+// applicant contact details are never logged. An exception is logged by its type only, as its
+// message could carry personal data.
 //
 // A BackgroundService, so a failure here logs rather than crash-looping the host. The Mongo client
 // is resolved only once the migration is enabled.
@@ -332,17 +333,20 @@ public class DuplicateApplicationDeletionMigration(
 
     // ---- Logging ----
 
-    // Only registration reference, material, year, ids, statuses, versions and dates: never the
-    // organisation name or id.
+    // The group line names the group's organisation (id and name) so a reviewer can tell what a
+    // dry run would delete. Never the reviewer, applicant contact details or an exception message.
     private void LogGroup(string mode, DuplicateGroup group)
     {
         if (!logger.IsEnabled(LogLevel.Information))
             return;
 
         logger.LogInformation(
-            "RA-788 {Mode:l}: group registration={Registration} material={Material} year={Year} "
+            "RA-788 {Mode:l}: group organisationId={OrganisationId} organisationName={OrganisationName} "
+                + "registration={Registration} material={Material} year={Year} "
                 + "outcome={Outcome:l} candidates={Candidates} keepers={Keepers}",
             mode,
+            group.Key.OrganisationId,
+            group.Key.OrganisationName,
             group.Key.RegistrationReference,
             group.Key.MaterialType,
             group.Key.Year,
