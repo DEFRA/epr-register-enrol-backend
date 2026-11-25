@@ -263,10 +263,15 @@ public class DuplicateApplicationDeletionMigration(
         IReadOnlyList<AccreditationApplicationModel> Keepers
     )
     {
-        public GroupOutcome Outcome =>
-            Candidates.Count == 0 ? GroupOutcome.NoCandidate
-            : Keepers.Count == 0 ? GroupOutcome.NoKeeper
-            : GroupOutcome.Delete;
+        public GroupOutcome Outcome
+        {
+            get
+            {
+                if (Candidates.Count == 0)
+                    return GroupOutcome.NoCandidate;
+                return Keepers.Count == 0 ? GroupOutcome.NoKeeper : GroupOutcome.Delete;
+            }
+        }
     }
 
     private sealed record ScanResult(IReadOnlyList<DuplicateGroup> Groups, int UngroupedMissingKey);
@@ -351,27 +356,36 @@ public class DuplicateApplicationDeletionMigration(
             group.Keepers.Count
         );
         foreach (var c in group.Candidates)
-            logger.LogInformation(
-                "RA-788 {Mode:l}: candidate {Id} status={Status} version={Version} "
-                    + "createdAt={CreatedAt:O} dateLastEdited={DateLastEdited:O}",
-                mode,
-                c.Id,
-                c.ApplicationStatus,
-                c.Version,
-                c.CreatedAt,
-                c.DateLastEdited
-            );
+            LogCandidate(mode, c);
         foreach (var k in group.Keepers)
-            logger.LogInformation(
-                "RA-788 {Mode:l}: keeper {Id} status={Status} hasOrgId={HasOrgId}",
-                mode,
-                k.Id,
-                k.ApplicationStatus,
-                k.OrgId is not null
-            );
+            LogKeeper(mode, k);
     }
 
-    private void LogSummary(string mode, RunSummary s) =>
+    private void LogCandidate(string mode, AccreditationApplicationModel c) =>
+        logger.LogInformation(
+            "RA-788 {Mode:l}: candidate {Id} status={Status} version={Version} "
+                + "createdAt={CreatedAt:O} dateLastEdited={DateLastEdited:O}",
+            mode,
+            c.Id,
+            c.ApplicationStatus,
+            c.Version,
+            c.CreatedAt,
+            c.DateLastEdited
+        );
+
+    private void LogKeeper(string mode, AccreditationApplicationModel k) =>
+        logger.LogInformation(
+            "RA-788 {Mode:l}: keeper {Id} status={Status} hasOrgId={HasOrgId}",
+            mode,
+            k.Id,
+            k.ApplicationStatus,
+            k.OrgId is not null
+        );
+
+    private void LogSummary(string mode, RunSummary s)
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+            return;
         logger.LogInformation(
             "RA-788 {Mode:l}: summary groups={Groups} candidates={Candidates} "
                 + "would-delete={WouldDelete} deleted={Deleted} skipped-no-keeper={NoKeeper} "
@@ -388,6 +402,7 @@ public class DuplicateApplicationDeletionMigration(
             s.RolledBack,
             s.OutcomeUnknown
         );
+    }
 
     private static string Invariant(FormattableString text) =>
         text.ToString(CultureInfo.InvariantCulture);
@@ -490,7 +505,7 @@ public class DuplicateApplicationDeletionMigration(
         var keepersLive = await collection.CountDocumentsAsync(
             session,
             Filters.And(
-                Filters.In(a => a.Id, keeperIds.Cast<ObjectId?>()),
+                Filters.In(a => a.Id, keeperIds),
                 Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
             ),
             cancellationToken: token
