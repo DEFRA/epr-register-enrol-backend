@@ -131,14 +131,15 @@ Search items also carry `overseasSites` for an exporter: see the table below.
 | Field | Meaning |
 | --- | --- |
 | `statusHistory` | every status change, oldest first: `status`, `effectiveFromDate`, `effectiveToDate`, `recordedAt` |
+| `statusTimeline` | the history as periods that don't overlap, so each date has one status: `status`, `effectiveFromDate`, `effectiveToDate` (`null` on the last only). Use it for the status on a date |
 | `tonnageBandHistory` | the band over time: `tonnageBand`, `recordedAt` |
 | `signatories` | the PRN signatories: `fullName`, `email` |
 | `overseasSites` | **exporters only**: the accredited overseas sites, ordered by `orsId` (see below) |
 
 An overseas site has `siteId`, `orsId`, `siteName`, `formattedAddress`, `address`, `contact`,
-`operationCodes`, `isEu`, `isOecd`, `latestStatus`, `statusHistory` and `interimSites`. An
+`operationCodes`, `isEu`, `isOecd`, `latestStatus`, `statusHistory`, `statusTimeline` and `interimSites`. An
 interim site has `siteId`, `siteNumber`, `siteName`, `address`, `contact`, `operationCodes`,
-`createdAt`, `latestStatus` and `statusHistory`.
+`createdAt`, `latestStatus`, `statusHistory` and `statusTimeline`.
 
 An interim site's status is `approved` from when its overseas site was approved, and `withdrawn` from
 when it was withdrawn. Withdrawn interim sites are always returned: read `latestStatus` to tell
@@ -182,7 +183,7 @@ A site on a registration also has `siteId`, `siteName`, `formattedAddress`, `add
 - `latestStatus` can be in the future. A 2027 accreditation approved in November 2026 has a
   `latestStatus` of `approved` with an `effectiveFromDate` of `2027-01-01`: it has been granted, but
   the status does not apply until that date. **Use the effective dates to tell whether it is in
-  effect today.** For the status on a given day, use `statusHistory` (see "Was this accreditation
+  effect today.** For the status on a given day, use `statusTimeline` (see "Was this accreditation
   approved on date X?").
 - `effectiveFromDate` is the first day a status applies, and `effectiveToDate` the last. Both are UK
   calendar dates (`yyyy-MM-dd`, Europe/London). `effectiveFromDate` is the later of 1 January of the
@@ -216,6 +217,9 @@ grouped for reading:
   "statusHistory": [
     { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" }
   ],
+  "statusTimeline": [
+    { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null }
+  ],
   "tonnageBandHistory": [
     { "tonnageBand": "up_to_5000", "recordedAt": "2026-10-01T00:00:00Z" }
   ],
@@ -241,6 +245,9 @@ grouped for reading:
       "statusHistory": [
         { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" }
       ],
+      "statusTimeline": [
+        { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null }
+      ],
       "interimSites": [
         {
           "siteId": 990001011,
@@ -258,7 +265,14 @@ grouped for reading:
             "phone": "+31 10 000 0000"
           },
           "operationCodes": ["R12"],
-          "createdAt": "2026-10-01T00:00:00Z"
+          "createdAt": "2026-10-01T00:00:00Z",
+          "latestStatus": { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" },
+          "statusHistory": [
+            { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" }
+          ],
+          "statusTimeline": [
+            { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null }
+          ]
         }
       ]
     }
@@ -274,26 +288,25 @@ A reprocessor's detail is the same without `overseasSites`
 ### Was this accreditation approved on date X?
 
 1. Fetch the accreditation (the detail route above).
-2. Read `statusHistory`, which is oldest first.
-3. Take the latest entry whose `effectiveFromDate` is on or before X. Its `status` is the answer.
-   (The entry also ends on its `effectiveToDate`, which is the day before the next entry starts, so
-   the latest entry that has started is the one that applies.)
-4. If no entry is on or before X, the history has no status for that date, so treat `null` as "not
-   yet effective on X". `latestStatus` is still that later entry: it is the latest, not necessarily
-   the one in effect on X.
+2. Read `statusTimeline`. Its periods don't overlap, and are ordered by `effectiveFromDate`.
+3. The answer is the `status` of the period where `effectiveFromDate` is on or before X and
+   `effectiveToDate` is `null` or on or after X.
+4. If X is before the first period, there is no status on X: treat `null` as "not yet effective on
+   X". `latestStatus` is still set: it is the latest, not necessarily the one in effect on X.
 
 ```js
-// history: the accreditation's statusHistory. date: 'yyyy-MM-dd', a UK calendar date.
-// ISO dates compare correctly as strings. Returns null if no entry is effective on that date,
-// even when `latestStatus` is a later entry (see Status and dates).
-function statusOn(history, date) {
-  const applicable = history.filter((entry) => entry.effectiveFromDate <= date)
-  return applicable.length ? applicable[applicable.length - 1].status : null
+// timeline: the accreditation's statusTimeline. date: 'yyyy-MM-dd', a UK calendar date.
+// ISO dates compare correctly as strings. Returns null if the date is before the first period.
+function statusOn(timeline, date) {
+  const period = timeline.find(
+    (p) => p.effectiveFromDate <= date && (p.effectiveToDate === null || date <= p.effectiveToDate)
+  )
+  return period ? period.status : null
 }
 ```
 
-For the exporter above, whose history is one `approved` entry effective from `2027-01-01`:
-`statusOn(history, '2027-03-01')` is `approved`, and `statusOn(history, '2026-12-31')` is `null`.
+For the exporter above, whose timeline is one `approved` period effective from `2027-01-01`:
+`statusOn(timeline, '2027-03-01')` is `approved`, and `statusOn(timeline, '2026-12-31')` is `null`.
 To compare an instant (a UTC time), convert it to the UK calendar date first.
 
 ### What accreditations does an organisation hold?
@@ -427,6 +440,11 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
 
 ## What's new
 
+- Every `statusHistory` (accreditation, overseas site and interim site) now has a `statusTimeline`
+  beside it: the history as periods that don't overlap, so each date has exactly one status, and where
+  entries start on the same date the one recorded later wins. Use it for the status on a date. If your
+  client rejects fields it does not know, allow `statusTimeline`. `statusHistory` and `latestStatus`
+  are unchanged.
 - `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}` returns every
   application for a registration from 2027 on, whatever its status, with its case reference and
   every overseas site on it, its `orsId` and whether it is `selected`. It needs no granted

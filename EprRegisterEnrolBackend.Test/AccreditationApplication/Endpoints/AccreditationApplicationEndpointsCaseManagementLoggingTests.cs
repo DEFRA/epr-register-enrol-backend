@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
@@ -77,5 +79,121 @@ public class AccreditationApplicationEndpointsCaseManagementLoggingTests
         _factory
             .LogCapture.Entries.Should()
             .NotContain(e => e.Message.Contains("is terminal", StringComparison.Ordinal));
+    }
+
+    // Chris's review of PR #297: toStateId is a required string, but an explicit null (or a blank)
+    // still binds. Before the guard a null threw in the mapping (a 500) and a blank advanced the
+    // ordering watermark for a move nobody can name. Now it is a 400 ProblemDetails, logged at
+    // Error with the ids, and nothing is read or written.
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"\"")]
+    [InlineData("\"   \"")]
+    public async Task StatusChangedFromCaseManagement_NoToStateId_Returns400AndLogsErrorAndWritesNothing(
+        string toStateIdJson
+    )
+    {
+        _factory.FakePersistence.Clear();
+        _factory.LogCapture.Clear();
+        var workItemId = Guid.NewGuid();
+        var watermark = DateTime.UtcNow.AddMinutes(-5);
+        _factory.FakePersistence.Seed(
+            new AccreditationApplicationModel
+            {
+                Id = ObjectId.GenerateNewId(),
+                OrganisationId = "org-123",
+                Year = 2026,
+                MaterialType = MaterialType.Steel,
+                ApplicationStatus = ApplicationStatus.Submitted,
+                CaseManagementWorkItemId = workItemId,
+                CaseManagementStatusUpdatedAt = watermark,
+            }
+        );
+        using var body = new StringContent(
+            $$"""{"toStateId":{{toStateIdJson}},"actionId":"make-duly-made","occurredAt":"{{DateTime.UtcNow:O}}"}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        var response = await _client.PostAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            body,
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
+            .Should()
+            .Contain(CaseManagementStatusMapping.MissingToStateIdDetail);
+        var entry = _factory
+            .LogCapture.Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error)
+            .Subject;
+        entry.Message.Should().Contain("StatusChangedFromCaseManagement: status push has no toStateId");
+        entry.Message.Should().Contain($"workItemId={workItemId}");
+        entry.Message.Should().Contain("actionId=make-duly-made");
+        entry.Message.Should().Contain("correlationId=(absent)");
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(watermark);
+    }
+
+    // An unknown toStateId is still accepted with no status change, the push only advancing the
+    // ordering watermark (RA-368 §4.3), but it is now logged at Error with the ids. "queried" is
+    // known and not logged: management-be pushes it for a deadline change on a queried item
+    // (CaseManagementStatusMapping.KnownIgnoredStateIds).
+    [Theory]
+    [InlineData("unmapped-future-state", true)]
+    [InlineData("approved-pending-contact", true)]
+    [InlineData("queried", false)]
+    public async Task StatusChangedFromCaseManagement_StateWithNoEntry_SetsNoStatusAndLogsErrorUnlessKnown(
+        string toStateId,
+        bool loggedAsUnknown
+    )
+    {
+        _factory.FakePersistence.Clear();
+        _factory.LogCapture.Clear();
+        var workItemId = Guid.NewGuid();
+        var occurredAt = DateTime.UtcNow;
+        _factory.FakePersistence.Seed(
+            new AccreditationApplicationModel
+            {
+                Id = ObjectId.GenerateNewId(),
+                OrganisationId = "org-123",
+                Year = 2026,
+                MaterialType = MaterialType.Steel,
+                ApplicationStatus = ApplicationStatus.Submitted,
+                CaseManagementWorkItemId = workItemId,
+                CaseManagementStatusUpdatedAt = occurredAt.AddMinutes(-5),
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            new StatusChangedFromCaseManagementRequest
+            {
+                ToStateId = toStateId,
+                ActionId = "sla-extend",
+                OccurredAt = occurredAt,
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
+        var errors = _factory.LogCapture.Entries.Where(e => e.LogLevel == LogLevel.Error).ToList();
+        if (!loggedAsUnknown)
+        {
+            errors.Should().BeEmpty();
+            return;
+        }
+        var entry = errors.Should().ContainSingle().Subject;
+        entry.Message.Should().Contain($"StatusChangedFromCaseManagement: status push to unknown toStateId={toStateId}");
+        entry.Message.Should().Contain($"workItemId={workItemId}");
+        entry.Message.Should().Contain("actionId=sla-extend");
+        entry.Message.Should().Contain("correlationId=(absent)");
     }
 }

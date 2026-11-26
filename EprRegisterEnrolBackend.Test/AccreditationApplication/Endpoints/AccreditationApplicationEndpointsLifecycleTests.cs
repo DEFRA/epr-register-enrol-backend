@@ -1165,7 +1165,7 @@ public class AccreditationApplicationEndpointsLifecycleTests
     [Fact]
     public async Task StatusChangedFromCaseManagement_UnmappedState_IsNoOpForStatusButUpdatesWatermark()
     {
-        // "unmapped-future-state" has no arm in MapCaseManagementStateToApplicationStatus, so
+        // "unmapped-future-state" has no entry in CaseManagementStatusMapping.StatusPushMap, so
         // mappedStatus is null: the terminal-status guard and the approve/reject legality check
         // must both be skipped (short-circuited), ApplicationStatus must not change, but the
         // ordering watermark must still be updated.
