@@ -216,6 +216,33 @@ public static class ChangeRequestStatusEndpoints
         return Results.Ok(item);
     }
 
+    // RA-800: Case Management can correct the date until its confirm contact commits, which may be after the grant
+    // landed here (a lost reply, or a failed write on its side). Accepting a repeat with another date would let it
+    // commit that date while the site stays accredited from this one, so it is a 409. Null when the dates agree, the
+    // push is not an approval, or the item holds no date to compare.
+    private static IResult? RefuseAnotherGrantDate(ILogger logger, ChangeRequestSite item, Push push)
+    {
+        if (push.MappedStatus != ChangeItemStatus.Approved || item.ValidFrom is not { } grantedFrom)
+            return null;
+
+        var grantedOn = DateOnly.FromDateTime(grantedFrom);
+        if (push.Request.EffectiveDate == grantedOn)
+            return null;
+
+        logger.LogWarning(
+            "Change request status push: item already Approved from {GrantedFrom} and cannot take effectiveDate={EffectiveDate} for workItemId={WorkItemId} correlationId={CorrelationId}",
+            grantedOn,
+            push.Request.EffectiveDate,
+            push.WorkItemId,
+            push.CorrelationId
+        );
+        return Results.Conflict(
+            FormattableString.Invariant(
+                $"The change request item is already Approved from {grantedOn:yyyy-MM-dd} and cannot take a different effectiveDate."
+            )
+        );
+    }
+
     // The application route's guards, in its order: ordering, final status, approve/reject legality. Null when the
     // push may be applied.
     private static IResult? GuardPush(ILogger logger, ChangeRequestSite item, Push push)
@@ -231,11 +258,15 @@ public static class ChangeRequestStatusEndpoints
         }
 
         // A granted, refused or withdrawn item never moves again. A repeat of the final status it already has is
-        // Case Management's confirm-contact retry, accepted with no write. Unmapped pushes change no status.
+        // Case Management's confirm-contact retry, accepted with no write, unless a repeated approval names another
+        // date. Unmapped pushes change no status.
         if (mapped is not null && IsTerminal(item.Status))
         {
             if (mapped == item.Status)
             {
+                if (RefuseAnotherGrantDate(logger, item, push) is { } refused)
+                    return refused;
+
                 LogIgnored(logger, "idempotent repeat of the final status", item, push);
                 return Results.Ok(item);
             }
