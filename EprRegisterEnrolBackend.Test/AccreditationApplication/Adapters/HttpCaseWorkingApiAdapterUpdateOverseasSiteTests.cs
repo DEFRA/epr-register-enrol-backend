@@ -121,10 +121,10 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
         result.Sites.Single().CaseReference.Should().Be("IYC-ORS-2026-00004");
     }
 
-    // ManagementBe holds the add submission but refused the update one: the request must be treated as possibly
-    // held (no status code), so its sites are fixed and a resubmit replays the add and retries the update.
+    // ManagementBe holds the add submission but refused the update one before saving it (a 400): the add sites are
+    // held and the update sites certainly aren't.
     [Fact]
-    public async Task An_update_submission_refused_after_the_add_was_accepted_reports_a_partly_held_request()
+    public async Task An_update_submission_refused_after_the_add_was_accepted_reports_which_groups_are_held()
     {
         var handler = new QueuedHandler(
             (HttpStatusCode.Created, Response("SUB-2026-0004", (902504, "IYC-ORS-2026-00005"))),
@@ -137,10 +137,60 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
 
         var act = () => AdapterFor(handler).SubmitChangeRequestAsync(request, Accreditation, Ct);
 
-        var thrown = await act.Should().ThrowAsync<HttpRequestException>();
-        thrown.Which.StatusCode.Should().BeNull();
-        thrown.Which.InnerException.Should().BeOfType<HttpRequestException>()
+        var thrown = (await act.Should().ThrowAsync<ChangeRequestPartlySubmittedException>()).Which;
+        thrown.HeldChangeTypes.Should().Equal("add-overseas-site");
+        thrown.RefusedChangeType.Should().Be("update-overseas-site");
+        thrown.RefusedMayBeHeld.Should().BeFalse();
+        thrown.InnerException.Should().BeOfType<HttpRequestException>()
             .Which.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task An_update_submission_that_fails_with_a_5xx_may_be_held()
+    {
+        var handler = new QueuedHandler(
+            (HttpStatusCode.Created, Response("SUB-2026-0006", (902504, "IYC-ORS-2026-00006"))),
+            (HttpStatusCode.BadGateway, new { title = "Bad gateway" })
+        );
+        var request = Request(
+            new ChangeRequestSite { SiteId = 902504, OrsId = "004", SiteName = "Ghent Recycling NV", ChargePence = 32800 },
+            Update(902501, "001", "Gdansk Recycling Renamed")
+        );
+
+        var act = () => AdapterFor(handler).SubmitChangeRequestAsync(request, Accreditation, Ct);
+
+        (await act.Should().ThrowAsync<ChangeRequestPartlySubmittedException>()).Which.RefusedMayBeHeld.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Every_submission_reference_is_returned()
+    {
+        var handler = new QueuedHandler(
+            (HttpStatusCode.Created, Response("SUB-2026-0007", (902504, "IYC-ORS-2026-00007"))),
+            (HttpStatusCode.Created, Response("SUB-2026-0008", (902501, "IYC-ORS-2026-00008")))
+        );
+        var request = Request(
+            new ChangeRequestSite { SiteId = 902504, OrsId = "004", SiteName = "Ghent Recycling NV", ChargePence = 32800 },
+            Update(902501, "001", "Gdansk Recycling Renamed")
+        );
+
+        var result = await AdapterFor(handler).SubmitChangeRequestAsync(request, Accreditation, Ct);
+
+        result.SubmissionReferences.Should().Equal("SUB-2026-0007", "SUB-2026-0008");
+    }
+
+    [Fact]
+    public async Task An_update_whose_ORS_is_not_found_is_not_sent()
+    {
+        var handler = new QueuedHandler();
+        var update = Update(902501, "001", "Gdansk Recycling Renamed");
+        update.SiteId = 999999;
+        var request = Request(update);
+
+        var act = () => AdapterFor(handler).SubmitChangeRequestAsync(request, Accreditation, Ct);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        handler.Bodies.Should().BeEmpty();
     }
 
     [Fact]

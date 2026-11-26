@@ -97,13 +97,14 @@ public class HttpCaseWorkingApiAdapter(
         throw new CaseWorkingNotConfiguredException();
     }
 
-    // RA-492: the in-year "add a registered ORS to an accreditation" change request. Only called
-    // when AccreditationChanges:SubmitToCaseManagement is on - ManagementBe must register the
-    // add-overseas-site work-item type before that flag is switched on.
-    // RA-739: ManagementBe splits the request into one work item per site, in one transaction,
-    // and answers { submissionReference, workItems: [{ siteId, id, applicationReference }] }:
-    // each site's in-year change reference (format: see "Application reference" in
-    // ManagementBe's docs/work-items.md) and the SUB reference they share.
+    // RA-492: an in-year change request. Only called when AccreditationChanges:SubmitToCaseManagement is on, and
+    // ManagementBe must register each work-item type the request holds (add-overseas-site, RA-682's
+    // update-overseas-site) before that flag is switched on.
+    // RA-739: ManagementBe splits a submission into one work item per site, in one transaction, and answers
+    // { submissionReference, workItems: [{ siteId, id, applicationReference }] }: each site's in-year change reference
+    // (format: see "Application reference" in ManagementBe's docs/work-items.md) and the SUB reference they share.
+    // RA-682: a request holding adds and updates is one submission per change type, so it gets a SUB reference for
+    // each, and the groups are separate transactions (see ChangeRequestPartlySubmittedException).
     public async Task<ChangeRequestSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
@@ -120,7 +121,8 @@ public class HttpCaseWorkingApiAdapter(
             .OrderBy(g => g.Key == AccreditationChangeRequest.AddOverseasSiteChangeType ? 0 : 1)
             .ThenBy(g => g.Key, StringComparer.Ordinal)
             .ToList();
-        string? submissionReference = null;
+        var references = new List<string>(groups.Count);
+        var held = new List<string>(groups.Count);
         var sites = new List<SiteWorkItemResult>(changeRequest.Sites.Count);
         foreach (var group in groups)
         {
@@ -134,28 +136,27 @@ public class HttpCaseWorkingApiAdapter(
                     endpoint,
                     cancellationToken
                 );
-                submissionReference ??= result.SubmissionReference;
+                references.Add(result.SubmissionReference);
+                held.Add(group.Key);
                 sites.AddRange(result.Sites);
             }
-            catch (Exception ex) when (sites.Count > 0 && ex is not OperationCanceledException)
+            catch (Exception ex) when (held.Count > 0 && ex is not OperationCanceledException)
             {
-                // An earlier group is held by ManagementBe. Reported without a status code so the caller treats the
-                // submission as possibly held, and fixes the request's sites: a resubmit then replays the held groups
-                // (each under its own operatorRequestId) and sends the rest.
-                logger.LogError(
-                    ex,
-                    "ManagementBe holds part of change request {RequestId} but did not accept its {ChangeType} sites",
-                    changeRequest.RequestId,
-                    group.Key
-                );
-                throw new HttpRequestException(
-                    $"ManagementBe did not accept the {group.Key} sites of a change request it partly holds.",
+                // An earlier group is held by ManagementBe. The caller fixes the held groups' items, and the failed
+                // group's too unless ManagementBe certainly refused it: a resubmit then replays the held groups (each
+                // under its own operatorRequestId) and sends the rest. Logged by PostWorkItemAsync and by the caller.
+                throw new ChangeRequestPartlySubmittedException(
+                    held,
+                    group.Key,
+                    CaseWorkingSubmissionFailure.MayHold(ex),
                     ex
                 );
             }
         }
 
-        return new ChangeRequestSubmissionResult(submissionReference!, sites);
+        if (references.Count == 0)
+            throw new InvalidOperationException($"Change request {changeRequest.RequestId} has no sites to submit.");
+        return new ChangeRequestSubmissionResult(references[0], sites, references);
     }
 
     /// <summary>
@@ -311,17 +312,6 @@ public class HttpCaseWorkingApiAdapter(
         };
     }
 
-    internal static object BuildChangeRequestPayload(
-        AccreditationChangeRequest changeRequest,
-        AccreditationApplicationModel accreditation
-    ) =>
-        BuildChangeRequestPayload(
-            changeRequest,
-            accreditation,
-            AccreditationChangeRequest.AddOverseasSiteChangeType,
-            changeRequest.Sites
-        );
-
     // RA-682: one change type's submission: its own operatorRequestId and sites, and the charge and payment
     // reference only an add carries.
     internal static object BuildChangeRequestPayload(
@@ -350,21 +340,25 @@ public class HttpCaseWorkingApiAdapter(
             wasteProcessingType = accreditation.WasteProcessingType,
             operatorOrgNumber = accreditation.OrgId,
             // RA-682 AC05: only adds are charged, so the request's total is the add group's and an update group's is 0.
-            chargePence = changeType == AccreditationChangeRequest.AddOverseasSiteChangeType ? changeRequest.ChargePence : 0,
+            chargePence = groupSites.Any(ChangeRequestRules.IsChargeable) ? changeRequest.ChargePence : 0,
             submittedBy = changeRequest.SubmittedBy,
             // RA-682 AC05: an update is free, so its submission quotes no payment reference.
-            paymentReference = changeType == AccreditationChangeRequest.AddOverseasSiteChangeType
-                ? changeRequest.PaymentReference
-                : null,
+            paymentReference = groupSites.Any(ChangeRequestRules.IsChargeable) ? changeRequest.PaymentReference : null,
             // RA-739: each site in re-accreditation's shape, with the values in force for this request (the
             // operator's answer where the ORS had none), the request's own BES evidence and the site's own charge.
             sites = groupSites.Select(site =>
             {
                 var ors = ChangeRequestRules.FindSite(accreditation, site.SiteId);
                 // RA-682: an update is sent as the ORS stands, with its details as they were and as proposed and its
-                // interim site changes. Its locked values and BES evidence are the ORS's own.
-                if (site.IsUpdate && ors is not null)
-                    return CaseManagementSiteFrom(ors) with
+                // interim site changes. Its locked values and BES evidence are the ORS's own. Submit refuses an update
+                // whose ORS isn't accredited, so a missing one here is a defect, not something to send.
+                if (site.IsUpdate)
+                    return CaseManagementSiteFrom(
+                        ors
+                            ?? throw new InvalidOperationException(
+                                $"Update item for site {site.SiteId} has no ORS on the accreditation."
+                            )
+                    ) with
                     {
                         SiteId = site.SiteId,
                         OrsId = site.OrsId,

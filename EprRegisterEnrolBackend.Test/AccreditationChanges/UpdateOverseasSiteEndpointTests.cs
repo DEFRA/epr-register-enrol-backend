@@ -8,6 +8,7 @@ using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.DevSeed;
 using FluentAssertions;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
@@ -32,12 +33,14 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
     private readonly AccreditationChangeTestFactory _factory;
     private readonly HttpClient _client;
 
+    // The seeded accreditation, which the fake persistence holds by reference, so a test can change an ORS in place.
+    private readonly AccreditationApplicationModel _accreditation =
+        DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearUpdate, Year);
+
     public UpdateOverseasSiteEndpointTests()
     {
         _factory = new AccreditationChangeTestFactory(submitToCaseManagement: false);
-        _factory.FakePersistence.Seed(
-            DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearUpdate, Year)
-        );
+        _factory.FakePersistence.Seed(_accreditation);
         _client = _factory.CreateClient();
     }
 
@@ -303,7 +306,8 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
                     [
                         new SiteWorkItemResult(902504, "IYC-ORS-2026-00001", Guid.NewGuid()),
                         new SiteWorkItemResult(902501, "IYC-ORS-2026-00002", Guid.NewGuid()),
-                    ]
+                    ],
+                    ["SUB-2026-0001", "SUB-2026-0002"]
                 )
             );
         using var client = factory.CreateClient();
@@ -317,5 +321,205 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         var stored = factory.FakeChangeRequests.All.Single();
         stored.Sites.Single(s => s.SiteId == 902501).CaseManagementReference.Should().Be("IYC-ORS-2026-00002");
         stored.Sites.Single(s => s.SiteId == 902504).CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
+        stored.SubmissionReference.Should().Be("SUB-2026-0001");
+        stored.SubmissionReferences.Should().Equal("SUB-2026-0001", "SUB-2026-0002");
+        stored.ChangeType.Should().Be(AccreditationChangeRequest.AddOverseasSiteChangeType);
+    }
+
+    // Case Management held the add group and refused the update group before saving it (a 400): the add is fixed,
+    // and the update can still be changed or taken out.
+    [Fact]
+    public async Task A_refused_update_group_can_be_removed_while_the_held_add_stays_fixed()
+    {
+        using var factory = new AccreditationChangeTestFactory(submitToCaseManagement: true);
+        factory.FakePersistence.Seed(
+            DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearUpdate, Year)
+        );
+        factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .ThrowsAsync(
+                new ChangeRequestPartlySubmittedException(
+                    [AccreditationChangeRequest.AddOverseasSiteChangeType],
+                    UpdateType,
+                    refusedMayBeHeld: false,
+                    new HttpRequestException("refused", null, HttpStatusCode.BadRequest)
+                )
+            );
+        using var client = factory.CreateClient();
+        await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
+        await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
+        await client.PostAsJsonAsync(Sites, new { siteId = 902504 }, Ct);
+
+        var response = await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+
+        response.IsSuccessStatusCode.Should().BeFalse();
+        var stored = factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        stored.SentToCaseManagement.Should().BeTrue();
+        stored.Sites.Single(s => s.SiteId == 902504).CaseManagementMayHold.Should().BeTrue();
+        stored.Sites.Single(s => s.SiteId == 902501).CaseManagementMayHold.Should().BeFalse();
+
+        (await client.DeleteAsync($"{Sites}/902504", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Again" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+        (await client.DeleteAsync($"{Sites}/902501", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // The update group timed out: Case Management may hold it and would replay it, so its details are fixed.
+    [Fact]
+    public async Task An_update_that_may_be_held_cannot_be_changed()
+    {
+        using var factory = new AccreditationChangeTestFactory(submitToCaseManagement: true);
+        factory.FakePersistence.Seed(
+            DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearUpdate, Year)
+        );
+        factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .ThrowsAsync(new TaskCanceledException("timed out"));
+        using var client = factory.CreateClient();
+        await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
+        await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
+        await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+
+        var interim = $"{Sites}/902501/interim-sites";
+        (await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Other" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+        (await client.PostAsJsonAsync(interim, Interim("Depot"), Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.DeleteAsync($"{interim}/902512", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.DeleteAsync($"{Sites}/902501", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // AC02: an ORS with no stored coordinates shows a blank read-only input, which is posted back blank.
+    [Fact]
+    public async Task A_blank_locked_value_matches_a_missing_one()
+    {
+        ChangeRequestRules.FindSite(_accreditation, 902502)!.Coordinates = null;
+        await StartUpdate(902502);
+
+        var response = await Patch(902502, new { coordinates = "", country = " Portugal ", addressLine1 = "2 New Road" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        SiteIn(await Json(response), 902502).GetProperty("proposed").GetProperty("addressLine1").GetString()
+            .Should().Be("2 New Road");
+    }
+
+    [Theory]
+    [InlineData("coordinates", "1.0, 2.0")]
+    [InlineData("conditionsOfExport", false)]
+    public async Task Other_locked_fields_cannot_be_changed(string field, object value)
+    {
+        await StartUpdate(902501);
+
+        var refused = await Patch(902501, new Dictionary<string, object> { [field] = value });
+
+        refused.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Changed_recycling_operations_are_refused()
+    {
+        await StartUpdate(902501);
+
+        (await Patch(902501, new { operationCodes = new[] { "R4" } })).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Optional_details_can_be_cleared()
+    {
+        await StartUpdate(902501);
+
+        var response = await Patch(902501, new { addressLine2 = "", contactPhone = "" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var proposed = SiteIn(await Json(response), 902501).GetProperty("proposed");
+        proposed.GetProperty("addressLine2").ValueKind.Should().Be(JsonValueKind.Null);
+        proposed.GetProperty("contactPhone").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // AC07: the previous details are the ORS's when the request is submitted; details the operator didn't change
+    // follow the ORS too.
+    [Fact]
+    public async Task Submitting_takes_previous_details_from_the_ORS_as_it_is_then()
+    {
+        await StartUpdate(902501);
+        await Patch(902501, new { siteName = "Gdansk Recycling" });
+        ChangeRequestRules.FindSite(_accreditation, 902501)!.ContactName = "New Manager";
+
+        (await _client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var site = _factory.FakeChangeRequests.All.Single().Sites.Single();
+        site.Previous!.ContactName.Should().Be("New Manager");
+        site.Proposed!.ContactName.Should().Be("New Manager");
+        site.Proposed.SiteName.Should().Be("Gdansk Recycling");
+    }
+
+    [Fact]
+    public async Task An_update_only_request_is_stored_as_an_update()
+    {
+        await StartUpdate(902501);
+        await Patch(902501, new { siteName = "Gdansk Recycling" });
+
+        await _client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+
+        _factory.FakeChangeRequests.All.Single().ChangeType.Should().Be(UpdateType);
+    }
+
+    // AC02: BES evidence can't be amended on an update.
+    [Fact]
+    public async Task An_update_takes_no_BES_evidence()
+    {
+        await StartUpdate(902501);
+
+        (await _client.PostAsJsonAsync($"{Sites}/902501/bes-evidence/files", new { fileUploadId = "file-1" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.UnprocessableEntity);
+        (await _client.DeleteAsync($"{Sites}/902501/bes-evidence/files/file-1", Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    [Fact]
+    public async Task A_pending_interim_site_addition_can_be_edited()
+    {
+        await StartUpdate(902501);
+        var added = await _client.PostAsJsonAsync($"{Sites}/902501/interim-sites", Interim("Krakow Depot"), Ct);
+        var changeId = SiteIn(await Json(added), 902501).GetProperty("interimSiteChanges")[0].GetProperty("changeId").GetGuid();
+
+        var edited = await _client.PatchAsJsonAsync(
+            $"{Sites}/902501/interim-site-changes/{changeId}",
+            Interim("Krakow Depot Two"),
+            Ct
+        );
+
+        edited.StatusCode.Should().Be(HttpStatusCode.OK);
+        SiteIn(await Json(edited), 902501).GetProperty("interimSiteChanges")[0].GetProperty("proposed")
+            .GetProperty("siteName").GetString().Should().Be("Krakow Depot Two");
+    }
+
+    [Fact]
+    public async Task Unknown_interim_sites_and_changes_are_not_found()
+    {
+        await StartUpdate(902501);
+
+        (await _client.PatchAsJsonAsync($"{Sites}/902501/interim-sites/999999", Interim("X"), Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.NotFound);
+        (await _client.DeleteAsync($"{Sites}/902501/interim-sites/999999", Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.DeleteAsync($"{Sites}/902501/interim-site-changes/{Guid.NewGuid()}", Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.NotFound);
+        (await _client.PostAsJsonAsync($"{Sites}/902502/interim-sites", Interim("X"), Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.NotFound);
     }
 }

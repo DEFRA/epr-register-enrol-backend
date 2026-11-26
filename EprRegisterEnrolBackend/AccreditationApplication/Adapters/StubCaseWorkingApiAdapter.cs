@@ -107,7 +107,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         CancellationToken cancellationToken = default
     )
     {
-        // RA-682: each site is coded by its own change type (an add or an update); an unknown one throws, as before.
+        // RA-682: each site is coded by its own change type; an unknown one throws.
         var codes = changeRequest.Sites.Select(site => ChangeCodeFor(site.ChangeType)).ToList();
         RequireFourDigitYear(changeRequest);
         var year = changeRequest.Year;
@@ -138,7 +138,7 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
             );
         }
 
-        return Task.FromResult(new ChangeRequestSubmissionResult(submissionReference, sites));
+        return Task.FromResult(new ChangeRequestSubmissionResult(submissionReference, sites, [submissionReference]));
     }
 
     public Task<NotificationStatusResult> GetNotificationStatusAsync(

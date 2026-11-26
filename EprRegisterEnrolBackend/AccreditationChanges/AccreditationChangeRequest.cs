@@ -6,8 +6,8 @@ using MongoDB.Bson.Serialization.Attributes;
 namespace EprRegisterEnrolBackend.AccreditationChanges;
 
 /// <summary>
-/// RA-492: an in-year change request against a granted (Approved) accreditation application -
-/// today only "add one or more existing registered overseas reprocessing sites". It references
+/// RA-492: an in-year change request against a granted (Approved) accreditation application: adding
+/// existing registered overseas reprocessing sites (RA-492) and, RA-682, changing accredited ones' details. It references
 /// the sites by their existing <see cref="OverseasSiteModel.SiteId"/> and ORS id and never
 /// writes to the approved application, so the association stays pending until a regulator
 /// decision exists.
@@ -17,7 +17,7 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 /// </summary>
 public class AccreditationChangeRequest
 {
-    /// <summary>The request's own type, sent to Case Management; also the type of an item adding an ORS.</summary>
+    /// <summary>The type of an item adding a registered ORS (RA-492).</summary>
     public const string AddOverseasSiteChangeType = "add-overseas-site";
     public const string UpdateOverseasSiteChangeType = "update-overseas-site";
     public const string UpgradeTonnageBandChangeType = "upgrade-tonnage-band";
@@ -25,6 +25,11 @@ public class AccreditationChangeRequest
     [BsonId]
     public string RequestId { get; set; } = Guid.NewGuid().ToString();
 
+    /// <summary>
+    /// RA-682: what the request changes as a whole, derived from its items (see
+    /// <see cref="ChangeRequestRules.RequestChangeType"/>): an add-ORS request when it adds any ORS (it is charged), an
+    /// update when it only changes ORS details. Each item carries its own type, which is what Case Management is sent.
+    /// </summary>
     public string ChangeType { get; set; } = AddOverseasSiteChangeType;
 
     public required string OrganisationId { get; set; }
@@ -73,11 +78,24 @@ public class AccreditationChangeRequest
     public string? SubmissionReference { get; set; }
 
     /// <summary>
+    /// RA-682: every submission reference, one per change type: a request holding adds and updates is sent to Case
+    /// Management as one submission per type. <see cref="SubmissionReference"/> is the first of them.
+    /// </summary>
+    public List<string> SubmissionReferences { get; set; } = [];
+
+    /// <summary>
     /// RA-739: set when a submit was sent to Case Management but the request was reopened because no confirmed reply
     /// came back. Case Management may already hold the submission and replays a resubmit with the sites it first
     /// received, so from then on the request's sites can't be added or removed.
     /// </summary>
     public bool SentToCaseManagement { get; set; }
+
+    /// <summary>
+    /// RA-682: whether an item can still be changed. Not once Case Management may hold it: its replay would ignore the
+    /// change. An item's own <see cref="ChangeRequestItem.CaseManagementMayHold"/> decides; one written before RA-682
+    /// has none, and the request's <see cref="SentToCaseManagement"/> decides for it.
+    /// </summary>
+    public bool IsFixed(ChangeRequestItem item) => item.CaseManagementMayHold ?? SentToCaseManagement;
 
     /// <summary>Optimistic-concurrency token, bumped by every update.</summary>
     public long Version { get; set; }
@@ -88,14 +106,14 @@ public class AccreditationChangeRequest
         TonnageBandUpgrade is null ? Sites : [.. Sites, TonnageBandUpgrade];
 
     /// <summary>
-    /// RA-739: snapshots the charge at submit: the request's total and each site's own. RA-682 AC05: only an add
-    /// is chargeable; an update's own charge is 0.
+    /// RA-739: snapshots the charge at submit: the request's total and each site's own. RA-682 AC05: an update's own
+    /// charge is 0.
     /// </summary>
     public void SetCharge(ChargeView charge)
     {
         ChargePence = charge.TotalPence;
         foreach (var site in Sites)
-            site.ChargePence = site.IsUpdate ? 0 : charge.ChargePerSitePence;
+            site.ChargePence = ChangeRequestRules.IsChargeable(site) ? charge.ChargePerSitePence : 0;
     }
 
     /// <summary>Clears the total and every site's charge together, when a request is reopened.</summary>
@@ -150,6 +168,12 @@ public abstract class ChangeRequestItem
     /// watermark: a push at or before it is a duplicate or out of order and changes nothing.
     /// </summary>
     public DateTime? CaseManagementStatusUpdatedAt { get; set; }
+
+    /// <summary>
+    /// RA-682: set when a submit failed, to whether Case Management may hold this item's submission. A request holding
+    /// adds and updates is sent as one submission per type, so one group can be held while another was refused.
+    /// </summary>
+    public bool? CaseManagementMayHold { get; set; }
 }
 
 public class TonnageBandUpgradeItem : ChangeRequestItem
@@ -206,14 +230,14 @@ public class ChangeRequestSite : ChangeRequestItem
 /// </summary>
 public sealed record OverseasSiteDetails
 {
-    public string? SiteName { get; set; }
-    public string? AddressLine1 { get; set; }
-    public string? AddressLine2 { get; set; }
-    public string? TownOrCity { get; set; }
-    public string? ContactName { get; set; }
-    public string? ContactEmail { get; set; }
-    public string? ContactPhone { get; set; }
-    public string? RepatriatedLoads { get; set; }
+    public string? SiteName { get; init; }
+    public string? AddressLine1 { get; init; }
+    public string? AddressLine2 { get; init; }
+    public string? TownOrCity { get; init; }
+    public string? ContactName { get; init; }
+    public string? ContactEmail { get; init; }
+    public string? ContactPhone { get; init; }
+    public string? RepatriatedLoads { get; init; }
 }
 
 /// <summary>RA-682 AC04: one interim site change within an ORS update.</summary>
@@ -242,17 +266,17 @@ public class InterimSiteChange
 /// <summary>RA-682: an interim site's details, as <see cref="InterimSiteModel"/> holds them, without its ids.</summary>
 public sealed record InterimSiteDetails
 {
-    public required string Country { get; set; }
-    public required string SiteName { get; set; }
-    public required string AddressLine1 { get; set; }
-    public string? AddressLine2 { get; set; }
-    public required string TownOrCity { get; set; }
-    public string? StateOrRegion { get; set; }
-    public string? Postcode { get; set; }
-    public required string ContactName { get; set; }
-    public required string ContactEmail { get; set; }
-    public required string ContactPhone { get; set; }
-    public List<string> OperationCodes { get; set; } = [];
+    public required string Country { get; init; }
+    public required string SiteName { get; init; }
+    public required string AddressLine1 { get; init; }
+    public string? AddressLine2 { get; init; }
+    public required string TownOrCity { get; init; }
+    public string? StateOrRegion { get; init; }
+    public string? Postcode { get; init; }
+    public required string ContactName { get; init; }
+    public required string ContactEmail { get; init; }
+    public required string ContactPhone { get; init; }
+    public List<string> OperationCodes { get; init; } = [];
 
     // A record compares lists by reference; two interim sites' details are the same when their codes are.
     public bool Equals(InterimSiteDetails? other) =>

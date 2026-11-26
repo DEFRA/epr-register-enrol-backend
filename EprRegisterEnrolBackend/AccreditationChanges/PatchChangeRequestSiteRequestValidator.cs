@@ -1,3 +1,4 @@
+using EprRegisterEnrolBackend.AccreditationApplication.Validators;
 using EprRegisterEnrolBackend.Utils;
 using FluentValidation;
 
@@ -48,17 +49,10 @@ public class PatchChangeRequestSiteRequestValidator
         RuleFor(r => r.ContactEmail)
             .NotEmpty()
             .MaximumLength(254)
-            .Matches(EmailRegex)
+            .Matches(OverseasSiteEmail.Pattern)
             .WithMessage("ContactEmail must be a valid email address.")
             .When(r => r.ContactEmail is not null);
         RuleFor(r => r.ContactPhone).MaximumLength(30);
         RuleFor(r => r.RepatriatedLoads).NotEmpty().MaximumLength(5000).When(r => r.RepatriatedLoads is not null);
     }
-
-    // The same pattern as OverseasSiteRequestValidatorBase's.
-    private static readonly System.Text.RegularExpressions.Regex EmailRegex = new(
-        @"^[^\s@]+@[^\s@]+\.[^\s@.]+$",
-        System.Text.RegularExpressions.RegexOptions.Compiled,
-        TimeSpan.FromMilliseconds(100)
-    );
 }

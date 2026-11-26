@@ -719,7 +719,7 @@ public class FakeOrganisationPersistence
             _store.Add(DevExporterOrganisation(DevExporterOrg.NoChangeRequests, ["902001", "902002"]));
             _store.Add(DevExporterOrganisation(DevExporterOrg.RegistrationOnly, []));
             _store.Add(DevExporterOrganisation(DevExporterOrg.NoOverseasSites, []));
-            // RA-682: the in-year ORS update journey's org.
+            // The in-year ORS update journey's org.
             _store.Add(
                 DevExporterOrganisation(
                     DevExporterOrg.InYearUpdate,

@@ -574,9 +574,7 @@ public class DevExporterAccreditationSeedService(
             Selected = false,
         };
 
-    // The contact and waste details a registration holds, and only the given coordinates, R codes
-    // and conditions of export.
-    // RA-682 (org 50025): three accredited ORSs with every field, whose details an operator changes in year (A has
+    // Org 50025: three accredited ORSs with every field, whose details an operator changes in year (902501 has
     // two interim sites to change, remove and add to), and two registered ones, complete, to add in the same request.
     // All EU and OECD, so adding one needs no BES evidence. Site ids 9025xx, interim sites 90251x.
     internal static List<OverseasSiteModel> InYearUpdateOverseasSites(int year)
@@ -640,6 +638,8 @@ public class DevExporterAccreditationSeedService(
         return sites;
     }
 
+    // The contact and waste details a registration holds, and only the given coordinates, R codes
+    // and conditions of export.
     private static OverseasSiteModel InYearChangeOrs(
         OverseasSiteModel site,
         bool isEu,

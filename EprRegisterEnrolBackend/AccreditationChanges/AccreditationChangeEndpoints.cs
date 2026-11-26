@@ -36,6 +36,13 @@ public static class AccreditationChangeEndpoints
     private const string SitesFixedMessage =
         "This change request has already been sent to the regulator, so sites can't be added or removed. Submit it again instead.";
 
+    // RA-682: Case Management may already hold this item's submission and would replay it, ignoring any change.
+    private const string ItemFixedMessage =
+        "This change has already been sent to the regulator, so it can't be changed. Submit the request again instead.";
+
+    private const string UpdateTakesNoBesEvidenceMessage =
+        "A change to an accredited overseas site's details takes no evidence of broadly equivalent standards.";
+
     private const string PaymentReferenceField = nameof(SubmitRequest.PaymentReference);
     private const string PaymentReferenceRequiredMessage = "Payment reference is required.";
 
@@ -477,8 +484,7 @@ public static class AccreditationChangeEndpoints
             return held;
 
         var draft = requests.FirstOrDefault(r => r.Status == ChangeRequestStatus.InProgress);
-        // An ORS is in the draft once, so starting its change again returns the draft as it is (RA-682: changing
-        // ORS A twice edits the same item).
+        // An ORS is in the draft once, so starting its change again returns the draft as it is.
         if (draft is not null && draft.Sites.Exists(s => s.SiteId == body.SiteId))
             return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
         if (draft is { SentToCaseManagement: true })
@@ -533,9 +539,11 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        if (!draft!.Sites.Exists(s => s.SiteId == siteId))
+        var removing = draft!.Sites.Find(s => s.SiteId == siteId);
+        if (removing is null)
             return Results.NotFound();
-        if (draft.SentToCaseManagement)
+        // RA-682: only an item Case Management may hold is fixed. One whose group it refused can be taken out.
+        if (draft.IsFixed(removing))
             return Results.Conflict(SitesFixedMessage);
         draft.Sites.RemoveAll(s => s.SiteId == siteId);
 
@@ -556,10 +564,6 @@ public static class AccreditationChangeEndpoints
         [AsParameters] ChangeServices services
     )
     {
-        var validation = await validator.ValidateAsync(body, services.CancellationToken);
-        if (!validation.IsValid)
-            return Results.ValidationProblem(validation.ToDictionary());
-
         var (error, accreditation, draft) = await LoadDraftAsync(
             organisationId,
             applicationId,
@@ -571,6 +575,18 @@ public static class AccreditationChangeEndpoints
         if (requestSite is null)
             return Results.NotFound();
 
+        // An update's locked fields are echoed back from read-only inputs, blank when the ORS has no value, so they
+        // are checked against the ORS (PatchUpdateAsync) rather than as new values.
+        var validation = await validator.ValidateAsync(body, services.CancellationToken);
+        var invalid = validation
+            .Errors.Where(e => !requestSite.IsUpdate || !ChangeRequestRules.IsLockedOrsField(e.PropertyName))
+            .GroupBy(e => e.PropertyName)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+        if (invalid.Count > 0)
+            return Results.ValidationProblem(invalid);
+
+        if (draft.IsFixed(requestSite))
+            return Results.Conflict(ItemFixedMessage);
         if (requestSite.IsUpdate)
             return await PatchUpdateAsync(body, requestSite, draft, accreditation!, services);
         if (body.HasDetails)
@@ -629,47 +645,19 @@ public static class AccreditationChangeEndpoints
         if (site is null)
             return Results.NotFound();
 
-        var changedLocked = new Dictionary<string, string[]>();
-        void Locked(string field, bool changed)
-        {
-            if (changed)
-                changedLocked[field] = [$"{field} can't be changed for an accredited overseas site."];
-        }
-        Locked(ChangeRequestRules.Country, body.Country is { } country && country.Trim() != site.Country);
-        Locked(
-            ChangeRequestRules.Coordinates,
-            body.Coordinates is { } coordinates && coordinates.Trim() != site.Coordinates
-        );
-        Locked(
-            ChangeRequestRules.OperationCodes,
-            body.OperationCodes is { } codes && !codes.SequenceEqual(site.OperationCodes)
-        );
-        Locked(
-            ChangeRequestRules.ConditionsOfExport,
-            body.ConditionsOfExport is { } conditions && conditions != site.ConditionsOfExport
-        );
+        var changedLocked = ChangeRequestRules.ChangedLockedOrsFields(site, body);
         if (changedLocked.Count > 0)
             return Results.ValidationProblem(changedLocked);
 
-        var proposed = requestSite.Proposed ?? ChangeRequestRules.DetailsOf(site);
-        requestSite.Proposed = proposed with
-        {
-            SiteName = body.SiteName?.Trim() ?? proposed.SiteName,
-            AddressLine1 = body.AddressLine1?.Trim() ?? proposed.AddressLine1,
-            // An optional line is cleared with an empty string.
-            AddressLine2 = body.AddressLine2 is { } line2 ? NullIfBlank(line2) : proposed.AddressLine2,
-            TownOrCity = body.TownOrCity?.Trim() ?? proposed.TownOrCity,
-            ContactName = body.ContactName?.Trim() ?? proposed.ContactName,
-            ContactEmail = body.ContactEmail?.Trim() ?? proposed.ContactEmail,
-            ContactPhone = body.ContactPhone is { } phone ? NullIfBlank(phone) : proposed.ContactPhone,
-            RepatriatedLoads = body.RepatriatedLoads?.Trim() ?? proposed.RepatriatedLoads,
-        };
         // SiteName stays the ORS's current name: it is how the item is listed and sent to Case Management, and the
         // new name is in Proposed.
+        requestSite.Proposed = ChangeRequestRules.ApplyDetails(
+            requestSite.Proposed ?? ChangeRequestRules.DetailsOf(site),
+            body
+        );
+
         return await SaveAndViewAsync(draft, accreditation, services);
     }
-
-    private static string? NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     // RA-682 AC04: the draft's update item for an ORS, with the ORS itself, or why there isn't one.
     private static async Task<(
@@ -695,25 +683,18 @@ public static class AccreditationChangeEndpoints
                 null,
                 null
             );
+        if (draft.IsFixed(item))
+            return (Results.Conflict(ItemFixedMessage), null, null, null, null);
         return (null, accreditation, draft, item, site);
     }
 
-    private static InterimSiteModel? ActiveInterimSite(OverseasSiteModel site, int interimSiteId) =>
-        site.InterimSites.Find(i => i.SiteId == interimSiteId && i.RemovedAt is null);
-
-    // A changed interim site keeps its country and recycling operations (AC02, as for the ORS itself).
-    private static IResult? ChangedLockedInterimFields(InterimSiteModel interim, AddInterimSiteRequest body)
-    {
-        var errors = new Dictionary<string, string[]>();
-        if (body.Country != interim.Country)
-            errors[nameof(AddInterimSiteRequest.Country)] = ["An interim site's country can't be changed."];
-        if (!body.OperationCodes.SequenceEqual(interim.OperationCodes))
-            errors[nameof(AddInterimSiteRequest.OperationCodes)] =
-            [
-                "An interim site's recycling operations can't be changed.",
-            ];
-        return errors.Count > 0 ? Results.ValidationProblem(errors) : null;
-    }
+    // A changed interim site keeps its country and recycling operations, so the create rules for those don't apply:
+    // a site from before RA-486 has no recycling operations, which the create rules would refuse.
+    private static readonly HashSet<string> s_lockedInterimFields =
+    [
+        nameof(AddInterimSiteRequest.Country),
+        nameof(AddInterimSiteRequest.OperationCodes),
+    ];
 
     private static async Task<IResult> AddInterimSiteChange(
         string organisationId,
@@ -753,8 +734,12 @@ public static class AccreditationChangeEndpoints
     )
     {
         var validation = await validator.ValidateAsync(body, services.CancellationToken);
-        if (!validation.IsValid)
-            return Results.ValidationProblem(validation.ToDictionary());
+        var invalid = validation
+            .Errors.Where(e => !s_lockedInterimFields.Contains(e.PropertyName))
+            .GroupBy(e => e.PropertyName)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+        if (invalid.Count > 0)
+            return Results.ValidationProblem(invalid);
         var (error, accreditation, draft, item, site) = await LoadUpdateItemAsync(
             organisationId,
             applicationId,
@@ -763,26 +748,14 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        var interim = ActiveInterimSite(site!, interimSiteId);
+        var interim = ChangeRequestRules.ActiveInterimSite(site!, interimSiteId);
         if (interim is null)
             return Results.NotFound();
-        if (ChangedLockedInterimFields(interim, body) is { } locked)
-            return locked;
+        var locked = ChangeRequestRules.ChangedLockedInterimFields(interim, body);
+        if (locked.Count > 0)
+            return Results.ValidationProblem(locked);
 
-        var previous = InterimSiteDetails.From(interim);
-        var proposed = InterimSiteDetails.From(body);
-        // One change per interim site: a change replaces a removal, and changing it back to what it was drops it.
-        item!.InterimSiteChanges.RemoveAll(c => c.InterimSiteId == interimSiteId);
-        if (proposed != previous)
-            item.InterimSiteChanges.Add(
-                new InterimSiteChange
-                {
-                    Action = InterimSiteChange.Change,
-                    InterimSiteId = interimSiteId,
-                    Previous = previous,
-                    Proposed = proposed,
-                }
-            );
+        ChangeRequestRules.SetInterimChange(item!, interim, InterimSiteDetails.From(body));
         return await SaveAndViewAsync(draft!, accreditation!, services);
     }
 
@@ -802,19 +775,11 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        var interim = ActiveInterimSite(site!, interimSiteId);
+        var interim = ChangeRequestRules.ActiveInterimSite(site!, interimSiteId);
         if (interim is null)
             return Results.NotFound();
 
-        item!.InterimSiteChanges.RemoveAll(c => c.InterimSiteId == interimSiteId);
-        item.InterimSiteChanges.Add(
-            new InterimSiteChange
-            {
-                Action = InterimSiteChange.Remove,
-                InterimSiteId = interimSiteId,
-                Previous = InterimSiteDetails.From(interim),
-            }
-        );
+        ChangeRequestRules.SetInterimRemoval(item!, interim);
         return await SaveAndViewAsync(draft!, accreditation!, services);
     }
 
@@ -916,6 +881,9 @@ public static class AccreditationChangeEndpoints
         var requestSite = draft!.Sites.Find(s => s.SiteId == siteId);
         if (requestSite is null)
             return Results.NotFound();
+        // RA-682 AC02: an update can't amend an ORS's BES evidence.
+        if (requestSite.IsUpdate)
+            return Results.UnprocessableEntity(UpdateTakesNoBesEvidenceMessage);
 
         // 422, as the other request rules here: a site inside the EU or OECD, or whose conditions
         // of export are met, takes no BES evidence.
@@ -983,7 +951,10 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        var uploads = draft!.Sites.Find(s => s.SiteId == siteId)?.BesEvidence?.BesEvidenceUploads;
+        var holder = draft!.Sites.Find(s => s.SiteId == siteId);
+        if (holder is { IsUpdate: true })
+            return Results.UnprocessableEntity(UpdateTakesNoBesEvidenceMessage);
+        var uploads = holder?.BesEvidence?.BesEvidenceUploads;
         if (uploads is null || uploads.RemoveAll(f => f.FileId == fileId) == 0)
             return Results.NotFound();
 
@@ -1062,6 +1033,13 @@ public static class AccreditationChangeEndpoints
                 new Dictionary<string, string[]> { [PaymentReferenceField] = [PaymentReferenceRequiredMessage] }
             );
 
+        // RA-682 AC07: an update's previous details are the ORS's as it stands now, not when the change was started.
+        foreach (var update in draft!.Sites.Where(s => s.IsUpdate))
+        {
+            if (ChangeRequestRules.FindSite(accreditation!, update.SiteId) is { } current)
+                ChangeRequestRules.RebaseOnCurrent(update, current);
+        }
+
         // AC02: nothing is submitted while any site is missing required information.
         var incomplete = draft!
             .Sites.SelectMany(requestSite =>
@@ -1097,6 +1075,7 @@ public static class AccreditationChangeEndpoints
         };
         draft.PaymentReference = body.PaymentReference;
         draft.SetCharge(ChangeRequestRules.Charge(ChangeRequestRules.ChargeableSites(draft)));
+        draft.ChangeType = ChangeRequestRules.RequestChangeType(draft);
         draft.Status = ChangeRequestStatus.Submitted;
         draft.SetItemStatuses(ChangeItemStatus.Submitted);
         draft.SubmittedAt = DateTime.UtcNow;
@@ -1113,9 +1092,9 @@ public static class AccreditationChangeEndpoints
         ChangeRequestSubmissionResult result;
         try
         {
-            // The payload's operatorRequestId is this request's id, the same on every attempt, so
-            // Case Management can recognise a retry after a work item it created but whose response
-            // never arrived (a timeout).
+            // Each submission's operatorRequestId is the same on every attempt (the request's id for its adds,
+            // suffixed with the type for any other change type), so Case Management can recognise a retry
+            // after a work item it created but whose response never arrived (a timeout).
             result = await submit.CaseWorking.SubmitChangeRequestAsync(
                 draft,
                 accreditation!,
@@ -1131,7 +1110,12 @@ public static class AccreditationChangeEndpoints
             // replays a resubmit on operatorRequestId with the sites it first received. So once it may
             // hold it, the request's sites are fixed: an added site would never get a reference and a
             // removed one would leave its work item behind.
-            if (MayHoldSubmission(ex))
+            // RA-682: a request holding adds and updates is one submission per change type, so Case Management can
+            // hold some groups and not others. Each item records whether it may be held: those are fixed, while the
+            // items of a group Case Management certainly refused can still be changed or removed.
+            foreach (var item in draft.Sites)
+                item.CaseManagementMayHold = draft.IsFixed(item) || MayHold(ex, item);
+            if (draft.Sites.Exists(s => s.CaseManagementMayHold == true))
                 draft.SentToCaseManagement = true;
             await ReopenAsync(draft, services, logger);
             if (
@@ -1157,6 +1141,7 @@ public static class AccreditationChangeEndpoints
         // RA-739: each site is its own work item with its own reference; the adapter has checked
         // that every submitted site has one.
         draft.SubmissionReference = result.SubmissionReference;
+        draft.SubmissionReferences = [.. result.SubmissionReferences ?? [result.SubmissionReference]];
         foreach (var site in result.Sites)
         {
             var item = draft.Sites.Single(s => s.SiteId == site.SiteId);
@@ -1175,28 +1160,12 @@ public static class AccreditationChangeEndpoints
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
     }
 
-    // The statuses ManagementBe returns from validating a submission, before it saves anything, so
-    // they are proof it holds nothing. Deliberately not every 4xx: a 408 or 429, or any 4xx from a
-    // gateway or proxy in front of ManagementBe, says nothing about whether the submission was saved.
-    private static readonly HttpStatusCode[] s_holdsNothingStatuses =
-    [
-        HttpStatusCode.BadRequest,
-        HttpStatusCode.Unauthorized,
-        HttpStatusCode.Forbidden,
-        HttpStatusCode.NotFound,
-        HttpStatusCode.Conflict,
-    ];
-
-    // Not configured means nothing was sent, and the statuses above mean ManagementBe rejected the
-    // submission before saving it. Any other 4xx, a timeout, a 5xx or an unreadable 2xx may follow a
-    // save, so the request's sites are fixed from then on.
-    private static bool MayHoldSubmission(Exception ex) =>
-        ex switch
-        {
-            CaseWorkingNotConfiguredException => false,
-            HttpRequestException { StatusCode: { } status } => !s_holdsNothingStatuses.Contains(status),
-            _ => true,
-        };
+    // Whether Case Management may hold this item after a failed submit (see CaseWorkingSubmissionFailure).
+    private static bool MayHold(Exception ex, ChangeRequestSite item) =>
+        ex is ChangeRequestPartlySubmittedException partial
+            ? partial.HeldChangeTypes.Contains(item.ChangeType)
+                || (item.ChangeType == partial.RefusedChangeType && partial.RefusedMayBeHeld)
+            : CaseWorkingSubmissionFailure.MayHold(ex);
 
     // Undoes Submit's save after Case Management failed. Not cancellable: the caller may have gone,
     // and the request must not be left Submitted.
@@ -1213,6 +1182,7 @@ public static class AccreditationChangeEndpoints
         draft.PaymentReference = null;
         draft.ClearCharge();
         draft.SubmissionReference = null;
+        draft.SubmissionReferences = [];
         foreach (var item in draft.Items)
         {
             item.CaseManagementReference = null;
