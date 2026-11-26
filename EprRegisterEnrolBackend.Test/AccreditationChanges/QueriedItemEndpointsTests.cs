@@ -527,6 +527,204 @@ public sealed class QueriedItemEndpointsTests : IDisposable
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
     }
 
+    private async Task<string> SeedCleanUpload(string fileId, string filename)
+    {
+        var fileUploadId = Guid.NewGuid().ToString();
+        await _factory.FakePendingUploadService.CreateAsync(fileUploadId, "http://cdp/status", ct: Ct);
+        await _factory.FakePendingUploadService.CompleteAsync(
+            fileUploadId,
+            new CdpCallbackFile
+            {
+                FileId = fileId,
+                Filename = filename,
+                FileStatus = "complete",
+                ContentType = "application/pdf",
+                S3Key = $"bes-evidence/{fileId}",
+                S3Bucket = "bes-evidence",
+            },
+            Ct
+        );
+        return fileUploadId;
+    }
+
+    private async Task<HttpResponseMessage> AddFile(string fileId, string filename) =>
+        await _client.PostAsJsonAsync(
+            ItemUrl("bes-evidence/files"),
+            new { fileUploadId = await SeedCleanUpload(fileId, filename) },
+            Ct
+        );
+
+    private static object InitiateBody =>
+        new { redirectUrl = "http://frontend/back", s3Bucket = "bucket", s3Path = "ors/901914" };
+
+    [Fact]
+    public async Task AddBesFile_AddsItToTheItemAndCanBeRemovedAgain()
+    {
+        await SeedQueried();
+
+        (await AddFile("new-file", "new.pdf")).StatusCode.Should().Be(HttpStatusCode.Created);
+        Item().BesEvidence!.BesEvidenceUploads.Should().ContainSingle(f => f.FileId == "new-file");
+
+        (await _client.DeleteAsync(ItemUrl("bes-evidence/files/new-file"), Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().BesEvidence!.BesEvidenceUploads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AddBesFile_WithTheSameFilenameTwice_Is422()
+    {
+        await SeedQueried();
+        await AddFile("f1", "same.pdf");
+
+        (await AddFile("f2", "same.pdf")).StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    [Fact]
+    public async Task AddBesFile_WithAnUnknownUpload_Is422()
+    {
+        await SeedQueried();
+
+        (await _client.PostAsJsonAsync(ItemUrl("bes-evidence/files"), new { fileUploadId = "nope" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    [Fact]
+    public async Task AddBesFile_WithoutAnUploadId_Is400()
+    {
+        await SeedQueried();
+
+        (await _client.PostAsJsonAsync(ItemUrl("bes-evidence/files"), new { fileUploadId = "" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AddBesFile_OnAnItemThatIsNotQueried_Is409()
+    {
+        SeedRequest();
+
+        (await AddFile("f", "f.pdf")).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task DeleteBesFile_ThatIsNotOnTheItem_Is404()
+    {
+        await SeedQueried();
+
+        (await _client.DeleteAsync(ItemUrl("bes-evidence/files/missing"), Ct)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task DeleteBesFile_OnAnItemThatIsNotQueried_Is409()
+    {
+        SeedRequest();
+
+        (await _client.DeleteAsync(ItemUrl("bes-evidence/files/x"), Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task InitiateBesUpload_ForAQueriedItem_StartsTheUpload()
+    {
+        await SeedQueried();
+        _factory
+            .MockCdpUploaderService.InitiateAsync(Arg.Any<CdpInitiateRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new CdpInitiateResponse { UploadId = "u1", UploadUrl = "http://cdp/upload/u1", StatusUrl = "http://cdp/status/u1" });
+
+        (await _client.PostAsJsonAsync(ItemUrl("bes-evidence/initiate"), InitiateBody, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task InitiateBesUpload_OnAnItemThatIsNotQueried_Is409()
+    {
+        SeedRequest();
+
+        (await _client.PostAsJsonAsync(ItemUrl("bes-evidence/initiate"), InitiateBody, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task PatchInterimSite_WithABlankName_Is400()
+    {
+        await SeedQueried();
+
+        (await _client.PatchAsJsonAsync(ItemUrl($"interim-sites/{InterimSite.SiteId}/answers"), new { siteName = " " }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PatchInterimSite_OnAnItemThatIsNotQueried_Is409()
+    {
+        SeedRequest();
+
+        (await _client.PatchAsJsonAsync(ItemUrl($"interim-sites/{InterimSite.SiteId}/answers"), new { siteName = "X" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Patch_ForAnUnknownApplication_IsRefused()
+    {
+        await SeedQueried();
+
+        var response = await _client.PatchAsJsonAsync(
+            $"/api/v1/accreditation-changes/{Org}/{Guid.NewGuid()}/items/{Item().ItemId}/answers",
+            new { siteName = "X" },
+            Ct
+        );
+
+        response.IsSuccessStatusCode.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Patch_WhenTheSiteIsNoLongerOnTheAccreditation_Is409()
+    {
+        await SeedQueried();
+        _accreditation.OverseasSites!.Sites.Remove(QueriedSite);
+
+        (await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "X" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Resubmit_WithOnlyANewBesFile_IsAccepted()
+    {
+        await SeedQueried();
+        await AddFile("new-file", "new.pdf");
+
+        (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Item().Query!.QuerySubmissions.Single().NewBesFileIds.Should().Equal("new-file");
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenBesEvidenceIsRequiredAndMissing_Is422()
+    {
+        await SeedQueried();
+        QueriedSite.IsEu = false;
+        QueriedSite.IsOecd = false;
+        QueriedSite.ConditionsOfExport = false;
+        (await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "Changed" }, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await response.Content.ReadAsStringAsync(Ct)).Should().Contain("besEvidence");
+    }
+
+    [Fact]
+    public async Task Query_WhenEverySaveIsLost_Is503()
+    {
+        SeedRequest();
+        _factory.FakeChangeRequests.LoseUpdateWhen = _ => true;
+
+        (await RaiseQuery()).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private async Task<JsonElement> GetView()
