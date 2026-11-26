@@ -168,6 +168,28 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         Assert.Equal(Ids(legacyItems), Ids(modelItems));
     }
 
+    [Theory]
+    [InlineData(500001, "R27EX1234567P", FirstYear, 3)]
+    [InlineData(500001, "R27EX1234567P", 2027, 2)]
+    [InlineData(500027, "R27EX0000001P", FirstYear, 2)]
+    [InlineData(500027, "R27EX1234567P", FirstYear, 0)]
+    [InlineData(500099, "R27EX1234567P", FirstYear, 0)]
+    public async Task GetByOrgIdAndRegistrationNumber_FindsTheSameApplications_OfEveryStatus(
+        int orgId,
+        string registration,
+        int firstYear,
+        int expected
+    )
+    {
+        await ApiDataAsync();
+
+        var legacy = await _legacy.GetByOrgIdAndRegistrationNumberAsync(orgId, registration, firstYear);
+        var model = await _model.GetByOrgIdAndRegistrationNumberAsync(orgId, registration, firstYear);
+
+        Assert.Equal(expected, legacy.Count);
+        Assert.Equal(legacy.Select(a => a.Id), model.Select(a => a.Id));
+    }
+
     // RA-702's load protection: the API passes a time limit, and the model's lookup query asks the server for it, as
     // legacy's does. The server stopping a query past it is what answers 503 query_timeout.
     [Fact]
