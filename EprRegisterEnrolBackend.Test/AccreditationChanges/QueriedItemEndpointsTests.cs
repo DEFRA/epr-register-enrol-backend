@@ -408,7 +408,7 @@ public sealed class QueriedItemEndpointsTests : IDisposable
         Item().Status.Should().Be(ChangeItemStatus.Queried);
         await _factory
             .MockCaseWorkingAdapter.DidNotReceiveWithAnyArgs()
-            .ResumeChangeRequestItemFromQueryAsync(default!, default!, default!, default);
+            .ResumeChangeRequestItemFromQueryAsync(default!, default!, default!, Ct);
     }
 
     [Fact]
@@ -464,7 +464,7 @@ public sealed class QueriedItemEndpointsTests : IDisposable
         await SeedQueried();
         await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "Changed" }, Ct);
         _factory.MockCaseWorkingAdapter
-            .ResumeChangeRequestItemFromQueryAsync(default!, default!, default!, default)
+            .ResumeChangeRequestItemFromQueryAsync(default!, default!, default!, Ct)
             .ReturnsForAnyArgs(new ResumeFromQueryResult(false));
 
         var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);

@@ -325,9 +325,14 @@ public static class QueriedItemEndpoints
                 .Where(kv => !kv.Key.StartsWith("interimSites[", StringComparison.Ordinal) && changed.Contains(kv.Key))
                 .ToDictionary(kv => kv.Key, kv => kv.Value),
             [
-                .. item.Answers.InterimSites.Select(a => new InterimSiteResponse(
+                // An interim site withdrawn since its answer was saved is no longer the ORS's, so its answer is not sent.
+                .. item.Answers.InterimSites.Join(
+                    QueriedItemRules.ActiveInterimSites(site),
+                    a => a.SiteId,
+                    s => s.SiteId,
+                    (a, interimSite) => new InterimSiteResponse(
                     a.SiteId,
-                    QueriedItemRules.ActiveInterimSites(site).First(s => s.SiteId == a.SiteId).SiteNumber,
+                    interimSite.SiteNumber,
                     QueriedItemRules
                         .InterimFields.Where(f =>
                             changed.Contains(QueriedItemRules.InterimKey(a.SiteId, f.Key))
