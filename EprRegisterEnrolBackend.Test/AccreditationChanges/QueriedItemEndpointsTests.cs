@@ -5,6 +5,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
+using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.DevSeed;
 using FluentAssertions;
 using NSubstitute;
