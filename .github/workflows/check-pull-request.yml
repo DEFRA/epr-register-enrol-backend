@@ -161,7 +161,7 @@ jobs:
           echo "management-be : ${BE_TAG:-latest (published image)}"
 
       - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
-        uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@f906a4044d665eefdef2367828bfbb2bd314ed5f # main
+        uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@73063c1b8ec565bc088b675e8939cc4fba4898f0 # main
         with:
           operator-be: ${{ github.sha }}
           management-fe: ${{ steps.siblings.outputs.management-fe }}
