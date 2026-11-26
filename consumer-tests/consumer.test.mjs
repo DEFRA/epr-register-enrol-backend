@@ -53,17 +53,104 @@ async function assertProblem(res, status, code) {
     assert.ok(body.traceId);
 }
 
+// The status on a date, from a statusTimeline, as the guide describes it. ISO dates compare as
+// strings.
+const statusOn = (timeline, date) =>
+    timeline.find(
+        (p) =>
+            p.effectiveFromDate <= date &&
+            (p.effectiveToDate === null || date <= p.effectiveToDate),
+    )?.status ?? null;
+
+// The same answer straight from the history: of the entries started by the date, the latest start,
+// then the latest recordedAt. The history is oldest first, so a full tie goes to the later entry
+// (sort is stable).
+const statusFromHistory = (history, date) =>
+    history
+        .filter((e) => e.effectiveFromDate <= date)
+        .sort(
+            (a, b) =>
+                a.effectiveFromDate.localeCompare(b.effectiveFromDate) ||
+                Date.parse(a.recordedAt) - Date.parse(b.recordedAt),
+        )
+        .at(-1)?.status ?? null;
+
+const addDays = (date, days) => {
+    const day = new Date(`${date}T00:00:00Z`);
+    day.setUTCDate(day.getUTCDate() + days);
+    return day.toISOString().slice(0, 10);
+};
+
+// Every record with a statusHistory has a statusTimeline: periods in order, with no gaps or
+// overlaps, only the last open-ended, that agree with the history and latestStatus.
+function assertStatusTimeline(record, what) {
+    const { statusHistory: history, statusTimeline: timeline } = record;
+    assert.ok(history?.length >= 1, `${what} has no statusHistory`);
+    assert.ok(timeline?.length >= 1, `${what} has no statusTimeline`);
+
+    timeline.forEach((period, index) => {
+        assert.ok(period.status, `${what} period has no status`);
+        assert.match(period.effectiveFromDate, /^\d{4}-\d{2}-\d{2}$/, what);
+        const next = timeline[index + 1];
+        if (!next) {
+            assert.equal(period.effectiveToDate, null, `${what} last period`);
+            return;
+        }
+        assert.ok(
+            period.effectiveFromDate <= period.effectiveToDate,
+            `${what} period ends before it starts`,
+        );
+        assert.equal(
+            next.effectiveFromDate,
+            addDays(period.effectiveToDate, 1),
+            `${what} periods have a gap or overlap`,
+        );
+        assert.notEqual(
+            next.status,
+            period.status,
+            `${what} adjacent periods are not merged`,
+        );
+    });
+
+    assert.equal(timeline.at(-1).status, record.latestStatus.status, what);
+
+    // The status only changes where an entry or a period starts or ends, so check each of those
+    // days and the days either side.
+    const dates = [...history, ...timeline]
+        .flatMap((e) => [e.effectiveFromDate, e.effectiveToDate])
+        .filter(Boolean)
+        .flatMap((date) => [-1, 0, 1].map((days) => addDays(date, days)));
+    for (const date of dates) {
+        assert.equal(
+            statusOn(timeline, date),
+            statusFromHistory(history, date),
+            `${what} status on ${date}`,
+        );
+    }
+}
+
+function assertSiteTimelines(sites) {
+    for (const site of sites) {
+        assertStatusTimeline(site, `overseas site ${site.orsId}`);
+        for (const interim of site.interimSites) {
+            assertStatusTimeline(
+                interim,
+                `interim site ${interim.siteNumber} of ${site.orsId}`,
+            );
+        }
+    }
+}
+
 test("returns the accreditation", live, async () => {
     const res = await get(path, mine());
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.registrationNumber, REG);
     assert.equal(body.accreditationYear, Number(YEAR));
-    assert.equal(body.status, "approved");
+    assert.equal(body.latestStatus.status, "approved");
     assert.ok(body.accreditationNumber);
-    assert.ok(
-        Array.isArray(body.statusHistory) && body.statusHistory.length >= 1,
-    );
+    assertStatusTimeline(body, "accreditation");
+    assertSiteTimelines(body.overseasSites ?? []);
 });
 
 test("searches accreditations as a page", live, async () => {
@@ -73,6 +160,8 @@ test("searches accreditations as a page", live, async () => {
     assert.ok(Array.isArray(body.items));
     assert.equal(typeof body.totalItems, "number");
     assert.ok(body.items.every((item) => !("signatories" in item)));
+    // A search item has no history of its own; its overseas sites do.
+    assertSiteTimelines(body.items.flatMap((item) => item.overseasSites ?? []));
 });
 
 test("search filters by organisation and registration number", live, async () => {
@@ -130,12 +219,20 @@ test("the accreditation carries its overseas sites only if it is an exporter", l
     }
 });
 
-test("lists overseas sites as a page", live, async () => {
+test("lists overseas sites as a page, and gets each one", live, async () => {
     const res = await get(`${path}/overseas-sites`, mine());
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.ok(Array.isArray(body.items));
     assert.equal(typeof body.totalItems, "number");
+    assertSiteTimelines(body.items);
+
+    // A reprocessor has no overseas sites to get.
+    for (const site of body.items) {
+        const one = await get(`${path}/overseas-sites/${site.orsId}`, mine());
+        assert.equal(one.status, 200);
+        assertSiteTimelines([await one.json()]);
+    }
 });
 
 test("unknown accreditation is 404", live, async () => {
