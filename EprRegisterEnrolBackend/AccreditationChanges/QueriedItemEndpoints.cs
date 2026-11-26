@@ -41,7 +41,7 @@ public static class QueriedItemEndpoints
         app.MapPost(QueryRoute, QueryFromCaseManagement).RequireCaseManagementCaller();
 
     // A queried item of a request the accreditation holds, with the ORS it is for. 404 for an unknown item, 409 when it
-    // is not Queried: the only state in which anything on it may change.
+    // is not Queried (the only state in which anything on it may change) or its ORS has left the accreditation.
     private static async Task<(
         IResult? Error,
         AccreditationApplicationModel? Accreditation,
