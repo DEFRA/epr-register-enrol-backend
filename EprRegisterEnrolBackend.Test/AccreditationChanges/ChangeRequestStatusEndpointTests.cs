@@ -1,16 +1,21 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Infrastructure;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
@@ -330,6 +335,71 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         Item().CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
         Item(_siblingWorkItemId).Status.Should().Be(ChangeItemStatus.Submitted);
         Item(_siblingWorkItemId).ValidFrom.Should().BeNull();
+    }
+
+    // PR #297 review: toStateId is a required string, but an explicit null or a blank still binds. The item route
+    // used to map it to "no status" and advance the watermark; now it is a 400 ProblemDetails, logged at Error with
+    // the ids, before anything is read or written.
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"\"")]
+    [InlineData("\"   \"")]
+    public async Task NoToStateId_Returns400AndLogsErrorAndWritesNothing(string toStateIdJson)
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var logs = new CapturingLoggerFactory();
+        using var client = _factory
+            .WithWebHostBuilder(builder =>
+                builder.ConfigureTestServices(services => services.AddSingleton<ILoggerFactory>(logs))
+            )
+            .CreateClient();
+        using var body = new StringContent(
+            $$"""{"toStateId":{{toStateIdJson}},"actionId":"some-action","occurredAt":"{{Watermark.AddMinutes(5):O}}"}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        var response = await client.PostAsync(StatusUrl(_workItemId), body, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        (await response.Content.ReadAsStringAsync(Ct)).Should().Contain(CaseManagementStatusMapping.MissingToStateIdDetail);
+        var entry = logs.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Subject;
+        entry.Message.Should().Contain("ChangeRequestStatusChangedFromCaseManagement: status push has no toStateId");
+        entry.Message.Should().Contain($"workItemId={_workItemId}");
+        entry.Message.Should().Contain("actionId=some-action");
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(Watermark);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // PR #297 review: the item route projects the application's table (CaseManagementStatusMapping.StatusPushMap)
+    // rather than keeping its own copy of the state ids. Every entry projects, so a state id added to the table can't
+    // reach an item push and throw; awaiting-decision has no item equivalent and leaves the status alone.
+    [Fact]
+    public void MapState_ProjectsEveryEntryOfTheSharedTable()
+    {
+        var projected = CaseManagementStatusMapping.StatusPushMap.ToDictionary(
+            entry => entry.Key,
+            entry => ChangeRequestStatusEndpoints.MapState(entry.Key)
+        );
+
+        projected
+            .Should()
+            .Equal(
+                new Dictionary<string, ChangeItemStatus?>
+                {
+                    ["submitted"] = ChangeItemStatus.Submitted,
+                    ["duly-made"] = ChangeItemStatus.DulyMade,
+                    ["assessment-started"] = ChangeItemStatus.DulyMade,
+                    ["assessment-in-progress"] = ChangeItemStatus.Updated,
+                    ["updated"] = ChangeItemStatus.Updated,
+                    ["awaiting-decision"] = null,
+                    ["approved"] = ChangeItemStatus.Approved,
+                    ["rejected"] = ChangeItemStatus.Rejected,
+                }
+            );
+        ChangeRequestStatusEndpoints.MapState("unmapped-future-state").Should().BeNull();
     }
 
     // AC6: only Case Management knows the date the caseworker entered, so an approval without it grants nothing.

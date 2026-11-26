@@ -4444,6 +4444,17 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
+        if (
+            CaseManagementStatusMapping.RejectMissingToStateId(
+                logger,
+                nameof(StatusChangedFromCaseManagement),
+                workItemId,
+                request,
+                correlationId
+            ) is { } missingToStateId
+        )
+            return missingToStateId;
+
         // RA-644 B8f: read once outside the transaction for the application id the unit of work
         // migrates and syncs; the work reads it again in the session.
         var known = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);

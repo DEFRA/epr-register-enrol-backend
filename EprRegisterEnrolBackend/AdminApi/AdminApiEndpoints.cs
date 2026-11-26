@@ -146,7 +146,7 @@ public static class AdminApiEndpoints
         Results.Ok(
             new CaseManagementStatusMappingDto(
                 CaseManagementStatusMapping
-                    .StatusPush.Select(push => new StatusPushMappingDto(push.Key, push.Value))
+                    .StatusPushMap.Select(push => new StatusPushMappingDto(push.Key, push.Value))
                     .ToList(),
                 new QueryPushMappingDto(CaseManagementStatusMapping.QueryPushStatus)
             )

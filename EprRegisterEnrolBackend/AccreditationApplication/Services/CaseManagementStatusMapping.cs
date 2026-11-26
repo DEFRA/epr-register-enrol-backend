@@ -26,7 +26,7 @@ public static class CaseManagementStatusMapping
     /// case Updated.
     /// </para>
     /// </summary>
-    public static readonly IReadOnlyList<KeyValuePair<string, ApplicationStatus>> StatusPush =
+    public static readonly IReadOnlyList<KeyValuePair<string, ApplicationStatus>> StatusPushMap =
     [
         new("submitted", ApplicationStatus.Submitted),
         new("duly-made", ApplicationStatus.DulyMade),
@@ -40,14 +40,58 @@ public static class CaseManagementStatusMapping
 
     // Throws at type initialisation if a state id is listed twice.
     private static readonly Dictionary<string, ApplicationStatus> ByStateId = new(
-        StatusPush,
+        StatusPushMap,
         StringComparer.Ordinal
     );
 
     /// <summary>The status a query push (<c>/case-management/{workItemId}/query</c>) sets.</summary>
     public const ApplicationStatus QueryPushStatus = ApplicationStatus.Queried;
 
-    /// <summary>The status a status push to <paramref name="toStateId"/> sets, or null for none.</summary>
-    public static ApplicationStatus? ForStatusPush(string toStateId) =>
-        ByStateId.TryGetValue(toStateId, out var status) ? status : null;
+    /// <summary>
+    /// The 400 <c>detail</c> for a status push that names no <c>toStateId</c>. Both push receivers
+    /// (the accreditation application's and the change request item's) answer it.
+    /// </summary>
+    public const string MissingToStateIdDetail = "A status push must name the toStateId the work item moved to.";
+
+    /// <summary>
+    /// The status a status push to <paramref name="toStateId"/> sets, or null for a state with no
+    /// entry. A blank <paramref name="toStateId"/> is not "no entry": the receivers refuse it first
+    /// (<see cref="RejectMissingToStateId"/>), so reaching here with one is a bug and throws.
+    /// </summary>
+    public static ApplicationStatus? ForStatusPush(string toStateId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(toStateId);
+        return ByStateId.TryGetValue(toStateId, out var status) ? status : null;
+    }
+
+    /// <summary>
+    /// A 400 ProblemDetails, logged at Error, when a status push names no <c>toStateId</c>; null
+    /// when it names one. <c>toStateId</c> is a required string, but an explicit JSON
+    /// <c>null</c> (or an empty string) still binds, and acting on it would advance the ordering
+    /// watermark for a move nobody can name. Case Management's push adapter
+    /// (management-be <c>HttpOperatorBackendPushAdapter</c>) never retries a 4xx: it logs the
+    /// response at Error, and a decision push that fails abandons the caseworker's action with no
+    /// state changed.
+    /// </summary>
+    internal static IResult? RejectMissingToStateId(
+        ILogger logger,
+        string operation,
+        Guid workItemId,
+        StatusChangedFromCaseManagementRequest request,
+        string? correlationId
+    )
+    {
+        if (!string.IsNullOrWhiteSpace(request.ToStateId))
+            return null;
+
+        logger.LogError(
+            "{Operation}: status push has no toStateId, refused with 400, for workItemId={WorkItemId} actionId={ActionId} occurredAt={OccurredAt} correlationId={CorrelationId}",
+            operation,
+            workItemId,
+            request.ActionId,
+            request.OccurredAt,
+            correlationId ?? "(absent)"
+        );
+        return Results.Problem(detail: MissingToStateIdDetail, statusCode: StatusCodes.Status400BadRequest);
+    }
 }

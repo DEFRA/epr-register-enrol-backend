@@ -347,6 +347,11 @@ public class AccreditationApplicationPersistence(
         return (items, total);
     }
 
+    // The applications collection as raw documents, for the admin reads that must see what is
+    // stored rather than what the model makes of it.
+    private IMongoCollection<BsonDocument> RawCollection =>
+        Collection.Database.GetCollection<BsonDocument>(Collection.CollectionNamespace.CollectionName);
+
     public async Task<BsonDocument?> GetLegacyApplicationAsync(
         string reference,
         TimeSpan? maxTime = null,
@@ -362,8 +367,7 @@ public class AccreditationApplicationPersistence(
 
         // Raw, not through the model: the class map ignores elements it doesn't know, and the admin
         // view is for seeing the document as it is.
-        var raw = Collection.Database.GetCollection<BsonDocument>(Collection.CollectionNamespace.CollectionName);
-        return await raw.Find(filter, new FindOptions { MaxTime = maxTime })
+        return await RawCollection.Find(filter, new FindOptions { MaxTime = maxTime })
             .Limit(1)
             .FirstOrDefaultAsync(cancellationToken);
     }
@@ -378,7 +382,12 @@ public class AccreditationApplicationPersistence(
         var statusElement = ElementName(nameof(AccreditationApplicationModel.ApplicationStatus));
         // Raw, so a document with no status is seen as such: read through the model it would
         // silently become the model's default, Saved.
-        var raw = Collection.Database.GetCollection<BsonDocument>(Collection.CollectionNamespace.CollectionName);
+        // Standard (BinData subtype 4) is the only representation the link is ever stored in: its one
+        // writer is the model's [BsonGuidRepresentation(GuidRepresentation.Standard)]
+        // (AccreditationApplicationModel.CaseManagementWorkItemId, set at submit), with no global
+        // GuidSerializer and no script or migration writing the element. The attribute came three
+        // days after the field (0ccd1c7 after bab2388), and in between the 3.x driver refused to write
+        // an unannotated Guid at all, so no legacy (subtype 3) link was ever stored.
         var filter = new BsonDocument(
             linkElement,
             new BsonDocument(
@@ -387,7 +396,7 @@ public class AccreditationApplicationPersistence(
             )
         );
         var projection = new BsonDocument { { "_id", 1 }, { linkElement, 1 }, { statusElement, 1 } };
-        var documents = await raw.Find(filter, new FindOptions { MaxTime = maxTime })
+        var documents = await RawCollection.Find(filter, new FindOptions { MaxTime = maxTime })
             .Project(projection)
             .ToListAsync(cancellationToken);
 
