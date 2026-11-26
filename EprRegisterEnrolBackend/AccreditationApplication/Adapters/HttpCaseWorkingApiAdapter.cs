@@ -590,6 +590,90 @@ public class HttpCaseWorkingApiAdapter(
         }
     }
 
+    public async Task<ResumeFromQueryResult> ResumeChangeRequestItemFromQueryAsync(
+        ChangeRequestSite item,
+        QuerySubmitterContactDetails contactDetails,
+        ChangeRequestQueryResponse response,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (item.CaseManagementWorkItemId is not { } workItemId)
+        {
+            logger.LogError(
+                "Cannot resume-from-query: change request item {ItemId} has no CaseManagementWorkItemId.",
+                item.ItemId
+            );
+            return new ResumeFromQueryResult(false);
+        }
+
+        var url = _config.Url;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            logger.LogError(
+                "CaseWorking API URL is not configured. Cannot resume-from-query for workItemId={WorkItemId}.",
+                workItemId
+            );
+            return new ResumeFromQueryResult(false);
+        }
+
+        var body = new ResumeChangeRequestItemFromQueryRequest
+        {
+            ResponderContactDetails = new
+            {
+                fullName = contactDetails.FullName,
+                email = contactDetails.Email,
+                role = contactDetails.Role,
+            },
+            SubmittedAt = response.SubmittedAt,
+            Site = response.Site,
+            InterimSites = response.InterimSites.Select(s => new
+            {
+                siteId = s.SiteId,
+                siteNumber = s.SiteNumber,
+                changes = s.Changes,
+            }),
+            BesEvidenceFiles = response.NewBesFiles.Select(f => new
+            {
+                fileId = f.FileId,
+                filename = f.Filename,
+                contentType = f.ContentType,
+                s3Key = f.S3Key,
+                s3Bucket = f.S3Bucket,
+                besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
+                besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
+            }),
+        };
+
+        var endpoint = $"{url.TrimEnd('/')}/work-items/add-overseas-site/{workItemId}/resume-from-query";
+
+        try
+        {
+            using var request = BuildRequest(
+                HttpMethod.Post,
+                endpoint,
+                body,
+                contactDetails.Email,
+                contactDetails.FullName
+            );
+            var client = httpClientFactory.CreateClient(DefaultHttpClientName);
+
+            var result = await client.SendAsync(request, cancellationToken);
+            if (!result.IsSuccessStatusCode)
+            {
+                var responseBody = await result.Content.ReadAsStringAsync(cancellationToken);
+                LogManagementBeError(LogLevel.Error, (int)result.StatusCode, endpoint, responseBody);
+                return new ResumeFromQueryResult(false);
+            }
+
+            return new ResumeFromQueryResult(true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            return new ResumeFromQueryResult(false);
+        }
+    }
+
     public async Task<WithdrawResult> WithdrawApplicationAsync(
         AccreditationApplicationModel application,
         QuerySubmitterContactDetails contactDetails,
@@ -1221,6 +1305,16 @@ public class HttpCaseWorkingApiAdapter(
         // RA-316. Both optional on the consumer; nulls are dropped by JsonOptions.
         public int? ChargeAmountPence { get; init; }
         public string? PaymentReference { get; init; }
+    }
+
+    // RA-698: the contract with ManagementBe's add-ORS resume-from-query action.
+    internal sealed class ResumeChangeRequestItemFromQueryRequest
+    {
+        public required object ResponderContactDetails { get; init; }
+        public required DateTime SubmittedAt { get; init; }
+        public required IReadOnlyDictionary<string, string?> Site { get; init; }
+        public required IEnumerable<object> InterimSites { get; init; }
+        public required IEnumerable<object> BesEvidenceFiles { get; init; }
     }
 
     internal sealed class WithdrawWorkItemRequest

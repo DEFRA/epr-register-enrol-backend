@@ -227,6 +227,14 @@ public class DevChangeRequestSeedService(
             Status = item.Status,
             ValidFrom = validFrom,
             WithdrawnAt = item.WithdrawnAt is { } at ? SeedDate(target.Year, at) : null,
+            // RA-698: a Queried item carries the regulator's note, as Case Management's query leaves it.
+            Query = item.Status == ChangeItemStatus.Queried
+                ? new ItemQuery
+                {
+                    QueryNote = "Please confirm the site contact details and upload evidence of broadly equivalent standards.",
+                    RaisedAt = SeedDate(target.Year, (seed.Month, seed.Day)).AddDays(3),
+                }
+                : null,
         };
     }
 

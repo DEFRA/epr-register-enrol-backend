@@ -30,7 +30,7 @@ public static class AccreditationChangeEndpoints
     internal const string RegistrationRoute =
         "api/v1/accreditation-changes/{organisationId}/registrations/{registrationId}/{materialType}";
 
-    private const string ConcurrentEditMessage =
+    internal const string ConcurrentEditMessage =
         "The change request was changed by someone else. Reload it and try again.";
 
     private const string SitesFixedMessage =
@@ -59,6 +59,7 @@ public static class AccreditationChangeEndpoints
             DeleteBesEvidenceFile
         );
         group.MapPost("requests/current/submit", Submit);
+        QueriedItemEndpoints.Map(group);
 
         app.MapGet(RegistrationRoute, GetForRegistration)
             .RequireAuthorization(policy =>
@@ -97,7 +98,7 @@ public static class AccreditationChangeEndpoints
     );
 
     // Saves the request with its version check, then returns its view; 409 if someone else saved it first.
-    private static async Task<IResult> SaveAndViewAsync(
+    internal static async Task<IResult> SaveAndViewAsync(
         AccreditationChangeRequest request,
         AccreditationApplicationModel accreditation,
         ChangeServices services,
@@ -111,7 +112,7 @@ public static class AccreditationChangeEndpoints
     }
 
     // Any granted (Approved) accreditation, exporter or reprocessor.
-    private static async Task<(
+    internal static async Task<(
         IResult? Error,
         AccreditationApplicationModel? Accreditation
     )> LoadGrantedAsync(string organisationId, string applicationId, ChangeServices services)
@@ -133,7 +134,7 @@ public static class AccreditationChangeEndpoints
     }
 
     // Every write adds or changes overseas sites, which only an exporter has.
-    private static async Task<(
+    internal static async Task<(
         IResult? Error,
         AccreditationApplicationModel? Accreditation
     )> LoadGrantedExporterAsync(string organisationId, string applicationId, ChangeServices services)
@@ -149,7 +150,7 @@ public static class AccreditationChangeEndpoints
         return (error, accreditation);
     }
 
-    private static async Task<(
+    internal static async Task<(
         IResult? Error,
         AccreditationApplicationModel? Accreditation,
         AccreditationChangeRequest? Draft
@@ -391,6 +392,8 @@ public static class AccreditationChangeEndpoints
                 .OfType<string>()
                 .Distinct()
                 .ToList(),
+            // RA-698: while any item is queried the operator answers it, and adds and manages no other ORS.
+            HasOpenQuery = requests.Exists(r => r.Sites.Exists(s => s.Status == ChangeItemStatus.Queried)),
         };
     }
 

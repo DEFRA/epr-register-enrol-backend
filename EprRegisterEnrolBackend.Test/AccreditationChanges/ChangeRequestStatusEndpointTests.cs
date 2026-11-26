@@ -134,6 +134,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
     [InlineData("submitted", ChangeItemStatus.Submitted)]
     [InlineData("duly-made", ChangeItemStatus.DulyMade)]
     [InlineData("assessment-started", ChangeItemStatus.DulyMade)]
+    [InlineData("queried", ChangeItemStatus.Queried)]
     [InlineData("updated", ChangeItemStatus.Updated)]
     [InlineData("assessment-in-progress", ChangeItemStatus.Updated)]
     [InlineData("rejected", ChangeItemStatus.Rejected)]

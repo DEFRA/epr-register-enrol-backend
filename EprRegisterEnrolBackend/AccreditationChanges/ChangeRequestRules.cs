@@ -75,6 +75,18 @@ public static class ChangeRequestRules
                 ? site.OperationCodes
                 : answers.OperationCodes,
             ConditionsOfExport = site?.ConditionsOfExport ?? answers.ConditionsOfExport,
+            // RA-698: the operator's changes win over the ORS's own values.
+            SiteName = answers.SiteName ?? site?.SiteName,
+            AddressLine1 = answers.AddressLine1 ?? site?.AddressLine1,
+            AddressLine2 = answers.AddressLine2 ?? site?.AddressLine2,
+            TownOrCity = answers.TownOrCity ?? site?.TownOrCity,
+            StateOrRegion = answers.StateOrRegion,
+            Postcode = answers.Postcode,
+            ContactName = answers.ContactName ?? site?.ContactName,
+            ContactEmail = answers.ContactEmail ?? site?.ContactEmail,
+            ContactPhone = answers.ContactPhone ?? site?.ContactPhone,
+            RejectedLoadsArrangements = answers.RejectedLoadsArrangements ?? site?.RepatriatedLoads,
+            InterimSites = answers.InterimSites,
         };
 
     public static List<string> SuppliedFields(ChangeRequestSiteAnswers answers)
@@ -171,6 +183,48 @@ public static class ChangeRequestRules
     public static bool IsForSite(ChangeRequestSite item, OverseasSiteModel site) =>
         item.OrsId is not null && site.OrsId is not null ? item.OrsId == site.OrsId : item.SiteId == site.SiteId;
 
+    /// <summary>
+    /// RA-698: the query on the item, and while it is open what the operator may change: the editable and locked
+    /// fields, the BES files held before the query, and each interim site's effective values with its own
+    /// editable and locked fields. Null for an item that was never queried.
+    /// </summary>
+    private static QueryDetailsView? QueryDetails(ChangeRequestSite item, OverseasSiteModel? site)
+    {
+        if (item.Query is not { } query)
+            return null;
+        var open = item.Status == ChangeItemStatus.Queried;
+        var interimSites = open
+            ? QueriedItemRules
+                .ActiveInterimSites(site)
+                .Select(interim =>
+                {
+                    var answers = item.Answers.InterimSites.Find(a => a.SiteId == interim.SiteId);
+                    string? Pick(QueriedItemRules.Field<ChangeRequestInterimSiteAnswers, InterimSiteModel> field) =>
+                        (answers is null ? null : field.Get(answers)) ?? field.Base(interim);
+                    var values = QueriedItemRules.InterimFields.ToDictionary(f => f.Key, Pick);
+                    return new InterimSiteEditView(
+                        interim.SiteId,
+                        interim.SiteNumber,
+                        interim.Country,
+                        interim.OperationCodes,
+                        values,
+                        QueriedItemRules.EditableInterimFields,
+                        QueriedItemRules.LockedInterimFields
+                    );
+                })
+                .ToList()
+            : [];
+        return new QueryDetailsView(
+            query.QueryNote,
+            query.RaisedAt,
+            query.QuerySubmissions,
+            open ? QueriedItemRules.EditableOrsFields : [],
+            open ? QueriedItemRules.LockedOrsFields : [],
+            query.BesFileIdsAtQuery,
+            interimSites
+        );
+    }
+
     public static ChangeRequestView ToView(
         AccreditationChangeRequest request,
         AccreditationApplicationModel accreditation
@@ -203,7 +257,8 @@ public static class ChangeRequestRules
                     requestSite.Status,
                     requestSite.ValidFrom,
                     requestSite.WithdrawnAt,
-                    requestSite.CaseManagementReference
+                    requestSite.CaseManagementReference,
+                    QueryDetails(requestSite, site)
                 );
             })
             .ToList();
@@ -241,7 +296,33 @@ public sealed record ChangeRequestSiteView(
     ChangeItemStatus Status,
     DateTime? ValidFrom,
     DateTime? WithdrawnAt,
-    string? CaseManagementReference
+    string? CaseManagementReference,
+    QueryDetailsView? Query = null
+);
+
+/// <summary>
+/// RA-698: the regulator's query on an item. <see cref="EditableFields"/>, <see cref="LockedFields"/> and
+/// <see cref="InterimSites"/> are empty once the query is answered.
+/// </summary>
+public sealed record QueryDetailsView(
+    string QueryNote,
+    DateTime RaisedAt,
+    List<QuerySubmission> QuerySubmissions,
+    IReadOnlyList<string> EditableFields,
+    IReadOnlyList<string> LockedFields,
+    List<string> PreQueryBesFileIds,
+    List<InterimSiteEditView> InterimSites
+);
+
+/// <summary>RA-698: an interim site of a queried ORS: its effective values by field, and what may be changed.</summary>
+public sealed record InterimSiteEditView(
+    int SiteId,
+    string SiteNumber,
+    string Country,
+    List<string> OperationCodes,
+    Dictionary<string, string?> Values,
+    IReadOnlyList<string> EditableFields,
+    IReadOnlyList<string> LockedFields
 );
 
 /// <summary>
@@ -308,5 +389,6 @@ public sealed record AccreditationChangesView(
     List<AccreditationChangeSiteView> Sites,
     ChangeRequestView? ActiveRequest,
     List<ChangeRequestView> Requests,
-    List<string> PendingOrsIds
+    List<string> PendingOrsIds,
+    bool HasOpenQuery = false
 );

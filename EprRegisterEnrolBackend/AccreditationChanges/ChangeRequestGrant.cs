@@ -117,6 +117,31 @@ internal static class ChangeRequestGrant
             site.OperationCodes = [.. operationCodes];
         if (answers.ConditionsOfExport is { } conditionsOfExport)
             site.ConditionsOfExport = conditionsOfExport;
+
+        // RA-698: what the operator changed in answer to a query: the ORS's own details and its interim sites'.
+        site.SiteName = answers.SiteName ?? site.SiteName;
+        site.AddressLine1 = answers.AddressLine1 ?? site.AddressLine1;
+        site.AddressLine2 = answers.AddressLine2 ?? site.AddressLine2;
+        site.TownOrCity = answers.TownOrCity ?? site.TownOrCity;
+        site.ContactName = answers.ContactName ?? site.ContactName;
+        site.ContactEmail = answers.ContactEmail ?? site.ContactEmail;
+        site.ContactPhone = answers.ContactPhone ?? site.ContactPhone;
+        site.RepatriatedLoads = answers.RejectedLoadsArrangements ?? site.RepatriatedLoads;
+        foreach (var change in answers.InterimSites)
+        {
+            if (site.InterimSites.Find(i => i.SiteId == change.SiteId) is not { } interim)
+                continue;
+            interim.SiteName = change.SiteName ?? interim.SiteName;
+            interim.AddressLine1 = change.AddressLine1 ?? interim.AddressLine1;
+            interim.AddressLine2 = change.AddressLine2 ?? interim.AddressLine2;
+            interim.TownOrCity = change.TownOrCity ?? interim.TownOrCity;
+            interim.StateOrRegion = change.StateOrRegion ?? interim.StateOrRegion;
+            interim.Postcode = change.Postcode ?? interim.Postcode;
+            interim.ContactName = change.ContactName ?? interim.ContactName;
+            interim.ContactEmail = change.ContactEmail ?? interim.ContactEmail;
+            interim.ContactPhone = change.ContactPhone ?? interim.ContactPhone;
+        }
+        InterimSiteSync.SyncMirror(site);
     }
 
     /// <summary>
@@ -167,6 +192,49 @@ internal static class ChangeRequestGrant
             ors.OperationCodes = [.. site.OperationCodes];
         if (answers.ConditionsOfExport is not null)
             ors.ConditionsOfExport = site.ConditionsOfExport;
+
+        // RA-698: the ORS's details and interim sites' as changed in answer to a query, from the legacy site that now
+        // holds them. Only what was changed, so nothing else of the ORS is overwritten.
+        if (answers.SiteName is not null)
+            ors.SiteName = site.SiteName;
+        if (new[] { answers.AddressLine1, answers.AddressLine2, answers.TownOrCity, answers.StateOrRegion, answers.Postcode }.Any(v => v is not null))
+            ors.Address ??= new PostalAddress();
+        if (ors.Address is not null)
+        {
+            ors.Address.Line1 = answers.AddressLine1 ?? ors.Address.Line1;
+            ors.Address.Line2 = answers.AddressLine2 ?? ors.Address.Line2;
+            ors.Address.TownOrCity = answers.TownOrCity ?? ors.Address.TownOrCity;
+            ors.Address.Region = answers.StateOrRegion ?? ors.Address.Region;
+            ors.Address.Postcode = answers.Postcode ?? ors.Address.Postcode;
+        }
+        if (new[] { answers.ContactName, answers.ContactEmail, answers.ContactPhone }.Any(v => v is not null))
+            ors.Contact ??= new ContactPerson();
+        if (ors.Contact is not null)
+        {
+            ors.Contact.FullName = answers.ContactName ?? ors.Contact.FullName;
+            ors.Contact.Email = answers.ContactEmail ?? ors.Contact.Email;
+            ors.Contact.Phone = answers.ContactPhone ?? ors.Contact.Phone;
+        }
+        if (answers.RejectedLoadsArrangements is not null)
+            ors.RepatriatedLoads = site.RepatriatedLoads;
+        foreach (var change in answers.InterimSites)
+        {
+            var legacy = site.InterimSites.Find(i => i.SiteId == change.SiteId);
+            var entry = legacy is null ? null : ors.InterimSites.Find(e => e.SiteNumber == legacy.SiteNumber);
+            if (entry is null)
+                continue;
+            entry.SiteName = change.SiteName ?? entry.SiteName;
+            entry.Address ??= new PostalAddress();
+            entry.Address.Line1 = change.AddressLine1 ?? entry.Address.Line1;
+            entry.Address.Line2 = change.AddressLine2 ?? entry.Address.Line2;
+            entry.Address.TownOrCity = change.TownOrCity ?? entry.Address.TownOrCity;
+            entry.Address.Region = change.StateOrRegion ?? entry.Address.Region;
+            entry.Address.Postcode = change.Postcode ?? entry.Address.Postcode;
+            entry.Contact ??= new ContactPerson();
+            entry.Contact.FullName = change.ContactName ?? entry.Contact.FullName;
+            entry.Contact.Email = change.ContactEmail ?? entry.Contact.Email;
+            entry.Contact.Phone = change.ContactPhone ?? entry.Contact.Phone;
+        }
     }
 
     private static async Task GrantInModelAsync(

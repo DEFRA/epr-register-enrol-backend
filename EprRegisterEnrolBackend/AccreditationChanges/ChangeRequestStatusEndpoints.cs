@@ -26,8 +26,11 @@ public static class ChangeRequestStatusEndpoints
 
     private const string Operation = "ChangeRequestStatusChangedFromCaseManagement";
 
-    public static void UseChangeRequestStatusEndpoints(this IEndpointRouteBuilder app) =>
+    public static void UseChangeRequestStatusEndpoints(this IEndpointRouteBuilder app)
+    {
         app.MapPost(Route, StatusChangedFromCaseManagement).RequireCaseManagementCaller();
+        QueriedItemEndpoints.MapCaseManagement(app);
+    }
 
     /// <summary>
     /// A Case Management state id to the item status it projects onto, as for an application, minus the statuses an
@@ -43,6 +46,8 @@ public static class ChangeRequestStatusEndpoints
             "updated" or "assessment-in-progress" => ChangeItemStatus.Updated,
             // The grant: the site joins the accreditation in the same transaction (ChangeRequestGrant).
             "approved" => ChangeItemStatus.Approved,
+            // RA-698: the query itself arrives on its own route with its note; this only keeps the status in step.
+            "queried" => ChangeItemStatus.Queried,
             "rejected" => ChangeItemStatus.Rejected,
             _ => null,
         };
