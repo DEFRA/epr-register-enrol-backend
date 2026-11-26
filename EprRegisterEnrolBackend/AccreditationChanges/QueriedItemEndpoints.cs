@@ -322,36 +322,7 @@ public static class QueriedItemEndpoints
             );
 
         var now = resubmit.Clock.GetUtcNow().UtcDateTime;
-        var response = new ChangeRequestQueryResponse(
-            now,
-            // An answer undone since the query is sent as the ORS's own value, which case management must now hold.
-            QueriedItemRules
-                .OrsFields.Where(f => changed.Contains(f.Key))
-                .ToDictionary(f => f.Key, f => f.Get(item.Answers) ?? f.Base(site!) ?? string.Empty),
-            [
-                // An interim site withdrawn since its answer was saved is no longer the ORS's, so its answer is not sent.
-                .. QueriedItemRules
-                    .ActiveInterimSites(site)
-                    .Select(interimSite =>
-                    {
-                        var answer = item.Answers.InterimSites.Find(a => a.SiteId == interimSite.SiteId);
-                        return new InterimSiteResponse(
-                            interimSite.SiteId,
-                            interimSite.SiteNumber,
-                            QueriedItemRules
-                                .InterimFields.Where(f =>
-                                    changed.Contains(QueriedItemRules.InterimKey(interimSite.SiteId, f.Key))
-                                )
-                                .ToDictionary(
-                                    f => f.Key,
-                                    f => (answer is null ? null : f.Get(answer)) ?? f.Base(interimSite) ?? string.Empty
-                                )
-                        );
-                    })
-                    .Where(s => s.Changes.Count > 0),
-            ],
-            newFiles
-        );
+        var response = BuildQueryResponse(now, item, site!, changed, newFiles);
 
         // ManagementBe first, as for an application: the item is Updated only once the regulator's side knows.
         var contact = new QuerySubmitterContactDetails
@@ -384,14 +355,14 @@ public static class QueriedItemEndpoints
         // ManagementBe now holds this response, and a replay of a resume is not applied there, so a save refused as a
         // concurrent edit is retried on the item as it now stands, recording what was sent and picking up no newer
         // answers. Otherwise the item would stay Queried and a second resubmit's edits would never reach ManagementBe.
-        for (var attempt = 1; ; attempt++)
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             item!.Query!.QuerySubmissions.Add(submission);
             item.Status = ChangeItemStatus.Updated;
             if (await services.Requests.UpdateAsync(request!, services.CancellationToken))
                 return Results.Ok(ChangeRequestRules.ToView(request!, accreditation!));
             if (attempt == MaxAttempts)
-                return Results.Conflict(AccreditationChangeEndpoints.ConcurrentEditMessage);
+                break;
 
             (error, accreditation, request, item, _) = await LoadQueriedAsync(
                 organisationId,
@@ -402,8 +373,51 @@ public static class QueriedItemEndpoints
             if (error is not null)
                 return error;
         }
+
+        return Results.Conflict(AccreditationChangeEndpoints.ConcurrentEditMessage);
     }
 
+    private static ChangeRequestQueryResponse BuildQueryResponse(
+        DateTime now,
+        ChangeRequestSite item,
+        OverseasSiteModel site,
+        IReadOnlyCollection<string> changed,
+        List<BesEvidenceFileModel> newFiles
+    )
+    {
+        // An answer undone since the query is sent as the ORS's own value, which case management must now hold.
+        var siteChanges = QueriedItemRules
+            .OrsFields.Where(f => changed.Contains(f.Key))
+            .ToDictionary(f => f.Key, f => (string?)(f.Get(item.Answers) ?? f.Base(site) ?? string.Empty));
+
+        // An interim site withdrawn since its answer was saved is no longer the ORS's, so its answer is not sent.
+        var interimSites = QueriedItemRules
+            .ActiveInterimSites(site)
+            .Select(interimSite => new InterimSiteResponse(
+                interimSite.SiteId,
+                interimSite.SiteNumber,
+                BuildInterimChanges(item, interimSite, changed)
+            ))
+            .Where(s => s.Changes.Count > 0)
+            .ToList();
+
+        return new ChangeRequestQueryResponse(now, siteChanges, interimSites, newFiles);
+    }
+
+    private static Dictionary<string, string?> BuildInterimChanges(
+        ChangeRequestSite item,
+        InterimSiteModel interimSite,
+        IReadOnlyCollection<string> changed
+    )
+    {
+        var answer = item.Answers.InterimSites.Find(a => a.SiteId == interimSite.SiteId);
+        return QueriedItemRules
+            .InterimFields.Where(f => changed.Contains(QueriedItemRules.InterimKey(interimSite.SiteId, f.Key)))
+            .ToDictionary(
+                f => f.Key,
+                f => (string?)((answer is null ? null : f.Get(answer)) ?? f.Base(interimSite) ?? string.Empty)
+            );
+    }
     private static async Task<IResult> QueryFromCaseManagement(
         Guid workItemId,
         QueryFromCaseManagementRequest body,
