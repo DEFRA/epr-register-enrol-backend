@@ -262,6 +262,28 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
     }
 
+    // RA-800: Case Management can correct the valid-from date until its confirm contact commits, which may be after
+    // the grant landed here. Accepting the repeat would leave it showing one date and the site accredited from
+    // another, so a repeat naming a different date is refused and its confirmation does not complete.
+    [Fact]
+    public async Task ApprovedAgain_WithADifferentEffectiveDate_Returns409AndWritesNothing()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+        var granted = Item();
+        var updates = _factory.FakeChangeRequests.UpdateCount;
+        var legacyVersion = Legacy().Version;
+
+        var response = await Push("approved", Watermark.AddMinutes(10), EffectiveDate.AddDays(1));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadAsStringAsync(Ct)).Should().Contain("2026-05-20");
+        Item().Should().BeEquivalentTo(granted);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(updates);
+        Legacy().Version.Should().Be(legacyVersion);
+        LegacySite(SiteId).ValidFrom.Should().Be(SiteApprovalDate.Format(AccreditedFrom));
+    }
+
     // An unmapped push changes no status, so a terminal item takes it: only its watermark moves.
     [Fact]
     public async Task TerminalItem_UnmappedPush_AdvancesOnlyTheWatermark()
