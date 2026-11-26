@@ -17,7 +17,8 @@ The contract is everything a client can rely on, not only the JSON fields:
 - routes, query parameters, paging defaults and limits, and the order of results
 - response fields: names, types, formats, whether each is always sent, and what it means
 - enum values
-- which records are served (for example, only granted accreditations from 2027)
+- which records are served. Nothing before 2027 is served. The accreditation routes serve only granted
+  accreditations; getting a registration serves every application for it, whatever its status
 - status codes and problem `code` values
 - authentication and request signing, rate limits and query time limits
 
@@ -66,7 +67,7 @@ Once the shape is settled, breaking changes are not made in `/v1`.
 The policy doesn't mention these. Until the team decides, agree them with consumers before merging.
 
 - Sometimes omitting a field that was always sent, or sending `null` where there was always a value.
-- A new value of `material`, `glassRecyclingProcess` or `wasteProcessingType`.
+- A new value of `material`, `glassRecyclingProcess`, `wasteProcessingType` or `applicationStatus`.
 - Changing or removing a problem `code`, or the status code for a case. A new `code` for a new case needs
   at least an announcement.
 - Changing the default or maximum `limit`, or the order of results.
@@ -75,7 +76,9 @@ The policy doesn't mention these. Until the team decides, agree them with consum
 - Renaming an `operationId` or a schema in the spec, which can break generated clients.
 
 A new field that holds **personal or commercially sensitive data** can be compatible and still be wrong to add.
-Search results carry no signatories, and the business plan is not served at all. Raise it in review.
+Search results carry no signatories, and the business plan is not served at all. Getting a registration shows
+applications that haven't been granted, so it deliberately returns little: don't add to it without agreement.
+Raise it in review.
 
 ### Enum values
 
@@ -91,8 +94,12 @@ When you add one, update:
   left out of the response without an error
 - the allowed values in the end-to-end contract tests
 
-**Renaming a C# enum member can change the API.** `material` is the member name of `MaterialType`. In histories
-built from the domain model, `status` is the member name of the status enum in lower case.
+**Changing a C# enum can change the API:**
+
+- `material` is the member name of `MaterialType`.
+- `applicationStatus`, on a registration, is the member name of `ApplicationStatus`, which the whole application
+  journey uses. Renaming or adding a member for the journey changes what this API returns.
+- In histories built from the domain model, `status` is the member name of the status enum in lower case.
 
 ## Versioning
 
@@ -121,6 +128,7 @@ So change the code and the documents **in the same pull request**:
 | Update | When |
 | --- | --- |
 | `AccreditationApiDtos.cs`, `AccreditationApiMapper.cs`, `AccreditationApiEndpoints.cs` | the behaviour changes |
+| `GrantedAccreditations.cs`, `RegistrationApplications.cs` | which records are served, or where they are read from, changes |
 | OpenAPI spec, including `required` and descriptions | any visible change |
 | Mapping document | a field's source or rule changes |
 | Onboarding guide: field reference, JSON examples, errors, test data | anything it describes changes |
@@ -135,6 +143,12 @@ Points that are easy to miss:
 - **Search items** share the summary type with the single accreditation. A change to it appears in both.
 - **Two data sources.** `DomainModel:ReadFromModel` decides whether content comes from the legacy document or
   the domain model. A change must give the right response with the flag off and on.
+- **Derived fields.** `latestStatus` and `statusTimeline` are both worked out from `statusHistory`
+  (`StatusHistoryBuilder`, `StatusTimelineBuilder`) and must agree. They share one ordering rule,
+  `InPrecedenceOrder`: change it there. A new record with a `statusHistory` needs both.
+- **Code shared outside `/v1`.** Case management's accreditation summary uses the mapper's site order
+  (`OrderedAccreditedSites`), exporter rule (`IsExporter`) and blank-value rule (`Blank`). Changing them changes
+  that endpoint too.
 - **Global JSON settings** in `Program.cs` (camelCase, enums as strings) affect response shapes.
 
 ## How tests protect consumers
@@ -145,7 +159,7 @@ There are three sets. Only the first can stop a merge.
 | --- | --- | --- |
 | Backend tests, `EprRegisterEnrolBackend.Test/AccreditationApi/` | behaviour, authentication, errors, parts of the response shape, both data sources | every pull request. Required to merge |
 | End-to-end contract tests, `test/api/` in `epr-register-enrol-fe-tests` | response shapes, allowed enum values, removed fields, status history rules, errors, written by hand from the spec | against the `test` environment, in the full test suite run there or by hand. Skipped without the API client secret. **Not in backend pull request checks** |
-| [`consumer-tests/`](../consumer-tests/README.md) | signing and basic calls from outside the service, with real credentials | **only by hand** |
+| [`consumer-tests/`](../consumer-tests/README.md) | signing, basic calls to the accreditation routes and that each `statusTimeline` agrees with its history, from outside the service, with real credentials | **only by hand** |
 
 What this means:
 
@@ -238,11 +252,13 @@ Copy this into the pull request description:
 
 ## Known gaps
 
-As of 25 November 2026. Remove each one when it is fixed.
+As of 26 November 2026. Remove each one when it is fixed.
 
 - Nothing automatically compares the spec with the responses.
 - The end-to-end contract tests and consumer tests don't run on backend pull requests.
-- The consumer test `returns the accreditation` expects `status`, which `latestStatus` replaced, so it can't pass
-  against the current API.
+- Neither the end-to-end contract tests nor the consumer tests call the route that gets a registration. Only the
+  backend tests cover it.
+- The end-to-end contract test `answers 404 for the registration endpoint` predates that route. It expects `404`,
+  so it fails when the registration it asks for has an application from 2027 on.
 - The spec's introduction still says no authentication scheme is defined. The API uses HMAC request signing, as
   the onboarding guide describes.
