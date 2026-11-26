@@ -88,13 +88,14 @@ public class AccreditationChangeRequest
         TonnageBandUpgrade is null ? Sites : [.. Sites, TonnageBandUpgrade];
 
     /// <summary>
-    /// RA-739: snapshots the charge at submit: the request's total and each site's own (every site is chargeable).
+    /// RA-739: snapshots the charge at submit: the request's total and each site's own. RA-682 AC05: only an add
+    /// is chargeable; an update's own charge is 0.
     /// </summary>
     public void SetCharge(ChargeView charge)
     {
         ChargePence = charge.TotalPence;
         foreach (var site in Sites)
-            site.ChargePence = charge.ChargePerSitePence;
+            site.ChargePence = site.IsUpdate ? 0 : charge.ChargePerSitePence;
     }
 
     /// <summary>Clears the total and every site's charge together, when a request is reopened.</summary>
@@ -179,6 +180,121 @@ public class ChangeRequestSite : ChangeRequestItem
     /// total <see cref="AccreditationChangeRequest.ChargePence"/> and cleared with it when the request is reopened.
     /// </summary>
     public int? ChargePence { get; set; }
+
+    /// <summary>RA-682: an update-overseas-site item changes an accredited ORS's details rather than adding it.</summary>
+    [BsonIgnore]
+    [JsonIgnore]
+    public bool IsUpdate => ChangeType == AccreditationChangeRequest.UpdateOverseasSiteChangeType;
+
+    /// <summary>
+    /// RA-682: an update's snapshot of the ORS's editable details when the change was started, so the operator,
+    /// the regulator and AC07's history can see what changed. Null on an add item.
+    /// </summary>
+    public OverseasSiteDetails? Previous { get; set; }
+
+    /// <summary>RA-682: an update's proposed details, starting as <see cref="Previous"/>. Null on an add item.</summary>
+    public OverseasSiteDetails? Proposed { get; set; }
+
+    /// <summary>RA-682 AC04: an update's interim site changes: changed, added and removed interim sites.</summary>
+    public List<InterimSiteChange> InterimSiteChanges { get; set; } = [];
+}
+
+/// <summary>
+/// RA-682: the ORS details an operator may change in year. Country, coordinates, recycling operations, Basel
+/// codes, conditions of export and BES are locked (AC02), so they are not here. The ORS holds no state or
+/// postcode, so neither is here either.
+/// </summary>
+public sealed record OverseasSiteDetails
+{
+    public string? SiteName { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public string? TownOrCity { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactEmail { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? RepatriatedLoads { get; set; }
+}
+
+/// <summary>RA-682 AC04: one interim site change within an ORS update.</summary>
+public class InterimSiteChange
+{
+    public const string Change = "change";
+    public const string Add = "add";
+    public const string Remove = "remove";
+
+    [BsonGuidRepresentation(GuidRepresentation.Standard)]
+    public Guid ChangeId { get; set; } = Guid.NewGuid();
+
+    /// <summary><see cref="Change"/>, <see cref="Add"/> or <see cref="Remove"/>.</summary>
+    public required string Action { get; set; }
+
+    /// <summary>The existing interim site changed or removed. Null for an add, which has no id until it is granted.</summary>
+    public int? InterimSiteId { get; set; }
+
+    /// <summary>The interim site as it was, for a change or remove.</summary>
+    public InterimSiteDetails? Previous { get; set; }
+
+    /// <summary>The interim site as proposed, for a change or add.</summary>
+    public InterimSiteDetails? Proposed { get; set; }
+}
+
+/// <summary>RA-682: an interim site's details, as <see cref="InterimSiteModel"/> holds them, without its ids.</summary>
+public sealed record InterimSiteDetails
+{
+    public required string Country { get; set; }
+    public required string SiteName { get; set; }
+    public required string AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public required string TownOrCity { get; set; }
+    public string? StateOrRegion { get; set; }
+    public string? Postcode { get; set; }
+    public required string ContactName { get; set; }
+    public required string ContactEmail { get; set; }
+    public required string ContactPhone { get; set; }
+    public List<string> OperationCodes { get; set; } = [];
+
+    // A record compares lists by reference; two interim sites' details are the same when their codes are.
+    public bool Equals(InterimSiteDetails? other) =>
+        other is not null
+        && (Country, SiteName, AddressLine1, AddressLine2, TownOrCity, StateOrRegion, Postcode)
+            == (other.Country, other.SiteName, other.AddressLine1, other.AddressLine2, other.TownOrCity, other.StateOrRegion, other.Postcode)
+        && (ContactName, ContactEmail, ContactPhone) == (other.ContactName, other.ContactEmail, other.ContactPhone)
+        && OperationCodes.SequenceEqual(other.OperationCodes);
+
+    public override int GetHashCode() => HashCode.Combine(SiteName, AddressLine1, TownOrCity, ContactEmail);
+
+    public static InterimSiteDetails From(InterimSiteModel interim) =>
+        new()
+        {
+            Country = interim.Country,
+            SiteName = interim.SiteName,
+            AddressLine1 = interim.AddressLine1,
+            AddressLine2 = interim.AddressLine2,
+            TownOrCity = interim.TownOrCity,
+            StateOrRegion = interim.StateOrRegion,
+            Postcode = interim.Postcode,
+            ContactName = interim.ContactName,
+            ContactEmail = interim.ContactEmail,
+            ContactPhone = interim.ContactPhone,
+            OperationCodes = [.. interim.OperationCodes],
+        };
+
+    public static InterimSiteDetails From(AddInterimSiteRequest request) =>
+        new()
+        {
+            Country = request.Country,
+            SiteName = request.SiteName,
+            AddressLine1 = request.AddressLine1,
+            AddressLine2 = request.AddressLine2,
+            TownOrCity = request.TownOrCity,
+            StateOrRegion = request.StateOrRegion,
+            Postcode = request.Postcode,
+            ContactName = request.ContactName,
+            ContactEmail = request.ContactEmail,
+            ContactPhone = request.ContactPhone,
+            OperationCodes = [.. request.OperationCodes],
+        };
 }
 
 public class ChangeRequestSiteAnswers
@@ -235,6 +351,12 @@ public enum SiteAccreditationStatus
 public class AddChangeRequestSiteRequest
 {
     public required int SiteId { get; set; }
+
+    /// <summary>
+    /// RA-682: <c>add-overseas-site</c> (the default, RA-492's) to add a registered ORS, or
+    /// <c>update-overseas-site</c> to change an accredited ORS's details.
+    /// </summary>
+    public string? ChangeType { get; set; }
 }
 
 /// <summary>PATCH body: a null property leaves the stored answer unchanged.</summary>
@@ -244,4 +366,24 @@ public class PatchChangeRequestSiteRequest
     public string? Coordinates { get; set; }
     public List<string>? OperationCodes { get; set; }
     public bool? ConditionsOfExport { get; set; }
+
+    // RA-682: an update item's editable details. Absent means unchanged.
+    public string? SiteName { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public string? TownOrCity { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactEmail { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? RepatriatedLoads { get; set; }
+
+    internal bool HasDetails =>
+        SiteName is not null
+        || AddressLine1 is not null
+        || AddressLine2 is not null
+        || TownOrCity is not null
+        || ContactName is not null
+        || ContactEmail is not null
+        || ContactPhone is not null
+        || RepatriatedLoads is not null;
 }

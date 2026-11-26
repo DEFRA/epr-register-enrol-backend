@@ -9,6 +9,9 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 /// </summary>
 public static class ChangeRequestRules
 {
+    /// <summary>RA-682: the key an update with nothing changed is reported under.</summary>
+    public const string Changes = "changes";
+
     public const string Country = "country";
     public const string Coordinates = "coordinates";
     public const string OperationCodes = "operationCodes";
@@ -23,6 +26,7 @@ public static class ChangeRequestRules
             [OperationCodes] = "Select the recycling operation (R code) for the overseas reprocessing site.",
             [ConditionsOfExport] = "Confirm whether the conditions of export are met.",
             [BesEvidence] = "Upload evidence of broadly equivalent standards for the overseas reprocessing site.",
+            [Changes] = "Change at least one detail of the overseas reprocessing site, or remove it from the request.",
         };
 
     /// <summary>
@@ -137,8 +141,37 @@ public static class ChangeRequestRules
         };
     }
 
+    /// <summary>
+    /// RA-682: an ORS's editable details, as an update item snapshots them. Every value is the ORS's own, so an
+    /// unchanged update's proposed details equal these.
+    /// </summary>
+    public static OverseasSiteDetails DetailsOf(OverseasSiteModel site) =>
+        new()
+        {
+            SiteName = site.SiteName,
+            AddressLine1 = site.AddressLine1,
+            AddressLine2 = site.AddressLine2,
+            TownOrCity = site.TownOrCity,
+            ContactName = site.ContactName,
+            ContactEmail = site.ContactEmail,
+            ContactPhone = site.ContactPhone,
+            RepatriatedLoads = site.RepatriatedLoads,
+        };
+
+    /// <summary>RA-682: whether an update item changes anything: its ORS's details, or an interim site.</summary>
+    public static bool HasChanges(ChangeRequestSite requestSite) =>
+        requestSite.InterimSiteChanges.Count > 0 || requestSite.Proposed != requestSite.Previous;
+
+    /// <summary>RA-682 AC05: how many of the request's items are charged. Only adds are.</summary>
+    public static int ChargeableSites(AccreditationChangeRequest request) => request.Sites.Count(s => !s.IsUpdate);
+
     public static List<string> MissingFields(OverseasSiteModel? site, ChangeRequestSite requestSite)
     {
+        // RA-682: an update's details are validated as they are patched and its locked fields can't change, so the
+        // only thing it can be missing is a change.
+        if (requestSite.IsUpdate)
+            return HasChanges(requestSite) ? [] : [Changes];
+
         var effective = Effective(site, requestSite.Answers);
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(effective.Country))
@@ -203,7 +236,10 @@ public static class ChangeRequestRules
                     requestSite.Status,
                     requestSite.ValidFrom,
                     requestSite.WithdrawnAt,
-                    requestSite.CaseManagementReference
+                    requestSite.CaseManagementReference,
+                    requestSite.Previous,
+                    requestSite.Proposed,
+                    requestSite.InterimSiteChanges
                 );
             })
             .ToList();
@@ -218,7 +254,7 @@ public static class ChangeRequestRules
             request.SubmittedBy,
             sites,
             sites.Count > 0 && sites.All(s => s.IsComplete),
-            Charge(request.Sites.Count),
+            Charge(ChargeableSites(request)),
             request.TonnageBandUpgrade is { } tonnage ? TonnageBandUpgradeView.From(tonnage) : null
         );
     }
@@ -241,7 +277,11 @@ public sealed record ChangeRequestSiteView(
     ChangeItemStatus Status,
     DateTime? ValidFrom,
     DateTime? WithdrawnAt,
-    string? CaseManagementReference
+    string? CaseManagementReference,
+    // RA-682: an update's details as they were and as proposed, and its interim site changes. Null and empty on an add.
+    OverseasSiteDetails? Previous = null,
+    OverseasSiteDetails? Proposed = null,
+    List<InterimSiteChange>? InterimSiteChanges = null
 );
 
 /// <summary>

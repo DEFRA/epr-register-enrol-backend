@@ -19,6 +19,8 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     private static readonly Dictionary<string, string> s_changeTypeCodes = new()
     {
         [AccreditationChangeRequest.AddOverseasSiteChangeType] = "ORS",
+        // RA-682: ORS updates share add-ORS's code, and so its reference series.
+        [AccreditationChangeRequest.UpdateOverseasSiteChangeType] = "ORS",
     };
 
     // Stub only: ManagementBe owns the real sequences, one per change code per year for the
@@ -105,19 +107,21 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         CancellationToken cancellationToken = default
     )
     {
-        var code = ChangeCodeFor(changeRequest);
+        // RA-682: each site is coded by its own change type (an add or an update); an unknown one throws, as before.
+        var codes = changeRequest.Sites.Select(site => ChangeCodeFor(site.ChangeType)).ToList();
+        RequireFourDigitYear(changeRequest);
         var year = changeRequest.Year;
         var submissionReference = FormatSubmissionReference(
             year,
             _submissionSequences.AddOrUpdate(year, 1, (_, current) => current + 1)
         );
         var sites = changeRequest
-            .Sites.Select(site => new SiteWorkItemResult(
+            .Sites.Select((site, index) => new SiteWorkItemResult(
                 site.SiteId,
                 FormatChangeReference(
-                    code,
+                    codes[index],
                     year,
-                    _changeSequences.AddOrUpdate((code, year), 1, (_, current) => current + 1)
+                    _changeSequences.AddOrUpdate((codes[index], year), 1, (_, current) => current + 1)
                 ),
                 Guid.NewGuid()
             ))
@@ -219,15 +223,13 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.CompletedTask;
     }
 
-    private static string ChangeCodeFor(AccreditationChangeRequest changeRequest)
-    {
-        if (!s_changeTypeCodes.TryGetValue(changeRequest.ChangeType, out var code))
-        {
-            throw new InvalidOperationException(
-                $"No in-year change reference code for change type '{changeRequest.ChangeType}'."
-            );
-        }
+    private static string ChangeCodeFor(string changeType) =>
+        s_changeTypeCodes.TryGetValue(changeType, out var code)
+            ? code
+            : throw new InvalidOperationException($"No in-year change reference code for change type '{changeType}'.");
 
+    private static void RequireFourDigitYear(AccreditationChangeRequest changeRequest)
+    {
         // The accreditation year is always present on a change request (RA-492), so there is no
         // fallback. A year that is not four digits is refused with a 400, as ManagementBe
         // refuses it.
@@ -239,8 +241,6 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
                 HttpStatusCode.BadRequest
             );
         }
-
-        return code;
     }
 
     // sequence counts from 1.
