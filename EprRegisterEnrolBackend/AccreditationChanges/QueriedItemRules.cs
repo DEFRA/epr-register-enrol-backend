@@ -43,7 +43,7 @@ public static class QueriedItemRules
         new(Postcode, b => b.Postcode, a => a.Postcode, (a, v) => a.Postcode = v, _ => null, false),
         new(ContactName, b => b.ContactName, a => a.ContactName, (a, v) => a.ContactName = v, s => s.ContactName, true),
         new(ContactEmail, b => b.ContactEmail, a => a.ContactEmail, (a, v) => a.ContactEmail = v, s => s.ContactEmail, true),
-        new(ContactPhone, b => b.ContactPhone, a => a.ContactPhone, (a, v) => a.ContactPhone = v, s => s.ContactPhone, true),
+        new(ContactPhone, b => b.ContactPhone, a => a.ContactPhone, (a, v) => a.ContactPhone = v, s => s.ContactPhone, false),
         new(
             RejectedLoadsArrangements,
             b => b.RejectedLoadsArrangements,
@@ -64,7 +64,7 @@ public static class QueriedItemRules
         new(Postcode, b => b.Postcode, a => a.Postcode, (a, v) => a.Postcode = v, s => s.Postcode, false),
         new(ContactName, b => b.ContactName, a => a.ContactName, (a, v) => a.ContactName = v, s => s.ContactName, true),
         new(ContactEmail, b => b.ContactEmail, a => a.ContactEmail, (a, v) => a.ContactEmail = v, s => s.ContactEmail, true),
-        new(ContactPhone, b => b.ContactPhone, a => a.ContactPhone, (a, v) => a.ContactPhone = v, s => s.ContactPhone, true),
+        new(ContactPhone, b => b.ContactPhone, a => a.ContactPhone, (a, v) => a.ContactPhone = v, s => s.ContactPhone, false),
     ];
 
     public static readonly IReadOnlyList<string> EditableOrsFields =
@@ -105,23 +105,23 @@ public static class QueriedItemRules
     /// Applies the body's non-null values to the ORS's answers. A value equal to the ORS's own is a revert, so the answer
     /// is dropped rather than kept as a "change" that changes nothing.
     /// </summary>
-    internal static void Apply(ChangeRequestSiteAnswers answers, PatchQueriedSiteRequest body, OverseasSiteModel site)
-    {
-        foreach (var field in OrsFields)
-        {
-            if (field.FromBody(body)?.Trim() is not { } value)
-                continue;
-            field.Set(answers, value == (field.Base(site) ?? string.Empty) ? null : value);
-        }
-    }
+    internal static void Apply(ChangeRequestSiteAnswers answers, PatchQueriedSiteRequest body, OverseasSiteModel site) =>
+        ApplyFields(OrsFields, answers, body, site);
 
     internal static void Apply(
         ChangeRequestInterimSiteAnswers answers,
         PatchQueriedSiteRequest body,
         InterimSiteModel site
+    ) => ApplyFields(InterimFields, answers, body, site);
+
+    private static void ApplyFields<TAnswers, TBase>(
+        IReadOnlyList<Field<TAnswers, TBase>> fields,
+        TAnswers answers,
+        PatchQueriedSiteRequest body,
+        TBase site
     )
     {
-        foreach (var field in InterimFields)
+        foreach (var field in fields)
         {
             if (field.FromBody(body)?.Trim() is not { } value)
                 continue;
@@ -175,15 +175,18 @@ public static class QueriedItemRules
 
     public static string InterimKey(int siteId, string field) => $"interimSites[{siteId}].{field}";
 
-    /// <summary>The fields whose answer differs from the answers when the query was raised.</summary>
+    /// <summary>
+    /// The fields whose answer differs from the answers when the query was raised. An answer undone since (back at the
+    /// ORS's own value, so stored as none) is a change too: case management still holds the earlier answer.
+    /// </summary>
     public static List<string> ChangedFields(ChangeRequestSiteAnswers current, ChangeRequestSiteAnswers? atQuery)
     {
         var before = Values(atQuery ?? new ChangeRequestSiteAnswers());
+        var now = Values(current);
         return
         [
-            .. Values(current)
-                .Where(kv => !before.TryGetValue(kv.Key, out var old) || old != kv.Value)
-                .Select(kv => kv.Key),
+            .. now.Where(kv => !before.TryGetValue(kv.Key, out var old) || old != kv.Value).Select(kv => kv.Key),
+            .. before.Keys.Where(key => !now.ContainsKey(key)),
         ];
     }
 
@@ -206,7 +209,22 @@ public static class QueriedItemRules
 /// </summary>
 public class PatchQueriedSiteRequestValidator : AbstractValidator<PatchQueriedSiteRequest>
 {
+    // The add-ORS journey's limits (OverseasSiteRequestValidatorBase), so what that journey accepts is accepted here.
     private const int MaxLength = 200;
+    private const int MaxTownLength = 100;
+    private const int MaxEmailLength = 254;
+    private const int MaxPhoneLength = 30;
+    private const int MaxRejectedLoadsLength = 5000;
+
+    private static int LimitOf(string key) =>
+        key switch
+        {
+            QueriedItemRules.TownOrCity => MaxTownLength,
+            QueriedItemRules.ContactEmail => MaxEmailLength,
+            QueriedItemRules.ContactPhone => MaxPhoneLength,
+            QueriedItemRules.RejectedLoadsArrangements => MaxRejectedLoadsLength,
+            _ => MaxLength,
+        };
 
     public PatchQueriedSiteRequestValidator()
     {
@@ -220,7 +238,7 @@ public class PatchQueriedSiteRequestValidator : AbstractValidator<PatchQueriedSi
                 .When(r => required && field.FromBody(r) is not null)
                 .OverridePropertyName(key);
             RuleFor(r => field.FromBody(r))
-                .MaximumLength(key == QueriedItemRules.RejectedLoadsArrangements ? 2000 : MaxLength)
+                .MaximumLength(LimitOf(key))
                 .When(r => field.FromBody(r) is not null)
                 .OverridePropertyName(key);
         }

@@ -151,6 +151,21 @@ public class QueriedItemRulesTests
     }
 
     [Fact]
+    public void ChangedFields_AnAnswerUndoneSinceTheQuery_IsAChange()
+    {
+        var atQuery = new ChangeRequestSiteAnswers
+        {
+            ContactName = "B",
+            InterimSites = [new ChangeRequestInterimSiteAnswers { SiteId = 3, ContactName = "C" }],
+        };
+
+        QueriedItemRules.ChangedFields(new ChangeRequestSiteAnswers(), atQuery).Should().BeEquivalentTo(
+            QueriedItemRules.ContactName,
+            QueriedItemRules.InterimKey(3, QueriedItemRules.ContactName)
+        );
+    }
+
+    [Fact]
     public void NewBesFiles_AreThoseNotHeldAtTheQuery()
     {
         BesEvidenceFileModel File(string id) => new() { FileId = id, Filename = id, S3Key = id };

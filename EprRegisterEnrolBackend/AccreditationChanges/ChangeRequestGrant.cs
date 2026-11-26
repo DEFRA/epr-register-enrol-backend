@@ -119,6 +119,9 @@ internal static class ChangeRequestGrant
             site.ConditionsOfExport = conditionsOfExport;
 
         // RA-698: what the operator changed in answer to a query: the ORS's own details and its interim sites'.
+        // A pre-RA-603 site holds its interim site only in the singular field: promote it to the list first, so the
+        // query's edits to it apply and the mirror sync below does not erase it.
+        InterimSiteSync.Normalise(site);
         site.SiteName = answers.SiteName ?? site.SiteName;
         site.AddressLine1 = answers.AddressLine1 ?? site.AddressLine1;
         site.AddressLine2 = answers.AddressLine2 ?? site.AddressLine2;

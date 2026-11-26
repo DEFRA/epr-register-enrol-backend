@@ -322,28 +322,33 @@ public static class QueriedItemEndpoints
             );
 
         var now = resubmit.Clock.GetUtcNow().UtcDateTime;
-        var current = QueriedItemRules.Values(item.Answers);
         var response = new ChangeRequestQueryResponse(
             now,
-            current
-                .Where(kv => !kv.Key.StartsWith("interimSites[", StringComparison.Ordinal) && changed.Contains(kv.Key))
-                .ToDictionary(kv => kv.Key, kv => kv.Value),
+            // An answer undone since the query is sent as the ORS's own value, which case management must now hold.
+            QueriedItemRules
+                .OrsFields.Where(f => changed.Contains(f.Key))
+                .ToDictionary(f => f.Key, f => f.Get(item.Answers) ?? f.Base(site!) ?? string.Empty),
             [
                 // An interim site withdrawn since its answer was saved is no longer the ORS's, so its answer is not sent.
-                .. item.Answers.InterimSites.Join(
-                    QueriedItemRules.ActiveInterimSites(site),
-                    a => a.SiteId,
-                    s => s.SiteId,
-                    (a, interimSite) => new InterimSiteResponse(
-                    a.SiteId,
-                    interimSite.SiteNumber,
-                    QueriedItemRules
-                        .InterimFields.Where(f =>
-                            changed.Contains(QueriedItemRules.InterimKey(a.SiteId, f.Key))
-                            && f.Get(a) is not null
-                        )
-                        .ToDictionary(f => f.Key, f => f.Get(a))
-                )).Where(s => s.Changes.Count > 0),
+                .. QueriedItemRules
+                    .ActiveInterimSites(site)
+                    .Select(interimSite =>
+                    {
+                        var answer = item.Answers.InterimSites.Find(a => a.SiteId == interimSite.SiteId);
+                        return new InterimSiteResponse(
+                            interimSite.SiteId,
+                            interimSite.SiteNumber,
+                            QueriedItemRules
+                                .InterimFields.Where(f =>
+                                    changed.Contains(QueriedItemRules.InterimKey(interimSite.SiteId, f.Key))
+                                )
+                                .ToDictionary(
+                                    f => f.Key,
+                                    f => (answer is null ? null : f.Get(answer)) ?? f.Base(interimSite) ?? string.Empty
+                                )
+                        );
+                    })
+                    .Where(s => s.Changes.Count > 0),
             ],
             newFiles
         );
@@ -367,18 +372,36 @@ public static class QueriedItemEndpoints
                 statusCode: StatusCodes.Status503ServiceUnavailable
             );
 
-        item.Query.QuerySubmissions.Add(
-            new QuerySubmission
-            {
-                SubmittedAt = now,
-                FullName = body.FullName,
-                JobTitle = body.JobTitle,
-                ChangedFields = changed,
-                NewBesFileIds = [.. newFiles.Select(f => f.FileId)],
-            }
-        );
-        item.Status = ChangeItemStatus.Updated;
-        return await AccreditationChangeEndpoints.SaveAndViewAsync(request!, accreditation!, services);
+        var submission = new QuerySubmission
+        {
+            SubmittedAt = now,
+            FullName = body.FullName,
+            JobTitle = body.JobTitle,
+            ChangedFields = changed,
+            NewBesFileIds = [.. newFiles.Select(f => f.FileId)],
+        };
+
+        // ManagementBe now holds this response, and a replay of a resume is not applied there, so a save refused as a
+        // concurrent edit is retried on the item as it now stands, recording what was sent and picking up no newer
+        // answers. Otherwise the item would stay Queried and a second resubmit's edits would never reach ManagementBe.
+        for (var attempt = 1; ; attempt++)
+        {
+            item!.Query!.QuerySubmissions.Add(submission);
+            item.Status = ChangeItemStatus.Updated;
+            if (await services.Requests.UpdateAsync(request!, services.CancellationToken))
+                return Results.Ok(ChangeRequestRules.ToView(request!, accreditation!));
+            if (attempt == MaxAttempts)
+                return Results.Conflict(AccreditationChangeEndpoints.ConcurrentEditMessage);
+
+            (error, accreditation, request, item, _) = await LoadQueriedAsync(
+                organisationId,
+                applicationId,
+                itemId,
+                services
+            );
+            if (error is not null)
+                return error;
+        }
     }
 
     private static async Task<IResult> QueryFromCaseManagement(
@@ -420,6 +443,10 @@ public static class QueriedItemEndpoints
                 QuerySubmissions = item.Query?.QuerySubmissions ?? [],
             };
             item.Status = ChangeItemStatus.Queried;
+            // Orders the query against Case Management's status pushes: a delayed push older than the query cannot close it.
+            item.CaseManagementStatusUpdatedAt = item.CaseManagementStatusUpdatedAt is { } last && last > item.Query.RaisedAt
+                ? last
+                : item.Query.RaisedAt;
 
             if (await persistence.UpdateAsync(request, cancellationToken))
             {

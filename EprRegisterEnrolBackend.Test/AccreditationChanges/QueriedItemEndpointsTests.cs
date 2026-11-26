@@ -509,6 +509,175 @@ public sealed class QueriedItemEndpointsTests : IDisposable
         submissions[1].ChangedFields.Should().Equal("contactName");
     }
 
+    // ---------------------------------------------------------------- undone answers, retried saves, late pushes
+
+    [Fact]
+    public async Task Resubmit_AnswersUndoneSinceTheQuery_AreSentAsTheOrsOwnValuesAndCountAsChanges()
+    {
+        await SeedQueried();
+        var interimUrl = ItemUrl($"interim-sites/{InterimSite.SiteId}/answers");
+        await _client.PatchAsJsonAsync(
+            ItemUrl("answers"),
+            new { contactName = "Changed Contact", postcode = "75001" },
+            Ct
+        );
+        await _client.PatchAsJsonAsync(interimUrl, new { contactName = "Changed Interim" }, Ct);
+        (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await RaiseQuery("Again.")).StatusCode.Should().Be(HttpStatusCode.OK);
+        // Nothing but undoing the earlier answers.
+        await _client.PatchAsJsonAsync(
+            ItemUrl("answers"),
+            new { contactName = QueriedSite.ContactName, postcode = "" },
+            Ct
+        );
+        await _client.PatchAsJsonAsync(interimUrl, new { contactName = InterimSite.ContactName }, Ct);
+
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item()
+            .Query!.QuerySubmissions[1]
+            .ChangedFields.Should()
+            .BeEquivalentTo(["contactName", "postcode", $"interimSites[{InterimSite.SiteId}].contactName"]);
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .ResumeChangeRequestItemFromQueryAsync(
+                Arg.Any<ChangeRequestSite>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Is<ChangeRequestQueryResponse>(r =>
+                    r.Site["contactName"] == QueriedSite.ContactName
+                    && r.Site["postcode"] == ""
+                    && r.InterimSites.Count == 1
+                    && r.InterimSites[0].Changes["contactName"] == InterimSite.ContactName
+                ),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenTheSaveLosesToAConcurrentEdit_RetriesAndStillRecordsWhatWasSent()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "Changed" }, Ct);
+        var lost = false;
+        _factory.FakeChangeRequests.LoseUpdateWhen = r =>
+        {
+            if (lost || !r.Sites.Exists(s => s.Status == ChangeItemStatus.Updated))
+                return false;
+            lost = true;
+            return true;
+        };
+
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        lost.Should().BeTrue();
+        Item().Status.Should().Be(ChangeItemStatus.Updated);
+        Item().Query!.QuerySubmissions.Should().ContainSingle().Which.ChangedFields.Should().Equal("siteName");
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .ResumeChangeRequestItemFromQueryAsync(
+                Arg.Any<ChangeRequestSite>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Any<ChangeRequestQueryResponse>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenTheSaveKeepsLosing_Is409AndTheItemStaysQueried()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "Changed" }, Ct);
+        _factory.FakeChangeRequests.LoseUpdateWhen = r => r.Sites.Exists(s => s.Status == ChangeItemStatus.Updated);
+
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Item().Status.Should().Be(ChangeItemStatus.Queried);
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenTheItemIsAnsweredElsewhereDuringTheRetry_Is409()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "Changed" }, Ct);
+        var lost = false;
+        _factory.FakeChangeRequests.LoseUpdateWhen = _ =>
+        {
+            if (lost)
+                return false;
+            lost = true;
+            // Another tab answers the query between this save's read and write.
+            var other = _factory.FakeChangeRequests.All.Single();
+            other.Sites.Single(s => s.CaseManagementWorkItemId == _workItemId).Status = ChangeItemStatus.Updated;
+            _factory.FakeChangeRequests.UpdateAsync(other, Ct).GetAwaiter().GetResult();
+            return true;
+        };
+
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Query_AdvancesTheStatusClockSoAnOlderPushCannotCloseIt()
+    {
+        SeedRequest();
+        var raisedAt = new DateTime(2026, 6, 1, 10, 0, 0, DateTimeKind.Utc);
+
+        var response = await _client.PostAsJsonAsync(QueryUrl(_workItemId), new { note = "Query.", raisedAt }, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(raisedAt);
+    }
+
+    [Fact]
+    public async Task Query_NeverMovesTheStatusClockBackwards()
+    {
+        SeedRequest();
+        var later = new DateTime(2026, 7, 1, 10, 0, 0, DateTimeKind.Utc);
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Sites.Single(s => s.CaseManagementWorkItemId == _workItemId).CaseManagementStatusUpdatedAt = later;
+        (await _factory.FakeChangeRequests.UpdateAsync(stored, Ct)).Should().BeTrue();
+
+        var response = await _client.PostAsJsonAsync(
+            QueryUrl(_workItemId),
+            new { note = "Query.", raisedAt = new DateTime(2026, 6, 1, 10, 0, 0, DateTimeKind.Utc) },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(later);
+    }
+
+    [Fact]
+    public async Task Patch_UsesTheAddOrsJourneysRules_PhoneOptionalAndItsLengthLimits()
+    {
+        await SeedQueried();
+        var url = ItemUrl("answers");
+
+        (await _client.PatchAsJsonAsync(url, new { contactPhone = "" }, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _client.PatchAsJsonAsync(url, new { rejectedLoadsArrangements = new string('x', 5000) }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+        (await _client.PatchAsJsonAsync(url, new { rejectedLoadsArrangements = new string('x', 5001) }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.BadRequest);
+        (await _client.PatchAsJsonAsync(url, new { contactEmail = new string('a', 242) + "@example.com" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+        (await _client.PatchAsJsonAsync(url, new { contactEmail = new string('a', 243) + "@example.com" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.BadRequest);
+        (await _client.PatchAsJsonAsync(url, new { contactPhone = new string('1', 31) }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.BadRequest);
+        (await _client.PatchAsJsonAsync(url, new { townOrCity = new string('t', 101) }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.BadRequest);
+    }
+
     // ---------------------------------------------------------------- BES evidence (AC04, AC12)
 
     [Fact]

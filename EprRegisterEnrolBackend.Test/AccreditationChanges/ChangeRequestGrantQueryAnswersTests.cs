@@ -101,6 +101,37 @@ public class ChangeRequestGrantQueryAnswersTests
         interim.ContactPhone.Should().Be("0400");
     }
 
+    private static OverseasSiteModel PreRa603Site()
+    {
+        var site = LegacySite();
+        site.InterimSite = site.InterimSites.Single();
+        site.InterimSites = [];
+        return site;
+    }
+
+    [Fact]
+    public void ApplyToLegacySite_PreRa603SingleInterimSite_IsKeptWhenNothingIsAnswered()
+    {
+        var site = PreRa603Site();
+
+        ChangeRequestGrant.ApplySuppliedAnswers(site, new ChangeRequestSiteAnswers());
+
+        site.InterimSite.Should().NotBeNull();
+        site.InterimSite!.SiteName.Should().Be("Old interim");
+        site.InterimSites.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ApplyToLegacySite_PreRa603SingleInterimSite_TakesTheQueriedEdits()
+    {
+        var site = PreRa603Site();
+
+        ChangeRequestGrant.ApplySuppliedAnswers(site, AllAnswers());
+
+        site.InterimSites.Single().SiteName.Should().Be("New interim");
+        site.InterimSite.Should().BeSameAs(site.InterimSites.Single());
+    }
+
     [Fact]
     public void ApplyToLegacySite_NothingAnswered_LeavesTheSiteAsItWas()
     {
