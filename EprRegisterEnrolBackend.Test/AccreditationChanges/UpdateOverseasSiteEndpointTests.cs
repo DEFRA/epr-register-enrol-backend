@@ -302,7 +302,6 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
             )
             .Returns(
                 new ChangeRequestSubmissionResult(
-                    "SUB-2026-0001",
                     [
                         new SiteWorkItemResult(902504, "IYC-ORS-2026-00001", Guid.NewGuid()),
                         new SiteWorkItemResult(902501, "IYC-ORS-2026-00002", Guid.NewGuid()),
@@ -370,7 +369,7 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         (await client.DeleteAsync($"{Sites}/902501", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
-    // The update group timed out: Case Management may hold it and would replay it, so its details are fixed.
+    // The submission timed out: Case Management may hold it and would replay it, so the update's details are fixed.
     [Fact]
     public async Task An_update_that_may_be_held_cannot_be_changed()
     {
@@ -384,7 +383,7 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
                 Arg.Any<AccreditationApplicationModel>(),
                 Arg.Any<CancellationToken>()
             )
-            .ThrowsAsync(new TaskCanceledException("timed out"));
+            .ThrowsAsync(new CaseWorkingApiTimeoutException("timed out", new TimeoutException()));
         using var client = factory.CreateClient();
         await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
         await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
@@ -423,6 +422,7 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         var refused = await Patch(902501, new Dictionary<string, object> { [field] = value });
 
         refused.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await Json(refused)).GetProperty("errors").TryGetProperty(field, out _).Should().BeTrue();
     }
 
     [Fact]
@@ -430,7 +430,10 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
     {
         await StartUpdate(902501);
 
-        (await Patch(902501, new { operationCodes = new[] { "R4" } })).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var refused = await Patch(902501, new { operationCodes = new[] { "R4" } });
+
+        refused.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await Json(refused)).GetProperty("errors").TryGetProperty("operationCodes", out _).Should().BeTrue();
     }
 
     [Fact]
@@ -521,5 +524,153 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         (await _client.PostAsJsonAsync($"{Sites}/902502/interim-sites", Interim("X"), Ct))
             .StatusCode.Should()
             .Be(HttpStatusCode.NotFound);
+    }
+
+    // A factory that sends to Case Management, with its own seeded accreditation (held by reference, so a test can
+    // change an ORS in place).
+    private static (AccreditationChangeTestFactory Factory, HttpClient Client, AccreditationApplicationModel Seeded)
+        CaseManagementFactory()
+    {
+        var factory = new AccreditationChangeTestFactory(submitToCaseManagement: true);
+        var seeded = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearUpdate, Year);
+        factory.FakePersistence.Seed(seeded);
+        return (factory, factory.CreateClient(), seeded);
+    }
+
+    private static void SubmitFails(AccreditationChangeTestFactory factory, params Exception[] failures)
+    {
+        var queue = new Queue<Exception>(failures);
+        factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns<Task<ChangeRequestSubmissionResult>>(_ => throw queue.Dequeue());
+    }
+
+    private static async Task StartMixedRequest(HttpClient client)
+    {
+        await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
+        await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
+        await client.PostAsJsonAsync(Sites, new { siteId = 902504 }, Ct);
+    }
+
+    private static ChangeRequestPartlySubmittedException UpdateGroupRefused() =>
+        new(
+            [AccreditationChangeRequest.AddOverseasSiteChangeType],
+            UpdateType,
+            refusedMayBeHeld: false,
+            new HttpRequestException("refused", null, HttpStatusCode.BadRequest)
+        );
+
+    // The add group goes first, so when it times out the update group was never sent: only the adds are fixed, and
+    // when a resubmit's update group is then refused, the update can still be taken out.
+    [Fact]
+    public async Task A_first_group_timeout_fixes_only_that_group()
+    {
+        var (factory, client, _) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(factory, new CaseWorkingApiTimeoutException("timed out", new TimeoutException()), UpdateGroupRefused());
+        await StartMixedRequest(client);
+
+        await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+        var afterTimeout = factory.FakeChangeRequests.All.Single();
+        afterTimeout.Sites.Single(s => s.SiteId == 902504).CaseManagementMayHold.Should().BeTrue();
+        afterTimeout.Sites.Single(s => s.SiteId == 902501).CaseManagementMayHold.Should().BeFalse();
+
+        await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+
+        (await client.DeleteAsync($"{Sites}/902501", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.DeleteAsync($"{Sites}/902504", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // Only the add group may be held, so another add can't join it, but a new update goes as a fresh submission.
+    [Fact]
+    public async Task After_a_partial_hold_only_a_held_change_type_is_closed_to_new_sites()
+    {
+        var (factory, client, _) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(factory, UpdateGroupRefused());
+        await StartMixedRequest(client);
+        await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+
+        (await client.PostAsJsonAsync(Sites, new { siteId = 902505 }, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.PostAsJsonAsync(Sites, new { siteId = 902502, changeType = UpdateType }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Created);
+    }
+
+    // A held update is replayed as Case Management first received it, so submit doesn't rebase it on the ORS.
+    [Fact]
+    public async Task A_held_update_is_not_rebased_at_resubmit()
+    {
+        var (factory, client, seeded) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(
+            factory,
+            new CaseWorkingApiTimeoutException("timed out", new TimeoutException()),
+            new CaseWorkingApiTimeoutException("timed out", new TimeoutException())
+        );
+        await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
+        await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
+        await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+        ChangeRequestRules.FindSite(seeded, 902501)!.ContactName = "New Manager";
+
+        await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+
+        var site = factory.FakeChangeRequests.All.Single().Sites.Single();
+        site.Previous!.ContactName.Should().Be("Site Manager");
+        site.Proposed!.ContactName.Should().Be("Site Manager");
+    }
+
+    [Fact]
+    public async Task A_held_add_takes_no_new_BES_evidence()
+    {
+        var (factory, client, _) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(factory, new CaseWorkingApiTimeoutException("timed out", new TimeoutException()));
+        await client.PostAsJsonAsync(Sites, new { siteId = 902504 }, Ct);
+        await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+
+        (await client.PostAsJsonAsync($"{Sites}/902504/bes-evidence/files", new { fileUploadId = "file-1" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+        (await client.DeleteAsync($"{Sites}/902504/bes-evidence/files/file-1", Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+    }
+
+    // AC02: the interim site's country and recycling operations are its own, however the form sent them back.
+    [Fact]
+    public async Task An_interim_site_saved_unchanged_with_its_codes_reordered_records_no_change()
+    {
+        await StartUpdate(902501);
+        var codes = ChangeRequestRules.ActiveInterimSite(ChangeRequestRules.FindSite(_accreditation, 902501)!, 902511)!
+            .OperationCodes;
+
+        var saved = await _client.PatchAsJsonAsync(
+            $"{Sites}/902501/interim-sites/902511",
+            Interim("Gdynia Transfer Hub", country: " Poland ", codes: [.. Enumerable.Reverse(codes)]),
+            Ct
+        );
+
+        saved.StatusCode.Should().Be(HttpStatusCode.OK);
+        SiteIn(await Json(saved), 902501).GetProperty("interimSiteChanges").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_free_request_keeps_no_payment_reference()
+    {
+        await StartUpdate(902501);
+        await Patch(902501, new { siteName = "Gdansk Recycling" });
+
+        await _client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+
+        _factory.FakeChangeRequests.All.Single().PaymentReference.Should().BeNull();
     }
 }

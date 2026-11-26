@@ -11,13 +11,6 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Validators;
 public abstract class OverseasSiteRequestValidatorBase<T> : AbstractValidator<T>
     where T : IOverseasSiteRequestFields
 {
-    // S6444: ContactEmail arrives straight off a client request body, so the match is given
-    // an explicit timeout rather than being left to run unbounded on the request thread.
-    // The trailing label also excludes '.' (unlike the two classes before it): with
-    // [^\s@]+\.[^\s@]+ every dot in the domain is a candidate split point for the literal,
-    // which makes a failing match quadratic in the input length. Pinning the final label to
-    // the last dot removes the ambiguity. Only behaviour change: a trailing-dot address
-    // ("a@b.com.") no longer validates, and that was never a valid address.
     private static readonly System.Text.RegularExpressions.Regex EmailRegex = OverseasSiteEmail.Pattern;
 
     protected OverseasSiteRequestValidatorBase()
@@ -68,14 +61,4 @@ public abstract class OverseasSiteRequestValidatorBase<T> : AbstractValidator<T>
             .WithName("Code2");
         RuleFor(r => r.RepatriatedLoads).NotEmpty().MaximumLength(5000);
     }
-}
-
-// The ORS contact email pattern, shared with the change request validator so the two can't drift.
-internal static class OverseasSiteEmail
-{
-    internal static readonly System.Text.RegularExpressions.Regex Pattern = new(
-        @"^[^\s@]+@[^\s@]+\.[^\s@.]+$",
-        System.Text.RegularExpressions.RegexOptions.Compiled,
-        TimeSpan.FromMilliseconds(100)
-    );
 }

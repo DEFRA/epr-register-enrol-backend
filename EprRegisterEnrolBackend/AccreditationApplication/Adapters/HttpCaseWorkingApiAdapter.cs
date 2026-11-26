@@ -116,11 +116,7 @@ public class HttpCaseWorkingApiAdapter(
 
         // RA-682: a request can hold adds and updates. ManagementBe has a work item type per change, so each change
         // type goes as its own submission, adds first, and the sites' references are gathered from all of them.
-        var groups = changeRequest
-            .Sites.GroupBy(s => s.ChangeType)
-            .OrderBy(g => g.Key == AccreditationChangeRequest.AddOverseasSiteChangeType ? 0 : 1)
-            .ThenBy(g => g.Key, StringComparer.Ordinal)
-            .ToList();
+        var groups = ChangeRequestRules.SubmissionGroups(changeRequest);
         var references = new List<string>(groups.Count);
         var held = new List<string>(groups.Count);
         var sites = new List<SiteWorkItemResult>(changeRequest.Sites.Count);
@@ -140,11 +136,15 @@ public class HttpCaseWorkingApiAdapter(
                 held.Add(group.Key);
                 sites.AddRange(result.Sites);
             }
-            catch (Exception ex) when (held.Count > 0 && ex is not OperationCanceledException)
+            catch (Exception ex)
+                when (held.Count > 0
+                    && ex is HttpRequestException or CaseWorkingApiTimeoutException or OperationCanceledException
+                )
             {
                 // An earlier group is held by ManagementBe. The caller fixes the held groups' items, and the failed
                 // group's too unless ManagementBe certainly refused it: a resubmit then replays the held groups (each
                 // under its own operatorRequestId) and sends the rest. Logged by PostWorkItemAsync and by the caller.
+                // Any other exception is a defect, raised before the failed group was sent, and isn't wrapped.
                 throw new ChangeRequestPartlySubmittedException(
                     held,
                     group.Key,
@@ -156,7 +156,7 @@ public class HttpCaseWorkingApiAdapter(
 
         if (references.Count == 0)
             throw new InvalidOperationException($"Change request {changeRequest.RequestId} has no sites to submit.");
-        return new ChangeRequestSubmissionResult(references[0], sites, references);
+        return new ChangeRequestSubmissionResult(sites, references);
     }
 
     /// <summary>
@@ -292,7 +292,7 @@ public class HttpCaseWorkingApiAdapter(
             );
         }
 
-        return new ChangeRequestSubmissionResult(response.SubmissionReference, sites);
+        return new ChangeRequestSubmissionResult(sites, [response.SubmissionReference]);
     }
 
     // ManagementBe echoes siteId as the operator sent it: a number, or a string if it was one.

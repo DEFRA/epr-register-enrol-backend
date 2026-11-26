@@ -7,7 +7,7 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 
 /// <summary>
 /// RA-492: an in-year change request against a granted (Approved) accreditation application: adding
-/// existing registered overseas reprocessing sites (RA-492) and, RA-682, changing accredited ones' details. It references
+/// existing registered overseas reprocessing sites and (RA-682) changing accredited ones' details. It references
 /// the sites by their existing <see cref="OverseasSiteModel.SiteId"/> and ORS id and never
 /// writes to the approved application, so the association stays pending until a regulator
 /// decision exists.
@@ -26,9 +26,10 @@ public class AccreditationChangeRequest
     public string RequestId { get; set; } = Guid.NewGuid().ToString();
 
     /// <summary>
-    /// RA-682: what the request changes as a whole, derived from its items (see
-    /// <see cref="ChangeRequestRules.RequestChangeType"/>): an add-ORS request when it adds any ORS (it is charged), an
-    /// update when it only changes ORS details. Each item carries its own type, which is what Case Management is sent.
+    /// RA-682: what the request changes as a whole: an add-ORS request when it adds any ORS (it is charged), an update
+    /// when it only changes ORS details. Set from the items at submit; until then the view derives it
+    /// (<see cref="ChangeRequestRules.RequestChangeType"/>), so a draft's stored value may be the default. Each item
+    /// carries its own type, which is what Case Management is sent.
     /// </summary>
     public string ChangeType { get; set; } = AddOverseasSiteChangeType;
 

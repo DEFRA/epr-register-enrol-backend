@@ -1,5 +1,6 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using FluentValidation.Results;
 
 namespace EprRegisterEnrolBackend.AccreditationChanges;
 
@@ -30,7 +31,9 @@ public static class ChangeRequestRules
             [ConditionsOfExport] = "Confirm whether the conditions of export are met.",
             [BesEvidence] = "Upload evidence of broadly equivalent standards for the overseas reprocessing site.",
             [Changes] = "Change at least one detail of the overseas reprocessing site, or remove it from the request.",
-            [Site] = "This overseas reprocessing site is no longer accredited, so its details can't be changed. Remove it from the request.",
+            [Site] =
+                "This overseas reprocessing site is no longer accredited, so its details can't be changed. "
+                + "Remove it from the request.",
         };
 
     /// <summary>
@@ -178,15 +181,33 @@ public static class ChangeRequestRules
 
     /// <summary>
     /// RA-682: the request's own type, from its items: add-ORS when it adds any ORS (so it is charged), an update when
-    /// it only changes ORS details. Registration-only requests and RA-697's tonnage band upgrade requests keep theirs.
+    /// it only changes ORS details.
     /// </summary>
-    public static string RequestChangeType(AccreditationChangeRequest request) =>
-        request.ApplicationId is null ? request.ChangeType
-        : request.Sites.Count > 0 && request.Sites.All(s => s.IsUpdate)
-            ? AccreditationChangeRequest.UpdateOverseasSiteChangeType
-            : request.ChangeType == AccreditationChangeRequest.UpdateOverseasSiteChangeType
-                ? AccreditationChangeRequest.AddOverseasSiteChangeType
-                : request.ChangeType;
+    public static string RequestChangeType(AccreditationChangeRequest request)
+    {
+        // A registration-only request (RA-697) keeps its stored type, and so does a tonnage band upgrade, which has
+        // no sites.
+        if (request.ApplicationId is null || request.Sites.Count == 0)
+            return request.ChangeType;
+        if (request.Sites.All(s => s.IsUpdate))
+            return AccreditationChangeRequest.UpdateOverseasSiteChangeType;
+        // An update-only request that was reopened and then had an ORS added is an add-ORS request now.
+        return request.ChangeType == AccreditationChangeRequest.UpdateOverseasSiteChangeType
+            ? AccreditationChangeRequest.AddOverseasSiteChangeType
+            : request.ChangeType;
+    }
+
+    /// <summary>
+    /// RA-682: the order a request's items go to Case Management in: one submission per change type, adds first. The
+    /// adapter sends them in this order, so when a submission fails the groups after it were never sent.
+    /// </summary>
+    public static List<IGrouping<string, ChangeRequestSite>> SubmissionGroups(AccreditationChangeRequest request) =>
+        [
+            .. request
+                .Sites.GroupBy(s => s.ChangeType)
+                .OrderBy(g => g.Key == AccreditationChangeRequest.AddOverseasSiteChangeType ? 0 : 1)
+                .ThenBy(g => g.Key, StringComparer.Ordinal),
+        ];
 
     // RA-682 AC02: a locked value may be sent back as the form shows it, but not changed. A blank one matches a stored
     // value that is blank or missing, and both sides are trimmed: the form can't tell them apart.
@@ -196,12 +217,43 @@ public static class ChangeRequestRules
     private static bool SameCodes(IEnumerable<string>? sent, IEnumerable<string>? stored) =>
         (sent ?? []).ToHashSet(StringComparer.Ordinal).SetEquals(stored ?? []);
 
-    private static readonly HashSet<string> s_lockedOrsFields = [Country, Coordinates, OperationCodes, ConditionsOfExport];
+    private static readonly string[] s_lockedOrsFields = [Country, Coordinates, OperationCodes, ConditionsOfExport];
 
-    /// <summary>RA-682 AC02: whether a field of an accredited ORS is locked, so an update can't change it.</summary>
-    public static bool IsLockedOrsField(string field) => s_lockedOrsFields.Contains(field);
+    private static readonly string[] s_lockedInterimFields =
+    [
+        nameof(AddInterimSiteRequest.Country),
+        nameof(AddInterimSiteRequest.OperationCodes),
+    ];
 
-    private static readonly string[] s_lockedOrsFieldMessage = ["can't be changed for an accredited overseas site."];
+    private const string LockedOrsFieldMessage = "can't be changed for an accredited overseas site.";
+
+    /// <summary>
+    /// RA-682 AC02: validation errors with those on an update's locked ORS fields left out. The form echoes the locked
+    /// values back from read-only inputs, blank when the ORS has none, so they are checked against the ORS instead
+    /// (<see cref="ChangedLockedOrsFields"/>).
+    /// </summary>
+    public static Dictionary<string, string[]> WithoutLockedOrsFieldErrors(ValidationResult validation) =>
+        WithoutErrorsOn(validation, s_lockedOrsFields);
+
+    /// <summary>
+    /// RA-682 AC04: validation errors with those on a changed interim site's country and recycling operations left
+    /// out. They stay as they are (<see cref="ChangedLockedInterimFields"/>), so the create rules don't apply: an
+    /// interim site from before RA-486 has no recycling operations, which the create rules would refuse.
+    /// </summary>
+    public static Dictionary<string, string[]> WithoutLockedInterimFieldErrors(ValidationResult validation) =>
+        WithoutErrorsOn(validation, s_lockedInterimFields);
+
+    // A list's rules report each element as "Field[0]", so a field's errors are matched on its name or that prefix.
+    private static Dictionary<string, string[]> WithoutErrorsOn(ValidationResult validation, string[] fields) =>
+        validation
+            .Errors.Where(e =>
+                !fields.Any(f =>
+                    e.PropertyName.Equals(f, StringComparison.OrdinalIgnoreCase)
+                    || e.PropertyName.StartsWith(f + "[", StringComparison.OrdinalIgnoreCase)
+                )
+            )
+            .GroupBy(e => e.PropertyName)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
 
     /// <summary>
     /// RA-682 AC02: the locked fields an update's PATCH would change on the accredited ORS, as validation errors.
@@ -216,7 +268,7 @@ public static class ChangeRequestRules
         void Locked(string field, bool isChanged)
         {
             if (isChanged)
-                changed[field] = [$"{field} {s_lockedOrsFieldMessage[0]}"];
+                changed[field] = [$"{field} {LockedOrsFieldMessage}"];
         }
         Locked(Country, body.Country is not null && !SameText(body.Country, site.Country));
         Locked(Coordinates, body.Coordinates is not null && !SameText(body.Coordinates, site.Coordinates));
@@ -269,12 +321,14 @@ public static class ChangeRequestRules
 
     /// <summary>
     /// RA-682 AC04: the update's change to one existing interim site. There is at most one per interim site: a change
-    /// replaces a removal, and a change back to what the site holds drops it.
+    /// replaces a removal, and a change back to what the site holds drops it. The interim site keeps its own country
+    /// and recycling operations, whatever the form sent back for them.
     /// </summary>
-    public static void SetInterimChange(ChangeRequestSite item, InterimSiteModel interim, InterimSiteDetails proposed)
+    public static void SetInterimChange(ChangeRequestSite item, InterimSiteModel interim, InterimSiteDetails changed)
     {
         item.InterimSiteChanges.RemoveAll(c => c.InterimSiteId == interim.SiteId);
         var previous = InterimSiteDetails.From(interim);
+        var proposed = changed with { Country = previous.Country, OperationCodes = previous.OperationCodes };
         if (proposed != previous)
             item.InterimSiteChanges.Add(
                 new InterimSiteChange
@@ -308,7 +362,8 @@ public static class ChangeRequestRules
     /// <summary>
     /// RA-682 AC07: takes an update's previous details from the ORS as it stands at submit, so the history and Case
     /// Management see the values the change replaces. A detail the operator didn't change follows the ORS; one they did
-    /// keeps their value. Interim site changes take the interim sites' current values as their previous ones.
+    /// keeps their value. A change to an interim site is rebased the same way, and dropped if it no longer changes
+    /// anything. Only for an item Case Management can't already hold: a held one would be replayed as first sent.
     /// </summary>
     public static void RebaseOnCurrent(ChangeRequestSite item, OverseasSiteModel site)
     {
@@ -328,10 +383,31 @@ public static class ChangeRequestRules
             RepatriatedLoads = Follow(proposed.RepatriatedLoads, before.RepatriatedLoads, current.RepatriatedLoads),
         };
         item.Previous = current;
-        foreach (var change in item.InterimSiteChanges.Where(c => c.InterimSiteId is not null))
+        foreach (var change in item.InterimSiteChanges.Where(c => c.InterimSiteId is not null).ToList())
         {
-            if (ActiveInterimSite(site, change.InterimSiteId!.Value) is { } interim)
-                change.Previous = InterimSiteDetails.From(interim);
+            if (ActiveInterimSite(site, change.InterimSiteId!.Value) is not { } interim)
+                continue;
+            var was = change.Previous;
+            var now = InterimSiteDetails.From(interim);
+            change.Previous = now;
+            if (change.Action != InterimSiteChange.Change || was is null || change.Proposed is not { } mine)
+                continue;
+            change.Proposed = mine with
+            {
+                SiteName = Follow(mine.SiteName, was.SiteName, now.SiteName)!,
+                AddressLine1 = Follow(mine.AddressLine1, was.AddressLine1, now.AddressLine1)!,
+                AddressLine2 = Follow(mine.AddressLine2, was.AddressLine2, now.AddressLine2),
+                TownOrCity = Follow(mine.TownOrCity, was.TownOrCity, now.TownOrCity)!,
+                StateOrRegion = Follow(mine.StateOrRegion, was.StateOrRegion, now.StateOrRegion),
+                Postcode = Follow(mine.Postcode, was.Postcode, now.Postcode),
+                ContactName = Follow(mine.ContactName, was.ContactName, now.ContactName)!,
+                ContactEmail = Follow(mine.ContactEmail, was.ContactEmail, now.ContactEmail)!,
+                ContactPhone = Follow(mine.ContactPhone, was.ContactPhone, now.ContactPhone)!,
+                Country = now.Country,
+                OperationCodes = now.OperationCodes,
+            };
+            if (change.Proposed == now)
+                item.InterimSiteChanges.Remove(change);
         }
     }
 

@@ -179,6 +179,24 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
         result.SubmissionReferences.Should().Equal("SUB-2026-0007", "SUB-2026-0008");
     }
 
+    // A defect in a later group isn't a Case Management failure, so it isn't reported as a partly held request.
+    [Fact]
+    public async Task A_defect_in_a_later_group_is_not_wrapped()
+    {
+        var handler = new QueuedHandler((HttpStatusCode.Created, Response("SUB-2026-0009", (902504, "IYC-ORS-2026-00009"))));
+        var update = Update(902501, "001", "Gdansk Recycling Renamed");
+        update.SiteId = 999999;
+        var request = Request(
+            new ChangeRequestSite { SiteId = 902504, OrsId = "004", SiteName = "Ghent Recycling NV", ChargePence = 32800 },
+            update
+        );
+
+        var act = () => AdapterFor(handler).SubmitChangeRequestAsync(request, Accreditation, Ct);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        handler.Bodies.Should().ContainSingle();
+    }
+
     [Fact]
     public async Task An_update_whose_ORS_is_not_found_is_not_sent()
     {
