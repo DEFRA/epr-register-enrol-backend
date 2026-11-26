@@ -347,6 +347,11 @@ public class AccreditationApplicationPersistence(
         return (items, total);
     }
 
+    // The applications collection as raw documents, for the admin reads that must see what is
+    // stored rather than what the model makes of it.
+    private IMongoCollection<BsonDocument> RawCollection =>
+        Collection.Database.GetCollection<BsonDocument>(Collection.CollectionNamespace.CollectionName);
+
     public async Task<BsonDocument?> GetLegacyApplicationAsync(
         string reference,
         TimeSpan? maxTime = null,
@@ -362,10 +367,88 @@ public class AccreditationApplicationPersistence(
 
         // Raw, not through the model: the class map ignores elements it doesn't know, and the admin
         // view is for seeing the document as it is.
-        var raw = Collection.Database.GetCollection<BsonDocument>(Collection.CollectionNamespace.CollectionName);
-        return await raw.Find(filter, new FindOptions { MaxTime = maxTime })
+        return await RawCollection.Find(filter, new FindOptions { MaxTime = maxTime })
             .Limit(1)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<LegacyApplicationStatus>> GetLegacyApplicationStatusesAsync(
+        IReadOnlyCollection<Guid> workItemIds,
+        TimeSpan? maxTime = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var linkElement = ElementName(nameof(AccreditationApplicationModel.CaseManagementWorkItemId));
+        var statusElement = ElementName(nameof(AccreditationApplicationModel.ApplicationStatus));
+        // Raw, so a document with no status is seen as such: read through the model it would
+        // silently become the model's default, Saved.
+        // Standard (BinData subtype 4) is the only representation the link is ever stored in: its one
+        // writer is the model's [BsonGuidRepresentation(GuidRepresentation.Standard)]
+        // (AccreditationApplicationModel.CaseManagementWorkItemId, set at submit), with no global
+        // GuidSerializer and no script or migration writing the element. The attribute came three
+        // days after the field (0ccd1c7 after bab2388), and in between the 3.x driver refused to write
+        // an unannotated Guid at all, so no legacy (subtype 3) link was ever stored.
+        var filter = new BsonDocument(
+            linkElement,
+            new BsonDocument(
+                "$in",
+                new BsonArray(workItemIds.Select(id => new BsonBinaryData(id, GuidRepresentation.Standard)))
+            )
+        );
+        var projection = new BsonDocument { { "_id", 1 }, { linkElement, 1 }, { statusElement, 1 } };
+        var documents = await RawCollection.Find(filter, new FindOptions { MaxTime = maxTime })
+            .Project(projection)
+            .ToListAsync(cancellationToken);
+
+        var statuses = documents.Select(document => ReadStatus(document, linkElement, statusElement)).ToList();
+        // The unique index on the link means this can't happen; if it ever does, neither is "the" one.
+        var shared = statuses.GroupBy(s => s.WorkItemId).FirstOrDefault(g => g.Count() > 1);
+        if (shared is not null)
+        {
+            throw new LegacyApplicationStatusUnreadableException(
+                shared.Key,
+                shared.Last().ApplicationId,
+                $"another application ({shared.First().ApplicationId}) is linked to the same work item"
+            );
+        }
+
+        return statuses;
+    }
+
+    // The status as the model reads it (so a status stored as a number reads as it does everywhere
+    // else), but only when one is stored, and only when it is one of the enum's values.
+    private static LegacyApplicationStatus ReadStatus(BsonDocument document, string linkElement, string statusElement)
+    {
+        var applicationId = document["_id"].AsObjectId;
+        var workItemId = document[linkElement].AsBsonBinaryData.ToGuid(GuidRepresentation.Standard);
+        if (!document.Contains(statusElement) || document[statusElement].IsBsonNull)
+            throw new LegacyApplicationStatusUnreadableException(workItemId, applicationId, "it has no applicationStatus");
+
+        ApplicationStatus status;
+        try
+        {
+            status = BsonSerializer.Deserialize<AccreditationApplicationModel>(document).ApplicationStatus;
+        }
+        catch (Exception ex) when (ex is FormatException or BsonException)
+        {
+            throw new LegacyApplicationStatusUnreadableException(
+                workItemId,
+                applicationId,
+                "its applicationStatus is not an ApplicationStatus",
+                ex
+            );
+        }
+
+        if (!Enum.IsDefined(status))
+        {
+            throw new LegacyApplicationStatusUnreadableException(
+                workItemId,
+                applicationId,
+                "its applicationStatus is not an ApplicationStatus"
+            );
+        }
+
+        return new LegacyApplicationStatus(workItemId, applicationId, status);
     }
 
     // The element a model property is stored under, from the class map, so a raw filter follows the

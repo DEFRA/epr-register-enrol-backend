@@ -30,21 +30,29 @@ public static class ChangeRequestStatusEndpoints
         app.MapPost(Route, StatusChangedFromCaseManagement).RequireCaseManagementCaller();
 
     /// <summary>
-    /// A Case Management state id to the item status it projects onto, as for an application, minus the statuses an
-    /// item has no equivalent for. Anything else (awaiting-decision, the pending-contact states, anything added
-    /// later) leaves the status alone and only advances the item's ordering watermark. "assessment-started" is
-    /// never pushed (its start step is excluded) and is here, as on the application route, only as a safeguard.
+    /// A Case Management state id to the item status it projects onto: the application's mapping
+    /// (<see cref="CaseManagementStatusMapping.StatusPushMap"/>, the one table of state ids both push receivers and
+    /// the admin API use), projected onto <see cref="ChangeItemStatus"/>. It is not a second table because the state
+    /// ids and what they mean are the same; only the target type differs. An item has no AwaitingDecision, so
+    /// awaiting-decision, like a state with no entry, leaves the status alone and only advances the item's ordering
+    /// watermark. Awaiting-decision is a known state and is not logged; a state with no entry is logged at Error
+    /// unless it is one of <see cref="CaseManagementStatusMapping.KnownIgnoredStateIds"/>. A status the table gains
+    /// that this projection does not name throws, so adding a state id to the table can't silently skip items
+    /// (ChangeRequestStatusEndpointTests pins every entry).
     /// </summary>
     internal static ChangeItemStatus? MapState(string toStateId) =>
-        toStateId switch
+        CaseManagementStatusMapping.ForStatusPush(toStateId) switch
         {
-            "submitted" => ChangeItemStatus.Submitted,
-            "duly-made" or "assessment-started" => ChangeItemStatus.DulyMade,
-            "updated" or "assessment-in-progress" => ChangeItemStatus.Updated,
+            null or ApplicationStatus.AwaitingDecision => null,
+            ApplicationStatus.Submitted => ChangeItemStatus.Submitted,
+            ApplicationStatus.DulyMade => ChangeItemStatus.DulyMade,
+            ApplicationStatus.Updated => ChangeItemStatus.Updated,
             // The grant: the site joins the accreditation in the same transaction (ChangeRequestGrant).
-            "approved" => ChangeItemStatus.Approved,
-            "rejected" => ChangeItemStatus.Rejected,
-            _ => null,
+            ApplicationStatus.Approved => ChangeItemStatus.Approved,
+            ApplicationStatus.Rejected => ChangeItemStatus.Rejected,
+            { } unprojected => throw new InvalidOperationException(
+                $"CaseManagementStatusMapping maps toStateId={toStateId} to {unprojected}, which has no change request item status."
+            ),
         };
 
     private static bool IsTerminal(ChangeItemStatus status) =>
@@ -77,6 +85,14 @@ public static class ChangeRequestStatusEndpoints
         var correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var values)
             ? values.ToString()
             : "(absent)";
+        if (
+            CaseManagementStatusMapping.RejectMissingToStateId(logger, Operation, workItemId, request, correlationId)
+            is { } missingToStateId
+        )
+            return missingToStateId;
+        // awaiting-decision is in the shared table, so it is known here too, though an item has no status for it.
+        CaseManagementStatusMapping.LogUnknownState(logger, Operation, workItemId, request, correlationId);
+
         var push = new Push(workItemId, request, MapState(request.ToStateId), correlationId);
 
         // AC6: a grant is accredited from the date the caseworker entered, which only Case Management knows.
