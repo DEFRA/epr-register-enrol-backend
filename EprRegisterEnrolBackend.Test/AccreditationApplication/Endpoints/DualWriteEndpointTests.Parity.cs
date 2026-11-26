@@ -25,14 +25,14 @@ public sealed partial class DualWriteEndpointTests
     }
 
     // A write's response carries the time it set in memory (to the tick); Mongo stores milliseconds, so a read
-    // afterwards shows the stored value. That is true with the flag off too, so compare to the millisecond.
-    private static readonly Regex s_fraction = new(@"\.(\d+)Z", RegexOptions.Compiled);
+    // afterwards shows the stored value. That is true with the flag off too, so compare to the millisecond (a whole second has no fraction at all).
+    private static readonly Regex s_fraction = new(@"(\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z", RegexOptions.Compiled);
 
     private static JsonNode ToMilliseconds(JsonNode node) =>
         JsonNode.Parse(
             s_fraction.Replace(
                 node.ToJsonString(),
-                m => "." + m.Groups[1].Value.PadRight(3, '0')[..3] + "Z"
+                m => m.Groups[1].Value + "." + m.Groups[2].Value.PadRight(3, '0')[..3] + "Z"
             )
         )!;
 
