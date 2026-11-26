@@ -95,7 +95,9 @@ public static class QueriedItemRules
     {
         if (site is null)
             return [];
-        var sites = site.InterimSites.Count > 0 ? site.InterimSites : site.InterimSite is null ? [] : [site.InterimSite];
+        IEnumerable<InterimSiteModel> sites = site.InterimSites;
+        if (site.InterimSites.Count == 0 && site.InterimSite is not null)
+            sites = [site.InterimSite];
         return sites.Where(s => s.RemovedAt is null);
     }
 

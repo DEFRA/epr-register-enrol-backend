@@ -268,18 +268,22 @@ public static class QueriedItemEndpoints
         return await AccreditationChangeEndpoints.SaveAndViewAsync(request!, accreditation!, services);
     }
 
+    internal sealed record ResubmitServices(
+        IValidator<ResubmitItemRequest> Validator,
+        ICaseWorkingApiAdapter CaseWorking,
+        TimeProvider Clock
+    );
+
     private static async Task<IResult> Resubmit(
         string organisationId,
         string applicationId,
         Guid itemId,
         ResubmitItemRequest body,
-        IValidator<ResubmitItemRequest> validator,
-        ICaseWorkingApiAdapter caseWorking,
-        TimeProvider clock,
+        [AsParameters] ResubmitServices resubmit,
         [AsParameters] AccreditationChangeEndpoints.ChangeServices services
     )
     {
-        var validation = await validator.ValidateAsync(body, services.CancellationToken);
+        var validation = await resubmit.Validator.ValidateAsync(body, services.CancellationToken);
         if (!validation.IsValid)
             return Results.ValidationProblem(validation.ToDictionary());
 
@@ -317,7 +321,7 @@ public static class QueriedItemEndpoints
                 statusCode: StatusCodes.Status422UnprocessableEntity
             );
 
-        var now = clock.GetUtcNow().UtcDateTime;
+        var now = resubmit.Clock.GetUtcNow().UtcDateTime;
         var current = QueriedItemRules.Values(item.Answers);
         var response = new ChangeRequestQueryResponse(
             now,
@@ -351,7 +355,7 @@ public static class QueriedItemEndpoints
             Email = body.Email ?? request!.SubmittedBy?.Email ?? string.Empty,
             Role = body.JobTitle,
         };
-        var result = await caseWorking.ResumeChangeRequestItemFromQueryAsync(
+        var result = await resubmit.CaseWorking.ResumeChangeRequestItemFromQueryAsync(
             item,
             contact,
             response,
@@ -411,7 +415,7 @@ public static class QueriedItemEndpoints
             {
                 QueryNote = body.Note.Trim(),
                 RaisedAt = body.RaisedAt ?? clock.GetUtcNow().UtcDateTime,
-                BesFileIdsAtQuery = [.. (item.BesEvidence?.BesEvidenceUploads ?? []).Select(f => f.FileId)],
+                BesFileIdsAtQuery = (item.BesEvidence?.BesEvidenceUploads ?? []).Select(f => f.FileId).ToList(),
                 AnswersAtQuery = QueriedItemRules.Clone(item.Answers),
                 QuerySubmissions = item.Query?.QuerySubmissions ?? [],
             };

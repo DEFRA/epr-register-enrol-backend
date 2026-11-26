@@ -102,7 +102,7 @@ internal static class ChangeRequestGrant
     /// classification, the coordinates, the R codes and the conditions of export answer. Only what was supplied; the
     /// site's other details are its registered ones and are left alone.
     /// </summary>
-    private static void ApplySuppliedAnswers(OverseasSiteModel site, ChangeRequestSiteAnswers answers)
+    internal static void ApplySuppliedAnswers(OverseasSiteModel site, ChangeRequestSiteAnswers answers)
     {
         if (answers.Country is { } country)
         {
@@ -171,7 +171,7 @@ internal static class ChangeRequestGrant
     /// country is also the address's. Only the supplied fields, so the ORS's other details are not overwritten with
     /// the accreditation application's copy of them.
     /// </summary>
-    private static void ApplySuppliedAnswers(
+    internal static void ApplySuppliedAnswers(
         OverseasSiteEntity ors,
         ChangeRequestSiteAnswers answers,
         OverseasSiteModel site

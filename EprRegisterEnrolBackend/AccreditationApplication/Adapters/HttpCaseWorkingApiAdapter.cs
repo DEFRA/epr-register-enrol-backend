@@ -28,6 +28,7 @@ public class HttpCaseWorkingApiAdapter(
 
     // Named HttpClient registered in Program.cs (carries the explicit 15s timeout).
     private const string DefaultHttpClientName = "DefaultClient";
+    private const string FailedToReachManagementBe = "Failed to reach ManagementBe at {Endpoint}";
 
     // The response body is attached via BeginScope under a dotted key, not interpolated into
     // the message template: CDP's OpenSearch ingestion pipeline only recognises the specific
@@ -411,7 +412,7 @@ public class HttpCaseWorkingApiAdapter(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            logger.LogError(ex, FailedToReachManagementBe, endpoint);
             throw;
         }
 
@@ -585,7 +586,7 @@ public class HttpCaseWorkingApiAdapter(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            logger.LogError(ex, FailedToReachManagementBe, endpoint);
             return new ResumeFromQueryResult(false);
         }
     }
@@ -616,7 +617,7 @@ public class HttpCaseWorkingApiAdapter(
             return new ResumeFromQueryResult(false);
         }
 
-        var body = new ResumeChangeRequestItemFromQueryRequest
+        var body = new ResumeItemFromQueryBody
         {
             ResponderContactDetails = new
             {
@@ -669,7 +670,7 @@ public class HttpCaseWorkingApiAdapter(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            logger.LogError(ex, FailedToReachManagementBe, endpoint);
             return new ResumeFromQueryResult(false);
         }
     }
@@ -731,7 +732,7 @@ public class HttpCaseWorkingApiAdapter(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            logger.LogError(ex, FailedToReachManagementBe, endpoint);
             return WithdrawResult.Failed;
         }
     }
@@ -1308,7 +1309,7 @@ public class HttpCaseWorkingApiAdapter(
     }
 
     // RA-698: the contract with ManagementBe's add-ORS resume-from-query action.
-    internal sealed class ResumeChangeRequestItemFromQueryRequest
+    internal sealed class ResumeItemFromQueryBody
     {
         public required object ResponderContactDetails { get; init; }
         public required DateTime SubmittedAt { get; init; }

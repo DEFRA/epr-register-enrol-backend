@@ -219,6 +219,38 @@ public class StubCaseWorkingApiAdapterTests
     }
 
     [Fact]
+    public async Task ResumeChangeRequestItemFromQueryAsync_ReturnsSuccess()
+    {
+        var sut = BuildSut();
+        var item = new ChangeRequestSite
+        {
+            SiteId = 1,
+            SiteName = "Site",
+            CaseManagementWorkItemId = Guid.NewGuid(),
+        };
+        var response = new ChangeRequestQueryResponse(
+            DateTime.UtcNow,
+            new Dictionary<string, string?> { ["siteName"] = "New" },
+            [new InterimSiteResponse(5, "003", new Dictionary<string, string?> { ["townOrCity"] = "Nice" })],
+            []
+        );
+
+        var result = await sut.ResumeChangeRequestItemFromQueryAsync(
+            item,
+            new QuerySubmitterContactDetails
+            {
+                FullName = "Jane Smith",
+                Email = "jane@example.com",
+                Role = "Manager",
+            },
+            response,
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task WithdrawApplicationAsync_ReturnsSuccess()
     {
         var sut = BuildSut();
