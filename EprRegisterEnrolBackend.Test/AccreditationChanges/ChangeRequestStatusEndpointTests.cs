@@ -373,6 +373,45 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
     }
 
+    // An unknown toStateId still changes no item status and only advances the watermark, but is now logged at Error
+    // with the ids. awaiting-decision (in the shared table, no item equivalent) and queried (a deadline change on a
+    // queried item, CaseManagementStatusMapping.KnownIgnoredStateIds) are known and not logged.
+    [Theory]
+    [InlineData("unmapped-future-state", true)]
+    [InlineData("awaiting-decision", false)]
+    [InlineData("queried", false)]
+    public async Task StateWithNoItemStatus_ChangesNoStatusAndLogsErrorOnlyWhenUnknown(string toStateId, bool loggedAsUnknown)
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var logs = new CapturingLoggerFactory();
+        using var client = _factory
+            .WithWebHostBuilder(builder =>
+                builder.ConfigureTestServices(services => services.AddSingleton<ILoggerFactory>(logs))
+            )
+            .CreateClient();
+        var occurredAt = Watermark.AddMinutes(5);
+
+        var response = await client.PostAsJsonAsync(
+            StatusUrl(_workItemId),
+            new { toStateId, actionId = "some-action", occurredAt },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
+        var errors = logs.Entries.Where(e => e.LogLevel == LogLevel.Error).ToList();
+        if (!loggedAsUnknown)
+        {
+            errors.Should().BeEmpty();
+            return;
+        }
+        var entry = errors.Should().ContainSingle().Subject;
+        entry.Message.Should().Contain($"ChangeRequestStatusChangedFromCaseManagement: status push to unknown toStateId={toStateId}");
+        entry.Message.Should().Contain($"workItemId={_workItemId}");
+        entry.Message.Should().Contain("actionId=some-action");
+    }
+
     // PR #297 review: the item route projects the application's table (CaseManagementStatusMapping.StatusPushMap)
     // rather than keeping its own copy of the state ids. Every entry projects, so a state id added to the table can't
     // reach an item push and throw; awaiting-decision has no item equivalent and leaves the status alone.

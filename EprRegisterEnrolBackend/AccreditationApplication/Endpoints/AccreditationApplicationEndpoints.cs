@@ -4454,6 +4454,13 @@ public static class AccreditationApplicationEndpoints
             ) is { } missingToStateId
         )
             return missingToStateId;
+        CaseManagementStatusMapping.LogUnknownState(
+            logger,
+            nameof(StatusChangedFromCaseManagement),
+            workItemId,
+            request,
+            correlationId
+        );
 
         // RA-644 B8f: read once outside the transaction for the application id the unit of work
         // migrates and syncs; the work reads it again in the session.

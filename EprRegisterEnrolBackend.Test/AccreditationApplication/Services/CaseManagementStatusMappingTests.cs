@@ -30,4 +30,13 @@ public class CaseManagementStatusMappingTests
 
         map.Should().Throw<ArgumentException>();
     }
+
+    // A known-ignored state sets no status by design, so it must not also be in the table.
+    [Fact]
+    public void KnownIgnoredStateIds_AreNotInTheTable()
+    {
+        CaseManagementStatusMapping.KnownIgnoredStateIds.Should().Equal("queried");
+        foreach (var stateId in CaseManagementStatusMapping.KnownIgnoredStateIds)
+            CaseManagementStatusMapping.ForStatusPush(stateId).Should().BeNull();
+    }
 }

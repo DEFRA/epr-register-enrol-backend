@@ -13,11 +13,12 @@ public static class CaseManagementStatusMapping
 {
     /// <summary>
     /// Raw Case Management state id (the status push's <c>toStateId</c>) to the status it sets, in
-    /// the order the admin API lists them. A state with no entry (anything the Case Management
-    /// service adds in future) is a deliberate no-op for <see cref="ApplicationStatus"/>: the push
-    /// still updates <c>CaseManagementStatusUpdatedAt</c> for ordering. "queried" and "withdrawn"
-    /// are never sent as a status push: a query has its own richer push
-    /// (<see cref="QueryPushStatus"/>), and withdrawal is out of scope for the push (§4.1, §4.5).
+    /// the order the admin API lists them. A push to a state with no entry still sets no status
+    /// (RA-368 §4.3): it only updates <c>CaseManagementStatusUpdatedAt</c> for ordering. Unless the
+    /// state is in <see cref="KnownIgnoredStateIds"/>, it is also logged at Error
+    /// (<see cref="LogUnknownState"/>), because only a state Case Management added without this
+    /// table being told lands there. Withdrawal is out of scope for the push (§4.1, §4.5), so
+    /// "withdrawn" is never sent (management-be <c>StandardStatusPushHook</c> excludes it).
     /// <para>
     /// "assessment-started" (RA-527 follow-up) is the Case Management service's internal "started
     /// but still Duly made" state. Its start step is excluded from pushes, so it is never sent by
@@ -43,6 +44,20 @@ public static class CaseManagementStatusMapping
         StatusPushMap,
         StringComparer.Ordinal
     );
+
+    /// <summary>
+    /// States Case Management pushes in normal traffic that deliberately set no status, so a push to
+    /// one is not logged as unknown. "queried": a deadline change on a queried item (management-be
+    /// <c>SlaService.ExtendAsync</c>, the StandardWorkflow <c>sla-extend</c> self-loop
+    /// queried → queried) is pushed with the item still queried, because
+    /// <c>StandardStatusPushHook</c> never excludes a self-loop (RA-351). The query itself has its
+    /// own richer push (<see cref="QueryPushStatus"/>), which is what sets Queried; the extend
+    /// changes no status here.
+    /// </summary>
+    public static readonly IReadOnlySet<string> KnownIgnoredStateIds = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "queried",
+    };
 
     /// <summary>The status a query push (<c>/case-management/{workItemId}/query</c>) sets.</summary>
     public const ApplicationStatus QueryPushStatus = ApplicationStatus.Queried;
@@ -93,5 +108,33 @@ public static class CaseManagementStatusMapping
             correlationId ?? "(absent)"
         );
         return Results.Problem(detail: MissingToStateIdDetail, statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    /// <summary>
+    /// Logs at Error a status push to a state that is neither in <see cref="StatusPushMap"/> nor in
+    /// <see cref="KnownIgnoredStateIds"/>: Case Management has a state this service was never told
+    /// about. The push is still answered and applied as before (no status change, ordering only);
+    /// this only makes it visible. Call after <see cref="RejectMissingToStateId"/>.
+    /// </summary>
+    internal static void LogUnknownState(
+        ILogger logger,
+        string operation,
+        Guid workItemId,
+        StatusChangedFromCaseManagementRequest request,
+        string? correlationId
+    )
+    {
+        if (ByStateId.ContainsKey(request.ToStateId) || KnownIgnoredStateIds.Contains(request.ToStateId))
+            return;
+
+        logger.LogError(
+            "{Operation}: status push to unknown toStateId={ToStateId} sets no status, for workItemId={WorkItemId} actionId={ActionId} occurredAt={OccurredAt} correlationId={CorrelationId}",
+            operation,
+            request.ToStateId,
+            workItemId,
+            request.ActionId,
+            request.OccurredAt,
+            correlationId ?? "(absent)"
+        );
     }
 }

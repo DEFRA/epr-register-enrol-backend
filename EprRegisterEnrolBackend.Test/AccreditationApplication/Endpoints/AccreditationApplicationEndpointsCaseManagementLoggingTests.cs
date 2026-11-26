@@ -138,4 +138,62 @@ public class AccreditationApplicationEndpointsCaseManagementLoggingTests
         stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
         stored.CaseManagementStatusUpdatedAt.Should().Be(watermark);
     }
+
+    // An unknown toStateId is still accepted with no status change, the push only advancing the
+    // ordering watermark (RA-368 §4.3), but it is now logged at Error with the ids. "queried" is
+    // known and not logged: management-be pushes it for a deadline change on a queried item
+    // (CaseManagementStatusMapping.KnownIgnoredStateIds).
+    [Theory]
+    [InlineData("unmapped-future-state", true)]
+    [InlineData("approved-pending-contact", true)]
+    [InlineData("queried", false)]
+    public async Task StatusChangedFromCaseManagement_StateWithNoEntry_SetsNoStatusAndLogsErrorUnlessKnown(
+        string toStateId,
+        bool loggedAsUnknown
+    )
+    {
+        _factory.FakePersistence.Clear();
+        _factory.LogCapture.Clear();
+        var workItemId = Guid.NewGuid();
+        var occurredAt = DateTime.UtcNow;
+        _factory.FakePersistence.Seed(
+            new AccreditationApplicationModel
+            {
+                Id = ObjectId.GenerateNewId(),
+                OrganisationId = "org-123",
+                Year = 2026,
+                MaterialType = MaterialType.Steel,
+                ApplicationStatus = ApplicationStatus.Submitted,
+                CaseManagementWorkItemId = workItemId,
+                CaseManagementStatusUpdatedAt = occurredAt.AddMinutes(-5),
+            }
+        );
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            new StatusChangedFromCaseManagementRequest
+            {
+                ToStateId = toStateId,
+                ActionId = "sla-extend",
+                OccurredAt = occurredAt,
+            },
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = await _factory.FakePersistence.GetByCaseManagementWorkItemIdAsync(workItemId);
+        stored!.ApplicationStatus.Should().Be(ApplicationStatus.Submitted);
+        stored.CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
+        var errors = _factory.LogCapture.Entries.Where(e => e.LogLevel == LogLevel.Error).ToList();
+        if (!loggedAsUnknown)
+        {
+            errors.Should().BeEmpty();
+            return;
+        }
+        var entry = errors.Should().ContainSingle().Subject;
+        entry.Message.Should().Contain($"StatusChangedFromCaseManagement: status push to unknown toStateId={toStateId}");
+        entry.Message.Should().Contain($"workItemId={workItemId}");
+        entry.Message.Should().Contain("actionId=sla-extend");
+        entry.Message.Should().Contain("correlationId=(absent)");
+    }
 }

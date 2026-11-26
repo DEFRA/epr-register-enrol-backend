@@ -35,8 +35,10 @@ public static class ChangeRequestStatusEndpoints
     /// the admin API use), projected onto <see cref="ChangeItemStatus"/>. It is not a second table because the state
     /// ids and what they mean are the same; only the target type differs. An item has no AwaitingDecision, so
     /// awaiting-decision, like a state with no entry, leaves the status alone and only advances the item's ordering
-    /// watermark. A status the table gains that this projection does not name throws, so adding a state id to the
-    /// table can't silently skip items (ChangeRequestStatusEndpointTests pins every entry).
+    /// watermark. Awaiting-decision is a known state and is not logged; a state with no entry is logged at Error
+    /// unless it is one of <see cref="CaseManagementStatusMapping.KnownIgnoredStateIds"/>. A status the table gains
+    /// that this projection does not name throws, so adding a state id to the table can't silently skip items
+    /// (ChangeRequestStatusEndpointTests pins every entry).
     /// </summary>
     internal static ChangeItemStatus? MapState(string toStateId) =>
         CaseManagementStatusMapping.ForStatusPush(toStateId) switch
@@ -88,6 +90,8 @@ public static class ChangeRequestStatusEndpoints
             is { } missingToStateId
         )
             return missingToStateId;
+        // awaiting-decision is in the shared table, so it is known here too, though an item has no status for it.
+        CaseManagementStatusMapping.LogUnknownState(logger, Operation, workItemId, request, correlationId);
 
         var push = new Push(workItemId, request, MapState(request.ToStateId), correlationId);
 
