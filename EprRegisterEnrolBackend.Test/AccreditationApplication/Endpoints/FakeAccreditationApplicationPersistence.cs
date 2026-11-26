@@ -210,6 +210,25 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 .FirstOrDefault()
         );
 
+    public Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
+        int orgId,
+        string registrationNumber,
+        int firstYear,
+        TimeSpan? maxTime = null
+    ) =>
+        Task.FromResult<IReadOnlyList<AccreditationApplicationModel>>(
+            _store
+                .Where(a =>
+                    a.OrgId == orgId
+                    && a.RegistrationReference == registrationNumber
+                    && a.Year >= firstYear
+                )
+                .OrderBy(a => a.Year)
+                .ThenBy(a => a.Id)
+                .Select(ShallowCopy)
+                .ToList()
+        );
+
     public Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
@@ -748,6 +767,11 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
             // through this fake, latent until GetById's backfill-and-persist logic needed to see
             // a previously-stored value survive a round trip through this test double.
             OrgId = src.OrgId,
+            // RA-769: the same latent drop again - the case management accreditation summary reads these four.
+            OrganisationName = src.OrganisationName,
+            WasteProcessingType = src.WasteProcessingType,
+            SiteAddress = src.SiteAddress,
+            CompanyRegisteredAddress = src.CompanyRegisteredAddress,
             Year = src.Year,
             RegistrationId = src.RegistrationId,
             IsExporter = src.IsExporter,

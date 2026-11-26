@@ -491,6 +491,37 @@ public sealed class ModelBackedApplicationPersistence(
             .FirstOrDefault();
     }
 
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
+        int orgId,
+        string registrationNumber,
+        int firstYear,
+        TimeSpan? maxTime = null
+    )
+    {
+        var ofOrganisation = await OfOrganisationNumberAsync(orgId, CancellationToken.None);
+        if (ofOrganisation is null)
+        {
+            return [];
+        }
+
+        var results = await ProjectCurrentAsync(
+            ofOrganisation,
+            null,
+            CancellationToken.None,
+            maxTime
+        );
+
+        return results
+            .Where(a =>
+                a.OrgId == orgId
+                && a.RegistrationReference == registrationNumber
+                && a.Year >= firstYear
+            )
+            .OrderBy(a => a.Year)
+            .ThenBy(a => a.Id)
+            .ToList();
+    }
+
     public async Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total

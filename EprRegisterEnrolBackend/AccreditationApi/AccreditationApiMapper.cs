@@ -6,11 +6,11 @@ using Microsoft.Extensions.Logging;
 namespace EprRegisterEnrolBackend.AccreditationApi;
 
 /// <summary>
-/// Builds the accreditation API's v2 responses from a granted accreditation application. This
-/// backend holds applications, not accreditations of its own, so a granted application is the
-/// accreditation. Nothing is invented beyond the one-entry histories the v2 mapping document
-/// prescribes for accreditations that predate effective-dated history: what the application
-/// does not hold is left out.
+/// Builds the accreditation API's v2 responses from a granted accreditation application, and a
+/// registration's from its applications. This backend holds applications, not accreditations of
+/// its own, so a granted application is the accreditation. Nothing is invented beyond the one-entry
+/// histories the v2 mapping document prescribes for accreditations that predate effective-dated
+/// history: what the application does not hold is left out.
 /// </summary>
 public static class AccreditationApiMapper
 {
@@ -76,9 +76,7 @@ public static class AccreditationApiMapper
         AccreditationApplicationModel application
     ) =>
         IsExporter(application)
-            ? AccreditedSites(application)
-                .OrderBy(site => site.OrsId, StringComparer.Ordinal)
-                .ThenBy(site => site.SiteId)
+            ? OrderedAccreditedSites(application)
                 .Select(site => ToOverseasSite(application, site))
                 .ToList()
             : null;
@@ -99,6 +97,14 @@ public static class AccreditationApiMapper
     public static IEnumerable<OverseasSiteModel> AccreditedSites(
         AccreditationApplicationModel application
     ) => (application.OverseasSites?.Sites ?? []).Where(site => site.Selected);
+
+    // The accredited sites in ORS id then site id order: how the accreditation lists them.
+    public static IEnumerable<OverseasSiteModel> OrderedAccreditedSites(
+        AccreditationApplicationModel application
+    ) =>
+        AccreditedSites(application)
+            .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+            .ThenBy(site => site.SiteId);
 
     public static AccreditationDto ToAccreditation(AccreditationApplicationModel application)
     {
@@ -170,6 +176,46 @@ public static class AccreditationApiMapper
                 .ToList(),
         };
     }
+
+    public static RegistrationDto ToRegistration(
+        int organisationNumber,
+        string registrationNumber,
+        IEnumerable<AccreditationApplicationModel> applications
+    ) =>
+        new()
+        {
+            OrganisationNumber = organisationNumber,
+            RegistrationNumber = registrationNumber,
+            Applications = applications.Select(ToRegistrationApplication).ToList(),
+        };
+
+    private static RegistrationApplicationDto ToRegistrationApplication(
+        AccreditationApplicationModel application
+    ) =>
+        new()
+        {
+            Year = application.Year,
+            ApplicationReference = Blank(application.ApplicationReference),
+            ApplicationStatus = application.ApplicationStatus.ToString(),
+            AccreditationNumber = Blank(application.AccreditationReference),
+            OverseasSites = (application.OverseasSites?.Sites ?? [])
+                .OrderBy(site => site.OrsId, StringComparer.Ordinal)
+                .ThenBy(site => site.SiteId)
+                .Select(ToRegistrationOverseasSite)
+                .ToList(),
+        };
+
+    private static RegistrationOverseasSiteDto ToRegistrationOverseasSite(OverseasSiteModel site) =>
+        new()
+        {
+            SiteId = site.SiteId,
+            OrsId = site.OrsId,
+            SiteName = site.SiteName,
+            FormattedAddress = Blank(site.SiteAddress),
+            Address = ToOverseasAddress(site),
+            Coordinates = Blank(site.Coordinates),
+            Selected = site.Selected,
+        };
 
     private static AccreditationSummaryDto Summary(
         AccreditationApplicationModel application,
@@ -318,7 +364,7 @@ public static class AccreditationApiMapper
             : contact;
     }
 
-    private static bool IsExporter(AccreditationApplicationModel application) =>
+    internal static bool IsExporter(AccreditationApplicationModel application) =>
         string.IsNullOrWhiteSpace(application.WasteProcessingType)
             ? application.IsExporter
             : string.Equals(
@@ -327,5 +373,7 @@ public static class AccreditationApiMapper
                 StringComparison.OrdinalIgnoreCase
             );
 
-    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+    // The empty-string-to-null rule for an optional text field. Shared with the Case Management
+    // accreditation summary (RA-769), so the two mappings of an accredited site treat blanks alike.
+    internal static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 }

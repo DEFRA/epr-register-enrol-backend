@@ -233,6 +233,27 @@ public class AccreditationApplicationPersistence(
             .FirstOrDefaultAsync();
     }
 
+    public async Task<IReadOnlyList<AccreditationApplicationModel>> GetByOrgIdAndRegistrationNumberAsync(
+        int orgId,
+        string registrationNumber,
+        int firstYear,
+        TimeSpan? maxTime = null
+    )
+    {
+        var filters = Builders<AccreditationApplicationModel>.Filter;
+        var filter = filters.And(
+            filters.Eq(a => a.OrgId, orgId),
+            filters.Eq(a => a.RegistrationReference, registrationNumber),
+            filters.Gte(a => a.Year, firstYear)
+        );
+
+        return await Collection
+            .Find(filter, new FindOptions { MaxTime = maxTime })
+            .SortBy(a => a.Year)
+            .ThenBy(a => a.Id)
+            .ToListAsync();
+    }
+
     public async Task<(
         IReadOnlyList<AccreditationApplicationModel> Items,
         long Total
@@ -879,7 +900,8 @@ public class AccreditationApplicationPersistence(
                 builder.Ascending(a => a.SourceReExAccreditationId)
             ),
             // Backs GetGrantedAccreditationAsync, called for every service client read of an
-            // accreditation (organisation number, registration number and year).
+            // accreditation (organisation number, registration number and year), and
+            // GetByOrgIdAndRegistrationNumberAsync, for a service client read of a registration.
             new CreateIndexModel<AccreditationApplicationModel>(
                 builder.Combine(
                     builder.Ascending(a => a.OrgId),
