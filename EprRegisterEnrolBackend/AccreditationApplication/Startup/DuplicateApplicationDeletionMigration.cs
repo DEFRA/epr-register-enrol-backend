@@ -19,7 +19,8 @@ public sealed class DuplicateApplicationDeletionOptions
     public bool Enabled { get; set; }
 
     // Off (with Enabled on): dry run - logs what it would delete, writes nothing. On, it deletes only
-    // when SpotCheckConfirmedBy is set and ExpectedDeletions equals the candidates this run finds.
+    // when SpotCheckConfirmedBy is set and ExpectedDeletions and ExpectedApplicationIds both match
+    // the candidates this run finds.
     public bool Apply { get; set; }
 
     // Who spot-checked this environment's dry run. Required before Apply takes effect.
@@ -28,17 +29,23 @@ public sealed class DuplicateApplicationDeletionOptions
     public string? SpotCheckConfirmedBy { get; set; }
 
     // The candidate count from this environment's reviewed dry run. If this run finds a different
-    // number the run stays a dry run (with an error log), so the reviewed set is exactly what is
-    // deleted.
+    // number the run stays a dry run (with an error log).
     public int? ExpectedDeletions { get; set; }
+
+    // The candidate ids from this environment's reviewed dry run, comma separated (the
+    // candidate-ids= value of its summary line). Apply proceeds only if this run's candidate ids are
+    // exactly this set; otherwise the run stays a dry run (with an error log). The count alone is
+    // not enough: one candidate could stop qualifying and another appear, leaving the count the same.
+    public string? ExpectedApplicationIds { get; set; }
 }
 
 // RA-788 (INC2560371): duplicate live applications exist for the same registration, because the
 // seed endpoint's read-then-create is not atomic. This one-off finds every duplicate in the legacy
 // accreditationApplications collection and deletes the abandoned draft, keeping the other
-// record(s). The domain model is out of scope. Records linked to a deleted one are left in place
-// and not checked. A Saved application has never been submitted to case management. There is no
-// backup copy: a restore comes from the CDP backup.
+// record(s). The domain model is out of scope: any domain-model copy of a deleted application is
+// not deleted. Records linked to a deleted one are left in place and not checked. A Saved
+// application has never been submitted to case management. There is no backup copy: a restore
+// comes from the CDP backup.
 //
 // Group: live (not Withdrawn) applications are grouped on organisationId, organisationName,
 // registrationId, materialType and year. Records with different registration references still
@@ -49,26 +56,29 @@ public sealed class DuplicateApplicationDeletionOptions
 // candidates are deleted only when it also has a keeper (skipped-no-keeper otherwise); a group with
 // no candidate is logged for a human (skipped-no-candidate).
 //
-// Settings: Enabled alone is a dry run. Apply deletes only with SpotCheckConfirmedBy set and
-// ExpectedDeletions equal to the number of candidates found this run.
+// Settings: Enabled alone is a dry run. Apply deletes only with SpotCheckConfirmedBy set,
+// ExpectedDeletions equal to the number of candidates found this run and ExpectedApplicationIds equal
+// to the set of their ids. Apply with no candidates found is treated as already done (an info log).
 //
 // Delete: one transaction per group. Each candidate is DeleteOne'd guarded on its scanned Version,
 // Saved, OrgId null and the five key values, and must delete exactly 1; then every keeper must
 // still be live and the group must hold exactly as many live records as it has keepers. Any failure
 // rolls that group back and the run moves on. Each delete is guarded, so a re-run or a second
-// instance finds nothing left to delete in a finished group.
+// instance finds nothing left to delete in a finished group; a group whose candidates are all
+// already gone is logged as deleted by another run, not as a failure.
 //
 // After an error that was not a failed check (a commit can fail with an unknown result), the
 // group's candidates are re-read: all gone means the delete committed, all present means it rolled
 // back, anything else - or a failed re-read, or a cancellation - is outcome unknown.
 //
-// Logging: every line starts RA-788 and states the mode. Each group line carries the group's
-// organisationId and organisationName so the set to be deleted can be reviewed. The reviewer and
-// applicant contact details are never logged. An exception is logged by its type only, as its
-// message could carry personal data.
+// Logging: every line starts RA-788 and states the mode. The summary (counts and candidate ids) is
+// logged first, then one line per group (with its candidates and keepers), then an outcome line.
+// Each group line carries the group's organisationId and organisationName so the set to be deleted
+// can be reviewed. The reviewer and applicant contact details are never logged. An exception is
+// logged by its type only, as its message could carry personal data.
 //
-// A BackgroundService, so a failure here logs rather than crash-looping the host. The Mongo client
-// is resolved only once the migration is enabled.
+// A BackgroundService, so a failure here (including settings that fail to bind) logs rather than
+// crash-looping the host. The Mongo client is resolved only once the migration is enabled.
 //
 // Temporary: removed, with its tests, Program.cs registration, appsettings section, Serilog
 // override and cdp-app-config variables, once dev and prod are confirmed clean.
@@ -90,18 +100,20 @@ public class DuplicateApplicationDeletionMigration(
         Apply,
     }
 
-    // What a run did, so tests (and the one summary log line) can assert it.
+    // What a run did, so tests (and the log lines) can assert it. The *Records counts are
+    // applications; the *Groups counts are groups.
     internal sealed record RunSummary(
         RunMode Mode,
         int Groups = 0,
         int Candidates = 0,
-        int WouldDelete = 0,
-        int Deleted = 0,
+        int WouldDeleteRecords = 0,
+        int DeletedRecords = 0,
         int SkippedNoKeeper = 0,
         int SkippedNoCandidate = 0,
         int UngroupedMissingKey = 0,
-        int RolledBack = 0,
-        int OutcomeUnknown = 0
+        int RolledBackGroups = 0,
+        int OutcomeUnknownGroups = 0,
+        int DeletedElsewhereGroups = 0
     );
 
     // Test seams, in production code because the outcomes they simulate cannot otherwise be
@@ -123,13 +135,36 @@ public class DuplicateApplicationDeletionMigration(
     private static FilterDefinitionBuilder<AccreditationApplicationModel> Filters =>
         Builders<AccreditationApplicationModel>.Filter;
 
+    // Live: not Withdrawn.
+    private static FilterDefinition<AccreditationApplicationModel> Live =>
+        Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Yield so host startup is never held up by anything below.
         await Task.Yield();
+
+        // Read once, here: a setting that fails to bind (ExpectedDeletions=one) throws on this read,
+        // and nothing below may read it again, or the failure would escape and stop the host.
+        DuplicateApplicationDeletionOptions settings;
         try
         {
-            await RunAsync(stoppingToken);
+            settings = options.Value;
+        }
+        catch (Exception ex)
+        {
+            // The type only: the message could echo the bad value.
+            logger.LogError(
+                "RA-788 {Mode:l}: the settings could not be read, so nothing was done: error={Error}",
+                DryRunMode,
+                ex.GetType().Name
+            );
+            return;
+        }
+
+        try
+        {
+            await RunAsync(settings, stoppingToken);
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
@@ -137,26 +172,29 @@ public class DuplicateApplicationDeletionMigration(
             // delete is guarded, so the next run starts again safely.
             logger.LogError(
                 "RA-788 {Mode:l}: duplicate application deletion failed: error={Error}",
-                ModeOf(options.Value),
+                TextOf(HasReviewer(settings) ? RunMode.Apply : RunMode.DryRun),
                 ex.GetType().Name
             );
         }
     }
 
-    // Apply takes effect only with a named reviewer: the reviewer, or null for a dry run.
-    private static string? ReviewerOf(DuplicateApplicationDeletionOptions settings) =>
-        settings.Apply && !string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy)
-            ? settings.SpotCheckConfirmedBy
-            : null;
+    // Apply takes effect only with a named reviewer.
+    private static bool HasReviewer(DuplicateApplicationDeletionOptions settings) =>
+        settings.Apply && !string.IsNullOrWhiteSpace(settings.SpotCheckConfirmedBy);
 
-    private static string ModeOf(DuplicateApplicationDeletionOptions settings) =>
-        ReviewerOf(settings) is null ? DryRunMode : ApplyMode;
+    private static string TextOf(RunMode mode) => mode == RunMode.Apply ? ApplyMode : DryRunMode;
 
     // Extracted so tests can await the run deterministically - BackgroundService's StartAsync only
     // kicks ExecuteAsync off as a background task.
-    internal async Task<RunSummary> RunAsync(CancellationToken cancellationToken)
+    internal Task<RunSummary> RunAsync(CancellationToken cancellationToken) =>
+        RunAsync(options.Value, cancellationToken);
+
+    private async Task<RunSummary> RunAsync(
+        DuplicateApplicationDeletionOptions settings,
+        CancellationToken cancellationToken
+    )
     {
-        if (!options.Value.Enabled)
+        if (!settings.Enabled)
             return new RunSummary(RunMode.Disabled);
 
         var factory = serviceProvider.GetRequiredService<IMongoDbClientFactory>();
@@ -166,28 +204,33 @@ public class DuplicateApplicationDeletionMigration(
 
         var scan = await ScanAsync(collection, cancellationToken);
         var groups = scan.Groups;
-        var candidates = groups
+        var candidateIds = groups
             .Where(g => g.Outcome == GroupOutcome.Delete)
-            .Sum(g => g.Candidates.Count);
+            .SelectMany(g => g.Candidates.Select(c => c.Id!.Value))
+            .Order()
+            .ToList();
 
-        var apply = DecideApply(options.Value, candidates);
-        var mode = apply ? ApplyMode : DryRunMode;
+        var decision = DecideApply(settings, candidateIds);
+        var mode = decision.Apply ? RunMode.Apply : RunMode.DryRun;
         var summary = new RunSummary(
-            apply ? RunMode.Apply : RunMode.DryRun,
+            mode,
             Groups: groups.Count,
-            Candidates: candidates,
+            Candidates: candidateIds.Count,
             SkippedNoKeeper: groups.Count(g => g.Outcome == GroupOutcome.NoKeeper),
             SkippedNoCandidate: groups.Count(g => g.Outcome == GroupOutcome.NoCandidate),
             UngroupedMissingKey: scan.UngroupedMissingKey
         );
 
+        // The summary first, so the counts and ids are in the log even if the detail is not.
+        LogSummary(mode, summary, candidateIds);
+        LogDecision(decision);
         foreach (var group in groups)
             LogGroup(mode, group);
 
-        if (!apply)
+        if (!decision.Apply)
         {
-            summary = summary with { WouldDelete = candidates };
-            LogSummary(mode, summary);
+            summary = summary with { WouldDeleteRecords = candidateIds.Count };
+            LogOutcome(mode, summary);
             return summary;
         }
 
@@ -197,48 +240,97 @@ public class DuplicateApplicationDeletionMigration(
             {
                 DeleteResult.Deleted => summary with
                 {
-                    Deleted = summary.Deleted + group.Candidates.Count,
+                    DeletedRecords = summary.DeletedRecords + group.Candidates.Count,
                 },
-                DeleteResult.RolledBack => summary with { RolledBack = summary.RolledBack + 1 },
-                _ => summary with { OutcomeUnknown = summary.OutcomeUnknown + 1 },
+                DeleteResult.RolledBack => summary with
+                {
+                    RolledBackGroups = summary.RolledBackGroups + 1,
+                },
+                DeleteResult.DeletedElsewhere => summary with
+                {
+                    DeletedElsewhereGroups = summary.DeletedElsewhereGroups + 1,
+                },
+                _ => summary with { OutcomeUnknownGroups = summary.OutcomeUnknownGroups + 1 },
             };
         }
 
-        LogSummary(mode, summary);
+        LogOutcome(mode, summary);
         return summary;
     }
 
-    // Apply needs Apply, a reviewer and an ExpectedDeletions equal to what this run found. Anything
-    // short of that is a dry run, with an error log when Apply was asked for.
-    private bool DecideApply(DuplicateApplicationDeletionOptions settings, int candidates)
+    // The decision is logged after the summary, so it is not decided and logged in one step.
+    private sealed record ApplyDecision(bool Apply, string? Error = null, string? Note = null);
+
+    // Apply needs Apply, a reviewer, and an ExpectedDeletions and ExpectedApplicationIds equal to what
+    // this run found. Anything short of that is a dry run, with an error log when Apply was asked
+    // for. No candidates at all is already done, not an error.
+    private static ApplyDecision DecideApply(
+        DuplicateApplicationDeletionOptions settings,
+        IReadOnlyList<ObjectId> found
+    )
     {
         if (!settings.Apply)
-            return false;
+            return new ApplyDecision(false);
 
-        if (ReviewerOf(settings) is null)
-        {
-            logger.LogError(
-                "RA-788 {Mode:l}: Apply is set but SpotCheckConfirmedBy is not, so running as a dry "
-                    + "run. Set it to whoever spot-checked this environment's dry run.",
-                DryRunMode
+        if (!HasReviewer(settings))
+            return new ApplyDecision(
+                false,
+                Error: "Apply is set but SpotCheckConfirmedBy is not, so running as a dry "
+                    + "run. Set it to whoever spot-checked this environment's dry run."
             );
-            return false;
+
+        if (found.Count == 0)
+            return new ApplyDecision(
+                true,
+                Note: "no candidates found, so nothing to delete: already deleted by an earlier "
+                    + "or another run, or none to begin with"
+            );
+
+        if (settings.ExpectedDeletions != found.Count)
+            return new ApplyDecision(
+                false,
+                Error: Invariant(
+                    $"Apply is set but ExpectedDeletions={settings.ExpectedDeletions?.ToString(CultureInfo.InvariantCulture) ?? "unset"} does not match the {found.Count} candidates found this run, so running as a dry run. Review the dry run again and set ExpectedDeletions to the reviewed count."
+                )
+            );
+
+        var idsError = ExpectedIdsError(settings.ExpectedApplicationIds, found);
+        return new ApplyDecision(idsError is null, Error: idsError);
+    }
+
+    // Null when ExpectedApplicationIds is exactly the set of candidate ids found.
+    private static string? ExpectedIdsError(string? raw, IReadOnlyList<ObjectId> found)
+    {
+        const string DryRunSuffix =
+            " so running as a dry run. Set ExpectedApplicationIds to the candidate-ids= value of "
+            + "the reviewed dry run.";
+
+        var entries = (raw ?? string.Empty).Split(
+            ',',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+        );
+        if (entries.Length == 0)
+            return "Apply is set but ExpectedApplicationIds is not," + DryRunSuffix;
+
+        var expected = new HashSet<ObjectId>();
+        foreach (var entry in entries)
+        {
+            if (!ObjectId.TryParse(entry, out var id))
+                return "Apply is set but ExpectedApplicationIds has a value that is not an "
+                    + "application id,"
+                    + DryRunSuffix;
+            expected.Add(id);
         }
 
-        if (settings.ExpectedDeletions != candidates)
-        {
-            logger.LogError(
-                "RA-788 {Mode:l}: Apply is set but ExpectedDeletions={Expected} does not match the "
-                    + "{Candidates} candidates found this run, so running as a dry run. Review the "
-                    + "dry run again and set ExpectedDeletions to the reviewed count.",
-                DryRunMode,
-                settings.ExpectedDeletions?.ToString(CultureInfo.InvariantCulture) ?? "unset",
-                candidates
-            );
-            return false;
-        }
+        var unexpected = found.Where(id => !expected.Contains(id)).ToList();
+        var missing = expected.Where(id => !found.Contains(id)).Order().ToList();
+        if (unexpected.Count == 0 && missing.Count == 0)
+            return null;
 
-        return true;
+        return "Apply is set but ExpectedApplicationIds does not match the candidates found this "
+            + $"run (found but not expected: [{string.Join(",", unexpected)}]; expected but not "
+            + $"found: [{string.Join(",", missing)}]),"
+            + DryRunSuffix;
     }
 
     // ---- Scan (read only) ----
@@ -313,10 +405,7 @@ public class DuplicateApplicationDeletionMigration(
             .Include(a => a.MaterialType);
 
         var live = await collection
-            .Find(
-                Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn),
-                new FindOptions { MaxTime = ScanMaxTime }
-            )
+            .Find(Live, new FindOptions { MaxTime = ScanMaxTime })
             .Project<AccreditationApplicationModel>(projection)
             .ToListAsync(cancellationToken);
 
@@ -336,9 +425,10 @@ public class DuplicateApplicationDeletionMigration(
 
     // ---- Logging ----
 
-    // The group line names the group's organisation (id and name) so a reviewer can tell what a
-    // dry run would delete. Never the reviewer, applicant contact details or an exception message.
-    private void LogGroup(string mode, DuplicateGroup group)
+    // One line per group, with its candidates and keepers, naming the group's organisation (id and
+    // name) so a reviewer can tell what a dry run would delete. Never the reviewer, applicant
+    // contact details or an exception message.
+    private void LogGroup(RunMode mode, DuplicateGroup group)
     {
         if (!logger.IsEnabled(LogLevel.Information))
             return;
@@ -346,8 +436,8 @@ public class DuplicateApplicationDeletionMigration(
         logger.LogInformation(
             "RA-788 {Mode:l}: group organisationId={OrganisationId} organisationName={OrganisationName} registrationId={RegistrationId} "
                 + "material={Material} year={Year} "
-                + "outcome={Outcome:l} candidates={Candidates} keepers={Keepers}",
-            mode,
+                + "outcome={Outcome:l} candidates={Candidates} [{CandidateDetail:l}] keepers={Keepers} [{KeeperDetail:l}]",
+            TextOf(mode),
             group.Key.OrganisationId,
             group.Key.OrganisationName,
             group.Key.RegistrationId,
@@ -355,61 +445,69 @@ public class DuplicateApplicationDeletionMigration(
             group.Key.Year,
             group.Outcome switch
             {
-                GroupOutcome.Delete => mode == ApplyMode ? "delete" : "would-delete",
+                GroupOutcome.Delete => mode == RunMode.Apply ? "delete" : "would-delete",
                 GroupOutcome.NoKeeper => "skipped-no-keeper",
                 _ => "skipped-no-candidate",
             },
             group.Candidates.Count,
-            group.Keepers.Count
+            string.Join("; ", group.Candidates.Select(CandidateDetail)),
+            group.Keepers.Count,
+            string.Join("; ", group.Keepers.Select(KeeperDetail))
         );
-        foreach (var c in group.Candidates)
-            LogCandidate(mode, c);
-        foreach (var k in group.Keepers)
-            LogKeeper(mode, k);
     }
 
-    private void LogCandidate(string mode, AccreditationApplicationModel c) =>
-        logger.LogInformation(
-            "RA-788 {Mode:l}: candidate {Id} registration={Registration} status={Status} version={Version} "
-                + "createdAt={CreatedAt:O} dateLastEdited={DateLastEdited:O}",
-            mode,
-            c.Id,
-            c.RegistrationReference,
-            c.ApplicationStatus,
-            c.Version,
-            c.CreatedAt,
-            c.DateLastEdited
+    private static string CandidateDetail(AccreditationApplicationModel c) =>
+        Invariant(
+            $"{c.Id}(registration={c.RegistrationReference} status={c.ApplicationStatus} version={c.Version} createdAt={c.CreatedAt:O} dateLastEdited={c.DateLastEdited:O})"
         );
 
-    private void LogKeeper(string mode, AccreditationApplicationModel k) =>
-        logger.LogInformation(
-            "RA-788 {Mode:l}: keeper {Id} registration={Registration} status={Status} hasOrgId={HasOrgId}",
-            mode,
-            k.Id,
-            k.RegistrationReference,
-            k.ApplicationStatus,
-            k.OrgId is not null
+    private static string KeeperDetail(AccreditationApplicationModel k) =>
+        Invariant(
+            $"{k.Id}(registration={k.RegistrationReference} status={k.ApplicationStatus} hasOrgId={k.OrgId is not null})"
         );
 
-    private void LogSummary(string mode, RunSummary s)
+    // The first line of a run: the counts and the candidate ids that ExpectedApplicationIds is set from.
+    private void LogSummary(RunMode mode, RunSummary s, IReadOnlyList<ObjectId> candidateIds)
     {
         if (!logger.IsEnabled(LogLevel.Information))
             return;
         logger.LogInformation(
-            "RA-788 {Mode:l}: summary groups={Groups} candidates={Candidates} "
-                + "would-delete={WouldDelete} deleted={Deleted} skipped-no-keeper={NoKeeper} "
-                + "skipped-no-candidate={NoCandidate} ungrouped-missing-key={Ungrouped} "
-                + "rolled-back={RolledBack} outcome-unknown={Unknown}",
-            mode,
+            "RA-788 {Mode:l}: summary groups={Groups} candidates={Candidates} candidate-ids={CandidateIds:l} "
+                + "skipped-no-keeper={NoKeeper} skipped-no-candidate={NoCandidate} "
+                + "ungrouped-missing-key={Ungrouped}",
+            TextOf(mode),
             s.Groups,
             s.Candidates,
-            s.WouldDelete,
-            s.Deleted,
+            string.Join(",", candidateIds),
             s.SkippedNoKeeper,
             s.SkippedNoCandidate,
-            s.UngroupedMissingKey,
-            s.RolledBack,
-            s.OutcomeUnknown
+            s.UngroupedMissingKey
+        );
+    }
+
+    private void LogDecision(ApplyDecision decision)
+    {
+        if (decision.Error is not null)
+            logger.LogError("RA-788 {Mode:l}: {Error:l}", DryRunMode, decision.Error);
+        if (decision.Note is not null)
+            logger.LogInformation("RA-788 {Mode:l}: {Note:l}", ApplyMode, decision.Note);
+    }
+
+    // The last line of a run: what was (or would be) deleted.
+    private void LogOutcome(RunMode mode, RunSummary s)
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+            return;
+        logger.LogInformation(
+            "RA-788 {Mode:l}: outcome would-delete-records={WouldDelete} deleted-records={Deleted} "
+                + "rolled-back-groups={RolledBack} outcome-unknown-groups={Unknown} "
+                + "deleted-elsewhere-groups={Elsewhere}",
+            TextOf(mode),
+            s.WouldDeleteRecords,
+            s.DeletedRecords,
+            s.RolledBackGroups,
+            s.OutcomeUnknownGroups,
+            s.DeletedElsewhereGroups
         );
     }
 
@@ -422,6 +520,7 @@ public class DuplicateApplicationDeletionMigration(
     {
         Deleted,
         RolledBack,
+        DeletedElsewhere,
         Unknown,
     }
 
@@ -513,10 +612,7 @@ public class DuplicateApplicationDeletionMigration(
         var keeperIds = group.Keepers.Select(k => k.Id).ToList();
         var keepersLive = await collection.CountDocumentsAsync(
             session,
-            Filters.And(
-                Filters.In(a => a.Id, keeperIds),
-                Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
-            ),
+            Filters.And(Filters.In(a => a.Id, keeperIds), Live),
             cancellationToken: token
         );
         if (keepersLive != keeperIds.Count)
@@ -545,9 +641,19 @@ public class DuplicateApplicationDeletionMigration(
         CancellationToken cancellationToken
     )
     {
-        // A failed check always rolls back.
+        // A failed check always rolls back. If the candidates are all gone, though, another run
+        // deleted them first (its delete here found nothing), which is not a failure.
         if (attempt.RollbackReason is { } reason)
         {
+            if (await CountRemainingOrNullAsync(collection, group, cancellationToken) == 0)
+            {
+                logger.LogInformation(
+                    "RA-788 {Mode:l}: candidates {Ids:l} were already deleted by another run; nothing more to do",
+                    ApplyMode,
+                    CandidateIds(group)
+                );
+                return DeleteResult.DeletedElsewhere;
+            }
             LogRolledBack(group, reason);
             return DeleteResult.RolledBack;
         }
@@ -610,6 +716,26 @@ public class DuplicateApplicationDeletionMigration(
         }
     }
 
+    // Null if the re-read fails: the caller then reports the plain rollback.
+    private static async Task<long?> CountRemainingOrNullAsync(
+        IMongoCollection<AccreditationApplicationModel> collection,
+        DuplicateGroup group,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            return await collection.CountDocumentsAsync(
+                Filters.In(a => a.Id, CandidateIdList(group).Cast<ObjectId?>()),
+                cancellationToken: cancellationToken
+            );
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
     private static List<ObjectId> CandidateIdList(DuplicateGroup group) =>
         group.Candidates.Select(c => c.Id!.Value).ToList();
 
@@ -636,20 +762,21 @@ public class DuplicateApplicationDeletionMigration(
             reason
         );
 
-    // The reviewer is not logged (see SpotCheckConfirmedBy).
+    // One line per group. The reviewer is not logged (see SpotCheckConfirmedBy).
     private void LogApplied(DuplicateGroup group)
     {
         if (!logger.IsEnabled(LogLevel.Information))
             return;
-        var keepers = string.Join(",", group.Keepers.Select(k => k.Id.ToString()));
-        foreach (var c in group.Candidates)
-            logger.LogInformation(
-                "RA-788 APPLIED: deleted application {Id} (version={Version}); group kept "
-                    + "{Keepers}. Spot check confirmed",
-                c.Id,
-                c.Version,
-                keepers
-            );
+        logger.LogInformation(
+            "RA-788 APPLIED: deleted applications {Ids:l} (versions {Versions:l}); group kept "
+                + "{Keepers:l}. Spot check confirmed. Any domain-model copy of them is not deleted",
+            CandidateIds(group),
+            string.Join(
+                ",",
+                group.Candidates.Select(c => c.Version.ToString(CultureInfo.InvariantCulture))
+            ),
+            string.Join(",", group.Keepers.Select(k => k.Id.ToString()))
+        );
     }
 
     // ---- Filters ----
@@ -664,10 +791,7 @@ public class DuplicateApplicationDeletionMigration(
         );
 
     private static FilterDefinition<AccreditationApplicationModel> LiveInGroup(GroupKey key) =>
-        Filters.And(
-            InGroup(key),
-            Filters.Ne(a => a.ApplicationStatus, ApplicationStatus.Withdrawn)
-        );
+        Filters.And(InGroup(key), Live);
 
     private static FilterDefinition<AccreditationApplicationModel> GuardedCandidate(
         GroupKey key,
