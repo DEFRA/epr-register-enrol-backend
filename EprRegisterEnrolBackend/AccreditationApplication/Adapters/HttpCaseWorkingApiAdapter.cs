@@ -633,7 +633,7 @@ public class HttpCaseWorkingApiAdapter(
                 siteNumber = s.SiteNumber,
                 changes = s.Changes,
             }),
-            BesEvidenceFiles = response.NewBesFiles.Select(f => new
+            NewBesEvidenceFiles = response.NewBesFiles.Select(f => new
             {
                 fileId = f.FileId,
                 filename = f.Filename,
@@ -1315,7 +1315,8 @@ public class HttpCaseWorkingApiAdapter(
         public required DateTime SubmittedAt { get; init; }
         public required IReadOnlyDictionary<string, string?> Site { get; init; }
         public required IEnumerable<object> InterimSites { get; init; }
-        public required IEnumerable<object> BesEvidenceFiles { get; init; }
+        [JsonPropertyName("besEvidenceFiles")]
+        public required IEnumerable<object> NewBesEvidenceFiles { get; init; }
     }
 
     internal sealed class WithdrawWorkItemRequest
