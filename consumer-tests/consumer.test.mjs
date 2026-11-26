@@ -228,9 +228,8 @@ test("lists overseas sites as a page, and gets each one", live, async () => {
     assertSiteTimelines(body.items);
 
     // A reprocessor has no overseas sites to get.
-    const [first] = body.items;
-    if (first) {
-        const one = await get(`${path}/overseas-sites/${first.orsId}`, mine());
+    for (const site of body.items) {
+        const one = await get(`${path}/overseas-sites/${site.orsId}`, mine());
         assert.equal(one.status, 200);
         assertSiteTimelines([await one.json()]);
     }

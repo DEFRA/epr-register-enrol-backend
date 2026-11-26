@@ -134,7 +134,9 @@ public class StatusTimelineBuilderTests
                     (
                         Statuses[random.Next(Statuses.Length)],
                         // From before the accreditation year (so several start on 1 January) to within it.
-                        Utc(2026, 12, 28, 0).AddHours(random.Next(0, 12) * 12)
+                        Utc(2026, 12, 28, 0)
+                            .AddDays(random.Next(0, 8) * 3)
+                            .AddHours(random.Next(0, 2) * 12)
                     )
                 )
                 .ToList();

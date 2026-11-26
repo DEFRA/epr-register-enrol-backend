@@ -265,7 +265,14 @@ grouped for reading:
             "phone": "+31 10 000 0000"
           },
           "operationCodes": ["R12"],
-          "createdAt": "2026-10-01T00:00:00Z"
+          "createdAt": "2026-10-01T00:00:00Z",
+          "latestStatus": { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" },
+          "statusHistory": [
+            { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null, "recordedAt": "2026-10-01T00:00:00Z" }
+          ],
+          "statusTimeline": [
+            { "status": "approved", "effectiveFromDate": "2027-01-01", "effectiveToDate": null }
+          ]
         }
       ]
     }

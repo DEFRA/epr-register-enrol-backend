@@ -19,10 +19,9 @@ public static class StatusTimelineBuilder
     /// </summary>
     public static List<StatusTimelinePeriodDto> Build(IReadOnlyList<StatusHistoryEntryDto> history)
     {
-        // OrderBy is stable, so entries sharing both keys keep the history's order and the later one is last.
-        var kept = history
-            .OrderBy(entry => entry.EffectiveFromDate)
-            .ThenBy(entry => entry.RecordedAt)
+        // Of the entries sharing a date, the one with precedence is last.
+        var kept = StatusHistoryBuilder
+            .InPrecedenceOrder(history)
             .GroupBy(entry => entry.EffectiveFromDate)
             .Select(sameDay => sameDay.Last())
             .ToList();

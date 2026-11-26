@@ -412,6 +412,12 @@ components:
         first period there is no status. Built from the history: entries are ordered by
         `effectiveFromDate` then `recordedAt` (then array order), and of those sharing an
         `effectiveFromDate` only the last is kept.
+
+        Worked example, for a 2027 accreditation (status and date recorded): approved 2026-11-10,
+        suspended 2026-12-15, approved 2027-04-01, approved 2027-06-10, cancelled 2027-09-01. Its
+        timeline is suspended 2027-01-01 to 2027-03-31, approved 2027-04-01 to 2027-08-31, and
+        cancelled from 2027-09-01. On 2027-01-01 the status is `suspended`, as the suspension was
+        recorded later than the approval taking effect that day. On 2026-12-31 there is none.
       required: [status, effectiveFromDate, effectiveToDate]
       properties:
         status: { $ref: '#/components/schemas/AccreditationStatus' }
