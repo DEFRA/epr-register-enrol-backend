@@ -1716,7 +1716,7 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
     }
 
     // RA-739: each site goes in re-accreditation's site shape, with every interim site (withdrawn ones
-    // carrying removedAt), and its own charge alongside the submission's total.
+    // carrying removedAt), and its own charge alongside the submission's total. RA-681: an add is sent as selected.
     [Fact]
     public async Task Submit_SendsEachSiteInReaccreditationsSiteShapeWithItsOwnCharge()
     {
@@ -1765,6 +1765,7 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
             """
             {
               "siteId": 901910,
+              "selected": true,
               "orsId": "005",
               "siteName": "Lyon Plastiques SA",
               "siteAddress": "901910 Industrial Estate, France",

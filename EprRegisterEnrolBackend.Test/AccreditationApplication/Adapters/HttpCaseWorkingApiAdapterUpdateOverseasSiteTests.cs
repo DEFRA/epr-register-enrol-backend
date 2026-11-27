@@ -199,6 +199,42 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
         handler.Bodies.Should().ContainSingle();
     }
 
+    // RA-681: Case Management prefixes an ORS request's type with "Accreditation:" or "Registration:" from each
+    // site's selected flag. An add puts a registered ORS on the accreditation, so it is sent as selected although
+    // the ORS isn't yet; an update sends its ORS's own flag.
+    [Fact]
+    public async Task Every_site_is_sent_with_its_selected_flag()
+    {
+        ChangeRequestRules.FindSite(Accreditation, 902504)!.Selected.Should().BeFalse();
+        ChangeRequestRules.FindSite(Accreditation, 902501)!.Selected.Should().BeTrue();
+        var handler = new QueuedHandler(
+            (HttpStatusCode.Created, Response("SUB-2026-0012", (902504, "IYC-ORS-2026-00012"))),
+            (HttpStatusCode.Created, Response("SUB-2026-0013", (902501, "IYC-ORS-2026-00013")))
+        );
+        var request = Request(
+            new ChangeRequestSite { SiteId = 902504, OrsId = "004", SiteName = "Ghent Recycling NV", ChargePence = 32800 },
+            Update(902501, "001", "Gdansk Recycling Renamed")
+        );
+
+        await AdapterFor(handler).SubmitChangeRequestAsync(request, Accreditation, Ct);
+
+        handler.Bodies[0]["payload"]!["sites"]![0]!["selected"]!.GetValue<bool>().Should().BeTrue();
+        handler.Bodies[1]["payload"]!["sites"]![0]!["selected"]!.GetValue<bool>().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task An_update_to_a_registration_only_ORS_is_sent_as_not_selected()
+    {
+        var accreditation = DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearUpdate, 2026);
+        ChangeRequestRules.FindSite(accreditation, 902501)!.Selected = false;
+        var handler = new QueuedHandler((HttpStatusCode.Created, Response("SUB-2026-0014", (902501, "IYC-ORS-2026-00014"))));
+
+        await AdapterFor(handler)
+            .SubmitChangeRequestAsync(Request(Update(902501, "001", "Gdansk Recycling Renamed")), accreditation, Ct);
+
+        handler.Bodies.Single()["payload"]!["sites"]![0]!["selected"]!.GetValue<bool>().Should().BeFalse();
+    }
+
     // AC02: an update can add BES evidence: it goes as addedBesEvidence, beside the ORS's own unchanged besEvidence.
     [Fact]
     public async Task An_updates_added_BES_evidence_is_sent_apart_from_the_ORS_own()

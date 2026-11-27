@@ -360,6 +360,8 @@ public class HttpCaseWorkingApiAdapter(
                     ) with
                     {
                         SiteId = site.SiteId,
+                        // RA-681: Case Management labels the request "Accreditation:" or "Registration:" from this.
+                        Selected = ors.Selected,
                         OrsId = site.OrsId,
                         SiteName = site.SiteName,
                         Previous = site.Previous,
@@ -385,6 +387,9 @@ public class HttpCaseWorkingApiAdapter(
                 return projected with
                 {
                     SiteId = site.SiteId,
+                    // RA-681: an add puts a registered ORS on the accreditation, so Case Management reads it as an
+                    // accreditation request ("Accreditation:") although the ORS isn't selected until it is granted.
+                    Selected = true,
                     OrsId = site.OrsId,
                     SiteName = site.SiteName,
                     Country = effective.Country,
@@ -1135,7 +1140,8 @@ public class HttpCaseWorkingApiAdapter(
 
     // Serialised in declaration order, which re-accreditation's payload has always had; nulls are dropped by
     // JsonOptions, so a field one case type leaves unset is not sent at all.
-    // Re-accreditation only: Selected, IsNewSite, RegisteredNowAccredited and the InterimSite mirror.
+    // Re-accreditation only: IsNewSite, RegisteredNowAccredited and the InterimSite mirror.
+    // Both: Selected (RA-681: on an in-year change it sets Case Management's "Accreditation:"/"Registration:" label).
     // Add-ORS only: SuppliedFields and ChargePence (the site's own charge).
     private sealed record CaseManagementSite
     {
