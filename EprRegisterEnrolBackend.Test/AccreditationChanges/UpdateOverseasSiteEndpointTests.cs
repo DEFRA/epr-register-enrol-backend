@@ -688,10 +688,12 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         (await client.DeleteAsync($"{Sites}/902501", Ct)).IsSuccessStatusCode.Should().BeTrue();
     }
 
-    // A failure that sent nothing (Case Management not configured here) says nothing about an earlier attempt, so a hold
-    // left by an earlier timeout stands.
-    [Fact]
-    public async Task A_later_failure_that_sent_nothing_keeps_an_earlier_hold()
+    // A failure that sent nothing, or a 401 from auth before management-be's replay check, says nothing about an
+    // earlier attempt, so a hold left by an earlier timeout stands.
+    [Theory]
+    [InlineData("not configured")]
+    [InlineData("unauthorised")]
+    public async Task A_later_failure_that_proves_nothing_keeps_an_earlier_hold(string later)
     {
         var (factory, client, _) = CaseManagementFactory();
         using var disposeFactory = factory;
@@ -699,7 +701,9 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         SubmitFails(
             factory,
             new CaseWorkingApiTimeoutException("timed out", new TimeoutException()),
-            new CaseWorkingNotConfiguredException()
+            later == "not configured"
+                ? new CaseWorkingNotConfiguredException()
+                : new HttpRequestException("unauthorised", null, HttpStatusCode.Unauthorized)
         );
         await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
         await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);

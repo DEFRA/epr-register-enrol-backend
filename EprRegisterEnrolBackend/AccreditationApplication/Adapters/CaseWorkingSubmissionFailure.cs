@@ -22,18 +22,20 @@ public static class CaseWorkingSubmissionFailure
     ];
 
     /// <summary>
+    /// Whether ManagementBe proves it holds nothing from any attempt under this request id: a 400, which it returns
+    /// only after its replay check (a held submission would have been replayed instead). A 401, 403 or 404 comes from
+    /// auth or routing before that check, and a 409 means it does hold something under the id, so neither proves
+    /// anything about an earlier attempt. A defect or an unconfigured adapter sent nothing.
+    /// </summary>
+    public static bool ProvesNothingHeld(Exception ex) =>
+        ex is HttpRequestException { StatusCode: HttpStatusCode.BadRequest };
+
+    /// <summary>
     /// Whether ManagementBe may hold the submission that failed with <paramref name="ex"/>. Only a failure raised while
     /// sending or after can follow a save: any other 4xx, a timeout, a 5xx, an unreadable 2xx or the caller going
     /// away mid-send. Not configured means nothing was sent, the statuses above mean ManagementBe rejected the
     /// submission before saving it, and any other exception is a defect raised before anything was sent.
     /// </summary>
-    /// <summary>
-    /// Whether ManagementBe answered and so proves it holds nothing: one of the statuses above, which it returns
-    /// before saving anything (its replay check runs first, so it would have replayed a held submission instead).
-    /// A defect or an unconfigured adapter sent nothing, so says nothing about an earlier attempt.
-    /// </summary>
-    public static bool ProvesNothingHeld(Exception ex) =>
-        ex is HttpRequestException { StatusCode: { } status } && s_holdsNothingStatuses.Contains(status);
 
     public static bool MayHold(Exception ex) =>
         ex switch

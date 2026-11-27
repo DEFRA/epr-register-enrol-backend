@@ -1213,8 +1213,6 @@ public static class AccreditationChangeEndpoints
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation));
     }
 
-    // RA-767: the request is one submission, so every item shares its fate. ManagementBe checks for a replay before it
-    // validates, so a 400 proves it holds nothing, even after an earlier attempt timed out.
     // One submission, so every item shares its fate. A failure that may follow a save holds them; a refusal
     // ManagementBe answered proves it holds nothing; anything else (a defect, nothing configured) sent nothing, so
     // what an earlier attempt left stands.
