@@ -22,6 +22,13 @@ The contract is everything a client can rely on, not only the JSON fields:
 - status codes and problem `code` values
 - authentication and request signing, rate limits and query time limits
 
+Page sizes today (the constants are in `AccreditationApiEndpoints`):
+
+| Route | Default `limit` | Maximum `limit` |
+| --- | --- | --- |
+| `GET /v1/accreditations` (search) | 20 (`DefaultLimit`) | 500 (`MaxSearchLimit`, raised from 100 by RA-820) |
+| `…/overseas-sites` | 20 (`DefaultLimit`) | 100 (`MaxLimit`) |
+
 It is written down in:
 
 | Document | What it is for |
@@ -60,7 +67,8 @@ Once the shape is settled, breaking changes are not made in `/v1`.
 - Removing or renaming a field.
 - Changing a field's type or meaning.
 - Removing a route.
-- Rejecting input that was accepted before. This includes a new required parameter and tighter validation.
+- Rejecting input that was accepted before. This includes a new required parameter, tighter validation and
+  lowering a maximum `limit`.
 
 ### Not covered by the policy (proposed: treat as breaking)
 
@@ -70,7 +78,7 @@ The policy doesn't mention these. Until the team decides, agree them with consum
 - A new value of `material`, `glassRecyclingProcess`, `wasteProcessingType` or `applicationStatus`.
 - Changing or removing a problem `code`, or the status code for a case. A new `code` for a new case needs
   at least an announcement.
-- Changing the default or maximum `limit`, or the order of results.
+- Changing the default `limit`, or the order of results.
 - Serving fewer records, or different ones.
 - Changing signing or authentication, lowering the rate limit or shortening the query time limit.
 - Renaming an `operationId` or a schema in the spec, which can break generated clients.
@@ -79,6 +87,16 @@ A new field that holds **personal or commercially sensitive data** can be compat
 Search results carry no signatories, and the business plan is not served at all. Getting a registration shows
 applications that haven't been granted, so it deliberately returns little: don't add to it without agreement.
 Raise it in review.
+
+### Raising a page size limit (proposed)
+
+A higher maximum breaks no request: clients only get bigger pages if they ask. It still needs care.
+
+- **Performance test it before it reaches production.** Each page is built in memory on small containers. Test
+  each [data source](#keeping-the-spec-and-the-code-in-step) that an environment uses or is about to use, with
+  realistic data and simultaneous requests.
+- **Be sure before consumers rely on it.** Lowering it again rejects requests that were accepted, which is breaking.
+- Announce it in "What's new", with what a client should do if a page is too slow.
 
 ### Enum values
 
@@ -143,6 +161,9 @@ Points that are easy to miss:
 - **Search items** share the summary type with the single accreditation. A change to it appears in both.
 - **Two data sources.** `DomainModel:ReadFromModel` decides whether content comes from the legacy document or
   the domain model. A change must give the right response with the flag off and on.
+- **Page size limits.** Search and the overseas sites list have separate maximums. A change to one needs the
+  right spec parameter (`SearchLimit` or `Limit`), the route table and "How do I read every accreditation?" in
+  the onboarding guide, and the limit checks in both the backend tests and `test/api/validation.test.js`.
 - **Derived fields.** `latestStatus` and `statusTimeline` are both worked out from `statusHistory`
   (`StatusHistoryBuilder`, `StatusTimelineBuilder`) and must agree. They share one ordering rule,
   `InPrecedenceOrder`: change it there. A new record with a `statusHistory` needs both.
@@ -158,7 +179,7 @@ There are three sets. Only the first can stop a merge.
 | Tests | What they check | When they run |
 | --- | --- | --- |
 | Backend tests, `EprRegisterEnrolBackend.Test/AccreditationApi/` | behaviour, authentication, errors, parts of the response shape, both data sources | every pull request. Required to merge |
-| End-to-end contract tests, `test/api/` in `epr-register-enrol-fe-tests` | response shapes, allowed enum values, removed fields, status history rules, errors, written by hand from the spec | against the `test` environment, in the full test suite run there or by hand. Skipped without the API client secret. **Not in backend pull request checks** |
+| End-to-end contract tests, `test/api/` in `epr-register-enrol-fe-tests` | response shapes, allowed enum values, removed fields, status history and timeline rules, search paging, exporters' overseas sites on search, page size limits and errors, written by hand from the spec | against the `test` environment, in the full test suite run there or by hand. Skipped without the API client secret. **Not in backend pull request checks** |
 | [`consumer-tests/`](../consumer-tests/README.md) | signing, basic calls to the accreditation routes and that each `statusTimeline` agrees with its history, from outside the service, with real credentials | **only by hand** |
 
 What this means:
@@ -231,6 +252,7 @@ Copy this into the pull request description:
 - [ ] Onboarding guide updated, including "What's new"
 - [ ] Backend endpoint tests, with `DomainModel:ReadFromModel` off and on
 - [ ] End-to-end contract tests and consumer tests updated, or not affected
+- [ ] Performance tested, or not needed because no response gets bigger or slower
 - [ ] No new personal or commercially sensitive data, or it has been agreed
 ```
 
@@ -246,19 +268,29 @@ Copy this into the pull request description:
 ### Release (proposed)
 
 1. Tell consumers in Slack **before** a change they could notice is released.
-2. Merge the matching end-to-end test change so the `test` run matches the deployed API.
+2. Merge the matching end-to-end test change so the `test` run matches the deployed API. Work out which
+   versions each old and new check passes against, as that decides the order. For RA-820, the new check
+   (`limit=501` is refused) passed before and after the change, while the old one (`limit=101` is refused) failed
+   after it. So the test change had to merge no later than the deployment, and its passing didn't show that the
+   new limit was deployed.
 3. After deployment to `test`, check that the contract tests pass, and run the consumer tests, before the change
    goes further.
 
 ## Known gaps
 
-As of 26 November 2026. Remove each one when it is fixed.
+As of 27 November 2026. Remove each one when it is fixed.
 
 - Nothing automatically compares the spec with the responses.
 - The end-to-end contract tests and consumer tests don't run on backend pull requests.
 - Neither the end-to-end contract tests nor the consumer tests call the route that gets a registration. Only the
   backend tests cover it.
-- The end-to-end contract test `answers 404 for the registration endpoint` predates that route. It expects `404`,
-  so it fails when the registration it asks for has an application from 2027 on.
+- The end-to-end contract test that checks `recordedAt` for each interim site status change is a `todo`: it
+  needs changes after approval, which can't be made yet (RA-781).
+- The search limit of 500 merged while its performance testing was still outstanding (RA-820). Check that
+  ticket for the result before relying on the limit in production.
+- In a local check for RA-820, search pages were much slower with `DomainModel:ReadFromModel` on, and slower
+  again after the cut (`DomainModel:LegacyWrites` off). `ReadFromModel` loads applications one at a time, and
+  after the cut each page appears to rebuild every approved accreditation. In the code, the query time limit
+  covers only the first query there. Measure again before turning either on.
 - The spec's introduction still says no authentication scheme is defined. The API uses HMAC request signing, as
   the onboarding guide describes.
