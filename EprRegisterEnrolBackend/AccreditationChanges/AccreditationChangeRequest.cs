@@ -80,9 +80,10 @@ public class AccreditationChangeRequest
     public string? SubmissionReference { get; set; }
 
     /// <summary>
-    /// RA-682: every submission reference, one per change type: a request holding adds and updates is sent to Case
-    /// Management as one submission per type. <see cref="SubmissionReference"/> is the first of them. Both are stored
-    /// (a request submitted before RA-682 has only the one), so they are set together by
+    /// RA-682: the request's submission references, each once. A request holding adds and updates is sent to Case
+    /// Management as one submission per type, but (RA-767) every type shares the first's reference, so this holds one;
+    /// it stays a list for requests stored before RA-767. <see cref="SubmissionReference"/> is the first of them. Both
+    /// are stored (a request submitted before RA-682 has only the one), so they are set together by
     /// <see cref="SetSubmissionReferences"/>.
     /// </summary>
     public List<string> SubmissionReferences { get; set; } = [];
@@ -90,7 +91,7 @@ public class AccreditationChangeRequest
     /// <summary>Sets the submission references and, from them, <see cref="SubmissionReference"/>: the first, or null.</summary>
     public void SetSubmissionReferences(IReadOnlyList<string> references)
     {
-        SubmissionReferences = [.. references];
+        SubmissionReferences = [.. references.Distinct()];
         SubmissionReference = references.Count > 0 ? references[0] : null;
     }
 

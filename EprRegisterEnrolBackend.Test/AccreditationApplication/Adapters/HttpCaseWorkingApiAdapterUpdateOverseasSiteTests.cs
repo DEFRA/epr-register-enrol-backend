@@ -168,6 +168,24 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
         (await act.Should().ThrowAsync<ChangeRequestPartlySubmittedException>()).Which.RefusedMayBeHeld.Should().BeTrue();
     }
 
+    // RA-767: ManagementBe answers the later group with the reference it was sent, which is held once.
+    [Fact]
+    public async Task A_reference_shared_by_every_group_is_returned_once()
+    {
+        var handler = new QueuedHandler(
+            (HttpStatusCode.Created, Response("SUB-2026-0010", (902504, "IYC-ORS-2026-00010"))),
+            (HttpStatusCode.Created, Response("SUB-2026-0010", (902501, "IYC-ORS-2026-00011")))
+        );
+        var request = Request(
+            new ChangeRequestSite { SiteId = 902504, OrsId = "004", SiteName = "Ghent Recycling NV", ChargePence = 32800 },
+            Update(902501, "001", "Gdansk Recycling Renamed")
+        );
+
+        var result = await AdapterFor(handler).SubmitChangeRequestAsync(request, Accreditation, Ct);
+
+        result.SubmissionReferences.Should().Equal("SUB-2026-0010");
+    }
+
     [Fact]
     public async Task Every_submission_reference_is_returned()
     {

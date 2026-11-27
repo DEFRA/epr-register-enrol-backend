@@ -2,6 +2,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
+using EprRegisterEnrolBackend.DomainModel.Status;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationChanges;
@@ -163,7 +164,9 @@ public static class ChangeRequestStatusEndpoints
         );
     }
 
-    // RA-782: an update takes effect on the day it was decided; an add from the date the caseworker entered.
+    // RA-782: an update takes effect on the UK day it was decided; an add from the date the caseworker entered. The
+    // decision's instant is the push's occurredAt: when Case Management confirmed the contact, not when the caseworker
+    // determined the update.
     private static ChangeRequestDecision Decision(ChangeRequestSite item, StatusChangedFromCaseManagementRequest request)
     {
         var decidedAt =
@@ -171,7 +174,7 @@ public static class ChangeRequestStatusEndpoints
                 ? DateTime.SpecifyKind(request.OccurredAt, DateTimeKind.Utc)
                 : request.OccurredAt.ToUniversalTime();
         var validFrom = item.IsUpdate
-            ? DateTime.SpecifyKind(decidedAt.Date, DateTimeKind.Utc)
+            ? UkCalendar.ToUkDate(decidedAt).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)
             : request.EffectiveDate!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
         return new ChangeRequestDecision(validFrom, decidedAt);
     }

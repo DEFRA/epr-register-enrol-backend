@@ -338,6 +338,25 @@ public class StubCaseWorkingApiAdapterTests
         second.Sites.Select(s => s.CaseReference).Should().Equal("IYC-ORS-2026-00004", "IYC-ORS-2026-00005");
     }
 
+    // RA-767: as ManagementBe, a request holding adds and updates is one submission with one reference.
+    [Fact]
+    public async Task SubmitChangeRequestAsync_AddsAndUpdates_ShareOneSubmissionReference()
+    {
+        var request = CreateChangeRequest(sites: 2);
+        request.Sites[1] = new ChangeRequestSite
+        {
+            ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,
+            SiteId = 902,
+            OrsId = "002",
+            SiteName = "Site 2",
+        };
+
+        var result = await SubmitChange(BuildSut(), request);
+
+        result.SubmissionReferences.Should().Equal("SUB-2026-0001");
+        result.Sites.Select(s => s.CaseReference).Should().OnlyHaveUniqueItems();
+    }
+
     [Fact]
     public async Task SubmitChangeRequestAsync_NumbersEachSiteInTurnFromOne_ZeroPaddedToFiveDigits()
     {

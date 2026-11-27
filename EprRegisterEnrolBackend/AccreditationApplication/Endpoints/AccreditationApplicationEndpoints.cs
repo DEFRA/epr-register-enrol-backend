@@ -1803,12 +1803,7 @@ public static class AccreditationApplicationEndpoints
             AddressLine2 = request.AddressLine2,
             TownOrCity = request.TownOrCity,
             Country = request.Country,
-            SiteAddress = string.Join(
-                ", ",
-                new[] { request.AddressLine1, request.TownOrCity, request.Country }.Where(s =>
-                    !string.IsNullOrWhiteSpace(s)
-                )
-            ),
+            SiteAddress = OverseasSiteAddress.Format(request.AddressLine1, request.TownOrCity, request.Country),
             Coordinates = request.Coordinates,
             ContactName = request.ContactName,
             ContactEmail = request.ContactEmail,
@@ -1889,12 +1884,7 @@ public static class AccreditationApplicationEndpoints
         site.AddressLine2 = request.AddressLine2;
         site.TownOrCity = request.TownOrCity;
         site.Country = request.Country;
-        site.SiteAddress = string.Join(
-            ", ",
-            new[] { request.AddressLine1, request.TownOrCity, request.Country }.Where(s =>
-                !string.IsNullOrWhiteSpace(s)
-            )
-        );
+        site.SiteAddress = OverseasSiteAddress.Format(request.AddressLine1, request.TownOrCity, request.Country);
         site.Coordinates = request.Coordinates;
         site.ContactName = request.ContactName;
         site.ContactEmail = request.ContactEmail;

@@ -16,6 +16,8 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
@@ -889,7 +891,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
             TownOrCity = "Sopot",
             ContactName = "Jo Bloggs",
             ContactEmail = "jo@example.com",
-            ContactPhone = "0987654321",
+            ContactPhone = "07700 900456",
             OperationCodes = ["R13"],
         };
 
@@ -906,7 +908,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         );
         var site = StoredSite();
         var (selected, validFrom) = (site.Selected, site.ValidFrom);
-        site.ContactPhone = "+48 111 222 333";
+        site.ContactPhone = "07700 900123";
         site.ContactName = "Changed Since";
 
         var response = await PushUpdateApproved();
@@ -915,7 +917,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         var after = UpdateSite();
         after.SiteName.Should().Be("Gdansk Recykling Nowy");
         after.ContactEmail.Should().Be("new@example.com");
-        after.ContactPhone.Should().Be("+48 111 222 333");
+        after.ContactPhone.Should().Be("07700 900123");
         after.ContactName.Should().Be("Changed Since");
         after.Selected.Should().Be(selected);
         after.ValidFrom.Should().Be(validFrom);
@@ -1099,14 +1101,165 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         var lost = 0;
         _factory.FakeChangeRequests.LoseUpdateWhen = _ => Interlocked.Increment(ref lost) == 1;
         var versionBefore = UpdateLegacy().Version;
+        // Case Management's occurredAt has ticks finer than the millisecond Mongo keeps.
+        var occurredAt = DecidedAt.AddTicks(1234);
 
-        (await PushUpdateApproved()).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PushUpdateApproved(occurredAt)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         Item().Status.Should().Be(ChangeItemStatus.Approved);
         var added = UpdateSite().InterimSites.Should().ContainSingle(i => i.SiteName == "Sopot Yard").Subject;
         Item().InterimSiteChanges.Single().InterimSiteId.Should().Be(added.SiteId);
         UpdateLegacy().Version.Should().Be(versionBefore + 1);
+        // Stored to the millisecond, so the replay still finds it once Mongo has read it back.
+        added.CreatedAt.Should().Be(DecidedAt);
+        BsonSerializer.Deserialize<InterimSiteModel>(added.ToBsonDocument()).CreatedAt.Should().Be(added.CreatedAt);
     }
+
+    // The grant runs a second time when the item write is lost (no transaction without dual-write), past the
+    // final-status guard: details, BES files, a change, a withdrawal and an add each land once.
+    [Fact]
+    public async Task ApprovedUpdate_GrantRunTwice_AppliesEverythingOnce()
+    {
+        var site = StoredSite();
+        site.BesEvidence = new BesEvidenceModel { BesEvidenceUploads = [BesFile("bes-held")] };
+        SeedUpdateRequest(item =>
+        {
+            var current = UpdateSite();
+            item.Proposed = item.Previous! with { SiteName = "Gdansk Twice", AddressLine1 = "12 New Quay", TownOrCity = "Gdansk" };
+            item.BesEvidence = new BesEvidenceModel { BesEvidenceUploads = [BesFile("bes-new")] };
+            item.InterimSiteChanges =
+            [
+                new InterimSiteChange
+                {
+                    Action = InterimSiteChangeAction.Change,
+                    InterimSiteId = 902511,
+                    Previous = InterimSiteDetails.From(InterimOf(current, 902511)),
+                    Proposed = Renamed(InterimOf(current, 902511), "Gdynia Hub Renamed"),
+                },
+                new InterimSiteChange
+                {
+                    Action = InterimSiteChangeAction.Remove,
+                    InterimSiteId = 902512,
+                    Previous = InterimSiteDetails.From(InterimOf(current, 902512)),
+                },
+                new InterimSiteChange { Action = InterimSiteChangeAction.Add, Proposed = NewInterim("Sopot Yard") },
+            ];
+        });
+        var runs = 0;
+        _factory.FakeChangeRequests.LoseUpdateWhen = _ => Interlocked.Increment(ref runs) == 1;
+        var versionBefore = UpdateLegacy().Version;
+
+        (await PushUpdateApproved()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        runs.Should().Be(2);
+        Item().Status.Should().Be(ChangeItemStatus.Approved);
+        var after = UpdateSite();
+        after.SiteName.Should().Be("Gdansk Twice");
+        after.SiteAddress.Should().Be("12 New Quay, Gdansk, Poland");
+        after.BesEvidence!.BesEvidenceUploads.Select(f => f.FileId).Should().Equal("bes-held", "bes-new");
+        InterimOf(after, 902511).SiteName.Should().Be("Gdynia Hub Renamed");
+        var removed = InterimOf(after, 902512);
+        removed.RemovedAt.Should().Be(DecidedAt);
+        removed.StatusHistory.Select(h => h.Status).Should().Equal("approved", "withdrawn");
+        after.InterimSites.Should().ContainSingle(i => i.SiteName == "Sopot Yard");
+        // The second run found nothing to change, so wrote nothing.
+        UpdateLegacy().Version.Should().Be(versionBefore + 1);
+    }
+
+    // The registration has given out its last interim site number: nothing is written, and a retry fails the same way.
+    [Fact]
+    public async Task ApprovedUpdate_AddingAnInterimSitePastTheRegistrationsLast_Returns409AndWritesNothing()
+    {
+        SeedUpdateRequest(item =>
+            item.InterimSiteChanges =
+            [
+                new InterimSiteChange { Action = InterimSiteChangeAction.Add, Proposed = NewInterim("Sopot Yard") },
+            ]
+        );
+        var last = SiteIdAllocation.BuildInterimSite(902599, "999", NewInterim("Last number"), Watermark.AddDays(-5));
+        last.RemovedAt = Watermark.AddDays(-3);
+        StoredSite(902504).InterimSites.Add(last);
+        var versionBefore = UpdateLegacy().Version;
+
+        var response = await PushUpdateApproved();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadAsStringAsync(Ct)).Should().Contain("maximum of 999 interim sites");
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        UpdateSite().InterimSites.Should().NotContain(i => i.SiteName == "Sopot Yard");
+        UpdateLegacy().Version.Should().Be(versionBefore);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // A work item no item holds is a 404 before the missing effectiveDate is a 400: there is no item to say whether
+    // it needs one.
+    [Fact]
+    public async Task ApprovedWithoutAnEffectiveDate_UnknownWorkItem_Returns404()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+
+        var response = await Push("approved", Watermark.AddMinutes(5), effectiveDate: null, workItemId: Guid.NewGuid());
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // The UK date it was decided, not the UTC one: 00:30 BST on 2 June is 2 June.
+    [Theory]
+    [InlineData("2026-06-01T23:30:00Z", "2026-06-02")]
+    [InlineData("2026-06-01T22:59:00Z", "2026-06-01")]
+    [InlineData("2026-12-01T23:30:00Z", "2026-12-01")]
+    public async Task ApprovedUpdate_IsValidFromTheUkDateItWasDecided(string occurredAt, string ukDate)
+    {
+        SeedUpdateRequest(item => item.Proposed = item.Previous! with { SiteName = "Gdansk Renamed" });
+
+        var response = await PushRawOccurredAt(occurredAt);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().ValidFrom.Should().Be(DateOnly.Parse(ukDate).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+    }
+
+    // occurredAt with an offset, or with none (taken as UTC), is the same instant once normalised to UTC.
+    [Theory]
+    [InlineData("2026-05-01T10:05:00+01:00")]
+    [InlineData("2026-05-01T09:05:00Z")]
+    [InlineData("2026-05-01T09:05:00")]
+    public async Task ApprovedUpdate_OccurredAtInAnyForm_IsDecidedAtTheSameUtcInstant(string occurredAt)
+    {
+        SeedUpdateRequest(item =>
+            item.InterimSiteChanges =
+            [
+                new InterimSiteChange
+                {
+                    Action = InterimSiteChangeAction.Remove,
+                    InterimSiteId = 902512,
+                    Previous = InterimSiteDetails.From(InterimOf(UpdateSite(), 902512)),
+                },
+            ]
+        );
+
+        (await PushRawOccurredAt(occurredAt)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var removedAt = InterimOf(UpdateSite(), 902512).RemovedAt!.Value;
+        removedAt.Should().Be(DecidedAt);
+        removedAt.Kind.Should().Be(DateTimeKind.Utc);
+        Item().ValidFrom.Should().Be(DecidedOn);
+    }
+
+    // occurredAt sent as written, so its offset (or lack of one) reaches the endpoint.
+    private Task<HttpResponseMessage> PushRawOccurredAt(string occurredAt) =>
+        _client.PostAsJsonAsync(
+            StatusUrl(_workItemId),
+            new
+            {
+                toStateId = "approved",
+                toStateDisplayName = "approved",
+                actionId = "some-action",
+                actionDisplayName = "Some action",
+                occurredAt,
+            },
+            Ct
+        );
 
     // A refused update changes nothing on the ORS, and frees it for a new update (Rejected is not an active item).
     [Fact]

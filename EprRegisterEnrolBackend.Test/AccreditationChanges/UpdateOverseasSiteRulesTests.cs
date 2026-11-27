@@ -231,6 +231,9 @@ public sealed class UpdateOverseasSiteRulesTests
         request.SubmissionReference.Should().Be("SUB-2026-0001");
         request.SubmissionReferences.Should().Equal("SUB-2026-0001", "SUB-2026-0002");
 
+        request.SetSubmissionReferences(["SUB-2026-0003", "SUB-2026-0003"]);
+        request.SubmissionReferences.Should().Equal("SUB-2026-0003");
+
         request.SetSubmissionReferences([]);
         request.SubmissionReference.Should().BeNull();
         new ChangeRequestSubmissionResult([], []).SubmissionReference.Should().BeNull();

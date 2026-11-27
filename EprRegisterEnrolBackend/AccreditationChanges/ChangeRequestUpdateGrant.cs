@@ -27,7 +27,9 @@ internal static class ChangeRequestUpdateGrant
     private sealed record GrantedInterim(InterimSiteModel Interim, InterimSiteStatus Status);
 
     /// <exception cref="ChangeRequestWriteConflictException">The legacy application changed since it was read.</exception>
-    /// <exception cref="InvalidOperationException">The domain model lacks the application or ORS.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The domain model lacks the application or ORS, or, with new BES files, the Accreditation or its ORS entry.
+    /// </exception>
     public static async Task<IResult?> ApplyAsync(
         AccreditationChangeRequest changeRequest,
         ChangeRequestSite item,
@@ -40,6 +42,10 @@ internal static class ChangeRequestUpdateGrant
     {
         if (changeRequest.ApplicationId is null)
             return Results.Conflict("The change request has no accreditation to grant it on.");
+
+        // Mongo keeps dates to the millisecond and Case Management's occurredAt has finer ticks: an interim site added
+        // at the untruncated time would never match it again once read back (AddedBefore).
+        decidedAt = ToMilliseconds(decidedAt);
 
         var application = await applications.GetByIdAsync(
             changeRequest.OrganisationId,
@@ -90,6 +96,15 @@ internal static class ChangeRequestUpdateGrant
         return null;
     }
 
+    private static DateTime ToMilliseconds(DateTime instant)
+    {
+        var utc =
+            instant.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(instant, DateTimeKind.Utc)
+                : instant.ToUniversalTime();
+        return new DateTime(utc.Ticks - utc.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+    }
+
     // Every interim site change is checked before anything is applied, so a refusal writes nothing.
     private static IResult? RefuseInterimChanges(OverseasSiteModel site, ChangeRequestSite item)
     {
@@ -107,7 +122,9 @@ internal static class ChangeRequestUpdateGrant
             };
             if (refused)
                 return Results.Conflict(
-                    $"Interim site '{change.InterimSiteId}' is no longer on the overseas site as the update expects, so the update cannot be granted."
+                    change.Action == InterimSiteChangeAction.Add
+                        ? "An interim site the update adds has no details, so the update cannot be granted."
+                        : $"Interim site '{change.InterimSiteId}' is no longer on the overseas site as the update expects, so the update cannot be granted."
                 );
         }
         return null;
@@ -129,11 +146,8 @@ internal static class ChangeRequestUpdateGrant
         site.ContactPhone = details.ContactPhone;
         site.RepatriatedLoads = details.RepatriatedLoads;
         if (addressChanged && !string.IsNullOrWhiteSpace(site.SiteAddress))
-            site.SiteAddress = FormatAddress(site.AddressLine1, site.TownOrCity, site.Country);
+            site.SiteAddress = OverseasSiteAddress.Format(site.AddressLine1, site.TownOrCity, site.Country);
     }
-
-    private static string FormatAddress(params string?[] parts) =>
-        string.Join(", ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
 
     private sealed record LegacyTarget(
         AccreditationApplicationModel Application,
@@ -270,10 +284,14 @@ internal static class ChangeRequestUpdateGrant
         var files = LegacyApplicationMapper.ToBesEvidence(item.BesEvidence)?.BesEvidenceUploads ?? [];
         if (files.Count == 0)
             return;
-        var accreditation = await ChangeRequestGrant.FindAccreditationAsync(stores, entity, session, cancellationToken);
-        var entry = accreditation?.AccreditationOverseasSites.Find(e => e.OverseasSiteId == ors.EntityId);
-        if (accreditation is null || entry is null)
-            return;
+        var accreditation =
+            await ChangeRequestGrant.FindAccreditationAsync(stores, entity, session, cancellationToken)
+            ?? throw new InvalidOperationException($"Application {applicationId} has no Accreditation.");
+        var entry =
+            accreditation.AccreditationOverseasSites.Find(e => e.OverseasSiteId == ors.EntityId)
+            ?? throw new InvalidOperationException(
+                $"Application {applicationId}'s Accreditation has no entry for ORS {ors.OrsId}."
+            );
         var held = entry.BesEvidence.Select(f => f.FileId).ToHashSet();
         var added = files.Where(f => !held.Contains(f.FileId)).ToList();
         if (added.Count == 0)
@@ -319,7 +337,7 @@ internal static class ChangeRequestUpdateGrant
         ors.Contact.Phone = details.ContactPhone;
         ors.RepatriatedLoads = details.RepatriatedLoads;
         if (addressChanged && !string.IsNullOrWhiteSpace(ors.FormattedAddress))
-            ors.FormattedAddress = FormatAddress(ors.Address.Line1, ors.Address.TownOrCity, ors.Country);
+            ors.FormattedAddress = OverseasSiteAddress.Format(ors.Address.Line1, ors.Address.TownOrCity, ors.Country);
     }
 
     // The interim site as the legacy grant left it, under the number the model knows it by (the migration may have

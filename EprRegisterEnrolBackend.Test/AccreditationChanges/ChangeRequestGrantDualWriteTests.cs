@@ -653,11 +653,11 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
             TownOrCity = "Lyon",
             ContactName = "Alex Morgan",
             ContactEmail = "alex@example.com",
-            ContactPhone = "0123456789",
+            ContactPhone = "07700 900789",
             OperationCodes = ["R3", "R13"],
         };
 
-    // The accredited ORS 001 with interim sites 001 and 002, as the dev seed's org 50025 holds its Gdansk ORS.
+    // The accredited ORS 001 with interim sites 001 and 002.
     private static OverseasSiteModel AccreditedSiteWithInterims()
     {
         var site = Site(1, UpdatedOrsId, selected: true);
@@ -789,7 +789,10 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         );
         var entry = accreditation.AccreditationOverseasSites.Single(e => e.OrsId == UpdatedOrsId);
         Assert.Contains(entry.BesEvidence, f => f.FileId == "bes-1");
-        Assert.Null(entry.AccreditedFrom);
+        Assert.Equal(
+            accreditationBefore.AccreditationOverseasSites.Single(e => e.OrsId == UpdatedOrsId).AccreditedFrom,
+            entry.AccreditedFrom
+        );
 
         Assert.Empty(await ReconciliationDifferencesAsync());
     }
@@ -844,6 +847,32 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         Assert.Single((await LegacySiteAsync(application, 1)).InterimSites, i => i.SiteName == "Marseille Hub");
         Assert.Single((await OrsAsync(UpdatedOrsId)).InterimSites, i => i.SiteName == "Marseille Hub");
         Assert.Equal(orsBefore.Version + 1, (await OrsAsync(UpdatedOrsId)).Version);
+    }
+
+    // New BES files with nowhere to go in the model fail the push rather than being dropped: everything rolls back.
+    [Fact]
+    public async Task ApprovedUpdate_OrsMissingFromTheAccreditation_FailsAndRollsEverythingBack()
+    {
+        var application = await SubmittedUpdateAsync();
+        await MigrateAsync(application);
+        var accreditation = await AccreditationEntityAsync(application);
+        accreditation.AccreditationOverseasSites.RemoveAll(e => e.OrsId == UpdatedOrsId);
+        await Stores.Accreditations.Versions.UpdateAsync(
+            accreditation,
+            accreditation.Version,
+            new ChangeInfo { Reason = ChangeReason.ReExRefresh },
+            cancellationToken: Ct
+        );
+        var orsBefore = await OrsAsync(UpdatedOrsId);
+
+        var response = await PushAsync("approved", DecidedAt, withEffectiveDate: false);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(ChangeItemStatus.DulyMade, (await ItemAsync()).Status);
+        var site = await LegacySiteAsync(application, 1);
+        Assert.Equal($"Site {UpdatedOrsId}", site.SiteName);
+        Assert.Null(site.BesEvidence);
+        Assert.Equal(orsBefore.Version, (await OrsAsync(UpdatedOrsId)).Version);
     }
 
     // A refusal changes nothing on the ORS, in legacy or the model.

@@ -77,8 +77,9 @@ public sealed record CaseWorkingSubmissionResult(string CaseReference, Guid? Wor
 
 // RA-739: ManagementBe's answer to a change request: the submission reference shared by its work
 // items, and one entry per submitted site, in the request's site order.
-// RA-682: a request holding adds and updates is sent as one submission per change type, so it has a submission
-// reference for each, in the order they were sent; SubmissionReference is the first, or null if there are none.
+// RA-682: a request holding adds and updates is sent as one submission per change type; RA-767: they share one
+// submission reference, so SubmissionReferences holds each reference once (one in practice). SubmissionReference is
+// the first, or null if there are none.
 public sealed record ChangeRequestSubmissionResult(
     IReadOnlyList<SiteWorkItemResult> Sites,
     IReadOnlyList<string> SubmissionReferences

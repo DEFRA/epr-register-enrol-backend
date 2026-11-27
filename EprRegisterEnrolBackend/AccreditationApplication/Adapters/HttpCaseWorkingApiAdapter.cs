@@ -103,8 +103,8 @@ public class HttpCaseWorkingApiAdapter(
     // RA-739: ManagementBe splits a submission into one work item per site, in one transaction, and answers
     // { submissionReference, workItems: [{ siteId, id, applicationReference }] }: each site's in-year change reference
     // (format: see "Application reference" in ManagementBe's docs/work-items.md) and the SUB reference they share.
-    // RA-682: a request holding adds and updates is one submission per change type, so it gets a SUB reference for
-    // each, and the groups are separate transactions (see ChangeRequestPartlySubmittedException).
+    // RA-682: a request holding adds and updates is sent as one submission per change type, in separate transactions
+    // (see ChangeRequestPartlySubmittedException). RA-767: they share the first group's SUB reference.
     public async Task<ChangeRequestSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
@@ -125,7 +125,8 @@ public class HttpCaseWorkingApiAdapter(
             try
             {
                 // RA-767: one operator request is one submission to the regulator, so every group after the first
-                // carries the first group's submission reference for ManagementBe to reuse.
+                // carries the first group's submission reference for ManagementBe to reuse. ManagementBe accepts it
+                // from any group of the same request, not only the one sent under the bare request id.
                 var result = await SubmitChangeGroupAsync(
                     changeRequest,
                     accreditation,
@@ -135,7 +136,7 @@ public class HttpCaseWorkingApiAdapter(
                     endpoint,
                     cancellationToken
                 );
-                references.AddRange(result.SubmissionReferences);
+                references.AddRange(result.SubmissionReferences.Except(references));
                 held.Add(group.Key);
                 sites.AddRange(result.Sites);
             }
@@ -321,7 +322,7 @@ public class HttpCaseWorkingApiAdapter(
         AccreditationApplicationModel accreditation,
         string changeType,
         IReadOnlyList<ChangeRequestSite> groupSites,
-        string? submissionReference = null
+        string? submissionReference
     ) =>
         new
         {
