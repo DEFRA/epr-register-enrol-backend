@@ -170,8 +170,8 @@ internal sealed class DevExporterOrg
         Applications = [new(-2, ApplicationStatus.Approved)],
     };
 
-    /// <summary>RA-765: the dedicated exporters for the manage page's apply banner.</summary>
     // Before All, which reads it: static fields initialise in order.
+    /// <summary>RA-765: the dedicated exporters for the manage page's apply banner.</summary>
     internal static readonly IReadOnlyList<DevExporterOrg> Reapply =
     [
         ReapplyCurrentYear,
