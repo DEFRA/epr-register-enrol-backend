@@ -26,8 +26,11 @@ public static class ChangeRequestStatusEndpoints
 
     private const string Operation = "ChangeRequestStatusChangedFromCaseManagement";
 
-    public static void UseChangeRequestStatusEndpoints(this IEndpointRouteBuilder app) =>
+    public static void UseChangeRequestStatusEndpoints(this IEndpointRouteBuilder app)
+    {
         app.MapPost(Route, StatusChangedFromCaseManagement).RequireCaseManagementCaller();
+        QueriedItemEndpoints.MapCaseManagement(app);
+    }
 
     /// <summary>
     /// A Case Management state id to the item status it projects onto: the application's mapping

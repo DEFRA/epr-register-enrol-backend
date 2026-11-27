@@ -28,6 +28,7 @@ public class HttpCaseWorkingApiAdapter(
 
     // Named HttpClient registered in Program.cs (carries the explicit 15s timeout).
     private const string DefaultHttpClientName = "DefaultClient";
+    private const string FailedToReachManagementBe = "Failed to reach ManagementBe at {Endpoint}";
 
     // The response body is attached via BeginScope under a dotted key, not interpolated into
     // the message template: CDP's OpenSearch ingestion pipeline only recognises the specific
@@ -505,7 +506,7 @@ public class HttpCaseWorkingApiAdapter(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            logger.LogError(ex, FailedToReachManagementBe, endpoint);
             throw;
         }
 
@@ -679,7 +680,93 @@ public class HttpCaseWorkingApiAdapter(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            logger.LogError(ex, FailedToReachManagementBe, endpoint);
+            return new ResumeFromQueryResult(false);
+        }
+    }
+
+    public async Task<ResumeFromQueryResult> ResumeChangeRequestItemFromQueryAsync(
+        ChangeRequestSite item,
+        QuerySubmitterContactDetails contactDetails,
+        ChangeRequestQueryResponse response,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (item.CaseManagementWorkItemId is not { } workItemId)
+        {
+            logger.LogError(
+                "Cannot resume-from-query: change request item {ItemId} has no CaseManagementWorkItemId.",
+                item.ItemId
+            );
+            return new ResumeFromQueryResult(false);
+        }
+
+        var url = _config.Url;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            logger.LogError(
+                "CaseWorking API URL is not configured. Cannot resume-from-query for workItemId={WorkItemId}.",
+                workItemId
+            );
+            return new ResumeFromQueryResult(false);
+        }
+
+        var body = new ResumeItemFromQueryBody
+        {
+            ResponderContactDetails = new
+            {
+                fullName = contactDetails.FullName,
+                email = contactDetails.Email,
+                role = contactDetails.Role,
+            },
+            SubmittedAt = response.SubmittedAt,
+            Site = response.Site,
+            InterimSites = response.InterimSites.Select(s => new
+            {
+                siteId = s.SiteId,
+                siteNumber = s.SiteNumber,
+                changes = s.Changes,
+            }),
+            NewBesEvidenceFiles = response.NewBesFiles.Select(f => new
+            {
+                fileId = f.FileId,
+                filename = f.Filename,
+                contentType = f.ContentType,
+                s3Key = f.S3Key,
+                s3Bucket = f.S3Bucket,
+                besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
+                besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
+            }),
+            // Absent (null is dropped by JsonOptions) unless there is something to remove, as before this field existed.
+            RemovedBesFileIds = response.RemovedBesFileIds is { Count: > 0 } removed ? removed : null,
+        };
+
+        var endpoint = $"{url.TrimEnd('/')}/work-items/add-overseas-site/{workItemId}/resume-from-query";
+
+        try
+        {
+            using var request = BuildRequest(
+                HttpMethod.Post,
+                endpoint,
+                body,
+                contactDetails.Email,
+                contactDetails.FullName
+            );
+            var client = httpClientFactory.CreateClient(DefaultHttpClientName);
+
+            var result = await client.SendAsync(request, cancellationToken);
+            if (!result.IsSuccessStatusCode)
+            {
+                var responseBody = await result.Content.ReadAsStringAsync(cancellationToken);
+                LogManagementBeError(LogLevel.Error, (int)result.StatusCode, endpoint, responseBody);
+                return new ResumeFromQueryResult(false);
+            }
+
+            return new ResumeFromQueryResult(true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, FailedToReachManagementBe, endpoint);
             return new ResumeFromQueryResult(false);
         }
     }
@@ -741,7 +828,7 @@ public class HttpCaseWorkingApiAdapter(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to reach ManagementBe at {Endpoint}", endpoint);
+            logger.LogError(ex, FailedToReachManagementBe, endpoint);
             return WithdrawResult.Failed;
         }
     }
@@ -1323,6 +1410,20 @@ public class HttpCaseWorkingApiAdapter(
         // RA-316. Both optional on the consumer; nulls are dropped by JsonOptions.
         public int? ChargeAmountPence { get; init; }
         public string? PaymentReference { get; init; }
+    }
+
+    // RA-698: the contract with ManagementBe's add-ORS resume-from-query action.
+    internal sealed class ResumeItemFromQueryBody
+    {
+        public required object ResponderContactDetails { get; init; }
+        public required DateTime SubmittedAt { get; init; }
+        public required IReadOnlyDictionary<string, string?> Site { get; init; }
+        public required IEnumerable<object> InterimSites { get; init; }
+        [JsonPropertyName("besEvidenceFiles")]
+        public required IEnumerable<object> NewBesEvidenceFiles { get; init; }
+
+        // Optional on the consumer: the fileIds sent earlier that the operator has since deleted.
+        public IReadOnlyList<string>? RemovedBesFileIds { get; init; }
     }
 
     internal sealed class WithdrawWorkItemRequest

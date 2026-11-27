@@ -181,6 +181,29 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new ResumeFromQueryResult(true));
     }
 
+    public Task<ResumeFromQueryResult> ResumeChangeRequestItemFromQueryAsync(
+        ChangeRequestSite item,
+        QuerySubmitterContactDetails contactDetails,
+        ChangeRequestQueryResponse response,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "StubCaseWorkingApiAdapter.ResumeChangeRequestItemFromQueryAsync called for itemId={ItemId} workItemId={WorkItemId} changed={Changed}",
+                item.ItemId,
+                item.CaseManagementWorkItemId,
+                response.Site.Count
+                    + response.InterimSites.Sum(s => s.Changes.Count)
+                    + response.NewBesFiles.Count
+                    + (response.RemovedBesFileIds?.Count ?? 0)
+            );
+        }
+
+        return Task.FromResult(new ResumeFromQueryResult(true));
+    }
+
     public Task<WithdrawResult> WithdrawApplicationAsync(
         AccreditationApplicationModel application,
         QuerySubmitterContactDetails contactDetails,

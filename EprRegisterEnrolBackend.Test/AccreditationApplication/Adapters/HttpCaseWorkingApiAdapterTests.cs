@@ -1925,6 +1925,172 @@ public class HttpCaseWorkingApiAdapterTests
         result.IsSuccess.Should().BeFalse();
     }
 
+    // --- ResumeChangeRequestItemFromQueryAsync (RA-698) ---
+
+    private static ChangeRequestSite QueriedItem(Guid? workItemId) =>
+        new()
+        {
+            SiteId = 1,
+            SiteName = "Site",
+            CaseManagementWorkItemId = workItemId,
+        };
+
+    private static QuerySubmitterContactDetails QueryContact() =>
+        new()
+        {
+            FullName = "Jane Smith",
+            Email = "jane@example.com",
+            Role = "Manager",
+        };
+
+    private static ChangeRequestQueryResponse QueryResponse() =>
+        new(
+            new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc),
+            new Dictionary<string, string?> { ["siteName"] = "New" },
+            [new InterimSiteResponse(5, "003", new Dictionary<string, string?> { ["townOrCity"] = "Nice" })],
+            [
+                new BesEvidenceFileModel
+                {
+                    FileId = "f1",
+                    Filename = "a.pdf",
+                    S3Key = "k",
+                },
+            ]
+        );
+
+    [Fact]
+    public async Task ResumeChangeRequestItemFromQueryAsync_NoWorkItem_FailsWithoutCallingManagementBe()
+    {
+        var (adapter, handler) = CreateAdapter();
+
+        var result = await adapter.ResumeChangeRequestItemFromQueryAsync(
+            QueriedItem(null),
+            QueryContact(),
+            QueryResponse(),
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        handler.CapturedRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResumeChangeRequestItemFromQueryAsync_EmptyUrl_Fails()
+    {
+        var (adapter, handler) = CreateAdapter(url: "");
+
+        var result = await adapter.ResumeChangeRequestItemFromQueryAsync(
+            QueriedItem(Guid.NewGuid()),
+            QueryContact(),
+            QueryResponse(),
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+        handler.CapturedRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResumeChangeRequestItemFromQueryAsync_PostsTheResponseToTheResumeFromQueryUrl()
+    {
+        var workItemId = Guid.NewGuid();
+        var (adapter, handler) = CreateAdapter();
+
+        var result = await adapter.ResumeChangeRequestItemFromQueryAsync(
+            QueriedItem(workItemId),
+            QueryContact(),
+            QueryResponse(),
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeTrue();
+        handler
+            .CapturedRequest!.RequestUri!.ToString()
+            .Should()
+            .Be($"{TestUrl}/work-items/add-overseas-site/{workItemId}/resume-from-query");
+        handler.CapturedRequest.Method.Should().Be(HttpMethod.Post);
+        var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+        root.GetProperty("responderContactDetails").GetProperty("fullName").GetString().Should().Be("Jane Smith");
+        root.GetProperty("site").GetProperty("siteName").GetString().Should().Be("New");
+        var interim = root.GetProperty("interimSites")[0];
+        interim.GetProperty("siteId").GetInt32().Should().Be(5);
+        interim.GetProperty("siteNumber").GetString().Should().Be("003");
+        interim.GetProperty("changes").GetProperty("townOrCity").GetString().Should().Be("Nice");
+        var file = root.GetProperty("besEvidenceFiles")[0];
+        file.GetProperty("fileId").GetString().Should().Be("f1");
+        file.GetProperty("s3Key").GetString().Should().Be("k");
+        // Absent, not null or empty, when nothing was removed: the body is as it was before the field existed.
+        root.TryGetProperty("removedBesFileIds", out _).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ResumeChangeRequestItemFromQueryAsync_SendsRemovedBesFileIdsOnlyWhenThereAreSome(bool any)
+    {
+        var (adapter, handler) = CreateAdapter();
+
+        await adapter.ResumeChangeRequestItemFromQueryAsync(
+            QueriedItem(Guid.NewGuid()),
+            QueryContact(),
+            QueryResponse() with { RemovedBesFileIds = any ? ["gone-1", "gone-2"] : [] },
+            TestContext.Current.CancellationToken
+        );
+
+        var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+        if (any)
+            root.GetProperty("removedBesFileIds").EnumerateArray().Select(e => e.GetString()).Should().Equal("gone-1", "gone-2");
+        else
+            root.TryGetProperty("removedBesFileIds", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResumeChangeRequestItemFromQueryAsync_NonSuccessResponse_Fails()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var handler = new CapturingHttpMessageHandler(HttpStatusCode.BadRequest, new { title = "Error" });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var result = await adapter.ResumeChangeRequestItemFromQueryAsync(
+            QueriedItem(Guid.NewGuid()),
+            QueryContact(),
+            QueryResponse(),
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResumeChangeRequestItemFromQueryAsync_ManagementBeUnreachable_FailsWithoutThrowing()
+    {
+        var config = Options.Create(new CaseWorkingApiConfig { Url = TestUrl });
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory
+            .CreateClient("DefaultClient")
+            .Returns(new HttpClient(new ThrowingHttpMessageHandler()));
+        var adapter = new HttpCaseWorkingApiAdapter(
+            httpClientFactory,
+            config,
+            EnabledNullLogger<HttpCaseWorkingApiAdapter>.Instance
+        );
+
+        var result = await adapter.ResumeChangeRequestItemFromQueryAsync(
+            QueriedItem(Guid.NewGuid()),
+            QueryContact(),
+            QueryResponse(),
+            TestContext.Current.CancellationToken
+        );
+
+        result.IsSuccess.Should().BeFalse();
+    }
+
     // --- WithdrawApplicationAsync ---
 
     // The acting user withdrawing now — deliberately different from CreateTestApplication's

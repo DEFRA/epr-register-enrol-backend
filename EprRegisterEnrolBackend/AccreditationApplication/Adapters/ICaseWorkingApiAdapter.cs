@@ -44,6 +44,16 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
+    // RA-698: tells ManagementBe the operator has answered the regulator's query on an add-ORS item: the changed
+    // ORS and interim-site values, the new BES files, and who answered. Allowed to throw, and called before the
+    // item is saved as Updated, as ResumeFromQueryAsync is for an application.
+    Task<ResumeFromQueryResult> ResumeChangeRequestItemFromQueryAsync(
+        ChangeRequestSite item,
+        QuerySubmitterContactDetails contactDetails,
+        ChangeRequestQueryResponse response,
+        CancellationToken cancellationToken = default
+    );
+
     // Courtesy notification fired after a new ORS or interim site is saved (RA-294 AC05 /
     // RA-297 AC04) — not part of the save transaction, so like GetNotificationStatusAsync this
     // must never throw. siteNumber is only populated when siteType == "interim".
@@ -89,6 +99,25 @@ public sealed record ChangeRequestSubmissionResult(
 
 // WorkItemId is null when ManagementBe's entry carried no usable id; the reference is what counts.
 public sealed record SiteWorkItemResult(int SiteId, string CaseReference, Guid? WorkItemId);
+
+// RA-698: what an operator's response to a queried item carries to ManagementBe. Site holds only the ORS values that
+// changed, keyed as the item's editable fields (siteName, addressLine1, ..., rejectedLoadsArrangements); each
+// interim site holds its siteId, siteNumber and only the values that changed. RemovedBesFileIds (optional, null or
+// empty when none) are BES files an earlier send of this round carried that the operator has since deleted (from
+// another tab): ManagementBe removes them from the site's evidence.
+public sealed record ChangeRequestQueryResponse(
+    DateTime SubmittedAt,
+    IReadOnlyDictionary<string, string?> Site,
+    IReadOnlyList<InterimSiteResponse> InterimSites,
+    IReadOnlyList<BesEvidenceFileModel> NewBesFiles,
+    IReadOnlyList<string>? RemovedBesFileIds = null
+);
+
+public sealed record InterimSiteResponse(
+    int SiteId,
+    string SiteNumber,
+    IReadOnlyDictionary<string, string?> Changes
+);
 
 public sealed record NotificationStatusResult(string? NotificationStatus, DateTime? SlaDueDate);
 

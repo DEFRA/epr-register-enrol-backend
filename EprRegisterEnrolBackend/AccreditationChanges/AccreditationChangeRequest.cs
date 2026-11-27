@@ -211,6 +211,13 @@ public class ChangeRequestSite : ChangeRequestItem
     public BesEvidenceModel? BesEvidence { get; set; }
 
     /// <summary>
+    /// RA-698: the regulator's query on this item, answered by the operator's resubmit. At most one is open at a time
+    /// (the item is <see cref="ChangeItemStatus.Queried"/>); a later query replaces the note and keeps the earlier
+    /// <see cref="ItemQuery.QuerySubmissions"/>.
+    /// </summary>
+    public ItemQuery? Query { get; set; }
+
+    /// <summary>
     /// RA-739: this site's own charge, the per-site in-year ORS fee, snapshotted at submit beside the request's
     /// total <see cref="AccreditationChangeRequest.ChargePence"/> and cleared with it when the request is reopened.
     /// </summary>
@@ -376,6 +383,75 @@ public class ChangeRequestSiteAnswers
     public string? Coordinates { get; set; }
     public List<string>? OperationCodes { get; set; }
     public bool? ConditionsOfExport { get; set; }
+
+    // RA-698: the values an operator changes while answering a query. Unlike the four above these override the ORS's
+    // own values, which are not locked.
+    public string? SiteName { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public string? TownOrCity { get; set; }
+    public string? StateOrRegion { get; set; }
+    public string? Postcode { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactEmail { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? RejectedLoadsArrangements { get; set; }
+
+    /// <summary>RA-698: the queried ORS's interim sites the operator changed, keyed by the interim site's SiteId.</summary>
+    public List<ChangeRequestInterimSiteAnswers> InterimSites { get; set; } = [];
+}
+
+/// <summary>RA-698: what the operator changed on one interim site of the queried ORS. Null means unchanged.</summary>
+public class ChangeRequestInterimSiteAnswers
+{
+    public required int SiteId { get; set; }
+    public string? SiteName { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public string? TownOrCity { get; set; }
+    public string? StateOrRegion { get; set; }
+    public string? Postcode { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactEmail { get; set; }
+    public string? ContactPhone { get; set; }
+}
+
+/// <summary>RA-698: a regulator's query on an item.</summary>
+public class ItemQuery
+{
+    public required string QueryNote { get; set; }
+    public DateTime RaisedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// The BES files the item held when the query was raised, which the operator cannot remove: only files they add
+    /// in response can be.
+    /// </summary>
+    public List<string> BesFileIdsAtQuery { get; set; } = [];
+
+    /// <summary>The item's answers when the query was raised, so a response records only what it changed.</summary>
+    public ChangeRequestSiteAnswers AnswersAtQuery { get; set; } = new();
+
+    /// <summary>
+    /// What case management received when a resubmit was sent but its save was refused as a concurrent edit (the item
+    /// stays Queried): the answers as sent, and the new BES files sent. A later resubmit compares against these as well as
+    /// <see cref="AnswersAtQuery"/>, so undoing a sent answer counts as a change and is sent. Null otherwise.
+    /// </summary>
+    public ChangeRequestSiteAnswers? AnswersSent { get; set; }
+
+    public List<string> BesFileIdsSent { get; set; } = [];
+
+    /// <summary>One per resubmit, oldest first.</summary>
+    public List<QuerySubmission> QuerySubmissions { get; set; } = [];
+}
+
+/// <summary>RA-698: one response to a query: when, by whom, and what changed.</summary>
+public class QuerySubmission
+{
+    public DateTime SubmittedAt { get; set; } = DateTime.UtcNow;
+    public required string FullName { get; set; }
+    public required string JobTitle { get; set; }
+    public List<string> ChangedFields { get; set; } = [];
+    public List<string> NewBesFileIds { get; set; } = [];
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -430,6 +506,47 @@ public class AddChangeRequestSiteRequest
     /// <c>update-overseas-site</c> to change an accredited ORS's details.
     /// </summary>
     public string? ChangeType { get; set; }
+}
+
+/// <summary>
+/// RA-698: PATCH body for a queried item's editable fields, and for an interim site its own subset. A null property
+/// leaves the stored answer unchanged. The locked fields are here only so the validator can refuse them with a 422
+/// rather than silently ignore them.
+/// </summary>
+public class PatchQueriedSiteRequest
+{
+    public string? SiteName { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public string? TownOrCity { get; set; }
+    public string? StateOrRegion { get; set; }
+    public string? Postcode { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactEmail { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? RejectedLoadsArrangements { get; set; }
+
+    // Locked: any value is refused.
+    public string? Country { get; set; }
+    public string? Coordinates { get; set; }
+    public List<string>? OperationCodes { get; set; }
+    public List<string>? BaselCodes { get; set; }
+    public bool? ConditionsOfExport { get; set; }
+}
+
+/// <summary>RA-698: Case Management's query on an item, pushed by ManagementBe.</summary>
+public class QueryFromCaseManagementRequest
+{
+    public required string Note { get; set; }
+    public DateTime? RaisedAt { get; set; }
+}
+
+/// <summary>RA-698: the declaration that resubmits a queried item.</summary>
+public class ResubmitItemRequest
+{
+    public required string FullName { get; set; }
+    public required string JobTitle { get; set; }
+    public string? Email { get; set; }
 }
 
 /// <summary>
