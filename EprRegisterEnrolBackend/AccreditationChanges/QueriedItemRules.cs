@@ -64,7 +64,8 @@ public static class QueriedItemRules
         new(Postcode, b => b.Postcode, a => a.Postcode, (a, v) => a.Postcode = v, s => s.Postcode, false),
         new(ContactName, b => b.ContactName, a => a.ContactName, (a, v) => a.ContactName = v, s => s.ContactName, true),
         new(ContactEmail, b => b.ContactEmail, a => a.ContactEmail, (a, v) => a.ContactEmail = v, s => s.ContactEmail, true),
-        new(ContactPhone, b => b.ContactPhone, a => a.ContactPhone, (a, v) => a.ContactPhone = v, s => s.ContactPhone, false),
+        // The add-interim journey requires a phone, so a queried interim site's can't be blanked (the ORS's is optional).
+        new(ContactPhone, b => b.ContactPhone, a => a.ContactPhone, (a, v) => a.ContactPhone = v, s => s.ContactPhone, true),
     ];
 
     public static readonly IReadOnlyList<string> EditableOrsFields =
@@ -226,27 +227,43 @@ public class PatchQueriedSiteRequestValidator : AbstractValidator<PatchQueriedSi
             _ => MaxLength,
         };
 
+    /// <summary>
+    /// Set in the validation context's root data to validate an interim site's answers: its required-ness comes from
+    /// <see cref="QueriedItemRules.InterimFields"/>, not <see cref="QueriedItemRules.OrsFields"/>.
+    /// </summary>
+    internal const string InterimContextKey = "interim";
+
+    private static bool IsInterim(ValidationContext<PatchQueriedSiteRequest> context) =>
+        context.RootContextData.TryGetValue(InterimContextKey, out var value) && value is true;
+
     public PatchQueriedSiteRequestValidator()
     {
-        foreach (var field in QueriedItemRules.OrsFields)
-        {
-            var key = field.Key;
-            var required = field.Required;
-            RuleFor(r => field.FromBody(r))
-                .NotEmpty()
-                .WithMessage($"{key} must not be blank.")
-                .When(r => required && field.FromBody(r) is not null)
-                .OverridePropertyName(key);
-            RuleFor(r => field.FromBody(r))
-                .MaximumLength(LimitOf(key))
-                .When(r => field.FromBody(r) is not null)
-                .OverridePropertyName(key);
-        }
+        AddRules(QueriedItemRules.OrsFields.Select(f => (f.Key, f.FromBody, f.Required)), interim: false);
+        AddRules(QueriedItemRules.InterimFields.Select(f => (f.Key, f.FromBody, f.Required)), interim: true);
 
         RuleFor(r => r.ContactEmail)
             .EmailAddress()
             .When(r => !string.IsNullOrWhiteSpace(r.ContactEmail))
             .OverridePropertyName(QueriedItemRules.ContactEmail);
+    }
+
+    private void AddRules(
+        IEnumerable<(string Key, Func<PatchQueriedSiteRequest, string?> FromBody, bool Required)> fields,
+        bool interim
+    )
+    {
+        foreach (var (key, fromBody, required) in fields)
+        {
+            RuleFor(r => fromBody(r))
+                .NotEmpty()
+                .WithMessage($"{key} must not be blank.")
+                .When((r, ctx) => required && IsInterim(ctx) == interim && fromBody(r) is not null)
+                .OverridePropertyName(key);
+            RuleFor(r => fromBody(r))
+                .MaximumLength(LimitOf(key))
+                .When((r, ctx) => IsInterim(ctx) == interim && fromBody(r) is not null)
+                .OverridePropertyName(key);
+        }
     }
 }
 

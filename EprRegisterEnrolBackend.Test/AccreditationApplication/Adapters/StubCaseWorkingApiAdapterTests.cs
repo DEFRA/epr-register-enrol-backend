@@ -316,7 +316,14 @@ public class StubCaseWorkingApiAdapterTests
             [
                 .. Enumerable
                     .Range(1, sites)
-                    .Select(n => new ChangeRequestSite { SiteId = 900 + n, OrsId = $"{n:D3}", SiteName = $"Site {n}" }),
+                    .Select(n => new ChangeRequestSite
+                    {
+                        // RA-682: the stub codes each site by its own change type.
+                        ChangeType = changeType,
+                        SiteId = 900 + n,
+                        OrsId = $"{n:D3}",
+                        SiteName = $"Site {n}",
+                    }),
             ],
         };
     }

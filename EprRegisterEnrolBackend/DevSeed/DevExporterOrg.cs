@@ -108,6 +108,23 @@ internal sealed class DevExporterOrg
         IsAccredited = false,
     };
 
+    /// <summary>
+    /// RA-682: an Approved exporter for the in-year ORS update journey, kept apart from RA-492's org 50019 so the
+    /// update spec's changes, grants and adds never alter what RA-492's specs see. Three accredited ORSs (one with
+    /// two interim sites) to change, and two registered ones to add in the same request.
+    /// </summary>
+    internal static readonly DevExporterOrg InYearUpdate = new()
+    {
+        OrgId = 50025,
+        Name = "In-Year Update Exports Ltd",
+        TradingName = "In-Year Update Exports",
+        Email = "info@inyearupdateexports.co.uk",
+        CompaniesHouseNumber = "12345025",
+        AddressLine1 = "25 Harbour Road",
+        Town = "Bristol",
+        Postcode = "BS1 5AA",
+    };
+
     internal static readonly IReadOnlyList<DevExporterOrg> All =
     [
         Manage,
@@ -115,6 +132,7 @@ internal sealed class DevExporterOrg
         NoChangeRequests,
         RegistrationOnly,
         NoOverseasSites,
+        InYearUpdate,
     ];
 
     private DevExporterOrg() { }

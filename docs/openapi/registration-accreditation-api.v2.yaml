@@ -82,7 +82,7 @@ paths:
         - $ref: '#/components/parameters/RegistrationNumberFilter'
         - $ref: '#/components/parameters/StatusFilter'
         - $ref: '#/components/parameters/PageNumber'
-        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/SearchLimit'
       responses:
         '200':
           description: A page of accreditations. Filters combine with AND, and a filter that matches nothing is an empty page, not a 404.
@@ -243,6 +243,13 @@ components:
       name: limit
       in: query
       schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    SearchLimit:
+      name: limit
+      in: query
+      description: >-
+        The page size of the accreditation search. Larger pages mean fewer requests to read every
+        accreditation, but each is bigger and takes longer.
+      schema: { type: integer, minimum: 1, maximum: 500, default: 20 }
     Year:
       name: year
       in: query

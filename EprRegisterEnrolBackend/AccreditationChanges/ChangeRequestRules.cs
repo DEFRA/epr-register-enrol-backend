@@ -5,10 +5,17 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 
 /// <summary>
 /// RA-492 rules for an add-overseas-site change request: which ORS fields are locked, what is
-/// still missing (AC02), whether BES evidence is needed, and the charge (AC03/AC04).
+/// still missing (AC02), whether BES evidence is needed, and the charge (AC03/AC04). RA-682: the rules every item
+/// shares (charging, submission grouping, the view); an update item's own are in <see cref="UpdateOverseasSiteRules"/>.
 /// </summary>
 public static class ChangeRequestRules
 {
+    /// <summary>RA-682: the key an update with nothing changed is reported under.</summary>
+    public const string Changes = "changes";
+
+    /// <summary>RA-682: the key an update is reported under when its ORS is no longer accredited.</summary>
+    public const string Site = "site";
+
     public const string Country = "country";
     public const string Coordinates = "coordinates";
     public const string OperationCodes = "operationCodes";
@@ -23,6 +30,10 @@ public static class ChangeRequestRules
             [OperationCodes] = "Select the recycling operation (R code) for the overseas reprocessing site.",
             [ConditionsOfExport] = "Confirm whether the conditions of export are met.",
             [BesEvidence] = "Upload evidence of broadly equivalent standards for the overseas reprocessing site.",
+            [Changes] = "Change at least one detail of the overseas reprocessing site, or remove it from the request.",
+            [Site] =
+                "This overseas reprocessing site is no longer approved, so its details can't be changed. "
+                + "Remove it from the request.",
         };
 
     /// <summary>
@@ -149,8 +160,51 @@ public static class ChangeRequestRules
         };
     }
 
+    /// <summary>
+    /// RA-682 AC05: whether an item is charged. Only adding an ORS is; the charge, the payment reference and what Case
+    /// Management is sent all follow this one rule.
+    /// </summary>
+    public static bool IsChargeable(ChangeRequestItem item) =>
+        item.ChangeType == AccreditationChangeRequest.AddOverseasSiteChangeType;
+
+    /// <summary>RA-682 AC05: how many of the request's items are charged.</summary>
+    public static int ChargeableSites(AccreditationChangeRequest request) => request.Sites.Count(IsChargeable);
+
+    /// <summary>
+    /// RA-682: the request's own type, from its items: add-ORS when it adds any ORS (so it is charged), an update when
+    /// it only changes ORS details.
+    /// </summary>
+    public static string RequestChangeType(AccreditationChangeRequest request)
+    {
+        // A registration-only request (RA-697) keeps its stored type, and so does a tonnage band upgrade, which has
+        // no sites.
+        if (request.ApplicationId is null || request.Sites.Count == 0)
+            return request.ChangeType;
+        if (request.Sites.All(s => s.IsUpdate))
+            return AccreditationChangeRequest.UpdateOverseasSiteChangeType;
+        // An update-only request that was reopened and then had an ORS added is an add-ORS request now.
+        return request.ChangeType == AccreditationChangeRequest.UpdateOverseasSiteChangeType
+            ? AccreditationChangeRequest.AddOverseasSiteChangeType
+            : request.ChangeType;
+    }
+
+    /// <summary>
+    /// RA-682: the order a request's items go to Case Management in: one submission per change type, adds first. The
+    /// adapter sends them in this order, so when a submission fails the groups after it were never sent.
+    /// </summary>
+    public static List<IGrouping<string, ChangeRequestSite>> SubmissionGroups(AccreditationChangeRequest request) =>
+        [
+            .. request
+                .Sites.GroupBy(s => s.ChangeType)
+                .OrderBy(g => g.Key == AccreditationChangeRequest.AddOverseasSiteChangeType ? 0 : 1)
+                .ThenBy(g => g.Key, StringComparer.Ordinal),
+        ];
+
     public static List<string> MissingFields(OverseasSiteModel? site, ChangeRequestSite requestSite)
     {
+        if (requestSite.IsUpdate)
+            return UpdateOverseasSiteRules.MissingFields(site, requestSite);
+
         var effective = Effective(site, requestSite.Answers);
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(effective.Country))
@@ -248,7 +302,8 @@ public static class ChangeRequestRules
                     requestSite.SiteName,
                     requestSite.Answers,
                     effective,
-                    IsBesEvidenceRequired(site, effective),
+                    // RA-682 AC02: an update never needs new BES evidence, though it may add some.
+                    !requestSite.IsUpdate && IsBesEvidenceRequired(site, effective),
                     requestSite.BesEvidence,
                     missing,
                     missing.Count == 0,
@@ -258,6 +313,10 @@ public static class ChangeRequestRules
                     requestSite.ValidFrom,
                     requestSite.WithdrawnAt,
                     requestSite.CaseManagementReference,
+                    requestSite.Previous,
+                    requestSite.Proposed,
+                    requestSite.InterimSiteChanges,
+                                        IsBesEvidenceRequired(site, effective) && !request.IsFixed(requestSite),
                     QueryDetails(requestSite, site)
                 );
             })
@@ -265,7 +324,7 @@ public static class ChangeRequestRules
 
         return new ChangeRequestView(
             request.RequestId,
-            request.ChangeType,
+            RequestChangeType(request),
             request.Status,
             request.CreatedAt,
             request.UpdatedAt,
@@ -273,7 +332,7 @@ public static class ChangeRequestRules
             request.SubmittedBy,
             sites,
             sites.Count > 0 && sites.All(s => s.IsComplete),
-            Charge(request.Sites.Count),
+            Charge(ChargeableSites(request)),
             request.TonnageBandUpgrade is { } tonnage ? TonnageBandUpgradeView.From(tonnage) : null
         );
     }
@@ -297,6 +356,13 @@ public sealed record ChangeRequestSiteView(
     DateTime? ValidFrom,
     DateTime? WithdrawnAt,
     string? CaseManagementReference,
+    // RA-682: an update's details as they were and as proposed, and its interim site changes. Null and empty on an add.
+    OverseasSiteDetails? Previous = null,
+    OverseasSiteDetails? Proposed = null,
+    List<InterimSiteChange>? InterimSiteChanges = null,
+    // RA-682: whether BES evidence files can be uploaded to the item now: its ORS takes BES evidence (outside the EU
+    // and OECD, conditions of export not met) and Case Management can't hold the item. On an add or an update.
+    bool BesEvidenceUploadAllowed = false,
     QueryDetailsView? Query = null
 );
 

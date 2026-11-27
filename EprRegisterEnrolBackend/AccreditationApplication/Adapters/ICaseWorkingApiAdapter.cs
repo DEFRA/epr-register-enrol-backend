@@ -87,10 +87,15 @@ public sealed record CaseWorkingSubmissionResult(string CaseReference, Guid? Wor
 
 // RA-739: ManagementBe's answer to a change request: the submission reference shared by its work
 // items, and one entry per submitted site, in the request's site order.
+// RA-682: a request holding adds and updates is sent as one submission per change type, so it has a submission
+// reference for each, in the order they were sent; SubmissionReference is the first, or null if there are none.
 public sealed record ChangeRequestSubmissionResult(
-    string SubmissionReference,
-    IReadOnlyList<SiteWorkItemResult> Sites
-);
+    IReadOnlyList<SiteWorkItemResult> Sites,
+    IReadOnlyList<string> SubmissionReferences
+)
+{
+    public string? SubmissionReference => SubmissionReferences.Count > 0 ? SubmissionReferences[0] : null;
+}
 
 // WorkItemId is null when ManagementBe's entry carried no usable id; the reference is what counts.
 public sealed record SiteWorkItemResult(int SiteId, string CaseReference, Guid? WorkItemId);

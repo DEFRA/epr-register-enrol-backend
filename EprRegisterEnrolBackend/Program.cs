@@ -231,7 +231,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<LastYearsAccreditationBackfillMigration>();
 
-    // RA-788: one-off deletion of the duplicate 2027 Plastic application (INC2560371).
+    // RA-788: one-off find-and-delete of duplicate draft accreditation applications (INC2560371).
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
     builder.Services.Configure<DuplicateApplicationDeletionOptions>(
         builder.Configuration.GetSection(DuplicateApplicationDeletionOptions.SectionName)
@@ -394,7 +394,7 @@ static void ConfigureDevelopmentServices(WebApplicationBuilder builder)
         builder.Services.AddHostedService<DevRegistrationSeedService>();
     }
 
-    // RA-425: the dedicated exporters (orgs 50018, 50019 for RA-492 and 50020 to 50022 for RA-697). Also seedable on their own,
+    // RA-425: the dedicated exporters (orgs 50018, 50019 for RA-492, 50020 to 50022 for RA-697 and 50025 for RA-682). Also seedable on their own,
     // for the fe-tests stack, whose other specs must not see the Delta Green data above. The same check
     // decides whether the stub ReEx registry has the orgs (see ReExApiAdapterRegistration).
     if (DevExporterAccreditationSeedService.IsEnabled(builder.Configuration, builder.Environment))

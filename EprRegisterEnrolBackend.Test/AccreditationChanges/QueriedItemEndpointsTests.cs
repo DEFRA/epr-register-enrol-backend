@@ -620,6 +620,68 @@ public sealed class QueriedItemEndpointsTests : IDisposable
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // A second tab saves between this resubmit's send to ManagementBe and its save: the save is refused, and the
+    // reloaded item holds something the response did not carry.
+    private void LoseTheSaveToAnotherTabThat(Action<ChangeRequestSite> edit)
+    {
+        var lost = false;
+        _factory.FakeChangeRequests.LoseUpdateWhen = _ =>
+        {
+            if (lost)
+                return false;
+            lost = true;
+            var other = _factory.FakeChangeRequests.All.Single();
+            edit(other.Sites.Single(s => s.CaseManagementWorkItemId == _workItemId));
+            _factory.FakeChangeRequests.UpdateAsync(other, Ct).GetAwaiter().GetResult();
+            return true;
+        };
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenAnotherTabAddedAnAnswerBeforeTheSaveWasRefused_Is409AndDoesNotRecordItAsSent()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "Changed" }, Ct);
+        LoseTheSaveToAnotherTabThat(item => item.Answers.ContactName = "Y");
+
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Item().Status.Should().Be(ChangeItemStatus.Queried);
+        Item().Query!.QuerySubmissions.Should().BeEmpty();
+        Item().Answers.ContactName.Should().Be("Y");
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenAnotherTabChangedASentAnswerBeforeTheSaveWasRefused_Is409()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "Changed" }, Ct);
+        LoseTheSaveToAnotherTabThat(item => item.Answers.SiteName = "Changed again");
+
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Item().Status.Should().Be(ChangeItemStatus.Queried);
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenAnotherTabAddedABesFileBeforeTheSaveWasRefused_Is409()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { siteName = "Changed" }, Ct);
+        LoseTheSaveToAnotherTabThat(item =>
+            (item.BesEvidence ??= new BesEvidenceModel()).BesEvidenceUploads.Add(
+                new BesEvidenceFileModel { FileId = "late-file", Filename = "late.pdf", S3Key = "k" }
+            )
+        );
+
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Item().Status.Should().Be(ChangeItemStatus.Queried);
+    }
+
     [Fact]
     public async Task Query_AdvancesTheStatusClockSoAnOlderPushCannotCloseIt()
     {
@@ -676,6 +738,28 @@ public sealed class QueriedItemEndpointsTests : IDisposable
         (await _client.PatchAsJsonAsync(url, new { townOrCity = new string('t', 101) }, Ct))
             .StatusCode.Should()
             .Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PatchInterimSite_WithABlankPhone_Is400AndKeepsThePhone_ButTheOrsPhoneCanBeBlanked()
+    {
+        await SeedQueried();
+        var interimUrl = ItemUrl($"interim-sites/{InterimSite.SiteId}/answers");
+
+        var blank = await _client.PatchAsJsonAsync(interimUrl, new { contactPhone = "" }, Ct);
+
+        blank.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await blank.Content.ReadAsStringAsync(Ct)).Should().Contain("contactPhone");
+        Item().Answers.InterimSites.Should().BeEmpty();
+        (await _client.PatchAsJsonAsync(interimUrl, new { contactPhone = "+31 99 999 9999" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+        (await _client.PatchAsJsonAsync(interimUrl, new { contactPhone = new string('1', 31) }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.BadRequest);
+        (await _client.PatchAsJsonAsync(ItemUrl("answers"), new { contactPhone = "" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
     }
 
     // ---------------------------------------------------------------- BES evidence (AC04, AC12)

@@ -64,6 +64,7 @@ public class DevExporterAccreditationSeedService(
             [DevExporterOrg.Manage] = OverseasSites,
             [DevExporterOrg.InYearChange] = InYearChangeOverseasSites,
             [DevExporterOrg.NoChangeRequests] = NoChangeRequestsOverseasSites,
+            [DevExporterOrg.InYearUpdate] = InYearUpdateOverseasSites,
         };
 
     protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
@@ -572,6 +573,70 @@ public class DevExporterAccreditationSeedService(
             IsNewSite = true,
             Selected = false,
         };
+
+    // Org 50025: three accredited ORSs with every field, whose details an operator changes in year (902501 has
+    // two interim sites to change, remove and add to), and two registered ones, complete, to add in the same request.
+    // All EU and OECD, so adding one needs no BES evidence. Site ids 9025xx, interim sites 90251x.
+    internal static List<OverseasSiteModel> InYearUpdateOverseasSites(int year)
+    {
+        var accreditedFrom = $"{year}-01-01T00:00:00Z";
+        List<OverseasSiteModel> sites =
+        [
+            InYearChangeOrs(
+                Ors(
+                    902501,
+                    "001",
+                    "Gdansk Recykling Sp. z o.o.",
+                    "902501 Harbour Estate",
+                    "Poland",
+                    accreditedFrom,
+                    [
+                        InterimSite(902511, "001", "Gdynia Transfer Hub", "Poland"),
+                        InterimSite(902512, "002", "Szczecin Sorting Centre", "Poland"),
+                    ]
+                ),
+                isEu: true,
+                isOecd: true,
+                coordinates: "54.3520, 18.6466",
+                operationCodes: ["R3"],
+                conditionsOfExport: true
+            ),
+            InYearChangeOrs(
+                Ors(902502, "002", "Porto Reciclagem Lda", "902502 Harbour Estate", "Portugal", accreditedFrom, []),
+                isEu: true,
+                isOecd: true,
+                coordinates: "41.1579, -8.6291",
+                operationCodes: ["R3"],
+                conditionsOfExport: true
+            ),
+            InYearChangeOrs(
+                Ors(902503, "003", "Milano Riciclo SpA", "902503 Harbour Estate", "Italy", accreditedFrom, []),
+                isEu: true,
+                isOecd: true,
+                coordinates: "45.4642, 9.1900",
+                operationCodes: ["R3"],
+                conditionsOfExport: true
+            ),
+            InYearChangeOrs(
+                Ors(902504, "004", "Ghent Recycling NV", "902504 Harbour Estate", "Belgium", null, []),
+                isEu: true,
+                isOecd: true,
+                coordinates: "51.0543, 3.7174",
+                operationCodes: ["R3"],
+                conditionsOfExport: true
+            ),
+            InYearChangeOrs(
+                Ors(902505, "005", "Vienna Recycling GmbH", "902505 Harbour Estate", "Austria", null, []),
+                isEu: true,
+                isOecd: true,
+                coordinates: "48.2082, 16.3738",
+                operationCodes: ["R3"],
+                conditionsOfExport: true
+            ),
+        ];
+        sites.ForEach(InterimSiteSync.SyncMirror);
+        return sites;
+    }
 
     // The contact and waste details a registration holds, and only the given coordinates, R codes
     // and conditions of export.

@@ -20,7 +20,23 @@ public class OverseasSitesSnapshot
     public DateTime VersionedAt { get; set; }
 }
 
-public class OverseasSiteModel
+/// <summary>
+/// RA-682: the ORS details an operator may change in year, as an ORS, an in-year update's PATCH body and the update's
+/// own <c>OverseasSiteDetails</c> all hold them, so they are read in one place (<c>OverseasSiteDetails.From</c>).
+/// </summary>
+public interface IOverseasSiteDetailsFields
+{
+    string? SiteName { get; }
+    string? AddressLine1 { get; }
+    string? AddressLine2 { get; }
+    string? TownOrCity { get; }
+    string? ContactName { get; }
+    string? ContactEmail { get; }
+    string? ContactPhone { get; }
+    string? RepatriatedLoads { get; }
+}
+
+public class OverseasSiteModel : IOverseasSiteDetailsFields
 {
     public required int SiteId { get; set; }
     public string? OrsId { get; set; }
@@ -95,7 +111,26 @@ public class OverseasSiteModel
     public List<InterimSiteModel> InterimSites { get; set; } = [];
 }
 
-public class InterimSiteModel
+/// <summary>
+/// RA-682: an interim site's own details, as both the stored interim site and a request to add or change one hold
+/// them, so they are read into an in-year change's <c>InterimSiteDetails</c> in one place.
+/// </summary>
+public interface IInterimSiteFields
+{
+    string Country { get; }
+    string SiteName { get; }
+    string AddressLine1 { get; }
+    string? AddressLine2 { get; }
+    string TownOrCity { get; }
+    string? StateOrRegion { get; }
+    string? Postcode { get; }
+    string ContactName { get; }
+    string ContactEmail { get; }
+    string ContactPhone { get; }
+    List<string> OperationCodes { get; }
+}
+
+public class InterimSiteModel : IInterimSiteFields
 {
     public required int SiteId { get; set; }
     public required string SiteNumber { get; set; }

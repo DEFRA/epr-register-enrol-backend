@@ -1289,7 +1289,7 @@ public sealed class AccreditationChangeCaseManagementHandOffTests : IDisposable
 
     // Case Management's answer for AddAndSubmit's one site, 901910.
     private static ChangeRequestSubmissionResult Sent((string Reference, Guid? WorkItemId) site) =>
-        new("SUB-2026-0001", [new SiteWorkItemResult(901910, site.Reference, site.WorkItemId)]);
+        new([new SiteWorkItemResult(901910, site.Reference, site.WorkItemId)], ["SUB-2026-0001"]);
 
     [Fact]
     public async Task Submit_FlagOn_SendsTheRequestToCaseManagementAndStoresItsReference()

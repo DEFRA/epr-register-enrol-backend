@@ -19,6 +19,8 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
     private static readonly Dictionary<string, string> s_changeTypeCodes = new()
     {
         [AccreditationChangeRequest.AddOverseasSiteChangeType] = "ORS",
+        // RA-682: ORS updates share add-ORS's code, and so its reference series.
+        [AccreditationChangeRequest.UpdateOverseasSiteChangeType] = "ORS",
     };
 
     // Stub only: ManagementBe owns the real sequences, one per change code per year for the
@@ -97,27 +99,32 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new CaseWorkingSubmissionResult(applicationReference, workItemId));
     }
 
-    // RA-739: as ManagementBe, one work item per site, each with its own in-year change reference,
-    // and one submission reference they share.
+    // RA-739: as ManagementBe, one work item per site, each with its own in-year change reference, and a
+    // submission reference shared by the sites of each change type.
     public Task<ChangeRequestSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
         CancellationToken cancellationToken = default
     )
     {
-        var code = ChangeCodeFor(changeRequest);
+        // RA-682: each site is coded by its own change type; an unknown one throws.
+        var codes = changeRequest.Sites.Select(site => ChangeCodeFor(site.ChangeType)).ToList();
+        RequireFourDigitYear(changeRequest);
         var year = changeRequest.Year;
-        var submissionReference = FormatSubmissionReference(
-            year,
-            _submissionSequences.AddOrUpdate(year, 1, (_, current) => current + 1)
-        );
+        // As ManagementBe, one submission per change type, each with its own reference (see SubmissionGroups).
+        var submissionReferences = ChangeRequestRules
+            .SubmissionGroups(changeRequest)
+            .Select(_ =>
+                FormatSubmissionReference(year, _submissionSequences.AddOrUpdate(year, 1, (_, current) => current + 1))
+            )
+            .ToList();
         var sites = changeRequest
-            .Sites.Select(site => new SiteWorkItemResult(
+            .Sites.Select((site, index) => new SiteWorkItemResult(
                 site.SiteId,
                 FormatChangeReference(
-                    code,
+                    codes[index],
                     year,
-                    _changeSequences.AddOrUpdate((code, year), 1, (_, current) => current + 1)
+                    _changeSequences.AddOrUpdate((codes[index], year), 1, (_, current) => current + 1)
                 ),
                 Guid.NewGuid()
             ))
@@ -126,15 +133,15 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "StubCaseWorkingApiAdapter.SubmitChangeRequestAsync called for requestId={RequestId} submissionReference={SubmissionReference} references={References} org={OrganisationId}",
+                "StubCaseWorkingApiAdapter.SubmitChangeRequestAsync called for requestId={RequestId} submissionReferences={SubmissionReferences} references={References} org={OrganisationId}",
                 changeRequest.RequestId,
-                submissionReference,
+                string.Join(',', submissionReferences),
                 string.Join(',', sites.Select(s => s.CaseReference)),
                 changeRequest.OrganisationId
             );
         }
 
-        return Task.FromResult(new ChangeRequestSubmissionResult(submissionReference, sites));
+        return Task.FromResult(new ChangeRequestSubmissionResult(sites, submissionReferences));
     }
 
     public Task<NotificationStatusResult> GetNotificationStatusAsync(
@@ -239,15 +246,13 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.CompletedTask;
     }
 
-    private static string ChangeCodeFor(AccreditationChangeRequest changeRequest)
-    {
-        if (!s_changeTypeCodes.TryGetValue(changeRequest.ChangeType, out var code))
-        {
-            throw new InvalidOperationException(
-                $"No in-year change reference code for change type '{changeRequest.ChangeType}'."
-            );
-        }
+    private static string ChangeCodeFor(string changeType) =>
+        s_changeTypeCodes.TryGetValue(changeType, out var code)
+            ? code
+            : throw new InvalidOperationException($"No in-year change reference code for change type '{changeType}'.");
 
+    private static void RequireFourDigitYear(AccreditationChangeRequest changeRequest)
+    {
         // The accreditation year is always present on a change request (RA-492), so there is no
         // fallback. A year that is not four digits is refused with a 400, as ManagementBe
         // refuses it.
@@ -259,8 +264,6 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
                 HttpStatusCode.BadRequest
             );
         }
-
-        return code;
     }
 
     // sequence counts from 1.

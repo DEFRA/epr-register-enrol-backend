@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Endpoints;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
@@ -117,7 +118,14 @@ public static class QueriedItemEndpoints
         var locked = QueriedItemRules.LockedViolations(body, interim: true);
         if (locked.Count > 0)
             return Results.ValidationProblem(locked, statusCode: StatusCodes.Status422UnprocessableEntity);
-        var validation = await validator.ValidateAsync(body, services.CancellationToken);
+        // An interim site's fields are required as InterimFields says (its phone is), not as the ORS's are.
+        var validation = await validator.ValidateAsync(
+            new ValidationContext<PatchQueriedSiteRequest>(body)
+            {
+                RootContextData = { [PatchQueriedSiteRequestValidator.InterimContextKey] = true },
+            },
+            services.CancellationToken
+        );
         if (!validation.IsValid)
             return Results.ValidationProblem(validation.ToDictionary());
 
@@ -323,6 +331,7 @@ public static class QueriedItemEndpoints
 
         var now = resubmit.Clock.GetUtcNow().UtcDateTime;
         var response = BuildQueryResponse(now, item, site!, changed, newFiles);
+        var sent = JsonSerializer.Serialize(response);
 
         // ManagementBe first, as for an application: the item is Updated only once the regulator's side knows.
         var contact = new QuerySubmitterContactDetails
@@ -353,8 +362,9 @@ public static class QueriedItemEndpoints
         };
 
         // ManagementBe now holds this response, and a replay of a resume is not applied there, so a save refused as a
-        // concurrent edit is retried on the item as it now stands, recording what was sent and picking up no newer
-        // answers. Otherwise the item would stay Queried and a second resubmit's edits would never reach ManagementBe.
+        // concurrent edit is retried on the item as it now stands, so it does not stay Queried while ManagementBe is
+        // Updated. If the reload holds an answer or BES file that the response did not carry (a second tab saved
+        // first), marking it Updated would record it as sent when case management never received it: that is a 409.
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             item!.Query!.QuerySubmissions.Add(submission);
@@ -364,7 +374,7 @@ public static class QueriedItemEndpoints
             if (attempt == MaxAttempts)
                 break;
 
-            (error, accreditation, request, item, _) = await LoadQueriedAsync(
+            (error, accreditation, request, item, site) = await LoadQueriedAsync(
                 organisationId,
                 applicationId,
                 itemId,
@@ -372,9 +382,19 @@ public static class QueriedItemEndpoints
             );
             if (error is not null)
                 return error;
+            if (!MatchesSent(sent, now, item!, site!))
+                break;
         }
 
         return Results.Conflict(AccreditationChangeEndpoints.ConcurrentEditMessage);
+    }
+
+    /// <summary>Whether the item as reloaded would send the same response as the one ManagementBe already holds.</summary>
+    private static bool MatchesSent(string sent, DateTime now, ChangeRequestSite item, OverseasSiteModel site)
+    {
+        var changed = QueriedItemRules.ChangedFields(item.Answers, item.Query!.AnswersAtQuery);
+        var response = BuildQueryResponse(now, item, site, changed, QueriedItemRules.NewBesFiles(item));
+        return string.Equals(sent, JsonSerializer.Serialize(response), StringComparison.Ordinal);
     }
 
     private static ChangeRequestQueryResponse BuildQueryResponse(
