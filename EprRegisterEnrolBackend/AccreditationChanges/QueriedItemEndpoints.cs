@@ -303,8 +303,9 @@ public static class QueriedItemEndpoints
         );
         if (error is not null)
             return error;
+        ArgumentNullException.ThrowIfNull(item);
 
-        var changed = QueriedItemRules.ChangedFields(item!);
+        var changed = QueriedItemRules.ChangedFields(item);
         var newFiles = QueriedItemRules.NewBesFiles(item);
         var notReady = ResubmitPrecondition(item, site, changed, newFiles);
         if (notReady is not null)
@@ -351,11 +352,11 @@ public static class QueriedItemEndpoints
         // next resubmit also compares against it. That sends an answer a second tab undid (as the ORS's own value).
         // A BES file a second tab deleted after it was sent cannot be undone in ManagementBe (it only adds files): the
         // resubmit is allowed so the item is not stuck, but the file stays with case management.
-        var sentAnswers = QueriedItemRules.Clone(item!.Answers);
+        var sentAnswers = QueriedItemRules.Clone(item.Answers);
         var sentFileIds = newFiles.ConvertAll(f => f.FileId);
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            item!.Query!.QuerySubmissions.Add(submission);
+            item.Query!.QuerySubmissions.Add(submission);
             item.Status = ChangeItemStatus.Updated;
             if (await services.Requests.UpdateAsync(request!, services.CancellationToken))
                 return Results.Ok(ChangeRequestRules.ToView(request!, accreditation!));
@@ -370,11 +371,12 @@ public static class QueriedItemEndpoints
             );
             if (error is not null)
                 return error;
-            if (!MatchesSent(sent, now, item!, site!))
+            ArgumentNullException.ThrowIfNull(item);
+            if (!MatchesSent(sent, now, item, site!))
             {
                 await RecordSentAsync(
                     (organisationId, applicationId, itemId),
-                    (request!, item!),
+                    (request!, item),
                     (sentAnswers, sentFileIds),
                     services
                 );
