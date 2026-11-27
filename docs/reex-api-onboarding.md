@@ -92,7 +92,7 @@ registration and year. Accreditations for 2027 onwards are served.
 
 | Route | Returns |
 | --- | --- |
-| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditations across all organisations (limit max 100). An exporter's item carries its `overseasSites`, as getting one accreditation does; a reprocessor's has none. `year`, `organisationNumber`, `registrationNumber` and `status` (`approved`, `suspended`, `cancelled` or `withdrawn`) are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404. Results are ordered by accreditation number |
+| `GET /v1/accreditations?year=2027&organisationNumber=500027&registrationNumber=R27ER5000270036PL&pageNumber=1&limit=20` | a page of accreditations across all organisations (limit max 500, default 20). An exporter's item carries its `overseasSites`, as getting one accreditation does; a reprocessor's has none. `year`, `organisationNumber`, `registrationNumber` and `status` (`approved`, `suspended`, `cancelled` or `withdrawn`) are optional filters that combine with AND. A filter that matches nothing is an empty page, not a 404. Results are ordered by accreditation number |
 | `GET /v1/organisations/{organisationNumber}/registrations/{registrationNumber}/accreditations/{year}` | the complete accreditation: status and tonnage band history, signatories and, for an exporter, every accredited overseas site with its interim sites and status history (ordered by `orsId`, not paged). A reprocessor has no `overseasSites` |
 | `…/accreditations/{year}/overseas-sites?pageNumber=1&limit=20` | a page of the accredited overseas sites, each with its interim sites (limit max 100) |
 | `…/accreditations/{year}/overseas-sites/{orsId}` | one accredited overseas site (`orsId` is three digits, e.g. `001`) |
@@ -351,8 +351,10 @@ routes.
 
 ### How do I read every accreditation?
 
-Request pages with `pageNumber=1,2,3…` and `limit=100` until you have `totalItems` items. Results
-are ordered by accreditation number, so the order is stable between pages.
+Request pages with `pageNumber=1,2,3…` and `limit=500`, the largest allowed, until you have
+`totalItems` items. Results are ordered by accreditation number, so the order is stable between pages.
+A page of 500 can be several megabytes and takes longer than a small one, so allow for that in your
+timeout. If a request is answered `503` (`query_timeout`), use a smaller `limit`.
 
 ### Which overseas sites are accredited for a registration?
 
@@ -440,6 +442,9 @@ Contact. Contact the Reg-Acc team if a change would be a problem for you.
 
 ## What's new
 
+- `GET /v1/accreditations` now takes a `limit` of up to 500 (it was 100), so reading every
+  accreditation needs fewer requests. The default is still 20, and the overseas sites route still
+  takes up to 100.
 - Every `statusHistory` (accreditation, overseas site and interim site) now has a `statusTimeline`
   beside it: the history as periods that don't overlap, so each date has exactly one status, and where
   entries start on the same date the one recorded later wins. Use it for the status on a date. If your
