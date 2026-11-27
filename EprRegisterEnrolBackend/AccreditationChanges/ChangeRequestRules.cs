@@ -370,7 +370,7 @@ public static class ChangeRequestRules
         var current = DetailsOf(site);
         var before = item.Previous ?? current;
         var proposed = item.Proposed ?? before;
-        string? Follow(string? mine, string? was, string? now) => mine == was ? now : mine;
+        static string? Follow(string? mine, string? was, string? now) => mine == was ? now : mine;
         item.Proposed = proposed with
         {
             SiteName = Follow(proposed.SiteName, before.SiteName, current.SiteName),

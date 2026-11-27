@@ -448,32 +448,13 @@ public static class AccreditationChangeEndpoints
 
         // RA-682: an item adds a registered ORS (RA-492, the default) or changes an accredited one's details.
         var changeType = body.ChangeType ?? AccreditationChangeRequest.AddOverseasSiteChangeType;
-        if (
-            changeType
-            is not (AccreditationChangeRequest.AddOverseasSiteChangeType
-                or AccreditationChangeRequest.UpdateOverseasSiteChangeType)
-        )
-            return Results.ValidationProblem(
-                new Dictionary<string, string[]>
-                {
-                    [nameof(AddChangeRequestSiteRequest.ChangeType)] =
-                    [
-                        $"ChangeType must be {AccreditationChangeRequest.AddOverseasSiteChangeType} or {AccreditationChangeRequest.UpdateOverseasSiteChangeType}.",
-                    ],
-                }
-            );
+        if (InvalidChangeType(changeType) is { } invalid)
+            return invalid;
         var isUpdate = changeType == AccreditationChangeRequest.UpdateOverseasSiteChangeType;
 
-        // 404 for a site the GET view does not list (unknown, or never registered), so a client
-        // cannot tell the two apart; 409 for a listed site that cannot be added in its state.
         var site = ChangeRequestRules.FindSite(accreditation!, body.SiteId);
-        var status = site is null ? null : ChangeRequestRules.AccreditationStatus(site);
-        if (status is null)
-            return Results.NotFound();
-        if (!isUpdate && status == SiteAccreditationStatus.Accredited)
-            return Results.Conflict("This overseas site is already accredited.");
-        if (isUpdate && status != SiteAccreditationStatus.Accredited)
-            return Results.Conflict("Only an accredited overseas site's details can be changed.");
+        if (SiteStateProblem(site, isUpdate) is { } stateProblem)
+            return stateProblem;
 
         var requests = await services.Requests.ListAsync(
             organisationId,
@@ -505,13 +486,55 @@ public static class AccreditationChangeEndpoints
             CaseManagementMayHold = false,
         };
 
+        return await SaveSiteToDraftAsync(organisationId, applicationId, accreditation!, draft, requestSite, services);
+    }
+
+    private static IResult? InvalidChangeType(string changeType) =>
+        changeType
+            is AccreditationChangeRequest.AddOverseasSiteChangeType
+                or AccreditationChangeRequest.UpdateOverseasSiteChangeType
+            ? null
+            : Results.ValidationProblem(
+                new Dictionary<string, string[]>
+                {
+                    [nameof(AddChangeRequestSiteRequest.ChangeType)] =
+                    [
+                        $"ChangeType must be {AccreditationChangeRequest.AddOverseasSiteChangeType} or {AccreditationChangeRequest.UpdateOverseasSiteChangeType}.",
+                    ],
+                }
+            );
+
+    // 404 for a site the GET view does not list (unknown, or never registered), so a client
+    // cannot tell the two apart; 409 for a listed site that cannot be added in its state.
+    private static IResult? SiteStateProblem(OverseasSiteModel? site, bool isUpdate)
+    {
+        var status = site is null ? null : ChangeRequestRules.AccreditationStatus(site);
+        if (status is null)
+            return Results.NotFound();
+        var accredited = status == SiteAccreditationStatus.Accredited;
+        if (!isUpdate && accredited)
+            return Results.Conflict("This overseas site is already accredited.");
+        if (isUpdate && !accredited)
+            return Results.Conflict("Only an accredited overseas site's details can be changed.");
+        return null;
+    }
+
+    private static async Task<IResult> SaveSiteToDraftAsync(
+        string organisationId,
+        string applicationId,
+        AccreditationApplicationModel accreditation,
+        AccreditationChangeRequest? draft,
+        ChangeRequestSite requestSite,
+        ChangeServices services
+    )
+    {
         if (draft is null)
         {
             draft = new AccreditationChangeRequest
             {
                 OrganisationId = organisationId,
                 ApplicationId = applicationId,
-                RegistrationId = accreditation!.RegistrationId,
+                RegistrationId = accreditation.RegistrationId,
                 MaterialType = accreditation.MaterialType,
                 Year = accreditation.Year,
                 AccreditationReference = accreditation.AccreditationReference,
@@ -527,7 +550,7 @@ public static class AccreditationChangeEndpoints
                 return Results.Conflict(ConcurrentEditMessage);
         }
 
-        return Results.Created(string.Empty, ChangeRequestRules.ToView(draft, accreditation!));
+        return Results.Created(string.Empty, ChangeRequestRules.ToView(draft, accreditation));
     }
 
     private static async Task<IResult> RemoveSite(
@@ -1031,21 +1054,45 @@ public static class AccreditationChangeEndpoints
                 new Dictionary<string, string[]> { [PaymentReferenceField] = [PaymentReferenceRequiredMessage] }
             );
 
-        // RA-682 AC07: an update's previous details are the ORS's as it stands now, not when the change was started.
-        foreach (var update in draft!.Sites.Where(s => s.IsUpdate && !draft.IsFixed(s)))
+        RebaseUpdatesOnCurrent(accreditation!, draft!);
+
+        var incomplete = IncompleteProblems(accreditation!, draft!);
+        if (incomplete.Count > 0)
+            return Results.ValidationProblem(
+                incomplete,
+                title: "The change request is incomplete.",
+                statusCode: StatusCodes.Status422UnprocessableEntity
+            );
+
+        return await SaveAndSendAsync(draft!, accreditation!, body, services, submit);
+    }
+
+    // RA-682 AC07: an update's previous details are the ORS's as it stands now, not when the change was started.
+    private static void RebaseUpdatesOnCurrent(
+        AccreditationApplicationModel accreditation,
+        AccreditationChangeRequest draft
+    )
+    {
+        foreach (var update in draft.Sites.Where(s => s.IsUpdate && !draft.IsFixed(s)))
         {
-            if (ChangeRequestRules.FindSite(accreditation!, update.SiteId) is { } current)
+            if (ChangeRequestRules.FindSite(accreditation, update.SiteId) is { } current)
                 ChangeRequestRules.RebaseOnCurrent(update, current);
         }
+    }
 
-        // AC02: nothing is submitted while any site is missing required information. A site Case Management may
-        // hold is skipped: it is replayed as first sent, and it can't be changed or removed to put anything right.
-        var incomplete = draft!
+    // AC02: nothing is submitted while any site is missing required information. A site Case Management may
+    // hold is skipped: it is replayed as first sent, and it can't be changed or removed to put anything right.
+    private static Dictionary<string, string[]> IncompleteProblems(
+        AccreditationApplicationModel accreditation,
+        AccreditationChangeRequest draft
+    )
+    {
+        var incomplete = draft
             .Sites.Where(requestSite => !draft.IsFixed(requestSite))
             .SelectMany(requestSite =>
                 ChangeRequestRules
                     .MissingFields(
-                        ChangeRequestRules.FindSite(accreditation!, requestSite.SiteId),
+                        ChangeRequestRules.FindSite(accreditation, requestSite.SiteId),
                         requestSite
                     )
                     .Select(field =>
@@ -1058,15 +1105,19 @@ public static class AccreditationChangeEndpoints
             .ToDictionary(e => e.Key, e => new[] { e.Message });
         if (draft.Sites.Count == 0)
             incomplete["sites"] = ["Add at least one change."];
-        foreach (var (key, message) in BesEvidenceProblems(accreditation!, draft))
+        foreach (var (key, message) in BesEvidenceProblems(accreditation, draft))
             incomplete[key] = [message];
-        if (incomplete.Count > 0)
-            return Results.ValidationProblem(
-                incomplete,
-                title: "The change request is incomplete.",
-                statusCode: StatusCodes.Status422UnprocessableEntity
-            );
+        return incomplete;
+    }
 
+    private static async Task<IResult> SaveAndSendAsync(
+        AccreditationChangeRequest draft,
+        AccreditationApplicationModel accreditation,
+        SubmitRequest body,
+        ChangeServices services,
+        SubmitServices submit
+    )
+    {
         draft.SubmittedBy = new SubmittedByModel
         {
             FullName = body.FullName,
@@ -1087,7 +1138,7 @@ public static class AccreditationChangeEndpoints
             return Results.Conflict(ConcurrentEditMessage);
 
         if (!submit.Config.Value.SubmitToCaseManagement)
-            return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
+            return Results.Ok(ChangeRequestRules.ToView(draft, accreditation));
 
         var logger = submit.LoggerFactory.CreateLogger(typeof(AccreditationChangeEndpoints));
         ChangeRequestSubmissionResult result;
@@ -1098,7 +1149,7 @@ public static class AccreditationChangeEndpoints
             // after a work item it created but whose response never arrived (a timeout).
             result = await submit.CaseWorking.SubmitChangeRequestAsync(
                 draft,
-                accreditation!,
+                accreditation,
                 services.CancellationToken
             );
         }
@@ -1152,7 +1203,7 @@ public static class AccreditationChangeEndpoints
                 draft.RequestId,
                 string.Join(',', result.SubmissionReferences)
             );
-        return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
+        return Results.Ok(ChangeRequestRules.ToView(draft, accreditation));
     }
 
     private static bool IsCaseManagementFailure(Exception ex) =>
@@ -1171,13 +1222,23 @@ public static class AccreditationChangeEndpoints
                 CaseWorkingSubmissionFailure.MayHold(ex)
             );
         foreach (var item in draft.Sites)
-        {
-            item.CaseManagementMayHold =
-                held.Contains(item.ChangeType) ? true
-                : item.ChangeType == failed ? failedMayBeHeld
-                : draft.IsFixed(item);
-        }
+            item.CaseManagementMayHold = MayHold(draft, item, held, failed, failedMayBeHeld);
         draft.SentToCaseManagement = draft.Sites.Exists(s => s.CaseManagementMayHold == true);
+    }
+
+    private static bool MayHold(
+        AccreditationChangeRequest draft,
+        ChangeRequestSite item,
+        IReadOnlyCollection<string> held,
+        string failed,
+        bool failedMayBeHeld
+    )
+    {
+        if (held.Contains(item.ChangeType))
+            return true;
+        if (item.ChangeType == failed)
+            return failedMayBeHeld;
+        return draft.IsFixed(item);
     }
 
     // Undoes Submit's save after Case Management failed. Not cancellable: the caller may have gone,
