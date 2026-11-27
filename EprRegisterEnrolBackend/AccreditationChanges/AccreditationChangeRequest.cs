@@ -317,7 +317,10 @@ public class InterimSiteChange
     [BsonSerializer(typeof(JsonNamedEnumSerializer<InterimSiteChangeAction>))]
     public required InterimSiteChangeAction Action { get; set; }
 
-    /// <summary>The existing interim site changed or removed. Null for an add, which has no id until it is granted.</summary>
+    /// <summary>
+    /// The existing interim site changed or removed. Null for an add until it is granted; RA-782: the grant then records
+    /// the id it allocated, so the grant run again finds the interim site rather than adding it twice.
+    /// </summary>
     public int? InterimSiteId { get; set; }
 
     /// <summary>The interim site as it was, for a change or remove.</summary>
@@ -328,7 +331,7 @@ public class InterimSiteChange
 }
 
 /// <summary>RA-682: an interim site's details, as <see cref="InterimSiteModel"/> holds them, without its ids.</summary>
-public sealed record InterimSiteDetails
+public sealed record InterimSiteDetails : IInterimSiteFields
 {
     public required string Country { get; init; }
     public required string SiteName { get; init; }

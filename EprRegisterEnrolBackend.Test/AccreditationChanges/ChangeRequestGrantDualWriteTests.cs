@@ -119,7 +119,10 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
 
     // The operator's granted accreditation: site 001 accredited, site 002 registered and not selected, as ReEx
     // leaves a site that is registered but not on the accreditation.
-    private async Task<AccreditationApplicationModel> AccreditationAsync(OverseasSiteModel? registeredSite = null)
+    private async Task<AccreditationApplicationModel> AccreditationAsync(
+        OverseasSiteModel? registeredSite = null,
+        OverseasSiteModel? accreditedSite = null
+    )
     {
         var created = await Applications.CreateAsync(
             new AccreditationApplicationModel
@@ -140,7 +143,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
                 {
                     Sites =
                     [
-                        Site(1, "001", selected: true),
+                        accreditedSite ?? Site(1, "001", selected: true),
                         registeredSite ?? Site(2, GrantedOrsId, selected: false),
                     ],
                 },
@@ -206,7 +209,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
     }
 
-    private Task<HttpResponseMessage> PushAsync(string toStateId, DateTime occurredAt) =>
+    private Task<HttpResponseMessage> PushAsync(string toStateId, DateTime occurredAt, bool withEffectiveDate = true) =>
         _client.PostAsJsonAsync(
             $"/api/v1/accreditation-changes/case-management/{_workItemId}/status",
             new
@@ -216,7 +219,7 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
                 actionId = toStateId,
                 actionDisplayName = toStateId,
                 occurredAt,
-                effectiveDate = toStateId == "approved" ? EffectiveDate : (DateOnly?)null,
+                effectiveDate = toStateId == "approved" && withEffectiveDate ? EffectiveDate : (DateOnly?)null,
             },
             Ct
         );
@@ -631,6 +634,235 @@ public sealed class ChangeRequestGrantDualWriteTests : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(ChangeItemStatus.Updated, (await ItemAsync()).Status);
         Assert.False((await LegacySiteAsync(application, 2)).Selected);
+    }
+
+    // --- ORS update (RA-782) ----------------------------------------------------------------------------------------
+
+    private const string UpdatedOrsId = "001";
+    private static readonly DateTime DecidedAt = Watermark.AddMinutes(5);
+    private static readonly DateTime DecidedOn = new(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private static InterimSiteModel Interim(int siteId, string siteNumber, string siteName) =>
+        new()
+        {
+            SiteId = siteId,
+            SiteNumber = siteNumber,
+            Country = "France",
+            SiteName = siteName,
+            AddressLine1 = "1 Quai",
+            TownOrCity = "Lyon",
+            ContactName = "Alex Morgan",
+            ContactEmail = "alex@example.com",
+            ContactPhone = "0123456789",
+            OperationCodes = ["R3", "R13"],
+        };
+
+    // The accredited ORS 001 with interim sites 001 and 002, as the dev seed's org 50025 holds its Gdansk ORS.
+    private static OverseasSiteModel AccreditedSiteWithInterims()
+    {
+        var site = Site(1, UpdatedOrsId, selected: true);
+        site.ValidFrom = "2026-01-01T00:00:00Z";
+        site.SiteAddress = "1 Rue, Paris, France";
+        site.InterimSites = [Interim(11, "001", "Lyon Hub"), Interim(12, "002", "Lille Hub")];
+        InterimSiteSync.SyncMirror(site);
+        return site;
+    }
+
+    // An update renaming the ORS and moving it, renaming interim site 001, removing 002 and adding one, with a new
+    // BES file.
+    private async Task<AccreditationApplicationModel> SubmittedUpdateAsync()
+    {
+        var site = AccreditedSiteWithInterims();
+        var accreditation = await AccreditationAsync(accreditedSite: site);
+        var previous = OverseasSiteDetails.From(site);
+        var inserted = await Requests.InsertAsync(
+            new AccreditationChangeRequest
+            {
+                ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,
+                OrganisationId = OrganisationId,
+                ApplicationId = accreditation.Id.ToString(),
+                RegistrationId = ReExRegistrationId,
+                MaterialType = MaterialType.Steel,
+                Year = 2026,
+                Status = ChangeRequestStatus.Submitted,
+                SubmittedAt = SubmittedAt,
+                Sites =
+                [
+                    new ChangeRequestSite
+                    {
+                        ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,
+                        SiteId = 1,
+                        OrsId = UpdatedOrsId,
+                        SiteName = site.SiteName,
+                        Status = ChangeItemStatus.DulyMade,
+                        CaseManagementWorkItemId = _workItemId,
+                        CaseManagementStatusUpdatedAt = Watermark,
+                        Previous = previous,
+                        Proposed = previous with { SiteName = "Site 001 Renamed", AddressLine1 = "2 Rue" },
+                        InterimSiteChanges =
+                        [
+                            new InterimSiteChange
+                            {
+                                Action = InterimSiteChangeAction.Change,
+                                InterimSiteId = 11,
+                                Previous = InterimSiteDetails.From(site.InterimSites[0]),
+                                Proposed = InterimSiteDetails.From(site.InterimSites[0]) with
+                                {
+                                    SiteName = "Lyon Hub Renamed",
+                                },
+                            },
+                            new InterimSiteChange
+                            {
+                                Action = InterimSiteChangeAction.Remove,
+                                InterimSiteId = 12,
+                                Previous = InterimSiteDetails.From(site.InterimSites[1]),
+                            },
+                            new InterimSiteChange
+                            {
+                                Action = InterimSiteChangeAction.Add,
+                                Proposed = InterimSiteDetails.From(Interim(0, "", "Marseille Hub")),
+                            },
+                        ],
+                        BesEvidence = SuppliedBesEvidence(),
+                    },
+                ],
+            },
+            Ct
+        );
+        Assert.True(inserted);
+        return accreditation;
+    }
+
+    private static InterimSiteEntry ModelInterim(OverseasSiteEntity ors, string siteNumber) =>
+        Assert.Single(ors.InterimSites, i => i.SiteNumber == siteNumber);
+
+    [Fact]
+    public async Task ApprovedUpdate_AppliesItToLegacyAndTheModelInOneOrsVersion()
+    {
+        var application = await SubmittedUpdateAsync();
+        await MigrateAsync(application);
+        var orsBefore = await OrsAsync(UpdatedOrsId);
+        var accreditationBefore = await AccreditationEntityAsync(application);
+
+        var response = await PushAsync("approved", DecidedAt, withEffectiveDate: false);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var item = await ItemAsync();
+        Assert.Equal(ChangeItemStatus.Approved, item.Status);
+        Assert.Equal(DecidedOn, item.ValidFrom);
+
+        var site = await LegacySiteAsync(application, 1);
+        Assert.Equal("Site 001 Renamed", site.SiteName);
+        Assert.Equal("2 Rue", site.AddressLine1);
+        Assert.Equal("2 Rue, Paris, France", site.SiteAddress);
+        Assert.True(site.Selected);
+        Assert.Equal("2026-01-01T00:00:00Z", site.ValidFrom);
+        Assert.Equal("Lyon Hub Renamed", site.InterimSites.Single(i => i.SiteId == 11).SiteName);
+        Assert.Equal(DecidedAt, site.InterimSites.Single(i => i.SiteId == 12).RemovedAt);
+        var added = Assert.Single(site.InterimSites, i => i.SiteName == "Marseille Hub");
+        Assert.Equal("003", added.SiteNumber);
+        Assert.Equal(added.SiteId, item.InterimSiteChanges.Single(c => c.Action == InterimSiteChangeAction.Add).InterimSiteId);
+        Assert.Equal(["bes-1"], site.BesEvidence!.BesEvidenceUploads.Select(f => f.FileId));
+
+        // One ORS version for the details and every interim site: the unit of work's sync, which ran after, found
+        // nothing more to write, and did not record the added interim site as Proposed.
+        var ors = await OrsAsync(UpdatedOrsId);
+        Assert.Equal(orsBefore.Version + 1, ors.Version);
+        Assert.Equal(ChangeReason.ChangeRequestGranted, ors.LastChange.Reason);
+        Assert.Equal(OverseasSiteStatus.Active, ors.Status);
+        Assert.Equal("Site 001 Renamed", ors.SiteName);
+        Assert.Equal("2 Rue", ors.Address!.Line1);
+        Assert.Equal("Paris", ors.Address.TownOrCity);
+        Assert.Equal("2 Rue, Paris, France", ors.FormattedAddress);
+        Assert.Equal("Lyon Hub Renamed", ModelInterim(ors, "001").SiteName);
+        Assert.Equal(InterimSiteStatus.Active, ModelInterim(ors, "001").Status);
+        Assert.Equal(InterimSiteStatus.Withdrawn, ModelInterim(ors, "002").Status);
+        Assert.Equal(DecidedAt, ModelInterim(ors, "002").RemovedAt);
+        Assert.Equal(InterimSiteStatus.Active, ModelInterim(ors, "003").Status);
+        Assert.Equal("Marseille Hub", ModelInterim(ors, "003").SiteName);
+
+        // No new entry on the Accreditation: the ORS was already accredited. Its entry gains the new BES file.
+        var accreditation = await AccreditationEntityAsync(application);
+        Assert.Equal(
+            accreditationBefore.AccreditationOverseasSites.Select(e => e.OrsId),
+            accreditation.AccreditationOverseasSites.Select(e => e.OrsId)
+        );
+        var entry = accreditation.AccreditationOverseasSites.Single(e => e.OrsId == UpdatedOrsId);
+        Assert.Contains(entry.BesEvidence, f => f.FileId == "bes-1");
+        Assert.Null(entry.AccreditedFrom);
+
+        Assert.Empty(await ReconciliationDifferencesAsync());
+    }
+
+    [Fact]
+    public async Task ApprovedUpdateAgain_WritesNothing()
+    {
+        var application = await SubmittedUpdateAsync();
+        Assert.Equal(HttpStatusCode.OK, (await PushAsync("approved", DecidedAt, withEffectiveDate: false)).StatusCode);
+        var ors = await OrsAsync(UpdatedOrsId);
+        var accreditation = await AccreditationEntityAsync(application);
+        var legacy = await Applications.GetByIdAsync(OrganisationId, application.Id.ToString()!);
+
+        var response = await PushAsync("approved", DecidedAt.AddMinutes(5), withEffectiveDate: false);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(ors.Version, (await OrsAsync(UpdatedOrsId)).Version);
+        Assert.Equal(accreditation.Version, (await AccreditationEntityAsync(application)).Version);
+        var after = await Applications.GetByIdAsync(OrganisationId, application.Id.ToString()!);
+        Assert.Equal(legacy!.Version, after!.Version);
+        Assert.Single(after.OverseasSites!.Sites.Single(s => s.SiteId == 1).InterimSites, i => i.SiteName == "Marseille Hub");
+    }
+
+    // A failure after the grant's writes rolls them all back, the recorded interim site id with the item; the retry
+    // then applies the update once.
+    [Fact]
+    public async Task ApprovedUpdate_ModelSyncFails_RollsEverythingBackAndARetryAppliesItOnce()
+    {
+        var application = await SubmittedUpdateAsync();
+        await MigrateAsync(application);
+        var orsBefore = await OrsAsync(UpdatedOrsId);
+        _switches.FailSync = true;
+
+        var failed = await PushAsync("approved", DecidedAt, withEffectiveDate: false);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        var item = await ItemAsync();
+        Assert.Equal(ChangeItemStatus.DulyMade, item.Status);
+        Assert.Null(item.InterimSiteChanges.Single(c => c.Action == InterimSiteChangeAction.Add).InterimSiteId);
+        var site = await LegacySiteAsync(application, 1);
+        Assert.Equal($"Site {UpdatedOrsId}", site.SiteName);
+        Assert.Equal(2, site.InterimSites.Count);
+        Assert.Null(site.InterimSites.Single(i => i.SiteId == 12).RemovedAt);
+        Assert.Equal(orsBefore.Version, (await OrsAsync(UpdatedOrsId)).Version);
+
+        _switches.FailSync = false;
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await PushAsync("approved", DecidedAt.AddMinutes(1), withEffectiveDate: false)).StatusCode
+        );
+
+        Assert.Single((await LegacySiteAsync(application, 1)).InterimSites, i => i.SiteName == "Marseille Hub");
+        Assert.Single((await OrsAsync(UpdatedOrsId)).InterimSites, i => i.SiteName == "Marseille Hub");
+        Assert.Equal(orsBefore.Version + 1, (await OrsAsync(UpdatedOrsId)).Version);
+    }
+
+    // A refusal changes nothing on the ORS, in legacy or the model.
+    [Fact]
+    public async Task RejectedUpdate_LeavesTheOrsUnchanged()
+    {
+        var application = await SubmittedUpdateAsync();
+        await MigrateAsync(application);
+        var orsBefore = await OrsAsync(UpdatedOrsId);
+
+        var response = await PushAsync("rejected", DecidedAt);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(ChangeItemStatus.Rejected, (await ItemAsync()).Status);
+        var site = await LegacySiteAsync(application, 1);
+        Assert.Equal($"Site {UpdatedOrsId}", site.SiteName);
+        Assert.Equal(2, site.InterimSites.Count);
+        Assert.Null(site.BesEvidence);
+        Assert.Equal(orsBefore.Version, (await OrsAsync(UpdatedOrsId)).Version);
     }
 
     // --- switchable stand-ins -------------------------------------------------------------------------------------

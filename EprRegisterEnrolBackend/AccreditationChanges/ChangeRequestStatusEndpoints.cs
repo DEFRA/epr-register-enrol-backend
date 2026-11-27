@@ -12,8 +12,9 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 /// route (<c>AccreditationApplicationEndpoints.StatusChangedFromCaseManagement</c>), applied to one item rather than
 /// a whole application. RA-495 task 007: every push runs in the dual-write unit of work, and <c>approved</c> grants the
 /// site there (<see cref="ChangeRequestGrant"/>), so the item and the accreditation commit together or not at all.
-/// AC6: <c>approved</c> must carry the <c>effectiveDate</c> the caseworker entered, which the site is accredited from;
-/// without it the push is a 400 and nothing is read or written.
+/// AC6: <c>approved</c> for an add-ORS item must carry the <c>effectiveDate</c> the caseworker entered, which the site
+/// is accredited from; without it the push is a 400 and nothing is written. RA-782: an update-ORS item has no such date:
+/// its approval needs none, and the item takes effect from the day it was decided (<c>occurredAt</c>).
 /// </summary>
 public static class ChangeRequestStatusEndpoints
 {
@@ -47,7 +48,8 @@ public static class ChangeRequestStatusEndpoints
             ApplicationStatus.Submitted => ChangeItemStatus.Submitted,
             ApplicationStatus.DulyMade => ChangeItemStatus.DulyMade,
             ApplicationStatus.Updated => ChangeItemStatus.Updated,
-            // The grant: the site joins the accreditation in the same transaction (ChangeRequestGrant).
+            // The grant: the site joins the accreditation, or (RA-782) its update is applied to it, in the same
+            // transaction (ChangeRequestGrant).
             ApplicationStatus.Approved => ChangeItemStatus.Approved,
             ApplicationStatus.Rejected => ChangeItemStatus.Rejected,
             { } unprojected => throw new InvalidOperationException(
@@ -94,21 +96,6 @@ public static class ChangeRequestStatusEndpoints
         CaseManagementStatusMapping.LogUnknownState(logger, Operation, workItemId, request, correlationId);
 
         var push = new Push(workItemId, request, MapState(request.ToStateId), correlationId);
-
-        // AC6: a grant is accredited from the date the caseworker entered, which only Case Management knows.
-        if (push.MappedStatus == ChangeItemStatus.Approved && request.EffectiveDate is null)
-        {
-            logger.LogWarning(
-                "Change request status push: approved without an effectiveDate for workItemId={WorkItemId} correlationId={CorrelationId}",
-                workItemId,
-                correlationId
-            );
-            return Results.Problem(
-                detail: "An approved push must name the effectiveDate the site is accredited from.",
-                statusCode: StatusCodes.Status400BadRequest
-            );
-        }
-
         var stores = new PushStores(persistence, applications, httpContext.RequestServices);
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
@@ -125,6 +112,9 @@ public static class ChangeRequestStatusEndpoints
                 );
                 return Results.NotFound();
             }
+
+            if (RejectMissingEffectiveDate(logger, known, push) is { } missingEffectiveDate)
+                return missingEffectiveDate;
 
             try
             {
@@ -151,6 +141,39 @@ public static class ChangeRequestStatusEndpoints
             detail: "The change request was being changed at the same time. Try again.",
             statusCode: StatusCodes.Status503ServiceUnavailable
         );
+    }
+
+    // AC6: an add is accredited from the date the caseworker entered, which only Case Management knows. RA-782: an
+    // update has none, so it is not asked for. Checked before the unit of work, so nothing is written.
+    private static IResult? RejectMissingEffectiveDate(ILogger logger, AccreditationChangeRequest known, Push push)
+    {
+        if (push.MappedStatus != ChangeItemStatus.Approved || push.Request.EffectiveDate is not null)
+            return null;
+        if (known.Sites.Single(s => s.CaseManagementWorkItemId == push.WorkItemId).IsUpdate)
+            return null;
+
+        logger.LogWarning(
+            "Change request status push: approved without an effectiveDate for workItemId={WorkItemId} correlationId={CorrelationId}",
+            push.WorkItemId,
+            push.CorrelationId
+        );
+        return Results.Problem(
+            detail: "An approved push must name the effectiveDate the site is accredited from.",
+            statusCode: StatusCodes.Status400BadRequest
+        );
+    }
+
+    // RA-782: an update takes effect on the day it was decided; an add from the date the caseworker entered.
+    private static ChangeRequestDecision Decision(ChangeRequestSite item, StatusChangedFromCaseManagementRequest request)
+    {
+        var decidedAt =
+            request.OccurredAt.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(request.OccurredAt, DateTimeKind.Utc)
+                : request.OccurredAt.ToUniversalTime();
+        var validFrom = item.IsUpdate
+            ? DateTime.SpecifyKind(decidedAt.Date, DateTimeKind.Utc)
+            : request.EffectiveDate!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        return new ChangeRequestDecision(validFrom, decidedAt);
     }
 
     private sealed record PushStores(
@@ -183,11 +206,11 @@ public static class ChangeRequestStatusEndpoints
 
         if (push.MappedStatus == ChangeItemStatus.Approved)
         {
-            var accreditedFrom = push.Request.EffectiveDate!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            var decision = Decision(item, push.Request);
             var refused = await ChangeRequestGrant.ApplyAsync(
                 changeRequest,
                 item,
-                accreditedFrom,
+                decision,
                 stores.Applications,
                 stores.Services,
                 session,
@@ -202,7 +225,7 @@ public static class ChangeRequestStatusEndpoints
                 );
                 return refused;
             }
-            item.ValidFrom = accreditedFrom;
+            item.ValidFrom = decision.ValidFrom;
         }
 
         if (push.MappedStatus is { } status)
@@ -219,10 +242,11 @@ public static class ChangeRequestStatusEndpoints
     // RA-800: Case Management can correct the date until its confirm contact commits, which may be after the grant
     // landed here (a lost reply, or a failed write on its side). Accepting a repeat with another date would let it
     // commit that date while the site stays accredited from this one, so it is a 409. Null when the dates agree, the
-    // push is not an approval, or the item holds no date to compare.
+    // push is not an approval, the item holds no date to compare, or (RA-782) the item is an update, whose date is
+    // the day it was decided, not one Case Management sends.
     private static IResult? RefuseAnotherGrantDate(ILogger logger, ChangeRequestSite item, Push push)
     {
-        if (push.MappedStatus != ChangeItemStatus.Approved || item.ValidFrom is not { } grantedFrom)
+        if (push.MappedStatus != ChangeItemStatus.Approved || item.IsUpdate || item.ValidFrom is not { } grantedFrom)
             return null;
 
         var grantedOn = DateOnly.FromDateTime(grantedFrom);

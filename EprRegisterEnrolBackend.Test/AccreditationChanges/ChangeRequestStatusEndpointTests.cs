@@ -51,6 +51,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         _factory.FakePersistence.Seed(
             DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearChange, Year)
         );
+        _factory.FakePersistence.Seed(_updateAccreditation);
         _client = _factory.CreateClient();
     }
 
@@ -589,15 +590,15 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
     }
 
-    // Only an add-ORS item is granted by accrediting its site: an approved push for any other change type is a 409
-    // with nothing written.
+    // Only an add-ORS or (RA-782) update-ORS item is granted on its site: an approved push for a site item of any
+    // other change type is a 409 with nothing written.
     [Fact]
-    public async Task Approved_NotAnAddOrsItem_Returns409AndWritesNothing()
+    public async Task Approved_NeitherAnAddNorAnUpdateOrsItem_Returns409AndWritesNothing()
     {
         SeedSubmittedRequest(
             ChangeItemStatus.DulyMade,
             Watermark,
-            AccreditationChangeRequest.UpdateOverseasSiteChangeType
+            AccreditationChangeRequest.UpgradeTonnageBandChangeType
         );
         var versionBefore = Legacy().Version;
 
@@ -811,6 +812,320 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         (await _client.PostAsJsonAsync(Sites, new { siteId = SiteId }, Ct))
             .StatusCode.Should()
             .Be(HttpStatusCode.Conflict);
+    }
+
+    // ---------------------------------------------------------------- ORS update (RA-782)
+
+    // Org 50025: ORS 902501 (001, Gdansk) is accredited with interim sites 902511 (001) and 902512 (002); 902504 is
+    // registered only.
+    private const int GdanskSiteId = 902501;
+    private static readonly string UpdateOrg = DevExporterOrg.InYearUpdate.OrganisationId;
+    private static readonly string UpdateAppId = DevExporterAccreditationSeedService
+        .ApplicationIdFor(DevExporterOrg.InYearUpdate, Year)
+        .ToString();
+
+    // An update has no effective date: it takes effect on the day Case Management decided it.
+    private static readonly DateTime DecidedAt = Watermark.AddMinutes(5);
+    private static readonly DateTime DecidedOn = new(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    // Held by reference by the fake persistence, so a test can change the ORS in place as another write would have.
+    private readonly AccreditationApplicationModel _updateAccreditation =
+        DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearUpdate, Year);
+
+    private OverseasSiteModel StoredSite(int siteId = GdanskSiteId) =>
+        _updateAccreditation.OverseasSites!.Sites.Single(s => s.SiteId == siteId);
+
+    private AccreditationApplicationModel UpdateLegacy() =>
+        _factory.FakePersistence.GetByIdAsync(UpdateOrg, UpdateAppId).Result!;
+
+    private OverseasSiteModel UpdateSite(int siteId = GdanskSiteId) =>
+        UpdateLegacy().OverseasSites!.Sites.Single(s => s.SiteId == siteId);
+
+    private static InterimSiteModel InterimOf(OverseasSiteModel site, int interimSiteId) =>
+        site.InterimSites.Single(i => i.SiteId == interimSiteId);
+
+    // A submitted update to the ORS, changing nothing until configured, with its own work item.
+    private void SeedUpdateRequest(Action<ChangeRequestSite> configure, int siteId = GdanskSiteId)
+    {
+        var site = UpdateSite(siteId);
+        var previous = OverseasSiteDetails.From(site);
+        var item = new ChangeRequestSite
+        {
+            ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,
+            SiteId = siteId,
+            OrsId = site.OrsId,
+            SiteName = site.SiteName,
+            Status = ChangeItemStatus.DulyMade,
+            CaseManagementWorkItemId = _workItemId,
+            CaseManagementStatusUpdatedAt = Watermark,
+            Previous = previous,
+            Proposed = previous,
+        };
+        configure(item);
+        _factory.FakeChangeRequests.Seed(
+            new AccreditationChangeRequest
+            {
+                ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,
+                OrganisationId = UpdateOrg,
+                ApplicationId = UpdateAppId,
+                MaterialType = UpdateLegacy().MaterialType,
+                Year = Year,
+                Status = ChangeRequestStatus.Submitted,
+                SubmittedAt = SubmittedAt,
+                Sites = [item],
+            }
+        );
+    }
+
+    private static InterimSiteDetails Renamed(InterimSiteModel interim, string siteName) =>
+        InterimSiteDetails.From(interim) with { SiteName = siteName };
+
+    private static InterimSiteDetails NewInterim(string siteName) =>
+        new()
+        {
+            Country = "Poland",
+            SiteName = siteName,
+            AddressLine1 = "9 Dock Road",
+            TownOrCity = "Sopot",
+            ContactName = "Jo Bloggs",
+            ContactEmail = "jo@example.com",
+            ContactPhone = "0987654321",
+            OperationCodes = ["R13"],
+        };
+
+    private Task<HttpResponseMessage> PushUpdateApproved(DateTime? occurredAt = null) =>
+        Push("approved", occurredAt ?? DecidedAt, effectiveDate: null);
+
+    // Only what the update changed: a detail changed on the ORS since the update was submitted, which the update left
+    // alone, keeps its newer value. The ORS stays accredited as it was.
+    [Fact]
+    public async Task ApprovedUpdate_WithoutAnEffectiveDate_AppliesOnlyTheChangedDetails()
+    {
+        SeedUpdateRequest(item =>
+            item.Proposed = item.Previous! with { SiteName = "Gdansk Recykling Nowy", ContactEmail = "new@example.com" }
+        );
+        var site = StoredSite();
+        var (selected, validFrom) = (site.Selected, site.ValidFrom);
+        site.ContactPhone = "+48 111 222 333";
+        site.ContactName = "Changed Since";
+
+        var response = await PushUpdateApproved();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var after = UpdateSite();
+        after.SiteName.Should().Be("Gdansk Recykling Nowy");
+        after.ContactEmail.Should().Be("new@example.com");
+        after.ContactPhone.Should().Be("+48 111 222 333");
+        after.ContactName.Should().Be("Changed Since");
+        after.Selected.Should().Be(selected);
+        after.ValidFrom.Should().Be(validFrom);
+        Item().Status.Should().Be(ChangeItemStatus.Approved);
+        Item().ValidFrom.Should().Be(DecidedOn);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(DecidedAt);
+    }
+
+    [Fact]
+    public async Task ApprovedUpdate_ChangedAddress_RebuildsTheSitesAddress()
+    {
+        SeedUpdateRequest(item =>
+            item.Proposed = item.Previous! with { AddressLine1 = "12 New Quay", TownOrCity = "Gdansk" }
+        );
+
+        (await PushUpdateApproved()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        UpdateSite().SiteAddress.Should().Be("12 New Quay, Gdansk, Poland");
+    }
+
+    // AC6 is for an add only: an add approved without its date is still refused.
+    [Fact]
+    public async Task ApprovedAdd_WithoutAnEffectiveDate_IsStill400()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+
+        var response = await Push("approved", Watermark.AddMinutes(5), effectiveDate: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ApprovedUpdate_ChangesAddsAndRemovesInterimSites()
+    {
+        SeedUpdateRequest(item =>
+        {
+            var site = UpdateSite();
+            item.InterimSiteChanges =
+            [
+                new InterimSiteChange
+                {
+                    Action = InterimSiteChangeAction.Change,
+                    InterimSiteId = 902511,
+                    Previous = InterimSiteDetails.From(InterimOf(site, 902511)),
+                    Proposed = Renamed(InterimOf(site, 902511), "Gdynia Hub Renamed"),
+                },
+                new InterimSiteChange
+                {
+                    Action = InterimSiteChangeAction.Remove,
+                    InterimSiteId = 902512,
+                    Previous = InterimSiteDetails.From(InterimOf(site, 902512)),
+                },
+                new InterimSiteChange { Action = InterimSiteChangeAction.Add, Proposed = NewInterim("Sopot Yard") },
+            ];
+        });
+
+        (await PushUpdateApproved()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var site = UpdateSite();
+        InterimOf(site, 902511).SiteName.Should().Be("Gdynia Hub Renamed");
+        InterimOf(site, 902511).RemovedAt.Should().BeNull();
+        var removed = InterimOf(site, 902512);
+        removed.RemovedAt.Should().Be(DecidedAt);
+        removed.StatusHistory.Select(h => h.Status).Should().Equal("approved", "withdrawn");
+        removed.StatusHistory[^1].RecordedAt.Should().Be(DecidedAt);
+        // A new SiteId after every site and interim site the application holds, and the registration's next number.
+        var added = site.InterimSites.Should().ContainSingle(i => i.SiteName == "Sopot Yard").Subject;
+        added.SiteId.Should().Be(902513);
+        added.SiteNumber.Should().Be("003");
+        added.IsNewSite.Should().BeTrue();
+        added.CreatedAt.Should().Be(DecidedAt);
+        added.StatusHistory.Should().ContainSingle(h => h.Status == "approved" && h.RecordedAt == DecidedAt);
+        site.InterimSite!.SiteId.Should().Be(902511);
+        // The id is recorded on the change, so the grant run again finds the interim site rather than adding it.
+        Item()
+            .InterimSiteChanges.Single(c => c.Action == InterimSiteChangeAction.Add)
+            .InterimSiteId.Should()
+            .Be(902513);
+    }
+
+    // The interim site a change was for has been withdrawn since: nothing to change, and a retry would fail the same
+    // way, so a 409 with nothing written.
+    [Fact]
+    public async Task ApprovedUpdate_InterimSiteGone_Returns409AndWritesNothing()
+    {
+        SeedUpdateRequest(item =>
+        {
+            var interim = InterimOf(UpdateSite(), 902512);
+            item.Proposed = item.Previous! with { SiteName = "Not applied" };
+            item.InterimSiteChanges =
+            [
+                new InterimSiteChange
+                {
+                    Action = InterimSiteChangeAction.Change,
+                    InterimSiteId = 902512,
+                    Previous = InterimSiteDetails.From(interim),
+                    Proposed = Renamed(interim, "Not applied either"),
+                },
+            ];
+        });
+        InterimOf(StoredSite(), 902512).RemovedAt = Watermark.AddDays(-3);
+        var versionBefore = UpdateLegacy().Version;
+        var nameBefore = UpdateSite().SiteName;
+
+        var response = await PushUpdateApproved();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        UpdateSite().SiteName.Should().Be(nameBefore);
+        UpdateLegacy().Version.Should().Be(versionBefore);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // An ORS that is not accredited has no update to grant.
+    [Fact]
+    public async Task ApprovedUpdate_OrsNotAccredited_Returns409AndWritesNothing()
+    {
+        SeedUpdateRequest(item => item.Proposed = item.Previous! with { SiteName = "Ghent Renamed" }, siteId: 902504);
+        var versionBefore = UpdateLegacy().Version;
+
+        var response = await PushUpdateApproved();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        UpdateSite(902504).SiteName.Should().Be("Ghent Recycling NV");
+        UpdateLegacy().Version.Should().Be(versionBefore);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // New BES files join the ORS's own, as an add's do: a file the ORS already holds is not added again.
+    [Fact]
+    public async Task ApprovedUpdate_AppendsTheNewBesEvidence()
+    {
+        var site = StoredSite();
+        site.BesEvidence = new BesEvidenceModel { BesEvidenceUploads = [BesFile("bes-held")] };
+        SeedUpdateRequest(item =>
+            item.BesEvidence = new BesEvidenceModel { BesEvidenceUploads = [BesFile("bes-held"), BesFile("bes-new")] }
+        );
+
+        (await PushUpdateApproved()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        UpdateSite().BesEvidence!.BesEvidenceUploads.Select(f => f.FileId).Should().Equal("bes-held", "bes-new");
+    }
+
+    // A repeat of the approval, without a date as every update approval is, is answered at the final-status guard.
+    [Fact]
+    public async Task ApprovedUpdateAgain_WritesNothing()
+    {
+        SeedUpdateRequest(item =>
+        {
+            item.Proposed = item.Previous! with { SiteName = "Gdansk Again" };
+            item.InterimSiteChanges =
+            [
+                new InterimSiteChange { Action = InterimSiteChangeAction.Add, Proposed = NewInterim("Sopot Yard") },
+            ];
+        });
+        (await PushUpdateApproved()).StatusCode.Should().Be(HttpStatusCode.OK);
+        var granted = Item();
+        var updates = _factory.FakeChangeRequests.UpdateCount;
+        var legacyVersion = UpdateLegacy().Version;
+
+        (await PushUpdateApproved(DecidedAt.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Item().Should().BeEquivalentTo(granted);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(updates);
+        UpdateLegacy().Version.Should().Be(legacyVersion);
+        UpdateSite().InterimSites.Count(i => i.SiteName == "Sopot Yard").Should().Be(1);
+    }
+
+    // Without dual-write there is no transaction: a lost race on the item after the legacy write is read again, and
+    // the grant run again adds the interim site once.
+    [Fact]
+    public async Task ApprovedUpdate_LostRaceOnTheItem_AddsTheInterimSiteOnce()
+    {
+        SeedUpdateRequest(item =>
+            item.InterimSiteChanges =
+            [
+                new InterimSiteChange { Action = InterimSiteChangeAction.Add, Proposed = NewInterim("Sopot Yard") },
+            ]
+        );
+        var lost = 0;
+        _factory.FakeChangeRequests.LoseUpdateWhen = _ => Interlocked.Increment(ref lost) == 1;
+        var versionBefore = UpdateLegacy().Version;
+
+        (await PushUpdateApproved()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Item().Status.Should().Be(ChangeItemStatus.Approved);
+        var added = UpdateSite().InterimSites.Should().ContainSingle(i => i.SiteName == "Sopot Yard").Subject;
+        Item().InterimSiteChanges.Single().InterimSiteId.Should().Be(added.SiteId);
+        UpdateLegacy().Version.Should().Be(versionBefore + 1);
+    }
+
+    // A refused update changes nothing on the ORS, and frees it for a new update (Rejected is not an active item).
+    [Fact]
+    public async Task RejectedUpdate_LeavesTheOrsUnchangedAndReleasesItsLock()
+    {
+        SeedUpdateRequest(item => item.Proposed = item.Previous! with { SiteName = "Never Applied" });
+        var nameBefore = UpdateSite().SiteName;
+        var versionBefore = UpdateLegacy().Version;
+        var updateSites = $"/api/v1/accreditation-changes/{UpdateOrg}/{UpdateAppId}/requests/current/sites";
+        var startUpdate = new { siteId = GdanskSiteId, changeType = "update-overseas-site" };
+        (await _client.PostAsJsonAsync(updateSites, startUpdate, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        (await Push("rejected", DecidedAt)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Item().Status.Should().Be(ChangeItemStatus.Rejected);
+        Item().ValidFrom.Should().BeNull();
+        UpdateSite().SiteName.Should().Be(nameBefore);
+        UpdateLegacy().Version.Should().Be(versionBefore);
+        (await _client.PostAsJsonAsync(updateSites, startUpdate, Ct)).StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
     // ---------------------------------------------------------------- flag and auth
