@@ -322,7 +322,7 @@ paths:
       description: |
         Searches the accreditation applications in `applicationVersions` (`applicationType`
         `Accreditation`; the other application types in the collection are not listed). `q`
-        matches, ignoring case, when the `RA-` case reference (`applicationReference`), the
+        matches, ignoring case, when the application reference (`applicationReference`), the
         reserved accreditation number, the registration's number, or the organisation's name or
         number (as text) contains it, or when it is exactly the application's `id`. The
         organisation is the one the application names (`reExOrganisationId`), so an application
@@ -605,7 +605,7 @@ components:
       name: searchFields
       in: query
       description: |
-        Which fields `q` searches: `id` (exactly), the `RA-` case reference, the reserved accreditation number, the registration number, the organisation number or the organisation name. Repeat the parameter for more than one. Leave it out to
+        Which fields `q` searches: `id` (exactly), the application reference, the reserved accreditation number, the registration number, the organisation number or the organisation name. Repeat the parameter for more than one. Leave it out to
         search them all. Has no effect without `q`. Invalid (`invalid_search_fields`) for a value
         not in the list.
       style: form
@@ -926,7 +926,7 @@ components:
       required: [id, applicationReference, accreditationNumber, status, year, registrationId, registrationNumber, material, nation, organisation, updatedAt]
       properties:
         id: { type: string, description: The application's `entityId`. }
-        applicationReference: { type: string, nullable: true, description: 'The case reference, `RA-#########`. Null until first submitted.' }
+        applicationReference: { type: string, nullable: true, description: 'The application reference Case Management issues at submission, for example `AP27EA500500ABPL`. Null until first submitted.' }
         accreditationNumber: { type: string, nullable: true, description: The reserved accreditation number. Null until one is reserved. }
         status: { $ref: '#/components/schemas/ApplicationStatus' }
         year: { type: integer, format: int32, description: Accreditation year. }

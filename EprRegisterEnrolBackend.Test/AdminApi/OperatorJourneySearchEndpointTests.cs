@@ -178,7 +178,7 @@ public class OperatorJourneySearchEndpointTests : IDisposable
         var items = (await Page($"{Base}/accreditation-applications")).GetProperty("items");
         var submitted = items.EnumerateArray().Single(i => i.GetProperty("id").GetString() == _world.ApplicationA.ToString());
 
-        submitted.GetProperty("applicationReference").GetString().Should().Be("RA-000000123");
+        submitted.GetProperty("applicationReference").GetString().Should().Be("AP27EA500112ABPL");
         submitted.GetProperty("accreditationNumber").GetString().Should().Be("A27ER5001120018PL");
         submitted.GetProperty("status").GetString().Should().Be("Submitted");
         submitted.GetProperty("year").GetInt32().Should().Be(2027);
@@ -262,7 +262,7 @@ public class OperatorJourneySearchEndpointTests : IDisposable
     [InlineData("accreditations", "A27ER5001120018PL")]
     [InlineData("accreditations", "R25ER5001120018PL")]
     [InlineData("accreditations", "500112")]
-    [InlineData("accreditation-applications", "RA-000000123")]
+    [InlineData("accreditation-applications", "AP27EA500112ABPL")]
     [InlineData("accreditation-applications", "A27ER5001120018PL")]
     [InlineData("accreditation-applications", "R25ER5001120018PL")]
     [InlineData("accreditation-applications", "500112")]
@@ -295,7 +295,7 @@ public class OperatorJourneySearchEndpointTests : IDisposable
     [InlineData("accreditations", "27ER50011")]
     [InlineData("accreditations", "0011")]
     [InlineData("registrations", "25ER500")]
-    [InlineData("accreditation-applications", "000123")]
+    [InlineData("accreditation-applications", "27ea5001")]
     [InlineData("organisations", "0011")]
     [InlineData("overseas-sites", "ER5001120")]
     public async Task PartOfANumber_FindsEveryRecordWhoseNumberContainsIt(string type, string q)
@@ -724,7 +724,7 @@ public class OperatorJourneySearchEndpointTests : IDisposable
                 .GetCollection<ApplicationEntity>(DomainModelCollections.ApplicationVersions)
                 .InsertManyAsync(
                 [
-                    Application(ApplicationA, RegistrationA, "reex-org-a", "RA-000000123", ApplicationStatus.Submitted, 2027, "A27ER5001120018PL", T0.AddHours(5), current: true, version: 2),
+                    Application(ApplicationA, RegistrationA, "reex-org-a", "AP27EA500112ABPL", ApplicationStatus.Submitted, 2027, "A27ER5001120018PL", T0.AddHours(5), current: true, version: 2),
                     Application(ApplicationA, RegistrationA, "reex-org-a", null, ApplicationStatus.Withdrawn, 2027, null, T0.AddMinutes(40), current: false, version: 1),
                     Application(DraftApplicationB, null, "reex-org-b", null, ApplicationStatus.Saved, 2026, null, T0.AddHours(6), current: true, version: 1),
                 ]);
