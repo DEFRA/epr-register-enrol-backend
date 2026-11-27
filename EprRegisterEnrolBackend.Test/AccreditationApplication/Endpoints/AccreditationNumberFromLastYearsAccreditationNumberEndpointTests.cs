@@ -279,6 +279,25 @@ public class AccreditationNumberFromLastYearsAccreditationNumberEndpointTests
         (await Stored(app)).AccreditationReference.Should().BeNull();
     }
 
+    // RA-765: a renewal refused after its number was issued, then started again, renews to the
+    // same number. The refused record keeps it, as a withdrawn one does, but doesn't block.
+    [Fact]
+    public async Task A_renewal_restarted_after_a_refusal_is_issued_the_refused_applications_number()
+    {
+        SeedApplication(
+            2027,
+            a =>
+            {
+                a.ApplicationStatus = ApplicationStatus.Rejected;
+                a.AccreditationReference = "A27ER0001230042PL";
+                a.LastYearsAccreditationNumber = LastYears(LastYearsNumber);
+            }
+        );
+        var app = SeedApplication(2027, a => a.LastYearsAccreditationNumber = LastYears(LastYearsNumber));
+
+        (await IssuedReference(app)).Should().Be("A27ER0001230042PL");
+    }
+
     // With an earlier approval held here, a last year's number for the wrong year is ignored: the
     // held approval is the history. Here the held 2027 approval makes a 2028 application a
     // continuous renewal; taking the later, wrong-year 2028 number instead would fail with a 422.

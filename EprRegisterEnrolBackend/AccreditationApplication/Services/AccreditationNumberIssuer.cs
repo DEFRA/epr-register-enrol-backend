@@ -196,9 +196,9 @@ public sealed class AccreditationNumberIssuer(
     // another organisation, or a number written after the organisation's were read. Read-then-write:
     // two approvals at the same moment can both save one new number, so AccreditationNumberEndpoint
     // checks again once the save has committed and draws again on a clash.
-    // - A continuous renewal's number is fixed, so a live holder is a conflict. A withdrawn holder
-    //   doesn't block: an operator who withdrew and started again renews to the same number, and
-    //   the withdrawn record keeps it.
+    // - A continuous renewal's number is fixed, so a live holder is a conflict. A withdrawn or
+    //   refused holder doesn't block: an operator who withdrew, or was refused, and started again
+    //   renews to the same number, and the old record keeps it.
     // - A new random number is drawn again on any holder, withdrawn included, so it is never
     //   knowingly issued twice.
     private async Task<(

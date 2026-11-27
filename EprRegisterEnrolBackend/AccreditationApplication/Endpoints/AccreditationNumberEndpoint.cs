@@ -289,8 +289,9 @@ internal static class AccreditationNumberEndpoint
 
     // RA-690: the source of each issued reference is logged, not stored, so support can explain
     // any reference without a schema change. A previous-accreditation source also names the
-    // application it came from, and any withdrawn applications already holding the reference are
-    // named so support can see why two records share it.
+    // application it came from, and any withdrawn or (RA-765) refused applications already
+    // holding the reference are named so support can see why two records share it. The
+    // withdrawnHolderIds key covers both, and is kept as it is so existing log searches still match.
     private const string IssuedTemplate =
         "GenerateOrUpdateAccreditationNumber: issued accreditationReference={AccreditationReference} for applicationId={ApplicationId} as case={NumberCase} from sourceKind={SourceKind} sourceReference={SourceReference}";
     private const string SourceApplicationTemplate = " sourceApplicationId={SourceApplicationId}";
