@@ -737,6 +737,8 @@ public class HttpCaseWorkingApiAdapter(
                 besEvidenceValidFromDate = f.BesEvidenceValidFromDate,
                 besEvidenceExpiryDate = f.BesEvidenceExpiryDate,
             }),
+            // Absent (null is dropped by JsonOptions) unless there is something to remove, as before this field existed.
+            RemovedBesFileIds = response.RemovedBesFileIds is { Count: > 0 } removed ? removed : null,
         };
 
         var endpoint = $"{url.TrimEnd('/')}/work-items/add-overseas-site/{workItemId}/resume-from-query";
@@ -1419,6 +1421,9 @@ public class HttpCaseWorkingApiAdapter(
         public required IEnumerable<object> InterimSites { get; init; }
         [JsonPropertyName("besEvidenceFiles")]
         public required IEnumerable<object> NewBesEvidenceFiles { get; init; }
+
+        // Optional on the consumer: the fileIds sent earlier that the operator has since deleted.
+        public IReadOnlyList<string>? RemovedBesFileIds { get; init; }
     }
 
     internal sealed class WithdrawWorkItemRequest

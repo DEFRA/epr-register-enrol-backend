@@ -204,8 +204,9 @@ public static class QueriedItemRules
     }
 
     /// <summary>
-    /// BES files already sent to case management that are no longer on the item (removed by another tab). Case management
-    /// only ever adds files, so the removal cannot be sent: it only lets the item be resubmitted rather than stuck.
+    /// BES files already sent to case management (recorded when a resubmit was refused as a concurrent edit) that are
+    /// no longer on the item (removed by another tab). The next resubmit is not "Nothing has changed" for them, and
+    /// sends their ids so case management removes them too.
     /// </summary>
     public static List<string> SentBesFilesRemoved(ChangeRequestSite item)
     {

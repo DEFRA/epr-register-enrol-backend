@@ -2019,6 +2019,29 @@ public class HttpCaseWorkingApiAdapterTests
         var file = root.GetProperty("besEvidenceFiles")[0];
         file.GetProperty("fileId").GetString().Should().Be("f1");
         file.GetProperty("s3Key").GetString().Should().Be("k");
+        // Absent, not null or empty, when nothing was removed: the body is as it was before the field existed.
+        root.TryGetProperty("removedBesFileIds", out _).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ResumeChangeRequestItemFromQueryAsync_SendsRemovedBesFileIdsOnlyWhenThereAreSome(bool any)
+    {
+        var (adapter, handler) = CreateAdapter();
+
+        await adapter.ResumeChangeRequestItemFromQueryAsync(
+            QueriedItem(Guid.NewGuid()),
+            QueryContact(),
+            QueryResponse() with { RemovedBesFileIds = any ? ["gone-1", "gone-2"] : [] },
+            TestContext.Current.CancellationToken
+        );
+
+        var root = JsonDocument.Parse(handler.CapturedRequestBody!).RootElement;
+        if (any)
+            root.GetProperty("removedBesFileIds").EnumerateArray().Select(e => e.GetString()).Should().Equal("gone-1", "gone-2");
+        else
+            root.TryGetProperty("removedBesFileIds", out _).Should().BeFalse();
     }
 
     [Fact]

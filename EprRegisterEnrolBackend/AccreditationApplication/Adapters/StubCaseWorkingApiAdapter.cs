@@ -194,7 +194,10 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
                 "StubCaseWorkingApiAdapter.ResumeChangeRequestItemFromQueryAsync called for itemId={ItemId} workItemId={WorkItemId} changed={Changed}",
                 item.ItemId,
                 item.CaseManagementWorkItemId,
-                response.Site.Count + response.InterimSites.Sum(s => s.Changes.Count) + response.NewBesFiles.Count
+                response.Site.Count
+                    + response.InterimSites.Sum(s => s.Changes.Count)
+                    + response.NewBesFiles.Count
+                    + (response.RemovedBesFileIds?.Count ?? 0)
             );
         }
 

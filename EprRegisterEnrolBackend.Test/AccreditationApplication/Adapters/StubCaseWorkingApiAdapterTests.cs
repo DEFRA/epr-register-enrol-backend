@@ -232,7 +232,8 @@ public class StubCaseWorkingApiAdapterTests
             DateTime.UtcNow,
             new Dictionary<string, string?> { ["siteName"] = "New" },
             [new InterimSiteResponse(5, "003", new Dictionary<string, string?> { ["townOrCity"] = "Nice" })],
-            []
+            [],
+            ["removed-file"]
         );
 
         var result = await sut.ResumeChangeRequestItemFromQueryAsync(

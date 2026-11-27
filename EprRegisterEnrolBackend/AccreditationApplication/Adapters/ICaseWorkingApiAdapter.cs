@@ -102,12 +102,15 @@ public sealed record SiteWorkItemResult(int SiteId, string CaseReference, Guid? 
 
 // RA-698: what an operator's response to a queried item carries to ManagementBe. Site holds only the ORS values that
 // changed, keyed as the item's editable fields (siteName, addressLine1, ..., rejectedLoadsArrangements); each
-// interim site holds its siteId, siteNumber and only the values that changed.
+// interim site holds its siteId, siteNumber and only the values that changed. RemovedBesFileIds (optional, null or
+// empty when none) are BES files an earlier send of this round carried that the operator has since deleted (from
+// another tab): ManagementBe removes them from the site's evidence.
 public sealed record ChangeRequestQueryResponse(
     DateTime SubmittedAt,
     IReadOnlyDictionary<string, string?> Site,
     IReadOnlyList<InterimSiteResponse> InterimSites,
-    IReadOnlyList<BesEvidenceFileModel> NewBesFiles
+    IReadOnlyList<BesEvidenceFileModel> NewBesFiles,
+    IReadOnlyList<string>? RemovedBesFileIds = null
 );
 
 public sealed record InterimSiteResponse(

@@ -350,8 +350,8 @@ public static class QueriedItemEndpoints
         // not carry (a second tab saved first), marking it Updated would record it as sent when case management never
         // received it: that is a 409, and what was sent is recorded on the item (status unchanged, best effort) so the
         // next resubmit also compares against it. That sends an answer a second tab undid (as the ORS's own value).
-        // A BES file a second tab deleted after it was sent cannot be undone in ManagementBe (it only adds files): the
-        // resubmit is allowed so the item is not stuck, but the file stays with case management.
+        // A BES file a second tab deleted after it was sent is sent as removed on that next resubmit (it is recorded
+        // here with the rest of what was sent), so case management drops it too.
         var sentAnswers = QueriedItemRules.Clone(item.Answers);
         var sentFileIds = newFiles.ConvertAll(f => f.FileId);
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
@@ -483,7 +483,9 @@ public static class QueriedItemEndpoints
             .Where(s => s.Changes.Count > 0)
             .ToList();
 
-        return new ChangeRequestQueryResponse(now, siteChanges, interimSites, newFiles);
+        // BES files sent by an earlier, refused save and deleted since: case management removes them too.
+        var removed = QueriedItemRules.SentBesFilesRemoved(item);
+        return new ChangeRequestQueryResponse(now, siteChanges, interimSites, newFiles, removed.Count > 0 ? removed : null);
     }
 
     private static Dictionary<string, string?> BuildInterimChanges(

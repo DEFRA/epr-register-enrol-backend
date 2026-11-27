@@ -710,7 +710,7 @@ public sealed class QueriedItemEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task Resubmit_WhenAnotherTabRemovedASentBesFile_Is409AndTheNextResubmitIsNotStuck()
+    public async Task Resubmit_WhenAnotherTabRemovedASentBesFile_Is409AndTheNextResubmitSendsTheRemoval()
     {
         await SeedQueried();
         await AddFile("new-file", "new.pdf");
@@ -722,6 +722,25 @@ public sealed class QueriedItemEndpointsTests : IDisposable
         (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
         Item().Status.Should().Be(ChangeItemStatus.Updated);
         Item().Query!.QuerySubmissions.Single().NewBesFileIds.Should().BeEmpty();
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .ResumeChangeRequestItemFromQueryAsync(
+                Arg.Any<ChangeRequestSite>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Is<ChangeRequestQueryResponse>(r =>
+                    r.NewBesFiles.Count == 0 && r.RemovedBesFileIds != null && r.RemovedBesFileIds.SequenceEqual(new[] { "new-file" })
+                ),
+                Arg.Any<CancellationToken>()
+            );
+        // Only the first send (before the 409) carried the file, and it carried no removal.
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .ResumeChangeRequestItemFromQueryAsync(
+                Arg.Any<ChangeRequestSite>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Is<ChangeRequestQueryResponse>(r => r.NewBesFiles.Count == 1 && r.RemovedBesFileIds == null),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     // Refuses the first `refusals` saves of the resubmit; before each, edit(n) is what another tab saved meanwhile (the
