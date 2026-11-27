@@ -424,12 +424,10 @@ paths:
         least one current registration in that nation (a registration's nation is its
         regulator's; ReEx's organisation-level regulator is not used, RA-526).
 
-        Every organisation is searched (`organisations` is not versioned).
         Most recently changed first: `updatedAt` descending, then `id` descending. The values of a
         repeated filter combine with OR; different filters and `q` combine with AND. A parameter
         the endpoint does not take is refused (`unknown_parameter`), so a filter is never silently
-        dropped. A row whose stored record links to a registration or organisation that does not
-        exist fails the search with `500` `invalid_stored_record`, logged at Error with the ids.
+        dropped.
       parameters:
         - $ref: '#/components/parameters/Search'
         - $ref: '#/components/parameters/OrganisationSearchFields'
@@ -456,7 +454,6 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '405': { $ref: '#/components/responses/MethodNotAllowed' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
-        '500': { $ref: '#/components/responses/InvalidStoredRecord' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /admin/operator-journey/overseas-sites:

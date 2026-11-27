@@ -108,7 +108,7 @@ internal sealed class AccreditationRecordType : VersionedRecordType<Accreditatio
         if (search.Text is { } text)
         {
             var matches = new List<FilterDefinition<AccreditationEntity>>();
-            AddIdMatch(search, matches);
+            AddIdMatch(search, x => x.EntityId, matches);
             if (search.Searches(OperatorJourneyRecordTypes.AccreditationNumber))
                 matches.Add(Filter.Regex(a => a.AccreditationNumber, OperatorJourneyStore.Contains(text)));
             var registrationIds = await OperatorJourneyRecordTypes.RegistrationIdsForTextAsync(
@@ -140,37 +140,30 @@ internal sealed class AccreditationRecordType : VersionedRecordType<Accreditatio
         CancellationToken cancellationToken
     )
     {
-        var registrations = await store.CurrentRegistrationsAsync(page.Select(a => a.RegistrationId), cancellationToken);
-        var rows = page.Select(a =>
-                (Accreditation: a, Registration: Linked(registrations, a.RegistrationId, "accreditation", a.EntityId, "registration"))
-            )
-            .ToList();
-        var organisations = await store.OrganisationsAsync(
-            rows.Select(r => r.Registration.OrganisationId),
+        var links = await RegistrationsAndOrganisationsAsync(
+            page,
+            "accreditation",
+            a => a.EntityId,
+            a => a.RegistrationId,
+            store,
             cancellationToken
         );
-        return rows.Select(row =>
-                (object)
-                    new OperatorJourneyAccreditationDto(
-                        row.Accreditation.EntityId.ToString(),
-                        row.Accreditation.AccreditationNumber,
-                        row.Accreditation.Status,
-                        row.Accreditation.Year,
-                        row.Accreditation.TonnageBand,
-                        row.Registration.EntityId.ToString(),
-                        row.Registration.RegistrationNumber,
-                        row.Registration.Material,
-                        Summary(
-                            Linked(
-                                organisations,
-                                row.Registration.OrganisationId,
-                                "registration",
-                                row.Registration.EntityId,
-                                "organisation"
-                            )
-                        ),
-                        row.Accreditation.ValidFrom
-                    )
+        return page.Zip(
+                links,
+                (accreditation, link) =>
+                    (object)
+                        new OperatorJourneyAccreditationDto(
+                            accreditation.EntityId.ToString(),
+                            accreditation.AccreditationNumber,
+                            accreditation.Status,
+                            accreditation.Year,
+                            accreditation.TonnageBand,
+                            link.Registration.EntityId.ToString(),
+                            link.Registration.RegistrationNumber,
+                            link.Registration.Material,
+                            link.Organisation,
+                            accreditation.ValidFrom
+                        )
             )
             .ToList();
     }
@@ -245,7 +238,7 @@ internal sealed class AccreditationApplicationRecordType : VersionedRecordType<A
     {
         var contains = OperatorJourneyStore.Contains(text);
         var matches = new List<FilterDefinition<ApplicationEntity>>();
-        AddIdMatch(search, matches);
+        AddIdMatch(search, x => x.EntityId, matches);
         if (search.Searches(ApplicationReference))
             matches.Add(Filter.Regex(a => a.ApplicationReference, contains));
         if (search.Searches(OperatorJourneyRecordTypes.AccreditationNumber))
@@ -275,43 +268,46 @@ internal sealed class AccreditationApplicationRecordType : VersionedRecordType<A
         CancellationToken cancellationToken
     )
     {
-        var registrations = await store.CurrentRegistrationsAsync(
+        var found = await store.CurrentRegistrationsAsync(
             page.Where(a => a.RegistrationId is not null).Select(a => a.RegistrationId!.Value),
             cancellationToken
         );
-        var organisations = await store.OrganisationsByReExIdAsync(
-            page.Select(a => a.ReExOrganisationId),
+        // An application has no registration until one is made for it.
+        var registrations = page.Select(application =>
+                application.RegistrationId is { } registrationId
+                    ? Linked(found, registrationId, "application", application.EntityId, "registration")
+                    : null
+            )
+            .ToList();
+        var organisations = await OrganisationsAsync(
+            page,
+            "application",
+            a => a.EntityId,
+            a => a.ReExOrganisationId,
+            store.OrganisationsByReExIdAsync,
             cancellationToken
         );
-        return page.Select(application =>
-            {
-                var registration = application.RegistrationId is { } registrationId
-                    ? Linked(registrations, registrationId, "application", application.EntityId, "registration")
-                    : null;
-                var details = (AccreditationDetails)application.Details;
-                return (object)
-                    new OperatorJourneyApplicationDto(
-                        application.EntityId.ToString(),
-                        application.ApplicationReference,
-                        details.ReservedAccreditationNumber,
-                        application.Status,
-                        details.Year,
-                        registration?.EntityId.ToString(),
-                        registration?.RegistrationNumber,
-                        registration?.Material,
-                        registration?.Nation,
-                        Summary(
-                            Linked(
-                                organisations,
-                                application.ReExOrganisationId,
-                                "application",
-                                application.EntityId,
-                                "organisation"
-                            )
-                        ),
-                        application.ValidFrom
-                    );
-            })
+        return page.Select(
+                (application, i) =>
+                {
+                    var registration = registrations[i];
+                    var details = (AccreditationDetails)application.Details;
+                    return (object)
+                        new OperatorJourneyApplicationDto(
+                            application.EntityId.ToString(),
+                            application.ApplicationReference,
+                            details.ReservedAccreditationNumber,
+                            application.Status,
+                            details.Year,
+                            registration?.EntityId.ToString(),
+                            registration?.RegistrationNumber,
+                            registration?.Material,
+                            registration?.Nation,
+                            organisations[i],
+                            application.ValidFrom
+                        );
+                }
+            )
             .ToList();
     }
 }
@@ -348,7 +344,7 @@ internal sealed class RegistrationRecordType : VersionedRecordType<RegistrationE
         if (search.Text is { } text)
         {
             var matches = new List<FilterDefinition<RegistrationEntity>>();
-            AddIdMatch(search, matches);
+            AddIdMatch(search, x => x.EntityId, matches);
             if (search.Searches(OperatorJourneyRecordTypes.RegistrationNumber))
                 matches.Add(Filter.Regex(r => r.RegistrationNumber, OperatorJourneyStore.Contains(text)));
             var organisations = await store.OrganisationsMatchingAsync(
@@ -377,27 +373,28 @@ internal sealed class RegistrationRecordType : VersionedRecordType<RegistrationE
         CancellationToken cancellationToken
     )
     {
-        var organisations = await store.OrganisationsAsync(page.Select(r => r.OrganisationId), cancellationToken);
-        return page.Select(registration =>
-                (object)
-                    new OperatorJourneyRegistrationDto(
-                        registration.EntityId.ToString(),
-                        registration.RegistrationNumber,
-                        registration.Status,
-                        registration.Material,
-                        registration.Nation,
-                        registration.WasteProcessingType,
-                        Summary(
-                            Linked(
-                                organisations,
-                                registration.OrganisationId,
-                                "registration",
-                                registration.EntityId,
-                                "organisation"
-                            )
-                        ),
-                        registration.ValidFrom
-                    )
+        var organisations = await OrganisationsAsync(
+            page,
+            "registration",
+            r => r.EntityId,
+            r => r.OrganisationId,
+            store.OrganisationsAsync,
+            cancellationToken
+        );
+        return page.Zip(
+                organisations,
+                (registration, organisation) =>
+                    (object)
+                        new OperatorJourneyRegistrationDto(
+                            registration.EntityId.ToString(),
+                            registration.RegistrationNumber,
+                            registration.Status,
+                            registration.Material,
+                            registration.Nation,
+                            registration.WasteProcessingType,
+                            organisation,
+                            registration.ValidFrom
+                        )
             )
             .ToList();
     }
@@ -441,8 +438,7 @@ internal sealed class OrganisationRecordType : OperatorJourneyRecordType<Organis
         if (search.Text is { } text)
         {
             var matches = new List<FilterDefinition<OrganisationEntity>>();
-            if (search.Searches(OperatorJourneySearch.IdField) && ObjectId.TryParse(text, out var id))
-                matches.Add(Filter.Eq(o => o.Id, id));
+            AddIdMatch(search, o => o.Id, matches);
             if (search.Searches(OperatorJourneyRecordTypes.OrganisationName))
                 matches.Add(Filter.Regex(o => o.Name, OperatorJourneyStore.Contains(text)));
             if (search.Searches(OperatorJourneyRecordTypes.OrganisationNumber))
@@ -532,7 +528,7 @@ internal sealed class OverseasSiteRecordType : VersionedRecordType<OverseasSiteE
         if (search.Text is { } text)
         {
             var matches = new List<FilterDefinition<OverseasSiteEntity>>();
-            AddIdMatch(search, matches);
+            AddIdMatch(search, x => x.EntityId, matches);
             if (search.Searches(OrsId))
                 matches.Add(Filter.Regex(s => s.OrsId, OperatorJourneyStore.Contains(text)));
             var registrationIds = await OperatorJourneyRecordTypes.RegistrationIdsForTextAsync(
@@ -558,36 +554,29 @@ internal sealed class OverseasSiteRecordType : VersionedRecordType<OverseasSiteE
         CancellationToken cancellationToken
     )
     {
-        var registrations = await store.CurrentRegistrationsAsync(page.Select(s => s.RegistrationId), cancellationToken);
-        var rows = page.Select(s =>
-                (Site: s, Registration: Linked(registrations, s.RegistrationId, "overseas site", s.EntityId, "registration"))
-            )
-            .ToList();
-        var organisations = await store.OrganisationsAsync(
-            rows.Select(r => r.Registration.OrganisationId),
+        var links = await RegistrationsAndOrganisationsAsync(
+            page,
+            "overseas site",
+            s => s.EntityId,
+            s => s.RegistrationId,
+            store,
             cancellationToken
         );
-        return rows.Select(row =>
-                (object)
-                    new OperatorJourneyOverseasSiteDto(
-                        row.Site.EntityId.ToString(),
-                        row.Site.OrsId,
-                        row.Site.SiteName,
-                        row.Site.Country,
-                        row.Site.Status,
-                        row.Registration.EntityId.ToString(),
-                        row.Registration.RegistrationNumber,
-                        Summary(
-                            Linked(
-                                organisations,
-                                row.Registration.OrganisationId,
-                                "registration",
-                                row.Registration.EntityId,
-                                "organisation"
-                            )
-                        ),
-                        row.Site.ValidFrom
-                    )
+        return page.Zip(
+                links,
+                (site, link) =>
+                    (object)
+                        new OperatorJourneyOverseasSiteDto(
+                            site.EntityId.ToString(),
+                            site.OrsId,
+                            site.SiteName,
+                            site.Country,
+                            site.Status,
+                            link.Registration.EntityId.ToString(),
+                            link.Registration.RegistrationNumber,
+                            link.Organisation,
+                            site.ValidFrom
+                        )
             )
             .ToList();
     }

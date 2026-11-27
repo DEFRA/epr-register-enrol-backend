@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using MongoDB.Bson;
@@ -88,8 +89,72 @@ public abstract class OperatorJourneyRecordType<TEntity> : IOperatorJourneyRecor
             ? new BsonDocumentFilterDefinition<TEntity>(new BsonDocument("_id", new BsonDocument("$exists", false)))
             : Filter.Or(matches);
 
+    /// <summary><c>q</c> as an exact <paramref name="id"/>, when the <c>id</c> field is searched and <c>q</c> is one.</summary>
+    protected static void AddIdMatch(
+        OperatorJourneySearch search,
+        Expression<Func<TEntity, ObjectId>> id,
+        List<FilterDefinition<TEntity>> matches
+    )
+    {
+        if (search.Searches(OperatorJourneySearch.IdField) && ObjectId.TryParse(search.Text, out var value))
+            matches.Add(Filter.Eq(id, value));
+    }
+
     protected static OperatorJourneyOrganisationDto Summary(OrganisationEntity organisation) =>
         new(organisation.Id.ToString(), organisation.Name, organisation.OrganisationNumber);
+
+    /// <summary>
+    /// Each record's current registration, then that registration's organisation, in the page's order, for the
+    /// record types that hang off a registration. A link to either that does not exist fails the search.
+    /// </summary>
+    protected static async Task<
+        IReadOnlyList<(RegistrationEntity Registration, OperatorJourneyOrganisationDto Organisation)>
+    > RegistrationsAndOrganisationsAsync(
+        IReadOnlyList<TEntity> page,
+        string recordType,
+        Func<TEntity, ObjectId> recordId,
+        Func<TEntity, ObjectId> registrationId,
+        OperatorJourneyStore store,
+        CancellationToken cancellationToken
+    )
+    {
+        var found = await store.CurrentRegistrationsAsync(page.Select(registrationId), cancellationToken);
+        var registrations = page.Select(record =>
+                Linked(found, registrationId(record), recordType, recordId(record), "registration")
+            )
+            .ToList();
+        var organisations = await OrganisationsAsync(
+            registrations,
+            "registration",
+            r => r.EntityId,
+            r => r.OrganisationId,
+            store.OrganisationsAsync,
+            cancellationToken
+        );
+        return registrations.Zip(organisations).ToList();
+    }
+
+    /// <summary>
+    /// Each record's organisation, in <paramref name="records"/>' order, looked up by <paramref name="organisationId"/>.
+    /// A link to an organisation that does not exist fails the search.
+    /// </summary>
+    protected static async Task<IReadOnlyList<OperatorJourneyOrganisationDto>> OrganisationsAsync<TRecord, TKey>(
+        IReadOnlyList<TRecord> records,
+        string recordType,
+        Func<TRecord, ObjectId> recordId,
+        Func<TRecord, TKey> organisationId,
+        Func<IEnumerable<TKey>, CancellationToken, Task<IReadOnlyDictionary<TKey, OrganisationEntity>>> lookUp,
+        CancellationToken cancellationToken
+    )
+        where TKey : notnull
+    {
+        var found = await lookUp(records.Select(organisationId), cancellationToken);
+        return records
+            .Select(record =>
+                Summary(Linked(found, organisationId(record), recordType, recordId(record), "organisation"))
+            )
+            .ToList();
+    }
 
     protected static TValue Linked<TKey, TValue>(
         IReadOnlyDictionary<TKey, TValue> found,
@@ -112,16 +177,6 @@ public abstract class VersionedRecordType<TEntity> : OperatorJourneyRecordType<T
 
     protected override SortDefinition<TEntity> Order =>
         Builders<TEntity>.Sort.Descending(x => x.ValidFrom).Descending(x => x.EntityId);
-
-    /// <summary><c>q</c> as an exact entity id, when the <c>id</c> field is searched and <c>q</c> is one.</summary>
-    protected static void AddIdMatch(
-        OperatorJourneySearch search,
-        List<FilterDefinition<TEntity>> matches
-    )
-    {
-        if (search.Searches(OperatorJourneySearch.IdField) && ObjectId.TryParse(search.Text, out var id))
-            matches.Add(Filter.Eq(x => x.EntityId, id));
-    }
 }
 
 /// <summary>

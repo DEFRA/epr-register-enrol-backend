@@ -441,7 +441,7 @@ type is one more `OperatorJourneyRecordType` subclass.
 
 ### Testing
 
-Tests run a full `WebApplication` backed by [Ephemeral MongoDB](https://github.com/asimmon/ephemeral-mongo). No mocking — tests read and write from an in-memory database.
+Tests run a full `WebApplication` backed by [Ephemeral MongoDB](https://github.com/asimmon/ephemeral-mongo). Endpoint tests use no mocks — they read and write an in-memory database. The one accepted exception is a query timeout, which Ephemeral MongoDB can't produce on demand: the `503 query_timeout` tests fake it by throwing `MongoExecutionTimeoutException`. The Operator journey search tests use an NSubstitute `IMongoDbClientFactory`/`IMongoCollection`; the Legacy admin tests (`AdminApiEndpointTests`) use a hand-written `ILegacyApplicationSearch`.
 
 ```bash
 dotnet test

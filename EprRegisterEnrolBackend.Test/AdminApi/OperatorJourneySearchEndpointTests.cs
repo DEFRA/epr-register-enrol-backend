@@ -455,6 +455,41 @@ public class OperatorJourneySearchEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task SearchFieldsWithoutQ_AreStillChecked_ButAKnownOneLimitsNothing()
+    {
+        var all = await Ids($"{Base}/registrations");
+
+        (await Ids($"{Base}/registrations?searchFields=registrationNumber")).Should().Equal(all).And.HaveCount(2);
+        await AssertProblem(
+            await Get($"{Base}/registrations?searchFields=siteName"),
+            HttpStatusCode.BadRequest,
+            "invalid_search_fields"
+        );
+    }
+
+    // The last page number accepted is int.MaxValue; it is far past what Mongo can skip, so it is an empty page.
+    [Theory]
+    [InlineData("2147483647", HttpStatusCode.OK)]
+    [InlineData("2147483648", HttpStatusCode.BadRequest)]
+    public async Task ThePageNumberLimit_IsTheLargestWholeNumber_AndThatPageIsEmpty(
+        string pageNumber,
+        HttpStatusCode expected
+    )
+    {
+        var path = $"{Base}/registrations?pageNumber={pageNumber}";
+        if (expected == HttpStatusCode.BadRequest)
+        {
+            await AssertProblem(await Get(path), expected, "invalid_page_number");
+            return;
+        }
+
+        var body = await Page(path);
+        body.GetProperty("pageNumber").GetInt32().Should().Be(int.MaxValue);
+        body.GetProperty("totalItems").GetInt32().Should().Be(2);
+        body.GetProperty("items").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
     public async Task AQOver100Characters_Is400()
     {
         var response = await Get($"{Base}/organisations?q={new string('a', 101)}");
