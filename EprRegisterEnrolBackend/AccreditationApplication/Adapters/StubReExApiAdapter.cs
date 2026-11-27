@@ -213,7 +213,6 @@ public class StubReExApiAdapter(
             registrationId,
             materialType,
             glassRecyclingProcess,
-            year,
             nation,
             isExporter
         );
@@ -435,7 +434,8 @@ public class StubReExApiAdapter(
     // so a renewal derived from the registration number instead is caught; a hash that lands on the
     // registration's sequence moves on by one. The year is in the hash, so each year's number differs
     // and a test can tell last year's number from ReEx apart from one this backend issued and holds.
-    // Positions 11-14 are the sequence.
+    // Positions 11-14 are the sequence. The number's own year (positions 1-2) is the accreditation's,
+    // not the registration's, which is fixed (RA-753).
     private static string DerivedAccreditationNumber(
         string registrationReference,
         string registrationId,
@@ -454,7 +454,7 @@ public class StubReExApiAdapter(
             sequence = (int)((sequence + 1) % RegistrationSequenceRange);
         }
 
-        return $"A{registrationReference[1..11]}{sequence:D4}{registrationReference[15..]}";
+        return $"A{year % 100:D2}{registrationReference[3..11]}{sequence:D4}{registrationReference[15..]}";
     }
 
     // RA-690: a valid 17-character registration reference, derived so it is the same every time
@@ -464,12 +464,18 @@ public class StubReExApiAdapter(
     // is probabilistic: the 4-digit sequence is a hash, so two registrations of one organisation
     // collide about 1 time in 10,000 - fine for stub data, where each e2e organisation also has
     // its own org number.
+    //
+    // RA-753: the year in the reference is fixed, not the year asked for. A registration's number is
+    // issued once (with DualWrite on, Seed would otherwise overwrite the domain model's issued number
+    // each time a new year of the same registration is seeded). 2026 is the year the stub's documented
+    // references carry, and the year a 2027 application is seeded for, so those are unchanged.
+    private const int RegistrationReferenceYear = 2026;
+
     private static string DerivedRegistrationReference(
         string organisationId,
         string registrationId,
         MaterialType materialType,
         GlassRecyclingProcess? glassRecyclingProcess,
-        int year,
         Nation nation,
         bool isExporter
     )
@@ -487,7 +493,7 @@ public class StubReExApiAdapter(
                     materialType == MaterialType.Glass
                         ? glassRecyclingProcess ?? GlassRecyclingProcess.Other
                         : glassRecyclingProcess,
-                Year = year,
+                Year = RegistrationReferenceYear,
             }
         );
         return format.RegistrationNumber((int)(Fnv1a(registrationId) % RegistrationSequenceRange));

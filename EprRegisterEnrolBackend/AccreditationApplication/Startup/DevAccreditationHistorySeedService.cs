@@ -33,9 +33,9 @@ public class DevAccreditationHistorySeedService(
     );
     internal const int DeltaGreen2026Year = 2026;
 
-    // What StubReExApiAdapter returns for this registration when asked for 2025, i.e. what Seed
-    // would have stored for a 2026 application.
-    internal const string DeltaGreen2026RegistrationReference = "R25ER0500036908PL";
+    // What StubReExApiAdapter returns for this registration in any year (RA-753: a registration's
+    // number is fixed once issued), so what Seed stores for a 2026 application and for later ones.
+    internal const string DeltaGreen2026RegistrationReference = "R26ER0500036908PL";
     internal const string DeltaGreen2026AccreditationReference = "A26ER0500030042PL";
 
     protected override async Task SeedCoreAsync(CancellationToken cancellationToken)
