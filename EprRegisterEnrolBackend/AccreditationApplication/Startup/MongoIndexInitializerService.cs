@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.CdpUploader.Services;
@@ -47,6 +46,9 @@ public class MongoIndexInitializerService(
     // Backoff for the schema retry: doubles from FirstRetryDelay up to MaxRetryDelay. Settable for tests.
     internal TimeSpan FirstRetryDelay { get; init; } = TimeSpan.FromSeconds(5);
     internal TimeSpan MaxRetryDelay { get; init; } = TimeSpan.FromMinutes(5);
+
+    // The clock the validator retry waits on and measures its elapsed time with. Settable for tests.
+    internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -136,7 +138,7 @@ public class MongoIndexInitializerService(
     )
     {
         var result = degraded;
-        var elapsed = Stopwatch.StartNew();
+        var started = TimeProvider.GetTimestamp();
         if (await NothingToRetryAsync(collections, cancellationToken))
         {
             return result;
@@ -144,7 +146,7 @@ public class MongoIndexInitializerService(
 
         foreach (var delay in ValidatorRetryDelays)
         {
-            await Task.Delay(delay, cancellationToken);
+            await Task.Delay(delay, TimeProvider, cancellationToken);
             try
             {
                 var missing = await CollectionsMissingValidatorAsync(
@@ -189,7 +191,7 @@ public class MongoIndexInitializerService(
 
         logger.LogWarning(
             "MongoIndexInitializerService: domain model validators still not applied after retrying for {Duration}. {Description}",
-            elapsed.Elapsed,
+            TimeProvider.GetElapsedTime(started),
             result.Description
         );
         return result;

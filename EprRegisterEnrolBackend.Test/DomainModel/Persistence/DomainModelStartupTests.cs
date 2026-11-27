@@ -11,6 +11,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using NSubstitute;
 using NSubstitute.Core;
@@ -384,9 +385,11 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
     }
 
     // The final warning reports how long the retry really took, which can be minutes while Mongo is unreachable.
+    // The clock is fake, so each delay takes at least its full 40ms however the real timer rounds.
     [Fact]
     public async Task InitializeAsync_ValidatorKeepsFailing_WarningLogsTheElapsedTime()
     {
+        var clock = new FakeTimeProvider();
         var collection = ValidatedCollection(_ => ValidatorApplyResult.Transient);
         var logger = new CapturingLogger<MongoIndexInitializerService>();
         var initializer = new MongoIndexInitializerService(
@@ -395,9 +398,17 @@ public sealed class DomainModelStartupTests(MongoIntegrationFixture fixture)
         )
         {
             ValidatorRetryDelays = [TimeSpan.FromMilliseconds(40), TimeSpan.FromMilliseconds(40)],
+            TimeProvider = clock,
         };
 
-        await initializer.InitializeAsync(Ct);
+        var initialize = initializer.InitializeAsync(Ct);
+        while (!initialize.IsCompleted)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(40));
+            await Task.Delay(TimeSpan.FromMilliseconds(1), Ct);
+        }
+
+        await initialize;
 
         var warning = logger.Entries.Single(e =>
             e.LogLevel == LogLevel.Warning && e.Message.Contains("still not applied")
