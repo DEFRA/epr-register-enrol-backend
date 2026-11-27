@@ -351,8 +351,8 @@ With `AccreditationChanges__SubmitToCaseManagement` on, submit sends the request
 | `PATCH`  | `/requests/current/sites/{siteId}` | Supply missing `country`, `coordinates`, `operationCodes`, `conditionsOfExport`; 400 if a field already has a value on the site (locked) |
 | `DELETE` | `/requests/current/sites/{siteId}` | Remove a site: 200 with the draft, or 204 when the draft became empty and was deleted; 404 if the site isn't in the draft; 409 if the draft's sites are fixed after a failed send |
 | `POST`   | `/requests/current/bes-evidence/initiate` | Start a CDP upload for BES evidence |
-| `POST`   | `/requests/current/sites/{siteId}/bes-evidence/files` | Attach a scanned upload to a site in the draft |
-| `DELETE` | `/requests/current/sites/{siteId}/bes-evidence/files/{fileId}` | Remove a BES evidence file |
+| `POST`   | `/requests/current/sites/{siteId}/bes-evidence/files` | Attach a scanned upload to a site in the draft, an add or (RA-682) an `update-overseas-site` item, which adds the file to the ORS's own on approval; 422 if the ORS takes no BES evidence (each item's `besEvidenceUploadAllowed`), 409 once Case Management may hold the item |
+| `DELETE` | `/requests/current/sites/{siteId}/bes-evidence/files/{fileId}` | Remove a BES evidence file uploaded on the draft; 422 for a file the ORS already holds on an update item, which can't be removed |
 | `POST`   | `/requests/current/submit` | Declaration (`fullName`, `jobTitle`, `paymentReference`); 400 without a payment reference (RA-739), 422 with per-site errors when incomplete, 503 if Case Management fails (the request is reopened), otherwise `Submitted` |
 | `POST`   | `api/v1/accreditation-changes/case-management/{workItemId}/status` (full path, not under the base path) | Case Management service caller (RA-495): push a work item's status change onto its change request item. `approved` grants an add-ORS site in the same unit of work, accredited from the body's `effectiveDate` (`yyyy-MM-dd`, required on `approved`: 400 without it). 400 when `toStateId` is null or blank. A `toStateId` with no item status (`awaiting-decision`, `queried`, or one not in the table) changes no status; one not in the table and not known-ignored is logged at Error. The same body, auth and ordering guards as the accreditation application's `/case-management/{workItemId}/status` |
 
@@ -413,7 +413,7 @@ limit (`ServiceClients__RateLimitPermitsPerMinute`, 429), the database query tim
 
 | API | Paths | Who may call it | Contract |
 | --- | --- | --- | --- |
-| Accreditation API | `/v1/...` | Any configured service client (ReEx) | [`docs/openapi/registration-accreditation-api.v2.yaml`](docs/openapi/registration-accreditation-api.v2.yaml), [onboarding guide](docs/reex-api-onboarding.md) |
+| Accreditation API | `/v1/...` | Any configured service client (ReEx) | [`docs/openapi/registration-accreditation-api.v2.yaml`](docs/openapi/registration-accreditation-api.v2.yaml), [onboarding guide](docs/reex-api-onboarding.md). Before changing it, read [Changing the Accreditation API safely](docs/api-change-guide.md) |
 | Admin API (RA-740) | `/admin/...` | Only the client named `admin` (`epr-register-enrol-admin`, secret `AUTH_SHARED_SECRET__ADMIN`); any other client gets 403 | [`docs/openapi/admin-api.yaml`](docs/openapi/admin-api.yaml) |
 
 The Admin API is for the delivery team's support tool. `GET /admin/accreditation-applications`
