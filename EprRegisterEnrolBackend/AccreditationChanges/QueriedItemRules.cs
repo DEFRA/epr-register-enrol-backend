@@ -191,6 +191,28 @@ public static class QueriedItemRules
         ];
     }
 
+    /// <summary>
+    /// The fields a resubmit sends: those that differ from the answers at the query and, when an earlier send was not
+    /// recorded as a submission (its save was refused), those that differ from what case management received then.
+    /// </summary>
+    public static List<string> ChangedFields(ChangeRequestSite item)
+    {
+        var changed = ChangedFields(item.Answers, item.Query!.AnswersAtQuery);
+        if (item.Query.AnswersSent is { } sent)
+            changed.AddRange(ChangedFields(item.Answers, sent).Where(key => !changed.Contains(key)));
+        return changed;
+    }
+
+    /// <summary>
+    /// BES files already sent to case management that are no longer on the item (removed by another tab). Case management
+    /// only ever adds files, so the removal cannot be sent: it only lets the item be resubmitted rather than stuck.
+    /// </summary>
+    public static List<string> SentBesFilesRemoved(ChangeRequestSite item)
+    {
+        var held = (item.BesEvidence?.BesEvidenceUploads ?? []).Select(f => f.FileId).ToHashSet();
+        return [.. (item.Query?.BesFileIdsSent ?? []).Where(id => !held.Contains(id))];
+    }
+
     /// <summary>BES files on the item that were not there when the query was raised.</summary>
     public static List<BesEvidenceFileModel> NewBesFiles(ChangeRequestSite item) =>
     [

@@ -683,6 +683,112 @@ public sealed class QueriedItemEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Resubmit_WhenAnotherTabUndidASentAnswer_Is409RecordsWhatWasSentAndTheNextResubmitSendsTheUndo()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { contactName = "B" }, Ct);
+        LoseTheSaveToAnotherTabThat(item => item.Answers.ContactName = null);
+
+        (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        Item().Status.Should().Be(ChangeItemStatus.Queried);
+        Item().Query!.QuerySubmissions.Should().BeEmpty();
+        Item().Query!.AnswersSent!.ContactName.Should().Be("B");
+        var response = await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().Status.Should().Be(ChangeItemStatus.Updated);
+        Item().Query!.QuerySubmissions.Single().ChangedFields.Should().Equal("contactName");
+        await _factory
+            .MockCaseWorkingAdapter.Received(1)
+            .ResumeChangeRequestItemFromQueryAsync(
+                Arg.Any<ChangeRequestSite>(),
+                Arg.Any<QuerySubmitterContactDetails>(),
+                Arg.Is<ChangeRequestQueryResponse>(r => r.Site["contactName"] == QueriedSite.ContactName),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenAnotherTabRemovedASentBesFile_Is409AndTheNextResubmitIsNotStuck()
+    {
+        await SeedQueried();
+        await AddFile("new-file", "new.pdf");
+        LoseTheSaveToAnotherTabThat(item => item.BesEvidence!.BesEvidenceUploads.Clear());
+
+        (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        Item().Query!.BesFileIdsSent.Should().Equal("new-file");
+        (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().Status.Should().Be(ChangeItemStatus.Updated);
+        Item().Query!.QuerySubmissions.Single().NewBesFileIds.Should().BeEmpty();
+    }
+
+    // Refuses the first `refusals` saves of the resubmit; before each, edit(n) is what another tab saved meanwhile (the
+    // nested save of that edit is not itself counted or refused).
+    private void LoseTheSavesToAnotherTab(int refusals, Action<int, ChangeRequestSite> edit)
+    {
+        var n = 0;
+        var nested = false;
+        _factory.FakeChangeRequests.LoseUpdateWhen = _ =>
+        {
+            if (nested)
+                return false;
+            if (++n > refusals)
+                return false;
+            nested = true;
+            var other = _factory.FakeChangeRequests.All.Single();
+            edit(n, other.Sites.Single(s => s.CaseManagementWorkItemId == _workItemId));
+            _factory.FakeChangeRequests.UpdateAsync(other, Ct).GetAwaiter().GetResult();
+            nested = false;
+            return true;
+        };
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenRecordingWhatWasSentLosesTheSaveToo_ReloadsAndRecordsIt()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { contactName = "B" }, Ct);
+        LoseTheSavesToAnotherTab(2, (n, item) => item.Answers.ContactName = n == 1 ? null : item.Answers.ContactName);
+
+        (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        Item().Query!.AnswersSent!.ContactName.Should().Be("B");
+        Item().Status.Should().Be(ChangeItemStatus.Queried);
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenRecordingWhatWasSentKeepsLosingTheSave_StillAnswers409WithoutARecord()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { contactName = "B" }, Ct);
+        LoseTheSavesToAnotherTab(100, (n, item) => item.Answers.ContactName = n == 1 ? null : item.Answers.ContactName);
+
+        (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        Item().Query!.AnswersSent.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Resubmit_WhenTheItemIsAnsweredElsewhereWhileRecordingWhatWasSent_Is409WithoutARecord()
+    {
+        await SeedQueried();
+        await _client.PatchAsJsonAsync(ItemUrl("answers"), new { contactName = "B" }, Ct);
+        LoseTheSavesToAnotherTab(2, (n, item) =>
+        {
+            if (n == 1)
+                item.Answers.ContactName = null;
+            else
+                item.Status = ChangeItemStatus.Updated;
+        });
+
+        (await _client.PostAsJsonAsync(ItemUrl("resubmit"), Declaration, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        Item().Query!.AnswersSent.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Query_AdvancesTheStatusClockSoAnOlderPushCannotCloseIt()
     {
         SeedRequest();

@@ -431,6 +431,15 @@ public class ItemQuery
     /// <summary>The item's answers when the query was raised, so a response records only what it changed.</summary>
     public ChangeRequestSiteAnswers AnswersAtQuery { get; set; } = new();
 
+    /// <summary>
+    /// What case management received when a resubmit was sent but its save was refused as a concurrent edit (the item
+    /// stays Queried): the answers as sent, and the new BES files sent. A later resubmit compares against these as well as
+    /// <see cref="AnswersAtQuery"/>, so undoing a sent answer counts as a change and is sent. Null otherwise.
+    /// </summary>
+    public ChangeRequestSiteAnswers? AnswersSent { get; set; }
+
+    public List<string> BesFileIdsSent { get; set; } = [];
+
     /// <summary>One per resubmit, oldest first.</summary>
     public List<QuerySubmission> QuerySubmissions { get; set; } = [];
 }

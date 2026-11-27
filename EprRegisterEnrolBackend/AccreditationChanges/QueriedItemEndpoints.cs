@@ -304,7 +304,7 @@ public static class QueriedItemEndpoints
         if (error is not null)
             return error;
 
-        var changed = QueriedItemRules.ChangedFields(item!.Answers, item.Query!.AnswersAtQuery);
+        var changed = QueriedItemRules.ChangedFields(item!);
         var newFiles = QueriedItemRules.NewBesFiles(item);
         var notReady = ResubmitPrecondition(item, site, changed, newFiles);
         if (notReady is not null)
@@ -342,10 +342,17 @@ public static class QueriedItemEndpoints
             NewBesFileIds = [.. newFiles.Select(f => f.FileId)],
         };
 
-        // ManagementBe now holds this response, and a replay of a resume is not applied there, so a save refused as a
-        // concurrent edit is retried on the item as it now stands, so it does not stay Queried while ManagementBe is
-        // Updated. If the reload holds an answer or BES file that the response did not carry (a second tab saved
-        // first), marking it Updated would record it as sent when case management never received it: that is a 409.
+        // ManagementBe now holds this response (it moves the item to Updated once; a replay of the resume is a no-op
+        // when identical and is applied and audited, without a transition, when it differs, and the response it applies
+        // is cumulative). So a save refused as a concurrent edit is retried on the item as it now stands, so it does not
+        // stay Queried while ManagementBe is Updated. If the reload holds an answer or BES file that the response did
+        // not carry (a second tab saved first), marking it Updated would record it as sent when case management never
+        // received it: that is a 409, and what was sent is recorded on the item (status unchanged, best effort) so the
+        // next resubmit also compares against it. That sends an answer a second tab undid (as the ORS's own value).
+        // A BES file a second tab deleted after it was sent cannot be undone in ManagementBe (it only adds files): the
+        // resubmit is allowed so the item is not stuck, but the file stays with case management.
+        var sentAnswers = QueriedItemRules.Clone(item!.Answers);
+        var sentFileIds = newFiles.ConvertAll(f => f.FileId);
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             item!.Query!.QuerySubmissions.Add(submission);
@@ -364,10 +371,49 @@ public static class QueriedItemEndpoints
             if (error is not null)
                 return error;
             if (!MatchesSent(sent, now, item!, site!))
+            {
+                await RecordSentAsync(
+                    (organisationId, applicationId, itemId),
+                    (request!, item!),
+                    (sentAnswers, sentFileIds),
+                    services
+                );
                 break;
+            }
         }
 
         return Results.Conflict(AccreditationChangeEndpoints.ConcurrentEditMessage);
+    }
+
+    /// <summary>
+    /// Records on the reloaded item what case management received, without touching its status, in the same
+    /// version-checked write as any other save; reloads and retries a refused write, and gives up quietly (the 409 is
+    /// returned either way, and the operator's next resubmit then only compares against the query's answers).
+    /// </summary>
+    private static async Task RecordSentAsync(
+        (string OrganisationId, string ApplicationId, Guid ItemId) ids,
+        (AccreditationChangeRequest Request, ChangeRequestSite Item) loaded,
+        (ChangeRequestSiteAnswers Answers, List<string> FileIds) sent,
+        AccreditationChangeEndpoints.ChangeServices services
+    )
+    {
+        var (request, item) = loaded;
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            item.Query!.AnswersSent = sent.Answers;
+            item.Query.BesFileIdsSent = sent.FileIds;
+            if (await services.Requests.UpdateAsync(request, services.CancellationToken))
+                return;
+            var (error, _, reloaded, reloadedItem, _) = await LoadQueriedAsync(
+                ids.OrganisationId,
+                ids.ApplicationId,
+                ids.ItemId,
+                services
+            );
+            if (error is not null)
+                return;
+            (request, item) = (reloaded!, reloadedItem!);
+        }
     }
 
     /// <summary>The 422 for a resubmit with nothing changed or required BES evidence missing, otherwise null.</summary>
@@ -378,7 +424,7 @@ public static class QueriedItemEndpoints
         List<BesEvidenceFileModel> newFiles
     )
     {
-        if (changed.Count == 0 && newFiles.Count == 0)
+        if (changed.Count == 0 && newFiles.Count == 0 && QueriedItemRules.SentBesFilesRemoved(item).Count == 0)
             return Results.ValidationProblem(
                 new Dictionary<string, string[]>
                 {
@@ -406,7 +452,7 @@ public static class QueriedItemEndpoints
     /// <summary>Whether the item as reloaded would send the same response as the one ManagementBe already holds.</summary>
     private static bool MatchesSent(string sent, DateTime now, ChangeRequestSite item, OverseasSiteModel site)
     {
-        var changed = QueriedItemRules.ChangedFields(item.Answers, item.Query!.AnswersAtQuery);
+        var changed = QueriedItemRules.ChangedFields(item);
         var response = BuildQueryResponse(now, item, site, changed, QueriedItemRules.NewBesFiles(item));
         return string.Equals(sent, JsonSerializer.Serialize(response), StringComparison.Ordinal);
     }
