@@ -274,7 +274,7 @@ public class DevChangeRequestSeedService(
         };
         // RA-739: a submitted add-ORS request holds what Submit stores: each site's own charge and the total.
         if (!draft && seed.ChangeType == Add)
-            request.SetCharge(ChangeRequestRules.Charge(request.Sites.Count));
+            request.SetCharge(ChangeRequestRules.Charge(ChangeRequestRules.ChargeableSites(request)));
         return request;
     }
 
