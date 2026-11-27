@@ -140,7 +140,7 @@ public record PromoteOverseasSiteRequest : IOverseasSiteRequestFields
 // RA-486: OperationCodes is required here - unlike InterimSiteModel's own default-to-empty list,
 // which exists purely because the model is also used to represent legacy/pre-RA-486 persisted
 // data that predates this field.
-public record AddInterimSiteRequest
+public record AddInterimSiteRequest : IInterimSiteFields
 {
     public required string Country { get; set; }
     public required string SiteName { get; set; }
