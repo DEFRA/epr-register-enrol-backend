@@ -999,6 +999,48 @@ public class AccreditationApiEndpointTests : IDisposable
         stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
     }
 
+    // RA-820: search takes pages of up to 500; the overseas sites list stays at 100.
+    [Theory]
+    [InlineData("", 20)]
+    [InlineData("?limit=101", 101)]
+    [InlineData("?limit=500", 500)]
+    public async Task Search_TakesALimitUpTo500_AndStillDefaultsTo20(string query, int limit)
+    {
+        await Seed();
+
+        var response = await Get($"/v1/accreditations{query}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(response)).GetProperty("limit").GetInt32().Should().Be(limit);
+    }
+
+    [Fact]
+    public async Task Search_PagesPast100_HoldEveryAccreditationOnce()
+    {
+        for (var i = 0; i < 501; i++)
+        {
+            await Seed(
+                accreditation: $"A27EX50002700{i:000}AL",
+                registration: $"R27EX50002700{i:000}AL"
+            );
+        }
+
+        var first = await Json(await Get("/v1/accreditations?limit=500"));
+        var second = await Json(await Get("/v1/accreditations?limit=500&pageNumber=2"));
+
+        first.GetProperty("totalItems").GetInt32().Should().Be(501);
+        first.GetProperty("items").GetArrayLength().Should().Be(500);
+        second.GetProperty("items").GetArrayLength().Should().Be(1);
+        first
+            .GetProperty("items")
+            .EnumerateArray()
+            .Concat(second.GetProperty("items").EnumerateArray())
+            .Select(item => item.GetProperty("accreditationNumber").GetString())
+            .Should()
+            .OnlyHaveUniqueItems()
+            .And.BeInAscendingOrder(StringComparer.Ordinal);
+    }
+
     [Fact]
     public async Task Search_ReturnsEveryFieldItReturnedBeforeAlongsideTheSites()
     {
@@ -1196,7 +1238,8 @@ public class AccreditationApiEndpointTests : IDisposable
     [InlineData("organisationNumber=-5", "invalid_organisation_number")]
     [InlineData("registrationNumber=bad%20number", "invalid_registration_number")]
     [InlineData("pageNumber=0", "invalid_paging")]
-    [InlineData("limit=101", "invalid_paging")]
+    [InlineData("limit=0", "invalid_paging")]
+    [InlineData("limit=501", "invalid_paging")]
     [InlineData("status=pending", "invalid_status")]
     [InlineData("status=Approved", "invalid_status")]
     [InlineData("status=", "invalid_status")]
