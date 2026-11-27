@@ -71,17 +71,6 @@ public sealed class UpdateOverseasSiteRulesTests
     }
 
     [Fact]
-    public void SubmissionGroups_send_adds_first()
-    {
-        var groups = ChangeRequestRules.SubmissionGroups(
-            Request(AddType, Accreditation.ApplicationId, Update(902501), Add(902504), Update(902502))
-        );
-
-        groups.Select(g => g.Key).Should().Equal(AddType, UpdateType);
-        groups[1].Select(s => s.SiteId).Should().Equal(902501, 902502);
-    }
-
-    [Fact]
     public void Rebasing_keeps_the_operators_value_and_takes_the_ORSs_for_the_rest()
     {
         var item = Update(902501);
@@ -230,6 +219,9 @@ public sealed class UpdateOverseasSiteRulesTests
         request.SetSubmissionReferences(["SUB-2026-0001", "SUB-2026-0002"]);
         request.SubmissionReference.Should().Be("SUB-2026-0001");
         request.SubmissionReferences.Should().Equal("SUB-2026-0001", "SUB-2026-0002");
+
+        request.SetSubmissionReferences(["SUB-2026-0003", "SUB-2026-0003"]);
+        request.SubmissionReferences.Should().Equal("SUB-2026-0003");
 
         request.SetSubmissionReferences([]);
         request.SubmissionReference.Should().BeNull();

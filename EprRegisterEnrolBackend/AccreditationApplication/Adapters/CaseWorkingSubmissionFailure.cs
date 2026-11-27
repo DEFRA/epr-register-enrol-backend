@@ -22,11 +22,21 @@ public static class CaseWorkingSubmissionFailure
     ];
 
     /// <summary>
+    /// Whether ManagementBe proves it holds nothing from any attempt under this request id: a 400, which it returns
+    /// only after its replay check (a held submission would have been replayed instead). A 401, 403 or 404 comes from
+    /// auth or routing before that check, and a 409 means it does hold something under the id, so neither proves
+    /// anything about an earlier attempt. A defect or an unconfigured adapter sent nothing.
+    /// </summary>
+    public static bool ProvesNothingHeld(Exception ex) =>
+        ex is HttpRequestException { StatusCode: HttpStatusCode.BadRequest };
+
+    /// <summary>
     /// Whether ManagementBe may hold the submission that failed with <paramref name="ex"/>. Only a failure raised while
     /// sending or after can follow a save: any other 4xx, a timeout, a 5xx, an unreadable 2xx or the caller going
     /// away mid-send. Not configured means nothing was sent, the statuses above mean ManagementBe rejected the
     /// submission before saving it, and any other exception is a defect raised before anything was sent.
     /// </summary>
+
     public static bool MayHold(Exception ex) =>
         ex switch
         {
@@ -38,11 +48,8 @@ public static class CaseWorkingSubmissionFailure
 
     /// <summary>
     /// Whether <paramref name="ex"/> is Case Management's own failure, answered as a 503, rather than a defect or the
-    /// caller going away, which are rethrown. A partly held submission is judged by the failure that stopped it.
+    /// caller going away, which are rethrown.
     /// </summary>
     public static bool IsCaseManagementFailure(Exception ex) =>
-        (ex is ChangeRequestPartlySubmittedException { InnerException: { } inner } ? inner : ex)
-            is HttpRequestException
-                or CaseWorkingApiTimeoutException
-                or CaseWorkingNotConfiguredException;
+        ex is HttpRequestException or CaseWorkingApiTimeoutException or CaseWorkingNotConfiguredException;
 }

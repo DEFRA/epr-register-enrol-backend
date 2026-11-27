@@ -99,8 +99,8 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         return Task.FromResult(new CaseWorkingSubmissionResult(applicationReference, workItemId));
     }
 
-    // RA-739: as ManagementBe, one work item per site, each with its own in-year change reference, and a
-    // submission reference shared by the sites of each change type.
+    // RA-739: as ManagementBe, one work item per site, each with its own in-year change reference, and (RA-767) one
+    // submission reference shared by every site of the request, whatever its change type.
     public Task<ChangeRequestSubmissionResult> SubmitChangeRequestAsync(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
@@ -111,13 +111,10 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         var codes = changeRequest.Sites.Select(site => ChangeCodeFor(site.ChangeType)).ToList();
         RequireFourDigitYear(changeRequest);
         var year = changeRequest.Year;
-        // As ManagementBe, one submission per change type, each with its own reference (see SubmissionGroups).
-        var submissionReferences = ChangeRequestRules
-            .SubmissionGroups(changeRequest)
-            .Select(_ =>
-                FormatSubmissionReference(year, _submissionSequences.AddOrUpdate(year, 1, (_, current) => current + 1))
-            )
-            .ToList();
+        var submissionReference = FormatSubmissionReference(
+            year,
+            _submissionSequences.AddOrUpdate(year, 1, (_, current) => current + 1)
+        );
         var sites = changeRequest
             .Sites.Select((site, index) => new SiteWorkItemResult(
                 site.SiteId,
@@ -133,15 +130,15 @@ public class StubCaseWorkingApiAdapter(ILogger<StubCaseWorkingApiAdapter> logger
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
-                "StubCaseWorkingApiAdapter.SubmitChangeRequestAsync called for requestId={RequestId} submissionReferences={SubmissionReferences} references={References} org={OrganisationId}",
+                "StubCaseWorkingApiAdapter.SubmitChangeRequestAsync called for requestId={RequestId} submissionReference={SubmissionReference} references={References} org={OrganisationId}",
                 changeRequest.RequestId,
-                string.Join(',', submissionReferences),
+                submissionReference,
                 string.Join(',', sites.Select(s => s.CaseReference)),
                 changeRequest.OrganisationId
             );
         }
 
-        return Task.FromResult(new ChangeRequestSubmissionResult(sites, submissionReferences));
+        return Task.FromResult(new ChangeRequestSubmissionResult(sites, [submissionReference]));
     }
 
     public Task<NotificationStatusResult> GetNotificationStatusAsync(

@@ -194,6 +194,21 @@ public static class UpdateOverseasSiteRules
     private static string? Follow(string? mine, string? was, string? now) => mine == was ? now : mine;
 
     /// <summary>
+    /// RA-782: the ORS's details once an approved update is granted on them: each detail the update changed takes its
+    /// proposed value, and every other keeps the ORS's own, so a change made to it since the update was submitted
+    /// is not undone.
+    /// </summary>
+    public static OverseasSiteDetails GrantedDetails(OverseasSiteDetails current, ChangeRequestSite item)
+    {
+        var previous = item.Previous ?? current;
+        var proposed = item.Proposed ?? previous;
+        return OverseasSiteDetails.Fields.Aggregate(
+            current,
+            (details, field) => field.Set(details, Follow(field.Get(proposed), field.Get(previous), field.Get(details)))
+        );
+    }
+
+    /// <summary>
     /// RA-682 AC07: takes an update's previous details from the ORS as it stands at submit, so the history and Case
     /// Management see the values the change replaces. A detail the operator didn't change follows the ORS; one they did
     /// keeps their value. A change to an interim site is rebased the same way, and dropped if it no longer changes

@@ -2362,12 +2362,14 @@ public class HttpCaseWorkingApiAdapterTests
         payload["operatorRequestId"]!.GetValue<string>().Should().Be(request.RequestId);
         payload["accreditationReference"]!.GetValue<string>().Should().Be("A26EX0500190001PL");
         payload["chargePence"]!.GetValue<int>().Should().Be(32800);
-        payload["changeType"]!.GetValue<string>().Should().Be("add-overseas-site");
+        payload.AsObject().ContainsKey("changeType").Should().BeFalse();
+        payload.AsObject().ContainsKey("submissionSize").Should().BeFalse();
         payload["accreditationYear"]!.GetValue<int>().Should().Be(2026);
         payload["wasteProcessingType"]!.GetValue<string>().Should().Be("exporter");
         payload["operatorOrgNumber"]!.GetValue<int>().Should().Be(50019);
         var site = payload["sites"]![0]!;
         site["orsId"]!.GetValue<string>().Should().Be("007");
+        site["typeId"]!.GetValue<string>().Should().Be("add-overseas-site");
         site["country"]!.GetValue<string>().Should().Be("Turkey");
         site["coordinates"]!.GetValue<string>().Should().Be("38.4237, 27.1428");
         site["operationCodes"]![0]!.GetValue<string>().Should().Be("R3");

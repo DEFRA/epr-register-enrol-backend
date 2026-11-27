@@ -4,6 +4,7 @@ using EprRegisterEnrolBackend.DomainModel.Entities;
 using EprRegisterEnrolBackend.DomainModel.Migration;
 using EprRegisterEnrolBackend.DomainModel.Versioning;
 using EprRegisterEnrolBackend.Utils;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolBackend.AccreditationChanges;
@@ -28,22 +29,34 @@ internal static class ChangeRequestGrant
 {
     /// <summary>
     /// Applies the grant to everything but the item, which the caller writes last. Returns a 409 before any write
-    /// when there is nothing to grant (not an add-ORS item, no site, or a site already accredited another way): a
-    /// retry would fail the same way.
+    /// when there is nothing to grant (not an add-ORS or update-ORS item, no site, or a site already accredited another
+    /// way): a retry would fail the same way. RA-782: an update-ORS item is granted by
+    /// <see cref="ChangeRequestUpdateGrant"/>.
     /// </summary>
     /// <exception cref="ChangeRequestWriteConflictException">The legacy application changed since it was read.</exception>
     /// <exception cref="InvalidOperationException">The domain model lacks the application, Accreditation or ORS.</exception>
     public static async Task<IResult?> ApplyAsync(
         AccreditationChangeRequest changeRequest,
         ChangeRequestSite item,
-        DateTime accreditedFrom,
+        ChangeRequestDecision decision,
         IAccreditationApplicationPersistence applications,
         IServiceProvider services,
         IClientSessionHandle? session,
         CancellationToken cancellationToken
     )
     {
-        // Only an add-ORS item is granted by accrediting its site; any other change type has no grant here yet.
+        if (item.IsUpdate)
+            return await ChangeRequestUpdateGrant.ApplyAsync(
+                changeRequest,
+                item,
+                decision.DecidedAt,
+                applications,
+                services,
+                session,
+                cancellationToken
+            );
+
+        // An add-ORS item is granted by accrediting its site; any other change type has no grant here.
         if (item.ChangeType != AccreditationChangeRequest.AddOverseasSiteChangeType)
             return Results.Conflict($"A '{item.ChangeType}' change request item cannot be granted.");
 
@@ -61,6 +74,7 @@ internal static class ChangeRequestGrant
         if (application is null || site is null)
             return Results.Conflict("The overseas site is no longer on the accreditation, so it cannot be granted.");
 
+        var accreditedFrom = decision.ValidFrom;
         // A selected site is this grant's own earlier write only when it carries this grant's date; selected any other
         // way, it is already accredited and granting it would leave its date, answers and BES evidence half-applied.
         var validFrom = SiteApprovalDate.Format(accreditedFrom);
@@ -125,7 +139,7 @@ internal static class ChangeRequestGrant
     /// 3bb.38: a grant cannot refuse, so the request's own upload held the files to the application's duplicate
     /// filename rule and per-site cap across these and the site's (<c>ChangeRequestRules.GrantedBesEvidence</c>).
     /// </summary>
-    private static void AddBesEvidence(OverseasSiteModel site, BesEvidenceModel? evidence)
+    internal static void AddBesEvidence(OverseasSiteModel site, BesEvidenceModel? evidence)
     {
         if (evidence is not { BesEvidenceUploads.Count: > 0 })
             return;
@@ -180,24 +194,7 @@ internal static class ChangeRequestGrant
     )
     {
         var applicationId = application.Id!.Value;
-        // The unit of work migrated the application's group before this ran, so each of these exists unless the
-        // migration recorded the group as a conflict; then nothing is granted, and the push fails until it is fixed.
-        var entity =
-            await stores.Applications.Versions.FindCurrentAsync(
-                Builders<ApplicationEntity>.Filter.Eq(a => a.EntityId, applicationId),
-                session,
-                cancellationToken
-            ) ?? throw new InvalidOperationException($"Application {applicationId} is not in the domain model.");
-        var registrationId =
-            entity.RegistrationId
-            ?? throw new InvalidOperationException($"Application {applicationId} has no Registration.");
-        var ors =
-            await stores.OverseasSites.Versions.FindCurrentAsync(
-                Builders<OverseasSiteEntity>.Filter.Eq(s => s.RegistrationId, registrationId)
-                    & Builders<OverseasSiteEntity>.Filter.Eq(s => s.OrsId, site.OrsId),
-                session,
-                cancellationToken
-            ) ?? throw new InvalidOperationException($"Registration {registrationId} has no ORS {site.OrsId}.");
+        var (entity, ors) = await FindInModelAsync(stores, applicationId, site.OrsId, session, cancellationToken);
         var accreditation =
             await FindAccreditationAsync(stores, entity, session, cancellationToken)
             ?? throw new InvalidOperationException($"Application {applicationId} has no Accreditation.");
@@ -230,8 +227,40 @@ internal static class ChangeRequestGrant
         }
     }
 
+    /// <summary>
+    /// The application and the ORS in the domain model. The unit of work migrated the application's group before the
+    /// grant ran, so each exists unless the migration recorded the group as a conflict; then nothing is granted, and
+    /// the push fails until it is fixed.
+    /// </summary>
+    internal static async Task<(ApplicationEntity Application, OverseasSiteEntity Ors)> FindInModelAsync(
+        ApplicationGroupStores stores,
+        ObjectId applicationId,
+        string? orsId,
+        IClientSessionHandle session,
+        CancellationToken cancellationToken
+    )
+    {
+        var entity =
+            await stores.Applications.Versions.FindCurrentAsync(
+                Builders<ApplicationEntity>.Filter.Eq(a => a.EntityId, applicationId),
+                session,
+                cancellationToken
+            ) ?? throw new InvalidOperationException($"Application {applicationId} is not in the domain model.");
+        var registrationId =
+            entity.RegistrationId
+            ?? throw new InvalidOperationException($"Application {applicationId} has no Registration.");
+        var ors =
+            await stores.OverseasSites.Versions.FindCurrentAsync(
+                Builders<OverseasSiteEntity>.Filter.Eq(s => s.RegistrationId, registrationId)
+                    & Builders<OverseasSiteEntity>.Filter.Eq(s => s.OrsId, orsId),
+                session,
+                cancellationToken
+            ) ?? throw new InvalidOperationException($"Registration {registrationId} has no ORS {orsId}.");
+        return (entity, ors);
+    }
+
     // The Accreditation the application points at, else the one it approved (unique on applicationId).
-    private static async Task<AccreditationEntity?> FindAccreditationAsync(
+    internal static async Task<AccreditationEntity?> FindAccreditationAsync(
         ApplicationGroupStores stores,
         ApplicationEntity entity,
         IClientSessionHandle session,
@@ -248,6 +277,12 @@ internal static class ChangeRequestGrant
             cancellationToken
         );
 }
+
+/// <summary>
+/// RA-782: what Case Management decided for an item: the date the granted change takes effect, and the push's
+/// <c>occurredAt</c>, which stamps what the grant writes.
+/// </summary>
+internal sealed record ChangeRequestDecision(DateTime ValidFrom, DateTime DecidedAt);
 
 /// <summary>
 /// RA-495: a change request or its accreditation application changed between read and write. In a transaction it

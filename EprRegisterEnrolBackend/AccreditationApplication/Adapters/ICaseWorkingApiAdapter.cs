@@ -10,8 +10,8 @@ public interface ICaseWorkingApiAdapter
         CancellationToken cancellationToken = default
     );
 
-    // RA-492, RA-739: sends a submitted add-overseas-site change request to ManagementBe, which
-    // creates one work item per site. Returns the submission reference they share and each site's
+    // RA-492, RA-739: sends a submitted change request to ManagementBe as one submission (RA-767), which
+    // creates one work item per site, all or none. Returns the submission reference they share and each site's
     // own work item id and in-year change reference (format: see "Application reference" in
     // ManagementBe's docs/work-items.md). Throws HttpRequestException unless every submitted site
     // came back with a reference; the caller reopens the request on any failure.
@@ -77,8 +77,8 @@ public sealed record CaseWorkingSubmissionResult(string CaseReference, Guid? Wor
 
 // RA-739: ManagementBe's answer to a change request: the submission reference shared by its work
 // items, and one entry per submitted site, in the request's site order.
-// RA-682: a request holding adds and updates is sent as one submission per change type, so it has a submission
-// reference for each, in the order they were sent; SubmissionReference is the first, or null if there are none.
+// RA-767: a request is one submission, so SubmissionReferences holds its one reference. SubmissionReference is
+// the first, or null if there are none.
 public sealed record ChangeRequestSubmissionResult(
     IReadOnlyList<SiteWorkItemResult> Sites,
     IReadOnlyList<string> SubmissionReferences

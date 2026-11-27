@@ -1764,6 +1764,7 @@ public sealed class AccreditationChangeCaseManagementHttpTests : IDisposable
         var expected = JsonNode.Parse(
             """
             {
+              "typeId": "add-overseas-site",
               "siteId": 901910,
               "orsId": "005",
               "siteName": "Lyon Plastiques SA",

@@ -80,9 +80,9 @@ public class AccreditationChangeRequest
     public string? SubmissionReference { get; set; }
 
     /// <summary>
-    /// RA-682: every submission reference, one per change type: a request holding adds and updates is sent to Case
-    /// Management as one submission per type. <see cref="SubmissionReference"/> is the first of them. Both are stored
-    /// (a request submitted before RA-682 has only the one), so they are set together by
+    /// RA-682: the request's submission references, each once. Since RA-767 a request is sent to Case Management as
+    /// one submission, so this holds one; it stays a list for requests stored before then. <see cref="SubmissionReference"/> is the first of them. Both
+    /// are stored (a request submitted before RA-682 has only the one), so they are set together by
     /// <see cref="SetSubmissionReferences"/>.
     /// </summary>
     public List<string> SubmissionReferences { get; set; } = [];
@@ -90,7 +90,7 @@ public class AccreditationChangeRequest
     /// <summary>Sets the submission references and, from them, <see cref="SubmissionReference"/>: the first, or null.</summary>
     public void SetSubmissionReferences(IReadOnlyList<string> references)
     {
-        SubmissionReferences = [.. references];
+        SubmissionReferences = [.. references.Distinct()];
         SubmissionReference = references.Count > 0 ? references[0] : null;
     }
 
@@ -181,8 +181,7 @@ public abstract class ChangeRequestItem
     public DateTime? CaseManagementStatusUpdatedAt { get; set; }
 
     /// <summary>
-    /// RA-682: set when a submit failed, to whether Case Management may hold this item's submission. A request holding
-    /// adds and updates is sent as one submission per type, so one group can be held while another was refused.
+    /// RA-682: set when a submit failed, to whether Case Management may hold this item's submission.
     /// </summary>
     public bool? CaseManagementMayHold { get; set; }
 }
@@ -317,7 +316,10 @@ public class InterimSiteChange
     [BsonSerializer(typeof(JsonNamedEnumSerializer<InterimSiteChangeAction>))]
     public required InterimSiteChangeAction Action { get; set; }
 
-    /// <summary>The existing interim site changed or removed. Null for an add, which has no id until it is granted.</summary>
+    /// <summary>
+    /// The existing interim site changed or removed. Null for an add until it is granted; RA-782: the grant then records
+    /// the id it allocated, so the grant run again finds the interim site rather than adding it twice.
+    /// </summary>
     public int? InterimSiteId { get; set; }
 
     /// <summary>The interim site as it was, for a change or remove.</summary>
@@ -328,7 +330,7 @@ public class InterimSiteChange
 }
 
 /// <summary>RA-682: an interim site's details, as <see cref="InterimSiteModel"/> holds them, without its ids.</summary>
-public sealed record InterimSiteDetails
+public sealed record InterimSiteDetails : IInterimSiteFields
 {
     public required string Country { get; init; }
     public required string SiteName { get; init; }
