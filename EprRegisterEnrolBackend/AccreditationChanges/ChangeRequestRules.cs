@@ -1,12 +1,12 @@
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
-using FluentValidation.Results;
 
 namespace EprRegisterEnrolBackend.AccreditationChanges;
 
 /// <summary>
 /// RA-492 rules for an add-overseas-site change request: which ORS fields are locked, what is
-/// still missing (AC02), whether BES evidence is needed, and the charge (AC03/AC04).
+/// still missing (AC02), whether BES evidence is needed, and the charge (AC03/AC04). RA-682: the rules every item
+/// shares (charging, submission grouping, the view); an update item's own are in <see cref="UpdateOverseasSiteRules"/>.
 /// </summary>
 public static class ChangeRequestRules
 {
@@ -32,7 +32,7 @@ public static class ChangeRequestRules
             [BesEvidence] = "Upload evidence of broadly equivalent standards for the overseas reprocessing site.",
             [Changes] = "Change at least one detail of the overseas reprocessing site, or remove it from the request.",
             [Site] =
-                "This overseas reprocessing site is no longer accredited, so its details can't be changed. "
+                "This overseas reprocessing site is no longer approved, so its details can't be changed. "
                 + "Remove it from the request.",
         };
 
@@ -149,31 +149,6 @@ public static class ChangeRequestRules
     }
 
     /// <summary>
-    /// RA-682: an ORS's editable details, as an update item snapshots them. Every value is the ORS's own, so an
-    /// unchanged update's proposed details equal these.
-    /// </summary>
-    public static OverseasSiteDetails DetailsOf(OverseasSiteModel site) =>
-        new()
-        {
-            SiteName = site.SiteName,
-            AddressLine1 = site.AddressLine1,
-            AddressLine2 = site.AddressLine2,
-            TownOrCity = site.TownOrCity,
-            ContactName = site.ContactName,
-            ContactEmail = site.ContactEmail,
-            ContactPhone = site.ContactPhone,
-            RepatriatedLoads = site.RepatriatedLoads,
-        };
-
-    /// <summary>
-    /// RA-682: whether an update item changes anything: its ORS's details, an interim site, or new BES evidence.
-    /// </summary>
-    public static bool HasChanges(ChangeRequestSite requestSite) =>
-        requestSite.InterimSiteChanges.Count > 0
-        || requestSite.Proposed != requestSite.Previous
-        || requestSite.BesEvidence is { BesEvidenceUploads.Count: > 0 };
-
-    /// <summary>
     /// RA-682 AC05: whether an item is charged. Only adding an ORS is; the charge, the payment reference and what Case
     /// Management is sent all follow this one rule.
     /// </summary>
@@ -213,221 +188,10 @@ public static class ChangeRequestRules
                 .ThenBy(g => g.Key, StringComparer.Ordinal),
         ];
 
-    // RA-682 AC02: a locked value may be sent back as the form shows it, but not changed. A blank one matches a stored
-    // value that is blank or missing, and both sides are trimmed: the form can't tell them apart.
-    private static bool SameText(string? sent, string? stored) =>
-        (sent?.Trim() ?? "") == (stored?.Trim() ?? "");
-
-    private static bool SameCodes(IEnumerable<string>? sent, IEnumerable<string>? stored) =>
-        (sent ?? []).ToHashSet(StringComparer.Ordinal).SetEquals(stored ?? []);
-
-    private static readonly string[] s_lockedOrsFields = [Country, Coordinates, OperationCodes, ConditionsOfExport];
-
-    private static readonly string[] s_lockedInterimFields =
-    [
-        nameof(AddInterimSiteRequest.Country),
-        nameof(AddInterimSiteRequest.OperationCodes),
-    ];
-
-    private const string LockedOrsFieldMessage = "can't be changed for an accredited overseas site.";
-
-    /// <summary>
-    /// RA-682 AC02: validation errors with those on an update's locked ORS fields left out. The form echoes the locked
-    /// values back from read-only inputs, blank when the ORS has none, so they are checked against the ORS instead
-    /// (<see cref="ChangedLockedOrsFields"/>).
-    /// </summary>
-    public static Dictionary<string, string[]> WithoutLockedOrsFieldErrors(ValidationResult validation) =>
-        WithoutErrorsOn(validation, s_lockedOrsFields);
-
-    /// <summary>
-    /// RA-682 AC04: validation errors with those on a changed interim site's country and recycling operations left
-    /// out. They stay as they are (<see cref="ChangedLockedInterimFields"/>), so the create rules don't apply: an
-    /// interim site from before RA-486 has no recycling operations, which the create rules would refuse.
-    /// </summary>
-    public static Dictionary<string, string[]> WithoutLockedInterimFieldErrors(ValidationResult validation) =>
-        WithoutErrorsOn(validation, s_lockedInterimFields);
-
-    // A list's rules report each element as "Field[0]", so a field's errors are matched on its name or that prefix.
-    private static Dictionary<string, string[]> WithoutErrorsOn(ValidationResult validation, string[] fields) =>
-        validation
-            .Errors.Where(e =>
-                !fields.Any(f =>
-                    e.PropertyName.Equals(f, StringComparison.OrdinalIgnoreCase)
-                    || e.PropertyName.StartsWith(f + "[", StringComparison.OrdinalIgnoreCase)
-                )
-            )
-            .GroupBy(e => e.PropertyName)
-            .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
-
-    /// <summary>
-    /// RA-682 AC02: the locked fields an update's PATCH would change on the accredited ORS, as validation errors.
-    /// Basel codes and BES aren't in the body at all, so they can't be changed either.
-    /// </summary>
-    public static Dictionary<string, string[]> ChangedLockedOrsFields(
-        OverseasSiteModel site,
-        PatchChangeRequestSiteRequest body
-    )
-    {
-        var changed = new Dictionary<string, string[]>();
-        void Locked(string field, bool isChanged)
-        {
-            if (isChanged)
-                changed[field] = [$"{field} {LockedOrsFieldMessage}"];
-        }
-        Locked(Country, body.Country is not null && !SameText(body.Country, site.Country));
-        Locked(Coordinates, body.Coordinates is not null && !SameText(body.Coordinates, site.Coordinates));
-        Locked(OperationCodes, body.OperationCodes is not null && !SameCodes(body.OperationCodes, site.OperationCodes));
-        Locked(
-            ConditionsOfExport,
-            body.ConditionsOfExport is { } conditions && conditions != site.ConditionsOfExport
-        );
-        return changed;
-    }
-
-    /// <summary>
-    /// RA-682: an update's proposed details with a PATCH's details applied. Absent means unchanged; an optional line
-    /// (address line 2, phone) is cleared with a blank value.
-    /// </summary>
-    public static OverseasSiteDetails ApplyDetails(OverseasSiteDetails proposed, PatchChangeRequestSiteRequest body) =>
-        proposed with
-        {
-            SiteName = body.SiteName?.Trim() ?? proposed.SiteName,
-            AddressLine1 = body.AddressLine1?.Trim() ?? proposed.AddressLine1,
-            AddressLine2 = body.AddressLine2 is { } line2 ? NullIfBlank(line2) : proposed.AddressLine2,
-            TownOrCity = body.TownOrCity?.Trim() ?? proposed.TownOrCity,
-            ContactName = body.ContactName?.Trim() ?? proposed.ContactName,
-            ContactEmail = body.ContactEmail?.Trim() ?? proposed.ContactEmail,
-            ContactPhone = body.ContactPhone is { } phone ? NullIfBlank(phone) : proposed.ContactPhone,
-            RepatriatedLoads = body.RepatriatedLoads?.Trim() ?? proposed.RepatriatedLoads,
-        };
-
-    private static string? NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    /// <summary>
-    /// RA-682: the locked fields a change to an interim site would change: its country and recycling operations stay
-    /// as they are, as the ORS's own do (AC02).
-    /// </summary>
-    public static Dictionary<string, string[]> ChangedLockedInterimFields(
-        InterimSiteModel interim,
-        AddInterimSiteRequest body
-    )
-    {
-        var changed = new Dictionary<string, string[]>();
-        if (!SameText(body.Country, interim.Country))
-            changed[nameof(AddInterimSiteRequest.Country)] = ["An interim site's country can't be changed."];
-        if (!SameCodes(body.OperationCodes, interim.OperationCodes))
-            changed[nameof(AddInterimSiteRequest.OperationCodes)] =
-            [
-                "An interim site's recycling operations can't be changed.",
-            ];
-        return changed;
-    }
-
-    /// <summary>
-    /// RA-682 AC04: the update's change to one existing interim site. There is at most one per interim site: a change
-    /// replaces a removal, and a change back to what the site holds drops it. The interim site keeps its own country
-    /// and recycling operations, whatever the form sent back for them.
-    /// </summary>
-    public static void SetInterimChange(ChangeRequestSite item, InterimSiteModel interim, InterimSiteDetails changed)
-    {
-        item.InterimSiteChanges.RemoveAll(c => c.InterimSiteId == interim.SiteId);
-        var previous = InterimSiteDetails.From(interim);
-        var proposed = changed with { Country = previous.Country, OperationCodes = previous.OperationCodes };
-        if (proposed != previous)
-            item.InterimSiteChanges.Add(
-                new InterimSiteChange
-                {
-                    Action = InterimSiteChange.Change,
-                    InterimSiteId = interim.SiteId,
-                    Previous = previous,
-                    Proposed = proposed,
-                }
-            );
-    }
-
-    /// <summary>RA-682 AC04: the update removes one existing interim site, in place of any change to it.</summary>
-    public static void SetInterimRemoval(ChangeRequestSite item, InterimSiteModel interim)
-    {
-        item.InterimSiteChanges.RemoveAll(c => c.InterimSiteId == interim.SiteId);
-        item.InterimSiteChanges.Add(
-            new InterimSiteChange
-            {
-                Action = InterimSiteChange.Remove,
-                InterimSiteId = interim.SiteId,
-                Previous = InterimSiteDetails.From(interim),
-            }
-        );
-    }
-
-    /// <summary>The ORS's interim site by id, active, whether it is in the list or only in the pre-RA-603 mirror.</summary>
-    public static InterimSiteModel? ActiveInterimSite(OverseasSiteModel site, int interimSiteId) =>
-        InterimSiteSync.Active(site).FirstOrDefault(i => i.SiteId == interimSiteId);
-
-    /// <summary>
-    /// RA-682 AC07: takes an update's previous details from the ORS as it stands at submit, so the history and Case
-    /// Management see the values the change replaces. A detail the operator didn't change follows the ORS; one they did
-    /// keeps their value. A change to an interim site is rebased the same way, and dropped if it no longer changes
-    /// anything. Only for an item Case Management can't already hold: a held one would be replayed as first sent.
-    /// </summary>
-    public static void RebaseOnCurrent(ChangeRequestSite item, OverseasSiteModel site)
-    {
-        var current = DetailsOf(site);
-        var before = item.Previous ?? current;
-        var proposed = item.Proposed ?? before;
-        static string? Follow(string? mine, string? was, string? now) => mine == was ? now : mine;
-        item.Proposed = proposed with
-        {
-            SiteName = Follow(proposed.SiteName, before.SiteName, current.SiteName),
-            AddressLine1 = Follow(proposed.AddressLine1, before.AddressLine1, current.AddressLine1),
-            AddressLine2 = Follow(proposed.AddressLine2, before.AddressLine2, current.AddressLine2),
-            TownOrCity = Follow(proposed.TownOrCity, before.TownOrCity, current.TownOrCity),
-            ContactName = Follow(proposed.ContactName, before.ContactName, current.ContactName),
-            ContactEmail = Follow(proposed.ContactEmail, before.ContactEmail, current.ContactEmail),
-            ContactPhone = Follow(proposed.ContactPhone, before.ContactPhone, current.ContactPhone),
-            RepatriatedLoads = Follow(proposed.RepatriatedLoads, before.RepatriatedLoads, current.RepatriatedLoads),
-        };
-        item.Previous = current;
-        foreach (var change in item.InterimSiteChanges.Where(c => c.InterimSiteId is not null).ToList())
-        {
-            if (ActiveInterimSite(site, change.InterimSiteId!.Value) is not { } interim)
-                continue;
-            var was = change.Previous;
-            var now = InterimSiteDetails.From(interim);
-            change.Previous = now;
-            if (change.Action != InterimSiteChange.Change || was is null || change.Proposed is not { } mine)
-                continue;
-            change.Proposed = mine with
-            {
-                SiteName = Follow(mine.SiteName, was.SiteName, now.SiteName)!,
-                AddressLine1 = Follow(mine.AddressLine1, was.AddressLine1, now.AddressLine1)!,
-                AddressLine2 = Follow(mine.AddressLine2, was.AddressLine2, now.AddressLine2),
-                TownOrCity = Follow(mine.TownOrCity, was.TownOrCity, now.TownOrCity)!,
-                StateOrRegion = Follow(mine.StateOrRegion, was.StateOrRegion, now.StateOrRegion),
-                Postcode = Follow(mine.Postcode, was.Postcode, now.Postcode),
-                ContactName = Follow(mine.ContactName, was.ContactName, now.ContactName)!,
-                ContactEmail = Follow(mine.ContactEmail, was.ContactEmail, now.ContactEmail)!,
-                ContactPhone = Follow(mine.ContactPhone, was.ContactPhone, now.ContactPhone)!,
-                Country = now.Country,
-                OperationCodes = now.OperationCodes,
-            };
-            if (change.Proposed == now)
-                item.InterimSiteChanges.Remove(change);
-        }
-    }
-
     public static List<string> MissingFields(OverseasSiteModel? site, ChangeRequestSite requestSite)
     {
-        // RA-682: an update's details are validated as they are patched and its locked fields can't change, so it can
-        // only be missing a change, its ORS, if that is no longer accredited, or a clean scan of new BES evidence.
         if (requestSite.IsUpdate)
-        {
-            if (site is null || AccreditationStatus(site) != SiteAccreditationStatus.Accredited)
-                return [Site];
-            if (!HasChanges(requestSite))
-                return [Changes];
-            var uploadedEvidence = requestSite.BesEvidence is { BesEvidenceUploads.Count: > 0 };
-            return uploadedEvidence && !HasCleanBesEvidence(requestSite.BesEvidence) ? [BesEvidence] : [];
-        }
+            return UpdateOverseasSiteRules.MissingFields(site, requestSite);
 
         var effective = Effective(site, requestSite.Answers);
         var missing = new List<string>();

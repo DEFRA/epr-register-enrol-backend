@@ -11,25 +11,19 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Validators;
 public abstract class OverseasSiteRequestValidatorBase<T> : AbstractValidator<T>
     where T : IOverseasSiteRequestFields
 {
-    private static readonly System.Text.RegularExpressions.Regex EmailRegex = OverseasSiteEmail.Pattern;
-
     protected OverseasSiteRequestValidatorBase()
     {
-        RuleFor(r => r.SiteName).NotEmpty().MaximumLength(200);
-        RuleFor(r => r.AddressLine1).NotEmpty().MaximumLength(200);
-        RuleFor(r => r.AddressLine2).MaximumLength(200);
-        RuleFor(r => r.TownOrCity).NotEmpty().MaximumLength(100);
-        RuleFor(r => r.Country).NotEmpty().MaximumLength(100);
+        RuleFor(r => r.SiteName).OverseasSiteName();
+        RuleFor(r => r.AddressLine1).OverseasSiteAddressLine1();
+        RuleFor(r => r.AddressLine2).OverseasSiteAddressLine2();
+        RuleFor(r => r.TownOrCity).OverseasSiteTownOrCity();
+        RuleFor(r => r.Country).OverseasSiteCountry();
         RuleFor(r => r.Coordinates)
             .ValidCoordinates()
             .When(r => !string.IsNullOrWhiteSpace(r.Coordinates));
-        RuleFor(r => r.ContactName).NotEmpty().MaximumLength(200);
-        RuleFor(r => r.ContactEmail)
-            .NotEmpty()
-            .MaximumLength(254)
-            .Matches(EmailRegex)
-            .WithMessage("ContactEmail must be a valid email address.");
-        RuleFor(r => r.ContactPhone).MaximumLength(30);
+        RuleFor(r => r.ContactName).OverseasSiteContactName();
+        RuleFor(r => r.ContactEmail).OverseasSiteContactEmail();
+        RuleFor(r => r.ContactPhone).OverseasSiteContactPhone();
         RuleFor(r => r.OperationCodes).NotEmpty().WithMessage("OperationCodes must not be empty.");
         RuleForEach(r => r.OperationCodes)
             .Must(c => RecyclingOperationCodes.AllCodes.Contains(c))
@@ -59,6 +53,6 @@ public abstract class OverseasSiteRequestValidatorBase<T> : AbstractValidator<T>
             .Must(r => !BaselOecdCodes.HasDuplicateCode(r.Code1, r.Code2, r.Code3))
             .WithMessage("Code1, Code2 and Code3 must not contain duplicate codes.")
             .WithName("Code2");
-        RuleFor(r => r.RepatriatedLoads).NotEmpty().MaximumLength(5000);
+        RuleFor(r => r.RepatriatedLoads).OverseasSiteRepatriatedLoads();
     }
 }

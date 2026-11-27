@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using MongoDB.Bson;
+using EprRegisterEnrolBackend.Utils.Mongo;
 using MongoDB.Bson.Serialization.Attributes;
 
 namespace EprRegisterEnrolBackend.AccreditationChanges;
@@ -80,9 +81,18 @@ public class AccreditationChangeRequest
 
     /// <summary>
     /// RA-682: every submission reference, one per change type: a request holding adds and updates is sent to Case
-    /// Management as one submission per type. <see cref="SubmissionReference"/> is the first of them.
+    /// Management as one submission per type. <see cref="SubmissionReference"/> is the first of them. Both are stored
+    /// (a request submitted before RA-682 has only the one), so they are set together by
+    /// <see cref="SetSubmissionReferences"/>.
     /// </summary>
     public List<string> SubmissionReferences { get; set; } = [];
+
+    /// <summary>Sets the submission references and, from them, <see cref="SubmissionReference"/>: the first, or null.</summary>
+    public void SetSubmissionReferences(IReadOnlyList<string> references)
+    {
+        SubmissionReferences = [.. references];
+        SubmissionReference = references.Count > 0 ? references[0] : null;
+    }
 
     /// <summary>
     /// RA-739: set when a submit was sent to Case Management but the request was reopened because no confirmed reply
@@ -229,7 +239,7 @@ public class ChangeRequestSite : ChangeRequestItem
 /// codes, conditions of export and BES are locked (AC02), so they are not here. The ORS holds no state or
 /// postcode, so neither is here either.
 /// </summary>
-public sealed record OverseasSiteDetails
+public sealed record OverseasSiteDetails : IOverseasSiteDetailsFields
 {
     public string? SiteName { get; init; }
     public string? AddressLine1 { get; init; }
@@ -239,20 +249,73 @@ public sealed record OverseasSiteDetails
     public string? ContactEmail { get; init; }
     public string? ContactPhone { get; init; }
     public string? RepatriatedLoads { get; init; }
+
+    /// <summary>The details as an ORS, a PATCH body or another set of details holds them.</summary>
+    public static OverseasSiteDetails From(IOverseasSiteDetailsFields fields) =>
+        new()
+        {
+            SiteName = fields.SiteName,
+            AddressLine1 = fields.AddressLine1,
+            AddressLine2 = fields.AddressLine2,
+            TownOrCity = fields.TownOrCity,
+            ContactName = fields.ContactName,
+            ContactEmail = fields.ContactEmail,
+            ContactPhone = fields.ContactPhone,
+            RepatriatedLoads = fields.RepatriatedLoads,
+        };
+
+    /// <summary>
+    /// Each detail with how to read and set it, so the rules that work detail by detail (applying a PATCH, rebasing on
+    /// the ORS) don't each list them. An optional detail (address line 2, phone) is cleared with a blank value.
+    /// </summary>
+    internal static IReadOnlyList<DetailField> Fields { get; } =
+    [
+        new(d => d.SiteName, (d, v) => d with { SiteName = v }),
+        new(d => d.AddressLine1, (d, v) => d with { AddressLine1 = v }),
+        new(d => d.AddressLine2, (d, v) => d with { AddressLine2 = v }, Optional: true),
+        new(d => d.TownOrCity, (d, v) => d with { TownOrCity = v }),
+        new(d => d.ContactName, (d, v) => d with { ContactName = v }),
+        new(d => d.ContactEmail, (d, v) => d with { ContactEmail = v }),
+        new(d => d.ContactPhone, (d, v) => d with { ContactPhone = v }, Optional: true),
+        new(d => d.RepatriatedLoads, (d, v) => d with { RepatriatedLoads = v }),
+    ];
+
+    internal sealed record DetailField(
+        Func<OverseasSiteDetails, string?> Get,
+        Func<OverseasSiteDetails, string?, OverseasSiteDetails> Set,
+        bool Optional = false
+    )
+    {
+        /// <summary>A sent value as it is kept: trimmed, and a blank optional one cleared.</summary>
+        public string? Clean(string value) => Optional && string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+}
+
+/// <summary>
+/// RA-682 AC04: what an interim site change does. Stored and sent as <c>change</c>, <c>add</c> or <c>remove</c>,
+/// the strings it was before it was an enum.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<InterimSiteChangeAction>))]
+public enum InterimSiteChangeAction
+{
+    [JsonStringEnumMemberName("change")]
+    Change,
+
+    [JsonStringEnumMemberName("add")]
+    Add,
+
+    [JsonStringEnumMemberName("remove")]
+    Remove,
 }
 
 /// <summary>RA-682 AC04: one interim site change within an ORS update.</summary>
 public class InterimSiteChange
 {
-    public const string Change = "change";
-    public const string Add = "add";
-    public const string Remove = "remove";
-
     [BsonGuidRepresentation(GuidRepresentation.Standard)]
     public Guid ChangeId { get; set; } = Guid.NewGuid();
 
-    /// <summary><see cref="Change"/>, <see cref="Add"/> or <see cref="Remove"/>.</summary>
-    public required string Action { get; set; }
+    [BsonSerializer(typeof(JsonNamedEnumSerializer<InterimSiteChangeAction>))]
+    public required InterimSiteChangeAction Action { get; set; }
 
     /// <summary>The existing interim site changed or removed. Null for an add, which has no id until it is granted.</summary>
     public int? InterimSiteId { get; set; }
@@ -289,7 +352,8 @@ public sealed record InterimSiteDetails
 
     public override int GetHashCode() => HashCode.Combine(SiteName, AddressLine1, TownOrCity, ContactEmail);
 
-    public static InterimSiteDetails From(InterimSiteModel interim) =>
+    /// <summary>A stored interim site's details, or a request's for one.</summary>
+    public static InterimSiteDetails From(IInterimSiteFields interim) =>
         new()
         {
             Country = interim.Country,
@@ -303,22 +367,6 @@ public sealed record InterimSiteDetails
             ContactEmail = interim.ContactEmail,
             ContactPhone = interim.ContactPhone,
             OperationCodes = [.. interim.OperationCodes],
-        };
-
-    public static InterimSiteDetails From(AddInterimSiteRequest request) =>
-        new()
-        {
-            Country = request.Country,
-            SiteName = request.SiteName,
-            AddressLine1 = request.AddressLine1,
-            AddressLine2 = request.AddressLine2,
-            TownOrCity = request.TownOrCity,
-            StateOrRegion = request.StateOrRegion,
-            Postcode = request.Postcode,
-            ContactName = request.ContactName,
-            ContactEmail = request.ContactEmail,
-            ContactPhone = request.ContactPhone,
-            OperationCodes = [.. request.OperationCodes],
         };
 }
 
@@ -384,8 +432,11 @@ public class AddChangeRequestSiteRequest
     public string? ChangeType { get; set; }
 }
 
-/// <summary>PATCH body: a null property leaves the stored answer unchanged.</summary>
-public class PatchChangeRequestSiteRequest
+/// <summary>
+/// PATCH body: a null property leaves the stored answer unchanged. RA-682: an update item's details are flat fields
+/// here, as the frontend sends them; <see cref="OverseasSiteDetails.From"/> reads them.
+/// </summary>
+public class PatchChangeRequestSiteRequest : IOverseasSiteDetailsFields
 {
     public string? Country { get; set; }
     public string? Coordinates { get; set; }
@@ -402,13 +453,5 @@ public class PatchChangeRequestSiteRequest
     public string? ContactPhone { get; set; }
     public string? RepatriatedLoads { get; set; }
 
-    internal bool HasDetails =>
-        SiteName is not null
-        || AddressLine1 is not null
-        || AddressLine2 is not null
-        || TownOrCity is not null
-        || ContactName is not null
-        || ContactEmail is not null
-        || ContactPhone is not null
-        || RepatriatedLoads is not null;
+    internal bool HasDetails => OverseasSiteDetails.From(this) != new OverseasSiteDetails();
 }

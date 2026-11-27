@@ -132,7 +132,7 @@ public class HttpCaseWorkingApiAdapter(
                     endpoint,
                     cancellationToken
                 );
-                references.Add(result.SubmissionReference);
+                references.AddRange(result.SubmissionReferences);
                 held.Add(group.Key);
                 sites.AddRange(result.Sites);
             }

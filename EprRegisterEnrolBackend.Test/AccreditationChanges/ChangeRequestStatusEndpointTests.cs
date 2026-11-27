@@ -529,7 +529,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
 
         var again = await _client.PostAsJsonAsync(Sites, new { siteId = SiteId }, Ct);
         again.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await again.Content.ReadAsStringAsync(Ct)).Should().Contain("already accredited");
+        (await again.Content.ReadAsStringAsync(Ct)).Should().Contain("already approved");
     }
 
     [Fact]

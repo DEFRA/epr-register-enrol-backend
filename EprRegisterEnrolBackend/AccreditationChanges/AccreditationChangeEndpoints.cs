@@ -481,8 +481,8 @@ public static class AccreditationChangeEndpoints
             SiteId = site!.SiteId,
             OrsId = site.OrsId,
             SiteName = site.SiteName,
-            Previous = isUpdate ? ChangeRequestRules.DetailsOf(site) : null,
-            Proposed = isUpdate ? ChangeRequestRules.DetailsOf(site) : null,
+            Previous = isUpdate ? OverseasSiteDetails.From(site) : null,
+            Proposed = isUpdate ? OverseasSiteDetails.From(site) : null,
             // Never sent, so Case Management can't hold it, whatever the draft's earlier attempts left.
             CaseManagementMayHold = false,
         };
@@ -514,9 +514,9 @@ public static class AccreditationChangeEndpoints
             return Results.NotFound();
         var accredited = status == SiteAccreditationStatus.Accredited;
         if (!isUpdate && accredited)
-            return Results.Conflict("This overseas site is already accredited.");
+            return Results.Conflict("This overseas site is already approved.");
         if (isUpdate && !accredited)
-            return Results.Conflict("Only an accredited overseas site's details can be changed.");
+            return Results.Conflict("Only an approved overseas site's details can be changed.");
         return null;
     }
 
@@ -608,7 +608,7 @@ public static class AccreditationChangeEndpoints
         // are checked against the ORS (PatchUpdateAsync) rather than as new values.
         var validation = await validator.ValidateAsync(body, services.CancellationToken);
         var invalid = requestSite.IsUpdate
-            ? ChangeRequestRules.WithoutLockedOrsFieldErrors(validation)
+            ? UpdateOverseasSiteRules.WithoutLockedOrsFieldErrors(validation)
             : validation.ToDictionary();
         if (invalid.Count > 0)
             return Results.ValidationProblem(invalid);
@@ -673,47 +673,51 @@ public static class AccreditationChangeEndpoints
         if (site is null)
             return Results.NotFound();
 
-        var changedLocked = ChangeRequestRules.ChangedLockedOrsFields(site, body);
+        var changedLocked = UpdateOverseasSiteRules.ChangedLockedOrsFields(site, body);
         if (changedLocked.Count > 0)
             return Results.ValidationProblem(changedLocked);
 
         // SiteName stays the ORS's current name: it is how the item is listed and sent to Case Management, and the
         // new name is in Proposed.
-        requestSite.Proposed = ChangeRequestRules.ApplyDetails(
-            requestSite.Proposed ?? ChangeRequestRules.DetailsOf(site),
-            body
+        requestSite.Proposed = UpdateOverseasSiteRules.ApplyDetails(
+            requestSite.Proposed ?? OverseasSiteDetails.From(site),
+            OverseasSiteDetails.From(body)
         );
 
         return await SaveAndViewAsync(draft, accreditation, services);
     }
 
-    // RA-682 AC04: the draft's update item for an ORS, with the ORS itself, or why there isn't one.
-    private static async Task<(
-        IResult? Error,
-        AccreditationApplicationModel? Accreditation,
-        AccreditationChangeRequest? Draft,
-        ChangeRequestSite? Item,
-        OverseasSiteModel? Site
-    )> LoadUpdateItemAsync(string organisationId, string applicationId, int siteId, ChangeServices services)
+    /// <summary>RA-682 AC04: the draft's update item for an ORS, with the ORS itself.</summary>
+    private sealed record UpdateItem(
+        AccreditationApplicationModel Accreditation,
+        AccreditationChangeRequest Draft,
+        ChangeRequestSite Item,
+        OverseasSiteModel Site
+    );
+
+    // RA-682 AC04: the draft's update item for an ORS, or why there isn't one.
+    private static async Task<(IResult? Error, UpdateItem? Update)> LoadUpdateItemAsync(
+        string organisationId,
+        string applicationId,
+        int siteId,
+        ChangeServices services
+    )
     {
         var (error, accreditation, draft) = await LoadDraftAsync(organisationId, applicationId, services);
         if (error is not null)
-            return (error, null, null, null, null);
+            return (error, null);
         var item = draft!.Sites.Find(s => s.SiteId == siteId);
         var site = ChangeRequestRules.FindSite(accreditation!, siteId);
         if (item is null || site is null)
-            return (Results.NotFound(), null, null, null, null);
+            return (Results.NotFound(), null);
         if (!item.IsUpdate)
             return (
-                Results.Conflict("Interim sites can only be changed as part of a change to an accredited overseas site."),
-                null,
-                null,
-                null,
+                Results.Conflict("Interim sites can only be changed as part of a change to an approved overseas site."),
                 null
             );
         if (draft.IsFixed(item))
-            return (Results.Conflict(ItemFixedMessage), null, null, null, null);
-        return (null, accreditation, draft, item, site);
+            return (Results.Conflict(ItemFixedMessage), null);
+        return (null, new UpdateItem(accreditation!, draft, item, site));
     }
 
     private static async Task<IResult> AddInterimSiteChange(
@@ -728,7 +732,7 @@ public static class AccreditationChangeEndpoints
         var validation = await validator.ValidateAsync(body, services.CancellationToken);
         if (!validation.IsValid)
             return Results.ValidationProblem(validation.ToDictionary());
-        var (error, accreditation, draft, item, _) = await LoadUpdateItemAsync(
+        var (error, update) = await LoadUpdateItemAsync(
             organisationId,
             applicationId,
             siteId,
@@ -736,11 +740,12 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
+        var (accreditation, draft, item, _) = update!;
 
-        item!.InterimSiteChanges.Add(
-            new InterimSiteChange { Action = InterimSiteChange.Add, Proposed = InterimSiteDetails.From(body) }
+        item.InterimSiteChanges.Add(
+            new InterimSiteChange { Action = InterimSiteChangeAction.Add, Proposed = InterimSiteDetails.From(body) }
         );
-        return await SaveAndViewAsync(draft!, accreditation!, services);
+        return await SaveAndViewAsync(draft, accreditation, services);
     }
 
     private static async Task<IResult> ChangeInterimSite(
@@ -754,10 +759,10 @@ public static class AccreditationChangeEndpoints
     )
     {
         var validation = await validator.ValidateAsync(body, services.CancellationToken);
-        var invalid = ChangeRequestRules.WithoutLockedInterimFieldErrors(validation);
+        var invalid = UpdateOverseasSiteRules.WithoutLockedInterimFieldErrors(validation);
         if (invalid.Count > 0)
             return Results.ValidationProblem(invalid);
-        var (error, accreditation, draft, item, site) = await LoadUpdateItemAsync(
+        var (error, update) = await LoadUpdateItemAsync(
             organisationId,
             applicationId,
             siteId,
@@ -765,15 +770,16 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        var interim = ChangeRequestRules.ActiveInterimSite(site!, interimSiteId);
+        var (accreditation, draft, item, site) = update!;
+        var interim = UpdateOverseasSiteRules.ActiveInterimSite(site, interimSiteId);
         if (interim is null)
             return Results.NotFound();
-        var locked = ChangeRequestRules.ChangedLockedInterimFields(interim, body);
+        var locked = UpdateOverseasSiteRules.ChangedLockedInterimFields(interim, body);
         if (locked.Count > 0)
             return Results.ValidationProblem(locked);
 
-        ChangeRequestRules.SetInterimChange(item!, interim, InterimSiteDetails.From(body));
-        return await SaveAndViewAsync(draft!, accreditation!, services);
+        UpdateOverseasSiteRules.SetInterimChange(item, interim, InterimSiteDetails.From(body));
+        return await SaveAndViewAsync(draft, accreditation, services);
     }
 
     private static async Task<IResult> RemoveInterimSite(
@@ -784,7 +790,7 @@ public static class AccreditationChangeEndpoints
         [AsParameters] ChangeServices services
     )
     {
-        var (error, accreditation, draft, item, site) = await LoadUpdateItemAsync(
+        var (error, update) = await LoadUpdateItemAsync(
             organisationId,
             applicationId,
             siteId,
@@ -792,12 +798,13 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        var interim = ChangeRequestRules.ActiveInterimSite(site!, interimSiteId);
+        var (accreditation, draft, item, site) = update!;
+        var interim = UpdateOverseasSiteRules.ActiveInterimSite(site, interimSiteId);
         if (interim is null)
             return Results.NotFound();
 
-        ChangeRequestRules.SetInterimRemoval(item!, interim);
-        return await SaveAndViewAsync(draft!, accreditation!, services);
+        UpdateOverseasSiteRules.SetInterimRemoval(item, interim);
+        return await SaveAndViewAsync(draft, accreditation, services);
     }
 
     // Drops one interim site change: an added interim site that won't be added after all, or a change or removal
@@ -810,7 +817,7 @@ public static class AccreditationChangeEndpoints
         [AsParameters] ChangeServices services
     )
     {
-        var (error, accreditation, draft, item, _) = await LoadUpdateItemAsync(
+        var (error, update) = await LoadUpdateItemAsync(
             organisationId,
             applicationId,
             siteId,
@@ -818,9 +825,10 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        if (item!.InterimSiteChanges.RemoveAll(c => c.ChangeId == changeId) == 0)
+        var (accreditation, draft, item, _) = update!;
+        if (item.InterimSiteChanges.RemoveAll(c => c.ChangeId == changeId) == 0)
             return Results.NotFound();
-        return await SaveAndViewAsync(draft!, accreditation!, services);
+        return await SaveAndViewAsync(draft, accreditation, services);
     }
 
     private static async Task<IResult> ChangeInterimSiteAddition(
@@ -836,7 +844,7 @@ public static class AccreditationChangeEndpoints
         var validation = await validator.ValidateAsync(body, services.CancellationToken);
         if (!validation.IsValid)
             return Results.ValidationProblem(validation.ToDictionary());
-        var (error, accreditation, draft, item, _) = await LoadUpdateItemAsync(
+        var (error, update) = await LoadUpdateItemAsync(
             organisationId,
             applicationId,
             siteId,
@@ -844,12 +852,13 @@ public static class AccreditationChangeEndpoints
         );
         if (error is not null)
             return error;
-        var addition = item!.InterimSiteChanges.Find(c => c.ChangeId == changeId && c.Action == InterimSiteChange.Add);
+        var (accreditation, draft, item, _) = update!;
+        var addition = item.InterimSiteChanges.Find(c => c.ChangeId == changeId && c.Action == InterimSiteChangeAction.Add);
         if (addition is null)
             return Results.NotFound();
 
         addition.Proposed = InterimSiteDetails.From(body);
-        return await SaveAndViewAsync(draft!, accreditation!, services);
+        return await SaveAndViewAsync(draft, accreditation, services);
     }
 
     private static async Task<IResult> InitiateBesEvidenceUpload(
@@ -1053,7 +1062,8 @@ public static class AccreditationChangeEndpoints
         // RA-739: the validator is shared with application submit, where the payment reference is optional.
         // Case Management requires it on a charged change request: it is the reference the operator was told to
         // quote. RA-682 AC05: a request that only changes ORS details costs nothing, so has none.
-        if (ChangeRequestRules.ChargeableSites(draft!) > 0 && string.IsNullOrWhiteSpace(body.PaymentReference))
+        var chargeableSites = ChangeRequestRules.ChargeableSites(draft!);
+        if (chargeableSites > 0 && string.IsNullOrWhiteSpace(body.PaymentReference))
             return Results.ValidationProblem(
                 new Dictionary<string, string[]> { [PaymentReferenceField] = [PaymentReferenceRequiredMessage] }
             );
@@ -1068,7 +1078,7 @@ public static class AccreditationChangeEndpoints
                 statusCode: StatusCodes.Status422UnprocessableEntity
             );
 
-        return await SaveAndSendAsync(draft!, accreditation!, body, services, submit);
+        return await SaveAndSendAsync(draft!, accreditation!, body, chargeableSites, services, submit);
     }
 
     // RA-682 AC07: an update's previous details are the ORS's as it stands now, not when the change was started.
@@ -1080,7 +1090,7 @@ public static class AccreditationChangeEndpoints
         foreach (var update in draft.Sites.Where(s => s.IsUpdate && !draft.IsFixed(s)))
         {
             if (ChangeRequestRules.FindSite(accreditation, update.SiteId) is { } current)
-                ChangeRequestRules.RebaseOnCurrent(update, current);
+                UpdateOverseasSiteRules.RebaseOnCurrent(update, current);
         }
     }
 
@@ -1118,6 +1128,7 @@ public static class AccreditationChangeEndpoints
         AccreditationChangeRequest draft,
         AccreditationApplicationModel accreditation,
         SubmitRequest body,
+        int chargeableSites,
         ChangeServices services,
         SubmitServices submit
     )
@@ -1129,8 +1140,8 @@ public static class AccreditationChangeEndpoints
             Email = body.Email,
         };
         // RA-682 AC05: a request with nothing to pay keeps no payment reference, whatever the form sent.
-        draft.PaymentReference = ChangeRequestRules.ChargeableSites(draft) > 0 ? body.PaymentReference : null;
-        draft.SetCharge(ChangeRequestRules.Charge(ChangeRequestRules.ChargeableSites(draft)));
+        draft.PaymentReference = chargeableSites > 0 ? body.PaymentReference : null;
+        draft.SetCharge(ChangeRequestRules.Charge(chargeableSites));
         draft.ChangeType = ChangeRequestRules.RequestChangeType(draft);
         draft.Status = ChangeRequestStatus.Submitted;
         draft.SetItemStatuses(ChangeItemStatus.Submitted);
@@ -1190,8 +1201,7 @@ public static class AccreditationChangeEndpoints
 
         // RA-739: each site is its own work item with its own reference; the adapter has checked
         // that every submitted site has one.
-        draft.SubmissionReference = result.SubmissionReference;
-        draft.SubmissionReferences = [.. result.SubmissionReferences];
+        draft.SetSubmissionReferences(result.SubmissionReferences);
         foreach (var site in result.Sites)
         {
             var item = draft.Sites.Single(s => s.SiteId == site.SiteId);
@@ -1257,8 +1267,7 @@ public static class AccreditationChangeEndpoints
         draft.SubmittedBy = null;
         draft.PaymentReference = null;
         draft.ClearCharge();
-        draft.SubmissionReference = null;
-        draft.SubmissionReferences = [];
+        draft.SetSubmissionReferences([]);
         foreach (var item in draft.Items)
         {
             item.CaseManagementReference = null;

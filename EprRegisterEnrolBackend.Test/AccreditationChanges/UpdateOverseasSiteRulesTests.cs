@@ -4,10 +4,14 @@ using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.DevSeed;
 using FluentAssertions;
 using FluentValidation.Results;
+using System.Text.Json;
+using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
-/// <summary>RA-682: the ORS update rules in <see cref="ChangeRequestRules"/>, without HTTP.</summary>
+/// <summary>RA-682: the ORS update rules (<see cref="UpdateOverseasSiteRules"/>, and the shared ones they rely on), without HTTP.</summary>
 public sealed class UpdateOverseasSiteRulesTests
 {
     private static readonly AccreditationApplicationModel Accreditation =
@@ -17,7 +21,7 @@ public sealed class UpdateOverseasSiteRulesTests
 
     private static ChangeRequestSite Update(int siteId)
     {
-        var details = ChangeRequestRules.DetailsOf(Ors(siteId));
+        var details = OverseasSiteDetails.From(Ors(siteId));
         return new ChangeRequestSite
         {
             ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,
@@ -87,7 +91,7 @@ public sealed class UpdateOverseasSiteRulesTests
         now.ContactName = "Also changed";
         now.ContactEmail = "changed@example.com";
 
-        ChangeRequestRules.RebaseOnCurrent(item, now);
+        UpdateOverseasSiteRules.RebaseOnCurrent(item, now);
 
         item.Previous!.SiteName.Should().Be("Renamed by support");
         item.Proposed!.SiteName.Should().Be("Mine");
@@ -99,10 +103,10 @@ public sealed class UpdateOverseasSiteRulesTests
     public void Rebasing_an_interim_change_follows_the_interim_site_and_drops_one_that_no_longer_changes_anything()
     {
         var item = Update(902501);
-        var gdynia = ChangeRequestRules.ActiveInterimSite(Ors(902501), 902511)!;
-        var szczecin = ChangeRequestRules.ActiveInterimSite(Ors(902501), 902512)!;
-        ChangeRequestRules.SetInterimChange(item, gdynia, InterimSiteDetails.From(gdynia) with { SiteName = "Mine" });
-        ChangeRequestRules.SetInterimChange(
+        var gdynia = UpdateOverseasSiteRules.ActiveInterimSite(Ors(902501), 902511)!;
+        var szczecin = UpdateOverseasSiteRules.ActiveInterimSite(Ors(902501), 902512)!;
+        UpdateOverseasSiteRules.SetInterimChange(item, gdynia, InterimSiteDetails.From(gdynia) with { SiteName = "Mine" });
+        UpdateOverseasSiteRules.SetInterimChange(
             item,
             szczecin,
             InterimSiteDetails.From(szczecin) with { ContactName = "Pat Lee" }
@@ -111,7 +115,7 @@ public sealed class UpdateOverseasSiteRulesTests
         now.InterimSites!.Single(i => i.SiteId == 902511).ContactName = "Changed";
         now.InterimSites!.Single(i => i.SiteId == 902512).ContactName = "Pat Lee";
 
-        ChangeRequestRules.RebaseOnCurrent(item, now);
+        UpdateOverseasSiteRules.RebaseOnCurrent(item, now);
 
         var change = item.InterimSiteChanges.Should().ContainSingle().Subject;
         change.InterimSiteId.Should().Be(902511);
@@ -123,9 +127,9 @@ public sealed class UpdateOverseasSiteRulesTests
     public void An_interim_change_keeps_the_interim_sites_own_country_and_codes()
     {
         var item = Update(902501);
-        var gdynia = ChangeRequestRules.ActiveInterimSite(Ors(902501), 902511)!;
+        var gdynia = UpdateOverseasSiteRules.ActiveInterimSite(Ors(902501), 902511)!;
 
-        ChangeRequestRules.SetInterimChange(
+        UpdateOverseasSiteRules.SetInterimChange(
             item,
             gdynia,
             InterimSiteDetails.From(gdynia) with { Country = " Poland ", OperationCodes = [.. Enumerable.Reverse(gdynia.OperationCodes)] }
@@ -145,8 +149,8 @@ public sealed class UpdateOverseasSiteRulesTests
             ]
         );
 
-        ChangeRequestRules.WithoutLockedInterimFieldErrors(validation).Keys.Should().Equal("SiteName");
-        ChangeRequestRules
+        UpdateOverseasSiteRules.WithoutLockedInterimFieldErrors(validation).Keys.Should().Equal("SiteName");
+        UpdateOverseasSiteRules
             .WithoutLockedOrsFieldErrors(new ValidationResult([new ValidationFailure("coordinates", "bad")]))
             .Should()
             .BeEmpty();
@@ -156,6 +160,80 @@ public sealed class UpdateOverseasSiteRulesTests
     public void An_update_whose_ORS_is_no_longer_accredited_is_missing_its_site()
     {
         ChangeRequestRules.MissingFields(null, Update(902501)).Should().Equal(ChangeRequestRules.Site);
+    }
+
+    [Fact]
+    public void An_update_with_new_BES_evidence_is_a_change_and_needs_it_scanned_clean()
+    {
+        var item = Update(902501);
+        item.BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads = [new BesEvidenceFileModel { FileId = "f", Filename = "f.pdf", S3Key = "k", ScanStatus = "Pending" }],
+        };
+
+        UpdateOverseasSiteRules.HasChanges(item).Should().BeTrue();
+        ChangeRequestRules.MissingFields(Ors(902501), item).Should().Equal(ChangeRequestRules.BesEvidence);
+        item.BesEvidence.BesEvidenceUploads[0].ScanStatus = "Clean";
+        ChangeRequestRules.MissingFields(Ors(902501), item).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Applying_sent_details_trims_them_leaves_absent_ones_and_clears_a_blank_optional_one()
+    {
+        var proposed = OverseasSiteDetails.From(Ors(902501));
+
+        var applied = UpdateOverseasSiteRules.ApplyDetails(
+            proposed,
+            OverseasSiteDetails.From(new PatchChangeRequestSiteRequest { SiteName = " New ", AddressLine2 = " ", ContactPhone = " 0123 " })
+        );
+
+        applied.Should().Be(proposed with { SiteName = "New", AddressLine2 = null, ContactPhone = "0123" });
+    }
+
+    [Fact]
+    public void A_patch_has_details_only_when_it_sends_one()
+    {
+        new PatchChangeRequestSiteRequest { Country = "Poland" }.HasDetails.Should().BeFalse();
+        new PatchChangeRequestSiteRequest { RepatriatedLoads = "" }.HasDetails.Should().BeTrue();
+    }
+
+    // The enum is stored and sent as the strings it replaced, so stored documents and the API are unchanged.
+    [Theory]
+    [InlineData(InterimSiteChangeAction.Change, "change")]
+    [InlineData(InterimSiteChangeAction.Add, "add")]
+    [InlineData(InterimSiteChangeAction.Remove, "remove")]
+    public void An_interim_change_action_is_stored_and_sent_as_its_lowercase_string(
+        InterimSiteChangeAction action,
+        string stored
+    )
+    {
+        var change = new InterimSiteChange { Action = action };
+
+        var document = change.ToBsonDocument();
+        // Matched on its name either way, as the camel case convention may or may not be registered in this process.
+        document.Elements.Single(e => e.Name.Equals(nameof(InterimSiteChange.Action), StringComparison.OrdinalIgnoreCase))
+            .Value.AsString.Should().Be(stored);
+        BsonSerializer.Deserialize<InterimSiteChange>(document).Action.Should().Be(action);
+
+        // No enum converter in the options: as the Case Management adapter's own options have none.
+        var json = JsonSerializer.SerializeToNode(change, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        json["action"]!.GetValue<string>().Should().Be(stored);
+        JsonSerializer.Deserialize<InterimSiteChange>($$"""{"action":"{{stored}}"}""", JsonSerializerOptions.Web)!
+            .Action.Should().Be(action);
+    }
+
+    [Fact]
+    public void Submission_references_are_set_together()
+    {
+        var request = Request(AddType, Accreditation.ApplicationId, Add(902504));
+
+        request.SetSubmissionReferences(["SUB-2026-0001", "SUB-2026-0002"]);
+        request.SubmissionReference.Should().Be("SUB-2026-0001");
+        request.SubmissionReferences.Should().Equal("SUB-2026-0001", "SUB-2026-0002");
+
+        request.SetSubmissionReferences([]);
+        request.SubmissionReference.Should().BeNull();
+        new ChangeRequestSubmissionResult([], []).SubmissionReference.Should().BeNull();
     }
 
     // The seed builds a fresh model each time, so this is a copy the test can change.

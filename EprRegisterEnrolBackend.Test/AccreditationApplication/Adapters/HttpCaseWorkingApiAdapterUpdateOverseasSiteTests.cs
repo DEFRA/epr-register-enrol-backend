@@ -29,7 +29,7 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
     private static ChangeRequestSite Update(int siteId, string orsId, string proposedName)
     {
         var ors = ChangeRequestRules.FindSite(Accreditation, siteId)!;
-        var previous = ChangeRequestRules.DetailsOf(ors);
+        var previous = OverseasSiteDetails.From(ors);
         return new ChangeRequestSite
         {
             ChangeType = AccreditationChangeRequest.UpdateOverseasSiteChangeType,

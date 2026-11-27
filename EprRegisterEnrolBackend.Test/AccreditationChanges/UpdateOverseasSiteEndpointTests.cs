@@ -98,8 +98,13 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
     [Fact]
     public async Task Only_an_accredited_ORS_can_be_updated_and_only_a_registered_one_added()
     {
-        (await StartUpdate(902504)).StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await Add(902501)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        // RA-814: the operator is told these ORSs are approved, though the status is still Accredited.
+        var update = await StartUpdate(902504);
+        update.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await update.Content.ReadAsStringAsync(Ct)).Should().Contain("Only an approved overseas site's details can be changed.");
+        var add = await Add(902501);
+        add.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await add.Content.ReadAsStringAsync(Ct)).Should().Contain("This overseas site is already approved.");
         (await _client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = "remove-overseas-site" }, Ct))
             .StatusCode.Should()
             .Be(HttpStatusCode.BadRequest);
@@ -828,7 +833,7 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
     public async Task An_interim_site_saved_unchanged_with_its_codes_reordered_records_no_change()
     {
         await StartUpdate(902501);
-        var codes = ChangeRequestRules.ActiveInterimSite(ChangeRequestRules.FindSite(_accreditation, 902501)!, 902511)!
+        var codes = UpdateOverseasSiteRules.ActiveInterimSite(ChangeRequestRules.FindSite(_accreditation, 902501)!, 902511)!
             .OperationCodes;
 
         var saved = await _client.PatchAsJsonAsync(

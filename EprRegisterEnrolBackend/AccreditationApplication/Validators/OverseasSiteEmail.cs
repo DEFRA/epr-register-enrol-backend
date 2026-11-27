@@ -8,9 +8,11 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Validators;
 // which makes a failing match quadratic in the input length. Pinning the final label to
 // the last dot removes the ambiguity. Only behaviour change: a trailing-dot address
 // ("a@b.com.") no longer validates, and that was never a valid address.
+// A property rather than a static field: .editorconfig wants an internal static field named s_pattern, which reads
+// badly from the validators that use it.
 internal static class OverseasSiteEmail
 {
-    internal static readonly System.Text.RegularExpressions.Regex Pattern = new(
+    internal static System.Text.RegularExpressions.Regex Pattern { get; } = new(
         @"^[^\s@]+@[^\s@]+\.[^\s@.]+$",
         System.Text.RegularExpressions.RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(100)

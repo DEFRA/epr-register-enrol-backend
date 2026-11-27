@@ -13,8 +13,7 @@ public class PatchChangeRequestSiteRequestValidator
     public PatchChangeRequestSiteRequestValidator()
     {
         RuleFor(r => r.Country)
-            .NotEmpty()
-            .MaximumLength(100)
+            .OverseasSiteCountry()
             .When(r => r.Country is not null)
             .OverridePropertyName(ChangeRequestRules.Country);
         RuleFor(r => r.Coordinates)
@@ -39,20 +38,15 @@ public class PatchChangeRequestSiteRequestValidator
             .When(r => r.OperationCodes is not null)
             .OverridePropertyName(ChangeRequestRules.OperationCodes);
 
-        // RA-682: an update's editable details, with the ORS journey's rules (OverseasSiteRequestValidatorBase).
-        // Each is checked only when sent; absent means unchanged.
-        RuleFor(r => r.SiteName).NotEmpty().MaximumLength(200).When(r => r.SiteName is not null);
-        RuleFor(r => r.AddressLine1).NotEmpty().MaximumLength(200).When(r => r.AddressLine1 is not null);
-        RuleFor(r => r.AddressLine2).MaximumLength(200);
-        RuleFor(r => r.TownOrCity).NotEmpty().MaximumLength(100).When(r => r.TownOrCity is not null);
-        RuleFor(r => r.ContactName).NotEmpty().MaximumLength(200).When(r => r.ContactName is not null);
-        RuleFor(r => r.ContactEmail)
-            .NotEmpty()
-            .MaximumLength(254)
-            .Matches(OverseasSiteEmail.Pattern)
-            .WithMessage("ContactEmail must be a valid email address.")
-            .When(r => r.ContactEmail is not null);
-        RuleFor(r => r.ContactPhone).MaximumLength(30);
-        RuleFor(r => r.RepatriatedLoads).NotEmpty().MaximumLength(5000).When(r => r.RepatriatedLoads is not null);
+        // RA-682: an update's editable details, with the ORS journey's rules (OverseasSiteFieldRules). Each is checked
+        // only when sent; absent means unchanged.
+        RuleFor(r => r.SiteName).OverseasSiteName().When(r => r.SiteName is not null);
+        RuleFor(r => r.AddressLine1).OverseasSiteAddressLine1().When(r => r.AddressLine1 is not null);
+        RuleFor(r => r.AddressLine2).OverseasSiteAddressLine2();
+        RuleFor(r => r.TownOrCity).OverseasSiteTownOrCity().When(r => r.TownOrCity is not null);
+        RuleFor(r => r.ContactName).OverseasSiteContactName().When(r => r.ContactName is not null);
+        RuleFor(r => r.ContactEmail).OverseasSiteContactEmail().When(r => r.ContactEmail is not null);
+        RuleFor(r => r.ContactPhone).OverseasSiteContactPhone();
+        RuleFor(r => r.RepatriatedLoads).OverseasSiteRepatriatedLoads().When(r => r.RepatriatedLoads is not null);
     }
 }
