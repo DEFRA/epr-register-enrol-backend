@@ -65,8 +65,10 @@ public class OperatorJourneySearchEndpointTests : IDisposable
         _world.SeedAsync(Mongo).GetAwaiter().GetResult();
     }
 
+    // Each test seeds a database of its own on the shared mongod; drop it so they don't pile up there.
     public void Dispose()
     {
+        Mongo.GetClient().DropDatabase(_factory.DatabaseName);
         _client.Dispose();
         _factory.Dispose();
         GC.SuppressFinalize(this);
