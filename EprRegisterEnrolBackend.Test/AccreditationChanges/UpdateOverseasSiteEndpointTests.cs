@@ -688,6 +688,30 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         (await client.DeleteAsync($"{Sites}/902501", Ct)).IsSuccessStatusCode.Should().BeTrue();
     }
 
+    // A failure that sent nothing (Case Management not configured here) says nothing about an earlier attempt, so a hold
+    // left by an earlier timeout stands.
+    [Fact]
+    public async Task A_later_failure_that_sent_nothing_keeps_an_earlier_hold()
+    {
+        var (factory, client, _) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(
+            factory,
+            new CaseWorkingApiTimeoutException("timed out", new TimeoutException()),
+            new CaseWorkingNotConfiguredException()
+        );
+        await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
+        await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
+
+        await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+        await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+
+        var stored = factory.FakeChangeRequests.All.Single();
+        stored.Sites.Single().CaseManagementMayHold.Should().BeTrue();
+        stored.SentToCaseManagement.Should().BeTrue();
+    }
+
     // A held site is replayed as first sent and can't be changed or removed, so submit doesn't hold it to rules it can
     // no longer meet: here, an ORS that stopped being accredited after the update was sent.
     [Fact]

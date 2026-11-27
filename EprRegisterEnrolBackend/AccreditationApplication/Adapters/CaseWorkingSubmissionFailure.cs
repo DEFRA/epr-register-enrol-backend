@@ -27,6 +27,14 @@ public static class CaseWorkingSubmissionFailure
     /// away mid-send. Not configured means nothing was sent, the statuses above mean ManagementBe rejected the
     /// submission before saving it, and any other exception is a defect raised before anything was sent.
     /// </summary>
+    /// <summary>
+    /// Whether ManagementBe answered and so proves it holds nothing: one of the statuses above, which it returns
+    /// before saving anything (its replay check runs first, so it would have replayed a held submission instead).
+    /// A defect or an unconfigured adapter sent nothing, so says nothing about an earlier attempt.
+    /// </summary>
+    public static bool ProvesNothingHeld(Exception ex) =>
+        ex is HttpRequestException { StatusCode: { } status } && s_holdsNothingStatuses.Contains(status);
+
     public static bool MayHold(Exception ex) =>
         ex switch
         {
