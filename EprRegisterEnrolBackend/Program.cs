@@ -231,7 +231,7 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     );
     builder.Services.AddHostedService<LastYearsAccreditationBackfillMigration>();
 
-    // RA-788: one-off deletion of the duplicate 2027 Plastic application (INC2560371).
+    // RA-788: one-off find-and-delete of duplicate draft accreditation applications (INC2560371).
     // Off by default; Enabled alone is a dry run (logs, writes nothing) - see the class comment.
     builder.Services.Configure<DuplicateApplicationDeletionOptions>(
         builder.Configuration.GetSection(DuplicateApplicationDeletionOptions.SectionName)

@@ -5,13 +5,14 @@ using EprRegisterEnrolBackend.Test.TestSupport;
 using EprRegisterEnrolBackend.Test.Utils.Logging;
 using EprRegisterEnrolBackend.Utils.Mongo;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Migration = EprRegisterEnrolBackend.AccreditationApplication.Startup.DuplicateApplicationDeletionMigration;
-using RunResult = EprRegisterEnrolBackend.AccreditationApplication.Startup.DuplicateApplicationDeletionMigration.RunResult;
+using RunMode = EprRegisterEnrolBackend.AccreditationApplication.Startup.DuplicateApplicationDeletionMigration.RunMode;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationApplication.Startup;
 
@@ -23,6 +24,9 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     private const string PersonalName = "Jane Personal-Data";
     private const string PersonalEmail = "jane.personal@example.com";
     private const string OrganisationName = "Personal Plastics Ltd";
+    private const string Registration = "REG-0001";
+    private const string RegistrationId = "reg-id-1";
+    private const string Reviewer = "A Reviewer";
 
     private readonly string _databaseName;
     private readonly TestMongoDbClientFactory _factory;
@@ -47,22 +51,24 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static AccreditationApplicationModel Application(
-        ObjectId? id,
+    private static AccreditationApplicationModel App(
         ApplicationStatus status,
         int? orgId,
-        string registrationId = Migration.RegistrationId,
-        int year = Migration.AccreditationYear,
-        MaterialType material = Migration.Material,
-        string organisationId = ReExOrganisationId,
+        string? organisationId = ReExOrganisationId,
+        string? organisationName = OrganisationName,
+        string? registration = Registration,
+        string? registrationId = RegistrationId,
+        MaterialType material = MaterialType.Plastic,
+        int year = 2027,
         long version = 3
     ) =>
         new()
         {
-            Id = id ?? ObjectId.GenerateNewId(),
-            OrganisationId = organisationId,
+            Id = ObjectId.GenerateNewId(),
+            OrganisationId = organisationId!,
             OrgId = orgId,
-            OrganisationName = OrganisationName,
+            OrganisationName = organisationName,
+            RegistrationReference = registration,
             RegistrationId = registrationId,
             Year = year,
             MaterialType = material,
@@ -75,27 +81,12 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             },
         };
 
-    private static AccreditationApplicationModel Target(
-        ApplicationStatus status = ApplicationStatus.Saved,
-        int? orgId = null,
-        string registrationId = Migration.RegistrationId,
-        int year = Migration.AccreditationYear,
-        MaterialType material = Migration.Material
-    ) => Application(Migration.TargetId, status, orgId, registrationId, year, material);
+    // The year separates groups in the tests that seed several.
+    private static AccreditationApplicationModel Candidate(int year = 2027) =>
+        App(ApplicationStatus.Saved, null, year: year);
 
-    private static AccreditationApplicationModel Keeper(
-        ApplicationStatus status = ApplicationStatus.Updated,
-        int? orgId = Migration.OrgId,
-        string organisationId = ReExOrganisationId,
-        MaterialType material = Migration.Material
-    ) =>
-        Application(
-            Migration.KeeperId,
-            status,
-            orgId,
-            material: material,
-            organisationId: organisationId
-        );
+    private static AccreditationApplicationModel Keeper(int year = 2027) =>
+        App(ApplicationStatus.Updated, 500131, year: year);
 
     private async Task SeedAsync(params AccreditationApplicationModel[] applications)
     {
@@ -103,19 +94,13 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             await _applications.InsertOneAsync(application, cancellationToken: Ct);
     }
 
-    // The production pair, plus records that must never be touched: the same registration for
-    // another year, and a Withdrawn record in the group (not live, so not counted).
-    private async Task SeedProductionShapeAsync(int? targetOrgId = null)
-    {
-        await SeedAsync(
-            Target(orgId: targetOrgId),
-            Keeper(),
-            Application(null, ApplicationStatus.Approved, Migration.OrgId, year: 2026),
-            Application(null, ApplicationStatus.Withdrawn, Migration.OrgId)
-        );
-    }
-
-    private Migration CreateMigration(bool enabled, bool apply = false, string? confirmedBy = null)
+    private Migration CreateMigration(
+        bool enabled,
+        bool apply = false,
+        string? confirmedBy = null,
+        int? expected = null,
+        string? expectedIds = null
+    )
     {
         var services = new ServiceCollection();
         services.AddSingleton<IMongoDbClientFactory>(_factory);
@@ -127,17 +112,30 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                     Enabled = enabled,
                     Apply = apply,
                     SpotCheckConfirmedBy = confirmedBy,
+                    ExpectedDeletions = expected,
+                    ExpectedApplicationIds = expectedIds,
                 }
             ),
             _logger
         );
     }
 
-    private const string Reviewer = "A Reviewer";
+    private Migration DryRun() => CreateMigration(true);
 
-    private Migration Applying() => CreateMigration(true, apply: true, confirmedBy: Reviewer);
+    // Apply, reviewed against exactly these candidates (count and ids).
+    private Migration Applying(params AccreditationApplicationModel[] expected) =>
+        ApplyingWith(expected.Length, string.Join(",", expected.Select(a => a.Id)));
 
-    private async Task<bool> ExistsAsync(ObjectId id) =>
+    private Migration ApplyingWith(int? count, string? ids) =>
+        CreateMigration(
+            true,
+            apply: true,
+            confirmedBy: Reviewer,
+            expected: count,
+            expectedIds: ids
+        );
+
+    private async Task<bool> ExistsAsync(ObjectId? id) =>
         await _applications.CountDocumentsAsync(a => a.Id == id, cancellationToken: Ct) == 1;
 
     private async Task<long> CountAsync() =>
@@ -153,42 +151,93 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     [Fact]
     public async Task Disabled_reads_and_writes_nothing()
     {
-        await SeedProductionShapeAsync();
+        await SeedAsync(Candidate(), Keeper());
 
         var result = await CreateMigration(enabled: false).RunAsync(Ct);
 
-        result.Should().Be(RunResult.Disabled);
-        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
+        result.Mode.Should().Be(RunMode.Disabled);
+        (await CountAsync()).Should().Be(2);
         _logger.Entries.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task Dry_run_logs_the_planned_delete_and_writes_nothing()
+    public async Task Dry_run_logs_the_plan_and_a_summary_and_writes_nothing()
     {
-        await SeedProductionShapeAsync();
+        var candidate = Candidate();
+        var keeper = Keeper();
+        await SeedAsync(candidate, keeper);
 
-        var result = await CreateMigration(enabled: true).RunAsync(Ct);
+        var result = await DryRun().RunAsync(Ct);
 
-        result.Should().Be(RunResult.DryRun);
-        (await CountAsync()).Should().Be(4);
+        result.Mode.Should().Be(RunMode.DryRun);
+        result.Groups.Should().Be(1);
+        result.Candidates.Should().Be(1);
+        result.WouldDeleteRecords.Should().Be(1);
+        result.DeletedRecords.Should().Be(0);
+        (await CountAsync()).Should().Be(2);
+        Messages
+            .Should()
+            .ContainSingle(m =>
+                m.StartsWith("RA-788 DRY RUN")
+                && m.Contains("material=Plastic year=2027")
+                && m.Contains("outcome=would-delete")
+                && m.Contains($"candidates=1 [{candidate.Id}(registration={Registration} status=Saved version=3")
+                && m.Contains("createdAt=")
+                && m.Contains("dateLastEdited=")
+                && m.Contains($"keepers=1 [{keeper.Id}(registration={Registration} status=Updated hasOrgId=True)]")
+            );
         Messages
             .Should()
             .Contain(m =>
-                m.StartsWith("RA-788 DRY RUN")
-                && m.Contains("would delete application " + Migration.TargetId)
+                m.Contains("summary groups=1 candidates=1 candidate-ids=" + candidate.Id)
+            )
+            .And.Contain(m =>
+                m.Contains("outcome would-delete-records=1 deleted-records=0")
             );
     }
 
     [Fact]
-    public async Task Apply_without_a_reviewer_stays_a_dry_run()
+    public async Task The_summary_is_logged_before_the_group_detail_and_the_outcome_last()
     {
-        await SeedProductionShapeAsync();
+        await SeedAsync(Candidate(), Keeper());
 
-        var result = await CreateMigration(enabled: true, apply: true, confirmedBy: " ")
+        await DryRun().RunAsync(Ct);
+
+        var lines = Messages.ToList();
+        lines.Should().HaveCount(3);
+        lines[0].Should().Contain("summary groups=1 candidates=1 candidate-ids=");
+        lines[1].Should().Contain("group organisationId=");
+        lines[2].Should().Contain("outcome would-delete-records=1");
+    }
+
+    [Fact]
+    public async Task A_candidate_deleted_by_another_run_is_logged_as_such_not_as_an_error()
+    {
+        var gone = Candidate();
+        await SeedAsync(gone, Keeper());
+        var migration = Applying(gone);
+        migration.BeforeDeleteForTest = async (_, token) =>
+            await _applications.DeleteOneAsync(a => a.Id == gone.Id, token);
+
+        var result = await migration.RunAsync(Ct);
+
+        result.DeletedElsewhereGroups.Should().Be(1);
+        result.RolledBackGroups.Should().Be(0);
+        result.DeletedRecords.Should().Be(0);
+        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
+        Messages.Should().Contain(m => m.Contains("already deleted by another run"));
+    }
+
+    [Fact]
+    public async Task Apply_without_a_reviewer_is_a_dry_run()
+    {
+        await SeedAsync(Candidate(), Keeper());
+
+        var result = await CreateMigration(true, apply: true, confirmedBy: " ", expected: 1)
             .RunAsync(Ct);
 
-        result.Should().Be(RunResult.DryRun);
-        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
+        result.Mode.Should().Be(RunMode.DryRun);
+        (await CountAsync()).Should().Be(2);
         _logger
             .Entries.Should()
             .Contain(e =>
@@ -196,205 +245,464 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             );
     }
 
-    // --- Success ---
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task Apply_with_a_missing_or_wrong_ExpectedDeletions_is_a_dry_run_with_an_error(
+        int? expected
+    )
+    {
+        var candidate = Candidate();
+        await SeedAsync(candidate, Keeper());
+
+        var result = await ApplyingWith(expected, candidate.Id.ToString()).RunAsync(Ct);
+
+        result.Mode.Should().Be(RunMode.DryRun);
+        result.DeletedRecords.Should().Be(0);
+        (await CountAsync()).Should().Be(2);
+        _logger
+            .Entries.Should()
+            .Contain(e =>
+                e.LogLevel == LogLevel.Error
+                && e.Message.StartsWith("RA-788 DRY RUN")
+                && e.Message.Contains("ExpectedDeletions=")
+                && e.Message.Contains("1 candidates found this run")
+            );
+    }
+
+    // --- ExpectedApplicationIds: which records, not just how many ---
 
     [Fact]
-    public async Task Apply_deletes_only_the_target_and_a_second_run_is_a_no_op()
+    public async Task Apply_with_the_expected_ids_in_any_order_and_spacing_deletes()
     {
-        await SeedProductionShapeAsync();
+        var (c1, c2) = (Candidate(), Candidate());
+        await SeedAsync(c1, c2, Keeper());
 
-        var first = await Applying().RunAsync(Ct);
+        var result = await ApplyingWith(2, $" {c2.Id} , {c1.Id},").RunAsync(Ct);
 
-        first.Should().Be(RunResult.Applied);
-        (await ExistsAsync(Migration.TargetId)).Should().BeFalse();
-        (await ExistsAsync(Migration.KeeperId)).Should().BeTrue();
-        (await CountAsync()).Should().Be(3);
-        Messages
-            .Should()
-            .ContainSingle(m => m.StartsWith("RA-788 APPLIED"))
-            .Which.Should()
-            .NotContain(Reviewer);
+        result.Mode.Should().Be(RunMode.Apply);
+        result.DeletedRecords.Should().Be(2);
+        (await CountAsync()).Should().Be(1);
+    }
 
-        var second = await Applying().RunAsync(Ct);
+    [Fact]
+    public async Task Apply_with_a_swapped_id_and_the_same_count_deletes_nothing()
+    {
+        // One candidate was reviewed; a different one is found now. The count still matches.
+        var reviewed = Candidate();
+        var found = Candidate();
+        await SeedAsync(found, Keeper());
 
-        second.Should().Be(RunResult.AlreadyDone);
-        (await CountAsync()).Should().Be(3);
-        Messages.Should().ContainSingle(m => m.StartsWith("RA-788 APPLIED"));
-        Messages.Should().Contain(m => m.Contains("already deleted"));
+        var result = await ApplyingWith(1, reviewed.Id.ToString()).RunAsync(Ct);
+
+        result.Mode.Should().Be(RunMode.DryRun);
+        result.DeletedRecords.Should().Be(0);
+        (await ExistsAsync(found.Id)).Should().BeTrue();
+        (await CountAsync()).Should().Be(2);
+        _logger
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.LogLevel == LogLevel.Error
+                && e.Message.Contains($"found but not expected: [{found.Id}]")
+                && e.Message.Contains($"expected but not found: [{reviewed.Id}]")
+            );
+    }
+
+    [Fact]
+    public async Task Apply_with_an_extra_expected_id_deletes_nothing()
+    {
+        var candidate = Candidate();
+        await SeedAsync(candidate, Keeper());
+
+        var result = await ApplyingWith(1, $"{candidate.Id},{ObjectId.GenerateNewId()}")
+            .RunAsync(Ct);
+
+        result.Mode.Should().Be(RunMode.DryRun);
+        (await CountAsync()).Should().Be(2);
+        _logger.Entries.Should().Contain(e => e.LogLevel == LogLevel.Error);
+    }
+
+    [Theory]
+    [InlineData(null, "ExpectedApplicationIds is not")]
+    [InlineData(" , ", "ExpectedApplicationIds is not")]
+    [InlineData("not-an-id", "not an application id")]
+    public async Task Apply_with_missing_or_invalid_expected_ids_deletes_nothing(
+        string? ids,
+        string expectedError
+    )
+    {
+        await SeedAsync(Candidate(), Keeper());
+
+        var result = await ApplyingWith(1, ids).RunAsync(Ct);
+
+        result.Mode.Should().Be(RunMode.DryRun);
+        (await CountAsync()).Should().Be(2);
+        _logger
+            .Entries.Should()
+            .Contain(e => e.LogLevel == LogLevel.Error && e.Message.Contains(expectedError));
+    }
+
+    [Fact]
+    public async Task Apply_with_no_candidates_is_already_done_without_an_error()
+    {
+        await SeedAsync(Keeper(), Keeper());
+
+        var result = await ApplyingWith(1, ObjectId.GenerateNewId().ToString()).RunAsync(Ct);
+
+        result.Mode.Should().Be(RunMode.Apply);
+        _logger.Entries.Should().NotContain(e => e.LogLevel == LogLevel.Error);
+        Messages.Should().Contain(m => m.Contains("no candidates found, so nothing to delete"));
+    }
+
+    // --- Grouping ---
+
+    [Fact]
+    public async Task A_match_on_all_five_fields_groups()
+    {
+        await SeedAsync(Candidate(), Keeper());
+
+        var result = await DryRun().RunAsync(Ct);
+
+        result.Groups.Should().Be(1);
+    }
+
+    public static TheoryData<string> Differences =>
+        ["organisationId", "organisationName", "registrationId", "material", "year"];
+
+    [Theory]
+    [MemberData(nameof(Differences))]
+    public async Task A_difference_in_any_one_field_does_not_group(string field)
+    {
+        await SeedAsync(
+            Candidate(),
+            field switch
+            {
+                "organisationId" => App(ApplicationStatus.Updated, 500131, organisationId: "reex-2"),
+                "organisationName" => App(
+                    ApplicationStatus.Updated,
+                    500131,
+                    organisationName: "Other Ltd"
+                ),
+                "registrationId" => App(ApplicationStatus.Updated, 500131, registrationId: "reg-id-2"),
+                "material" => App(ApplicationStatus.Updated, 500131, material: MaterialType.Glass),
+                // The same organisation carries across years: an abandoned draft for one year is
+                // not a duplicate of a live application for another.
+                _ => App(ApplicationStatus.Updated, 500131, year: 2026),
+            }
+        );
+
+        var result = await Applying().RunAsync(Ct);
+
+        result.Groups.Should().Be(0);
+        (await CountAsync()).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task The_organisation_name_match_is_exact()
+    {
+        await SeedAsync(
+            Candidate(),
+            App(ApplicationStatus.Updated, 500131, organisationName: OrganisationName.ToUpperInvariant())
+        );
+
+        var result = await DryRun().RunAsync(Ct);
+
+        result.Groups.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Withdrawn_records_are_ignored()
+    {
+        // The Withdrawn record is neither grouped, kept nor deleted: this leaves a group of one.
+        var withdrawn = App(ApplicationStatus.Withdrawn, null);
+        await SeedAsync(Candidate(), withdrawn);
+
+        var result = await Applying().RunAsync(Ct);
+
+        result.Groups.Should().Be(0);
+        (await ExistsAsync(withdrawn.Id)).Should().BeTrue();
+        (await CountAsync()).Should().Be(2);
     }
 
     [Theory]
     [InlineData(null)]
-    [InlineData(Migration.OrgId)]
-    public async Task A_backfilled_or_missing_target_orgId_passes(int? targetOrgId)
+    [InlineData("")]
+    public async Task A_null_or_empty_key_field_leaves_the_record_ungrouped(string? blank)
     {
-        await SeedProductionShapeAsync(targetOrgId);
+        await SeedAsync(
+            Candidate(),
+            Keeper(),
+            App(ApplicationStatus.Saved, null, organisationName: blank),
+            App(ApplicationStatus.Saved, null, organisationId: blank),
+            App(ApplicationStatus.Saved, null, registrationId: blank)
+        );
+
+        var result = await DryRun().RunAsync(Ct);
+
+        result.Groups.Should().Be(1);
+        result.Candidates.Should().Be(1);
+        result.UngroupedMissingKey.Should().Be(3);
+    }
+
+    [Theory]
+    [InlineData("REG-0002")]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task The_registration_reference_is_not_a_grouping_attribute(string? other)
+    {
+        var candidate = Candidate();
+        await SeedAsync(candidate, App(ApplicationStatus.Updated, 500131, registration: other));
+
+        var result = await Applying(candidate).RunAsync(Ct);
+
+        result.Groups.Should().Be(1);
+        result.DeletedRecords.Should().Be(1);
+        (await ExistsAsync(candidate.Id)).Should().BeFalse();
+    }
+
+    // --- Outcomes ---
+
+    [Fact]
+    public async Task A_keeper_plus_one_candidate_deletes_the_candidate_and_a_second_run_finds_none()
+    {
+        var candidate = Candidate();
+        var keeper = Keeper();
+        await SeedAsync(candidate, keeper);
+
+        var first = await Applying(candidate).RunAsync(Ct);
+
+        first.Mode.Should().Be(RunMode.Apply);
+        first.DeletedRecords.Should().Be(1);
+        first.RolledBackGroups.Should().Be(0);
+        (await ExistsAsync(candidate.Id)).Should().BeFalse();
+        (await ExistsAsync(keeper.Id)).Should().BeTrue();
+        Messages
+            .Should()
+            .ContainSingle(m => m.StartsWith("RA-788 APPLIED"))
+            .Which.Should()
+            .Contain(candidate.Id.ToString())
+            .And.NotContain(Reviewer);
+
+        var second = await Applying().RunAsync(Ct);
+
+        second.Mode.Should().Be(RunMode.Apply);
+        second.Candidates.Should().Be(0);
+        second.Groups.Should().Be(0);
+        (await CountAsync()).Should().Be(1);
+        Messages.Should().ContainSingle(m => m.StartsWith("RA-788 APPLIED"));
+    }
+
+    [Fact]
+    public async Task A_keeper_plus_two_candidates_deletes_both()
+    {
+        var keeper = Keeper();
+        var (c1, c2) = (Candidate(), Candidate());
+        await SeedAsync(c1, c2, keeper);
+
+        var result = await Applying(c1, c2).RunAsync(Ct);
+
+        result.DeletedRecords.Should().Be(2);
+        (await CountAsync()).Should().Be(1);
+        (await ExistsAsync(keeper.Id)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Only_candidates_is_skipped_no_keeper()
+    {
+        await SeedAsync(Candidate(), Candidate());
 
         var result = await Applying().RunAsync(Ct);
 
-        result.Should().Be(RunResult.Applied);
-        (await ExistsAsync(Migration.TargetId)).Should().BeFalse();
-    }
-
-    // --- Aborts ---
-
-    // Each case names the reason it must abort with, so it cannot pass by tripping another check.
-    public static TheoryData<string, string> TargetMismatches =>
-        new()
-        {
-            { "status", "status=Submitted" },
-            { "registration", "registrationMatches=False" },
-            { "year", "year=2026" },
-            { "material", "material=Glass" },
-            { "orgId", "orgId=500999" },
-        };
-
-    [Theory]
-    [MemberData(nameof(TargetMismatches))]
-    public async Task A_target_that_does_not_match_aborts(string mismatch, string reason)
-    {
-        await SeedAsync(
-            mismatch switch
-            {
-                "status" => Target(status: ApplicationStatus.Submitted),
-                "registration" => Target(registrationId: "68da9750c020f0e3dff99999"),
-                "year" => Target(year: 2026),
-                "material" => Target(material: MaterialType.Glass),
-                _ => Target(orgId: 500999),
-            },
-            Keeper()
-        );
-
-        await AssertAbortedAsync(Applying(), $"target {Migration.TargetId} is ", reason);
-        // The registration read from the database is never logged, only whether it matches.
-        Messages.Should().NotContain(m => m.Contains("68da9750c020f0e3dff99999"));
-    }
-
-    public static TheoryData<string, string> KeeperMismatches =>
-        new()
-        {
-            { "missing", $"keeper {Migration.KeeperId} not found" },
-            { "status", "status=Saved" },
-            { "organisation", "sameReExOrganisation=False" },
-            { "material", "material=Glass" },
-            { "orgId", "orgId=500999" },
-        };
-
-    [Theory]
-    [MemberData(nameof(KeeperMismatches))]
-    public async Task A_keeper_that_is_missing_or_does_not_match_aborts(string mismatch, string reason)
-    {
-        await SeedAsync(Target());
-        switch (mismatch)
-        {
-            case "status":
-                await SeedAsync(Keeper(status: ApplicationStatus.Saved));
-                break;
-            case "organisation":
-                await SeedAsync(Keeper(organisationId: "reex-other"));
-                break;
-            case "material":
-                await SeedAsync(Keeper(material: MaterialType.Glass));
-                break;
-            case "orgId":
-                await SeedAsync(Keeper(orgId: 500999));
-                break;
-        }
-
-        await AssertAbortedAsync(Applying(), $"keeper {Migration.KeeperId} ", reason);
+        result.SkippedNoKeeper.Should().Be(1);
+        result.Candidates.Should().Be(0);
+        (await CountAsync()).Should().Be(2);
+        Messages.Should().Contain(m => m.Contains("outcome=skipped-no-keeper"));
     }
 
     [Fact]
-    public async Task A_third_live_application_in_the_group_aborts()
+    public async Task Only_keepers_is_skipped_no_candidate()
     {
+        await SeedAsync(Keeper(), Keeper());
+
+        var result = await Applying().RunAsync(Ct);
+
+        result.SkippedNoCandidate.Should().Be(1);
+        (await CountAsync()).Should().Be(2);
+        Messages.Should().Contain(m => m.Contains("outcome=skipped-no-candidate"));
+    }
+
+    [Fact]
+    public async Task A_record_with_an_orgId_or_a_status_other_than_Saved_is_a_keeper()
+    {
+        // Saved with an orgId, and Submitted without one: neither is a candidate, so this group
+        // has only keepers.
         await SeedAsync(
-            Target(),
+            App(ApplicationStatus.Saved, 500131),
+            App(ApplicationStatus.Submitted, null)
+        );
+
+        var result = await Applying().RunAsync(Ct);
+
+        result.Candidates.Should().Be(0);
+        result.SkippedNoCandidate.Should().Be(1);
+        (await CountAsync()).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_Saved_record_with_an_orgId_or_a_Submitted_record_is_kept_beside_a_candidate()
+    {
+        var candidate = Candidate();
+        var savedWithOrgId = App(ApplicationStatus.Saved, 500131);
+        var submitted = App(ApplicationStatus.Submitted, null);
+        await SeedAsync(candidate, savedWithOrgId, submitted);
+
+        var result = await Applying(candidate).RunAsync(Ct);
+
+        result.DeletedRecords.Should().Be(1);
+        (await ExistsAsync(candidate.Id)).Should().BeFalse();
+        (await ExistsAsync(savedWithOrgId.Id)).Should().BeTrue();
+        (await ExistsAsync(submitted.Id)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Several_groups_are_handled_independently()
+    {
+        var first = Candidate();
+        var other = Candidate(2028);
+        await SeedAsync(
+            first,
             Keeper(),
-            Application(null, ApplicationStatus.Saved, null)
+            other,
+            Keeper(2028),
+            Candidate(2029),
+            Candidate(2029),
+            Keeper(2030),
+            Keeper(2030)
         );
 
-        await AssertAbortedAsync(Applying(), "the group holds 3 live applications; expected 2");
+        var result = await Applying(first, other).RunAsync(Ct);
+
+        result.Groups.Should().Be(4);
+        result.DeletedRecords.Should().Be(2);
+        result.SkippedNoKeeper.Should().Be(1);
+        result.SkippedNoCandidate.Should().Be(1);
+        (await CountAsync()).Should().Be(6);
+        (await ExistsAsync(other.Id)).Should().BeFalse();
     }
+
+    // --- Rollbacks: that group is untouched and the others still go ahead ---
 
     [Fact]
-    public async Task A_missing_target_with_no_live_keeper_aborts()
+    public async Task A_candidate_edited_between_scan_and_delete_rolls_that_group_back()
     {
-        await SeedAsync(Keeper(status: ApplicationStatus.Withdrawn));
-
-        await AssertAbortedAsync(
-            Applying(),
-            $"target {Migration.TargetId} not found and keeper {Migration.KeeperId} is status=Withdrawn"
-        );
-        (await ExistsAsync(Migration.KeeperId)).Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task A_missing_target_and_missing_keeper_aborts()
-    {
-        await AssertAbortedAsync(
-            Applying(),
-            $"target {Migration.TargetId} not found and keeper {Migration.KeeperId} is missing"
-        );
-    }
-
-    private async Task AssertAbortedAsync(Migration migration, params string[] reasonParts)
-    {
-        var before = await CountAsync();
+        var edited = Candidate();
+        var untouched = Candidate(2028);
+        await SeedAsync(edited, Keeper(), untouched, Keeper(2028));
+        var migration = Applying(edited, untouched);
+        migration.BeforeDeleteForTest = async (ids, token) =>
+        {
+            if (ids.Contains(edited.Id!.Value))
+                await _applications.UpdateOneAsync(
+                    a => a.Id == edited.Id,
+                    Builders<AccreditationApplicationModel>.Update.Inc(a => a.Version, 1),
+                    cancellationToken: token
+                );
+        };
 
         var result = await migration.RunAsync(Ct);
 
-        result.Should().Be(RunResult.Aborted);
-        (await CountAsync()).Should().Be(before);
-        Messages.Should().NotContain(m => m.StartsWith("RA-788 APPLIED"));
-        var aborted = _logger
-            .Entries.Should()
-            .ContainSingle(e =>
-                e.LogLevel == LogLevel.Error
-                && e.Message.StartsWith("RA-788 APPLY: aborted, nothing has been written")
-            )
-            .Which.Message;
-        foreach (var part in reasonParts)
-            aborted.Should().Contain(part);
+        result.RolledBackGroups.Should().Be(1);
+        result.DeletedRecords.Should().Be(1);
+        (await ExistsAsync(edited.Id)).Should().BeTrue();
+        (await ExistsAsync(untouched.Id)).Should().BeFalse();
+        Messages.Should().Contain(m => m.Contains("removed or changed after the scan"));
     }
 
-    // --- Rollbacks ---
-
     [Fact]
-    public async Task A_target_edited_after_the_checks_rolls_back()
+    public async Task A_keeper_withdrawn_inside_the_transaction_rolls_that_group_back()
     {
-        await SeedProductionShapeAsync();
-        var migration = Applying();
-        migration.BeforeDeleteForTest = async token =>
-            await _applications.UpdateOneAsync(
-                a => a.Id == Migration.TargetId,
-                Builders<AccreditationApplicationModel>.Update.Inc(a => a.Version, 1),
-                cancellationToken: token
+        var candidate = Candidate();
+        var keeper = Keeper();
+        var other = Candidate(2028);
+        await SeedAsync(candidate, keeper, other, Keeper(2028));
+        var migration = Applying(candidate, other);
+        migration.AfterDeleteForTest = async (ids, session, token) =>
+        {
+            if (ids.Contains(candidate.Id!.Value))
+                await _applications.UpdateOneAsync(
+                    session,
+                    a => a.Id == keeper.Id,
+                    Builders<AccreditationApplicationModel>.Update.Set(
+                        a => a.ApplicationStatus,
+                        ApplicationStatus.Withdrawn
+                    ),
+                    cancellationToken: token
+                );
+        };
+
+        var result = await migration.RunAsync(Ct);
+
+        result.RolledBackGroups.Should().Be(1);
+        result.DeletedRecords.Should().Be(1);
+        (await ExistsAsync(candidate.Id)).Should().BeTrue();
+        (await _applications.Find(a => a.Id == keeper.Id).SingleAsync(Ct))
+            .ApplicationStatus.Should()
+            .Be(ApplicationStatus.Updated);
+        (await ExistsAsync(other.Id)).Should().BeFalse();
+        Messages
+            .Should()
+            .Contain(m =>
+                m.StartsWith("RA-788 APPLY: rolled back")
+                && m.Contains("reason=a keeper is no longer live")
             );
-
-        var result = await migration.RunAsync(Ct);
-
-        result.Should().Be(RunResult.RolledBack);
-        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
-        Messages.Should().Contain(m => m.Contains("target changed after the checks"));
     }
 
-    // Another instance deleting the target between this one's checks and its delete is not a
-    // rollback: the work is done.
     [Fact]
-    public async Task A_target_deleted_by_another_run_after_the_checks_is_already_done()
+    public async Task A_group_not_left_with_only_its_keepers_rolls_back()
     {
-        await SeedProductionShapeAsync();
-        var migration = Applying();
-        migration.BeforeDeleteForTest = async token =>
-            await _applications.DeleteOneAsync(a => a.Id == Migration.TargetId, token);
+        var candidate = Candidate();
+        await SeedAsync(candidate, Keeper());
+        var migration = Applying(candidate);
+        migration.AfterDeleteForTest = async (_, session, token) =>
+            await _applications.InsertOneAsync(session, Candidate(), cancellationToken: token);
 
         var result = await migration.RunAsync(Ct);
 
-        result.Should().Be(RunResult.AlreadyDone);
-        (await ExistsAsync(Migration.KeeperId)).Should().BeTrue();
-        Messages.Should().Contain(m => m.Contains("already deleted by another run"));
-        Messages.Should().NotContain(m => m.Contains("rolled back"));
-        Messages.Should().NotContain(m => m.StartsWith("RA-788 APPLIED"));
+        result.RolledBackGroups.Should().Be(1);
+        (await ExistsAsync(candidate.Id)).Should().BeTrue();
+        (await CountAsync()).Should().Be(2);
+        Messages
+            .Should()
+            .Contain(m =>
+                m.Contains("reason=the group would hold 2 live applications; expected 1")
+            );
+    }
+
+    [Fact]
+    public async Task A_fault_after_a_delete_rolls_that_group_back_and_the_others_go_ahead()
+    {
+        var faulty = Candidate();
+        var fine = Candidate(2028);
+        await SeedAsync(faulty, Keeper(), fine, Keeper(2028));
+        var migration = Applying(faulty, fine);
+        migration.AfterDeleteForTest = (ids, _, _) =>
+            ids.Contains(faulty.Id!.Value)
+                ? throw new InvalidOperationException("injected")
+                : Task.CompletedTask;
+
+        var result = await migration.RunAsync(Ct);
+
+        result.RolledBackGroups.Should().Be(1);
+        result.DeletedRecords.Should().Be(1);
+        (await ExistsAsync(faulty.Id)).Should().BeTrue();
+        (await ExistsAsync(fine.Id)).Should().BeFalse();
+        Messages
+            .Should()
+            .Contain(m =>
+                m.StartsWith("RA-788 APPLY: rolled back") && m.Contains("reason=" + nameof(InvalidOperationException))
+            );
+        Messages.Should().NotContain(m => m.Contains("injected"));
     }
 
     // An error that is not a failed check, then a failed re-read: what happened is unknown, so it
@@ -402,34 +710,35 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
     [Fact]
     public async Task An_error_with_a_failed_re_read_reports_the_outcome_unknown()
     {
-        await SeedProductionShapeAsync();
-        var migration = Applying();
-        migration.AfterDeleteForTest = (_, _) => throw new InvalidOperationException("injected");
+        var candidate = Candidate();
+        await SeedAsync(candidate, Keeper());
+        var migration = Applying(candidate);
+        migration.AfterDeleteForTest = (_, _, _) => throw new InvalidOperationException("injected");
         migration.BeforeVerifyForTest = _ => throw new TimeoutException("injected re-read");
 
         var result = await migration.RunAsync(Ct);
 
-        result.Should().Be(RunResult.OutcomeUnknown);
+        result.OutcomeUnknownGroups.Should().Be(1);
         _logger
             .Entries.Should()
             .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("outcome unknown"))
             .Which.Message.Should()
             .Contain(nameof(InvalidOperationException))
             .And.Contain(nameof(TimeoutException))
-            .And.Contain($"Check whether application {Migration.TargetId} still exists");
+            .And.Contain(candidate.Id.ToString());
         Messages.Should().NotContain(m => m.Contains("rolled back"));
         Messages.Should().NotContain(m => m.StartsWith("RA-788 APPLIED"));
-        Messages.Should().NotContain(m => m.Contains("injected"));
     }
 
-    // Stopping part-way through the delete is logged, not lost, and still stops the run.
+    // Stopping part-way through a delete is logged, not lost, and still stops the run.
     [Fact]
     public async Task Cancellation_during_the_delete_reports_the_outcome_unknown()
     {
-        await SeedProductionShapeAsync();
+        var candidate = Candidate();
+        await SeedAsync(candidate, Keeper());
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        var migration = Applying();
-        migration.AfterDeleteForTest = (_, _) =>
+        var migration = Applying(candidate);
+        migration.AfterDeleteForTest = (_, _, _) =>
         {
             cts.Cancel();
             return Task.CompletedTask;
@@ -438,7 +747,7 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
         var run = () => migration.RunAsync(cts.Token);
 
         await run.Should().ThrowAsync<OperationCanceledException>();
-        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
+        (await ExistsAsync(candidate.Id)).Should().BeTrue();
         _logger
             .Entries.Should()
             .ContainSingle(e => e.LogLevel == LogLevel.Error && e.Message.Contains("outcome unknown"))
@@ -446,100 +755,20 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             .Contain("the run was cancelled during the delete");
     }
 
-    [Fact]
-    public async Task A_fault_after_the_delete_rolls_back()
-    {
-        await SeedProductionShapeAsync();
-        var migration = Applying();
-        migration.AfterDeleteForTest = (_, _) => throw new InvalidOperationException("injected");
-
-        var result = await migration.RunAsync(Ct);
-
-        result.Should().Be(RunResult.RolledBack);
-        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
-        (await CountAsync()).Should().Be(4);
-        Messages
-            .Should()
-            .Contain(m =>
-                m.StartsWith("RA-788 APPLY: rolled back")
-                && m.Contains(nameof(InvalidOperationException))
-            );
-        Messages.Should().NotContain(m => m.Contains("injected"));
-    }
-
-    // The two checks made after the delete, inside the transaction: the change that trips each is
-    // written in the same session, so the transaction sees it and rolls it back with the delete.
-    [Fact]
-    public async Task A_keeper_no_longer_live_after_the_delete_rolls_back()
-    {
-        await SeedProductionShapeAsync();
-        var migration = Applying();
-        migration.AfterDeleteForTest = async (session, token) =>
-            await _applications.UpdateOneAsync(
-                session,
-                a => a.Id == Migration.KeeperId,
-                Builders<AccreditationApplicationModel>.Update.Set(
-                    a => a.ApplicationStatus,
-                    ApplicationStatus.Withdrawn
-                ),
-                cancellationToken: token
-            );
-
-        var result = await migration.RunAsync(Ct);
-
-        result.Should().Be(RunResult.RolledBack);
-        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
-        (
-            await _applications
-                .Find(a => a.Id == Migration.KeeperId)
-                .SingleAsync(Ct)
-        ).ApplicationStatus.Should().Be(ApplicationStatus.Updated);
-        Messages
-            .Should()
-            .Contain(m =>
-                m.StartsWith("RA-788 APPLY: rolled back")
-                && m.Contains("reason=the keeper is no longer live")
-            );
-    }
-
-    [Fact]
-    public async Task A_group_not_left_with_one_live_application_rolls_back()
-    {
-        await SeedProductionShapeAsync();
-        var migration = Applying();
-        migration.AfterDeleteForTest = async (session, token) =>
-            await _applications.InsertOneAsync(
-                session,
-                Application(null, ApplicationStatus.Saved, null),
-                cancellationToken: token
-            );
-
-        var result = await migration.RunAsync(Ct);
-
-        result.Should().Be(RunResult.RolledBack);
-        (await ExistsAsync(Migration.TargetId)).Should().BeTrue();
-        (await CountAsync()).Should().Be(4);
-        Messages
-            .Should()
-            .Contain(m =>
-                m.StartsWith("RA-788 APPLY: rolled back")
-                && m.Contains("reason=the group would hold 2 live applications; expected 1")
-            );
-    }
-
     // --- Logging ---
 
     [Fact]
-    public async Task Every_line_is_prefixed_and_no_personal_data_is_logged()
+    public async Task Every_line_is_prefixed_states_its_mode_and_logs_no_applicant_or_reviewer_data()
     {
-        await SeedProductionShapeAsync();
+        var candidate = Candidate();
+        await SeedAsync(candidate, Keeper(), Candidate(2028));
 
-        await CreateMigration(enabled: true).RunAsync(Ct);
-        await Applying().RunAsync(Ct);
+        await DryRun().RunAsync(Ct);
+        await CreateMigration(true, apply: true, confirmedBy: Reviewer, expected: 5).RunAsync(Ct);
+        await Applying(candidate).RunAsync(Ct);
         await Applying().RunAsync(Ct);
 
         _logger.Entries.Should().NotBeEmpty();
-        Messages.Should().OnlyContain(m => m.StartsWith("RA-788 "));
         Messages
             .Should()
             .OnlyContain(m =>
@@ -547,17 +776,23 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
                 || m.StartsWith("RA-788 APPLY:")
                 || m.StartsWith("RA-788 APPLIED:")
             );
-        foreach (
-            var personal in new[]
-            {
-                PersonalName,
-                PersonalEmail,
-                OrganisationName,
-                ReExOrganisationId,
-                Reviewer,
-            }
-        )
+        foreach (var personal in new[] { PersonalName, PersonalEmail, Reviewer })
             Messages.Should().NotContain(m => m.Contains(personal));
+    }
+
+    [Fact]
+    public async Task Each_group_line_names_the_organisation_so_the_deletion_can_be_reviewed()
+    {
+        await SeedAsync(Candidate(), Keeper());
+
+        await DryRun().RunAsync(Ct);
+
+        Messages
+            .Should()
+            .ContainSingle(m =>
+                m.Contains("group organisationId=" + ReExOrganisationId + " ")
+                && m.Contains("organisationName=" + OrganisationName + " registrationId=")
+            );
     }
 
     // The failure is recorded with its mode on a dry run and an apply alike.
@@ -596,5 +831,66 @@ public sealed class DuplicateApplicationDeletionMigrationTests : IDisposable
             .Which.Message.Should()
             .StartWith(expected)
             .And.Contain("error=");
+    }
+
+    // A setting that fails to bind (ExpectedDeletions=one) makes options.Value throw. That must be
+    // logged, not escape ExecuteAsync and stop the host.
+    [Fact]
+    public async Task ExecuteAsync_logs_settings_that_fail_to_bind_instead_of_throwing()
+    {
+        var migration = new Migration(
+            new ServiceCollection().BuildServiceProvider(),
+            new UnbindableOptions(),
+            _logger
+        );
+
+        await migration.StartAsync(Ct);
+        await (migration.ExecuteTask ?? Task.CompletedTask);
+
+        migration.ExecuteTask!.IsCompletedSuccessfully.Should().BeTrue();
+        _logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error)
+            .Which.Message.Should()
+            .StartWith("RA-788 DRY RUN")
+            .And.Contain("settings could not be read")
+            .And.Contain("error=" + nameof(InvalidOperationException))
+            .And.NotContain("Failed to convert");
+    }
+
+    [Fact]
+    public async Task Real_binding_of_a_non_numeric_ExpectedDeletions_throws_on_read()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["Migrations:Ra788DuplicateApplicationDeletion:ExpectedDeletions"] = "one",
+                }
+            )
+            .Build();
+        var services = new ServiceCollection();
+        services.Configure<DuplicateApplicationDeletionOptions>(
+            configuration.GetSection(DuplicateApplicationDeletionOptions.SectionName)
+        );
+        var options = services
+            .BuildServiceProvider()
+            .GetRequiredService<IOptions<DuplicateApplicationDeletionOptions>>();
+        var migration = new Migration(services.BuildServiceProvider(), options, _logger);
+
+        await migration.StartAsync(Ct);
+        await (migration.ExecuteTask ?? Task.CompletedTask);
+
+        _logger
+            .Entries.Should()
+            .ContainSingle(e => e.LogLevel == LogLevel.Error)
+            .Which.Message.Should()
+            .Contain("settings could not be read");
+    }
+
+    private sealed class UnbindableOptions : IOptions<DuplicateApplicationDeletionOptions>
+    {
+        public DuplicateApplicationDeletionOptions Value =>
+            throw new InvalidOperationException("Failed to convert configuration value 'one'");
     }
 }
