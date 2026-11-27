@@ -91,6 +91,12 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
         update["typeId"]!.GetValue<string>().Should().Be("update-overseas-site");
         update["payload"]!["operatorRequestId"]!.GetValue<string>().Should().Be($"{request.RequestId}:update-overseas-site");
         update["payload"]!["changeType"]!.GetValue<string>().Should().Be("update-overseas-site");
+        // RA-767: one request is one submission: the update group reuses the add group's reference, and both carry
+        // the whole request's size.
+        add["payload"]!.AsObject().ContainsKey("submissionReference").Should().BeFalse();
+        update["payload"]!["submissionReference"]!.GetValue<string>().Should().Be("SUB-2026-0001");
+        add["payload"]!["submissionSize"]!.GetValue<int>().Should().Be(3);
+        update["payload"]!["submissionSize"]!.GetValue<int>().Should().Be(3);
         update["payload"]!.AsObject().ContainsKey("paymentReference").Should().BeFalse();
         update["payload"]!["chargePence"]!.GetValue<int>().Should().Be(0);
         var site = update["payload"]!["sites"]![0]!;

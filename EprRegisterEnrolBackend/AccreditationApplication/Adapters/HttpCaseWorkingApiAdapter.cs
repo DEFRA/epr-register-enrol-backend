@@ -124,11 +124,14 @@ public class HttpCaseWorkingApiAdapter(
         {
             try
             {
+                // RA-767: one operator request is one submission to the regulator, so every group after the first
+                // carries the first group's submission reference for ManagementBe to reuse.
                 var result = await SubmitChangeGroupAsync(
                     changeRequest,
                     accreditation,
                     group.Key,
                     [.. group],
+                    references.Count > 0 ? references[0] : null,
                     endpoint,
                     cancellationToken
                 );
@@ -172,6 +175,7 @@ public class HttpCaseWorkingApiAdapter(
         AccreditationApplicationModel accreditation,
         string changeType,
         IReadOnlyList<ChangeRequestSite> groupSites,
+        string? submissionReference,
         string endpoint,
         CancellationToken cancellationToken
     )
@@ -180,7 +184,7 @@ public class HttpCaseWorkingApiAdapter(
         {
             TypeId = changeType,
             Source = "operator-fe",
-            Payload = BuildChangeRequestPayload(changeRequest, accreditation, changeType, groupSites),
+            Payload = BuildChangeRequestPayload(changeRequest, accreditation, changeType, groupSites, submissionReference),
         };
 
         if (logger.IsEnabled(LogLevel.Information))
@@ -316,11 +320,16 @@ public class HttpCaseWorkingApiAdapter(
         AccreditationChangeRequest changeRequest,
         AccreditationApplicationModel accreditation,
         string changeType,
-        IReadOnlyList<ChangeRequestSite> groupSites
+        IReadOnlyList<ChangeRequestSite> groupSites,
+        string? submissionReference = null
     ) =>
         new
         {
             operatorRequestId = OperatorRequestId(changeRequest, changeType),
+            // RA-767: the submission reference an earlier group of this request was given (absent for the first), and
+            // how many applications the whole request holds, so every group's work items share both.
+            submissionReference,
+            submissionSize = changeRequest.Sites.Count,
             changeType,
             operatorOrganisationId = changeRequest.OrganisationId,
             accreditationApplicationId = changeRequest.ApplicationId,
