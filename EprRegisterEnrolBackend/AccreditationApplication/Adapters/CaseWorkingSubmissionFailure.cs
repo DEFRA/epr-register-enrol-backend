@@ -2,7 +2,11 @@ using System.Net;
 
 namespace EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 
-/// <summary>Whether a failed submission to ManagementBe may still have been saved by it.</summary>
+/// <summary>
+/// The one place a failed submission to ManagementBe is classified: whether it is Case Management's own failure (as
+/// opposed to a defect), and whether ManagementBe may still have saved it. The adapter and the change request submit
+/// both ask here, so they can't disagree.
+/// </summary>
 public static class CaseWorkingSubmissionFailure
 {
     // The statuses ManagementBe returns from validating a submission, before it saves anything, so
@@ -18,14 +22,27 @@ public static class CaseWorkingSubmissionFailure
     ];
 
     /// <summary>
-    /// Not configured means nothing was sent, and the statuses above mean ManagementBe rejected the submission before
-    /// saving it. Any other 4xx, a timeout, a 5xx or an unreadable 2xx may follow a save.
+    /// Whether ManagementBe may hold the submission that failed with <paramref name="ex"/>. Only a failure raised while
+    /// sending or after can follow a save: any other 4xx, a timeout, a 5xx, an unreadable 2xx or the caller going
+    /// away mid-send. Not configured means nothing was sent, the statuses above mean ManagementBe rejected the
+    /// submission before saving it, and any other exception is a defect raised before anything was sent.
     /// </summary>
     public static bool MayHold(Exception ex) =>
         ex switch
         {
             CaseWorkingNotConfiguredException => false,
             HttpRequestException { StatusCode: { } status } => !s_holdsNothingStatuses.Contains(status),
-            _ => true,
+            HttpRequestException or CaseWorkingApiTimeoutException or OperationCanceledException => true,
+            _ => false,
         };
+
+    /// <summary>
+    /// Whether <paramref name="ex"/> is Case Management's own failure, answered as a 503, rather than a defect or the
+    /// caller going away, which are rethrown. A partly held submission is judged by the failure that stopped it.
+    /// </summary>
+    public static bool IsCaseManagementFailure(Exception ex) =>
+        (ex is ChangeRequestPartlySubmittedException { InnerException: { } inner } ? inner : ex)
+            is HttpRequestException
+                or CaseWorkingApiTimeoutException
+                or CaseWorkingNotConfiguredException;
 }

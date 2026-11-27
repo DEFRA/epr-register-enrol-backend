@@ -165,9 +165,13 @@ public static class ChangeRequestRules
             RepatriatedLoads = site.RepatriatedLoads,
         };
 
-    /// <summary>RA-682: whether an update item changes anything: its ORS's details, or an interim site.</summary>
+    /// <summary>
+    /// RA-682: whether an update item changes anything: its ORS's details, an interim site, or new BES evidence.
+    /// </summary>
     public static bool HasChanges(ChangeRequestSite requestSite) =>
-        requestSite.InterimSiteChanges.Count > 0 || requestSite.Proposed != requestSite.Previous;
+        requestSite.InterimSiteChanges.Count > 0
+        || requestSite.Proposed != requestSite.Previous
+        || requestSite.BesEvidence is { BesEvidenceUploads.Count: > 0 };
 
     /// <summary>
     /// RA-682 AC05: whether an item is charged. Only adding an ORS is; the charge, the payment reference and what Case
@@ -414,12 +418,15 @@ public static class ChangeRequestRules
     public static List<string> MissingFields(OverseasSiteModel? site, ChangeRequestSite requestSite)
     {
         // RA-682: an update's details are validated as they are patched and its locked fields can't change, so it can
-        // only be missing a change, or its ORS, if that is no longer accredited.
+        // only be missing a change, its ORS, if that is no longer accredited, or a clean scan of new BES evidence.
         if (requestSite.IsUpdate)
         {
             if (site is null || AccreditationStatus(site) != SiteAccreditationStatus.Accredited)
                 return [Site];
-            return HasChanges(requestSite) ? [] : [Changes];
+            if (!HasChanges(requestSite))
+                return [Changes];
+            var uploadedEvidence = requestSite.BesEvidence is { BesEvidenceUploads.Count: > 0 };
+            return uploadedEvidence && !HasCleanBesEvidence(requestSite.BesEvidence) ? [BesEvidence] : [];
         }
 
         var effective = Effective(site, requestSite.Answers);
@@ -477,7 +484,7 @@ public static class ChangeRequestRules
                     requestSite.SiteName,
                     requestSite.Answers,
                     effective,
-                    // RA-682: an update takes no BES evidence (AC02); BES upload isn't part of changing an ORS.
+                    // RA-682 AC02: an update never needs new BES evidence, though it may add some.
                     !requestSite.IsUpdate && IsBesEvidenceRequired(site, effective),
                     requestSite.BesEvidence,
                     missing,
@@ -490,7 +497,8 @@ public static class ChangeRequestRules
                     requestSite.CaseManagementReference,
                     requestSite.Previous,
                     requestSite.Proposed,
-                    requestSite.InterimSiteChanges
+                    requestSite.InterimSiteChanges,
+                    IsBesEvidenceRequired(site, effective) && !request.IsFixed(requestSite)
                 );
             })
             .ToList();
@@ -532,7 +540,10 @@ public sealed record ChangeRequestSiteView(
     // RA-682: an update's details as they were and as proposed, and its interim site changes. Null and empty on an add.
     OverseasSiteDetails? Previous = null,
     OverseasSiteDetails? Proposed = null,
-    List<InterimSiteChange>? InterimSiteChanges = null
+    List<InterimSiteChange>? InterimSiteChanges = null,
+    // RA-682: whether BES evidence files can be uploaded to the item now: its ORS takes BES evidence (outside the EU
+    // and OECD, conditions of export not met) and Case Management can't hold the item. On an add or an update.
+    bool BesEvidenceUploadAllowed = false
 );
 
 /// <summary>

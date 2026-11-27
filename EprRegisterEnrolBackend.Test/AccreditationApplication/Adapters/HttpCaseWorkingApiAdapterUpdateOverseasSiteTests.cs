@@ -199,6 +199,38 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
         handler.Bodies.Should().ContainSingle();
     }
 
+    // AC02: an update can add BES evidence: it goes as addedBesEvidence, beside the ORS's own unchanged besEvidence.
+    [Fact]
+    public async Task An_updates_added_BES_evidence_is_sent_apart_from_the_ORS_own()
+    {
+        var handler = new QueuedHandler((HttpStatusCode.Created, Response("SUB-2026-0010", (902503, "IYC-ORS-2026-00010"))));
+        var update = Update(902503, "003", "Milano Riciclo Renamed");
+        update.BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel { FileId = "new-1", Filename = "new.pdf", S3Key = "bes-evidence/new-1", ScanStatus = "Clean" },
+            ],
+        };
+
+        await AdapterFor(handler).SubmitChangeRequestAsync(Request(update), Accreditation, Ct);
+
+        var site = handler.Bodies.Single()["payload"]!["sites"]![0]!;
+        site["addedBesEvidence"]!["files"]!.AsArray().Select(f => f!["fileId"]!.GetValue<string>()).Should().Equal("new-1");
+        var held = ChangeRequestRules.FindSite(Accreditation, 902503)!.BesEvidence?.BesEvidenceUploads ?? [];
+        site["besEvidence"]!["files"]!.AsArray().Should().HaveCount(held.Count);
+    }
+
+    [Fact]
+    public async Task An_update_without_added_BES_evidence_sends_none()
+    {
+        var handler = new QueuedHandler((HttpStatusCode.Created, Response("SUB-2026-0011", (902503, "IYC-ORS-2026-00011"))));
+
+        await AdapterFor(handler).SubmitChangeRequestAsync(Request(Update(902503, "003", "Renamed")), Accreditation, Ct);
+
+        handler.Bodies.Single()["payload"]!["sites"]![0]!.AsObject().ContainsKey("addedBesEvidence").Should().BeFalse();
+    }
+
     [Fact]
     public async Task An_update_whose_ORS_is_not_found_is_not_sent()
     {

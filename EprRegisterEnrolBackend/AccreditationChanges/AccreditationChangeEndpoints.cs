@@ -41,8 +41,9 @@ public static class AccreditationChangeEndpoints
     private const string ItemFixedMessage =
         "This change has already been sent to the regulator, so it can't be changed. Submit the request again instead.";
 
-    private const string UpdateTakesNoBesEvidenceMessage =
-        "A change to an accredited overseas site's details takes no evidence of broadly equivalent standards.";
+    // RA-682 AC02: an update can add BES evidence but not amend what the ORS already holds.
+    private const string HeldBesEvidenceMessage =
+        "Evidence of broadly equivalent standards that the approved overseas site already holds can't be removed.";
 
     private const string PaymentReferenceField = nameof(SubmitRequest.PaymentReference);
     private const string PaymentReferenceRequiredMessage = "Payment reference is required.";
@@ -897,9 +898,8 @@ public static class AccreditationChangeEndpoints
         var requestSite = draft!.Sites.Find(s => s.SiteId == siteId);
         if (requestSite is null)
             return Results.NotFound();
-        // RA-682 AC02: an update can't amend an ORS's BES evidence.
-        if (requestSite.IsUpdate)
-            return Results.UnprocessableEntity(UpdateTakesNoBesEvidenceMessage);
+        // RA-682 AC02: an update can add new BES evidence (the ORS's own files are untouched), by the same rules as an
+        // add, so it is refused for an ORS that needs none.
         // Case Management may hold this site with the files it was sent, and would replay them.
         if (draft.IsFixed(requestSite))
             return Results.Conflict(ItemFixedMessage);
@@ -971,16 +971,20 @@ public static class AccreditationChangeEndpoints
         if (error is not null)
             return error;
         var holder = draft!.Sites.Find(s => s.SiteId == siteId);
-        if (holder is { IsUpdate: true })
-            return Results.UnprocessableEntity(UpdateTakesNoBesEvidenceMessage);
         if (holder is not null && draft.IsFixed(holder))
             return Results.Conflict(ItemFixedMessage);
+        // Only a file uploaded on this request is removed. RA-682 AC02: an update can't remove one the ORS holds.
         var uploads = holder?.BesEvidence?.BesEvidenceUploads;
-        if (uploads is null || uploads.RemoveAll(f => f.FileId == fileId) == 0)
-            return Results.NotFound();
-
-        return await SaveAndViewAsync(draft, accreditation!, services);
+        if (uploads is not null && uploads.RemoveAll(f => f.FileId == fileId) > 0)
+            return await SaveAndViewAsync(draft, accreditation!, services);
+        if (holder is { IsUpdate: true } && HoldsBesEvidenceFile(accreditation!, siteId, fileId))
+            return Results.UnprocessableEntity(HeldBesEvidenceMessage);
+        return Results.NotFound();
     }
+
+    private static bool HoldsBesEvidenceFile(AccreditationApplicationModel accreditation, int siteId, string fileId) =>
+        ChangeRequestRules.FindSite(accreditation, siteId)?.BesEvidence?.BesEvidenceUploads.Exists(f => f.FileId == fileId)
+        == true;
 
     internal const string BesEvidenceMaxFilesKey = "besEvidenceMaxFiles";
     internal const string BesEvidenceDuplicateFilenameKey = "besEvidenceDuplicateFilename";
@@ -1171,7 +1175,7 @@ public static class AccreditationChangeEndpoints
             MarkWhatCaseManagementMayHold(draft, ex);
             await ReopenAsync(draft, services, logger);
             // A defect, or the caller going away, is rethrown rather than answered as Case Management's failure.
-            if (!IsCaseManagementFailure(ex is ChangeRequestPartlySubmittedException { InnerException: { } inner } ? inner : ex))
+            if (!CaseWorkingSubmissionFailure.IsCaseManagementFailure(ex))
                 throw;
             logger.LogError(
                 ex,
@@ -1206,12 +1210,10 @@ public static class AccreditationChangeEndpoints
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation));
     }
 
-    private static bool IsCaseManagementFailure(Exception ex) =>
-        ex is HttpRequestException or CaseWorkingApiTimeoutException or CaseWorkingNotConfiguredException;
-
     // See Submit. The adapter sends the groups in SubmissionGroups' order and stops at the first failure: a
     // ChangeRequestPartlySubmittedException names the groups it holds and the one that failed, and any other
-    // exception means the first group failed.
+    // exception means the first group failed. A defect raised before anything was sent leaves it holding nothing
+    // (CaseWorkingSubmissionFailure.MayHold), so nothing is fixed by it.
     private static void MarkWhatCaseManagementMayHold(AccreditationChangeRequest draft, Exception ex)
     {
         var (held, failed, failedMayBeHeld) = ex is ChangeRequestPartlySubmittedException partial

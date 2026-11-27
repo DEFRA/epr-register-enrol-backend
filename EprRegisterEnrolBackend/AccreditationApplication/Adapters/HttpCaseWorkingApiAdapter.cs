@@ -146,8 +146,7 @@ public class HttpCaseWorkingApiAdapter(
                 throw new ChangeRequestPartlySubmittedException(
                     held,
                     group.Key,
-                    (ex is HttpRequestException or CaseWorkingApiTimeoutException or OperationCanceledException)
-                        && CaseWorkingSubmissionFailure.MayHold(ex),
+                    CaseWorkingSubmissionFailure.MayHold(ex),
                     ex
                 );
             }
@@ -348,9 +347,10 @@ public class HttpCaseWorkingApiAdapter(
             sites = groupSites.Select(site =>
             {
                 var ors = ChangeRequestRules.FindSite(accreditation, site.SiteId);
-                // RA-682: an update is sent as the ORS stands, with its details as they were and as proposed and its
-                // interim site changes. Its locked values and BES evidence are the ORS's own. Submit refuses an update
-                // whose ORS isn't accredited, so a missing one here is a defect, not something to send.
+                // RA-682: an update is sent as the ORS stands, with its details as they were and as proposed, its
+                // interim site changes and any BES evidence the operator added. Its locked values and BES evidence are
+                // the ORS's own. Submit refuses an update whose ORS isn't accredited, so a missing one here is a
+                // defect, not something to send.
                 if (site.IsUpdate)
                     return CaseManagementSiteFrom(
                         ors
@@ -365,6 +365,9 @@ public class HttpCaseWorkingApiAdapter(
                         Previous = site.Previous,
                         Proposed = site.Proposed,
                         InterimSiteChanges = site.InterimSiteChanges,
+                        AddedBesEvidence = site.BesEvidence is { BesEvidenceUploads.Count: > 0 }
+                            ? BesEvidenceFiles(site.BesEvidence)
+                            : null,
                         ChargePence = site.ChargePence,
                     };
                 var effective = ChangeRequestRules.Effective(ors, site.Answers);
@@ -1169,6 +1172,9 @@ public class HttpCaseWorkingApiAdapter(
         public OverseasSiteDetails? Previous { get; init; }
         public OverseasSiteDetails? Proposed { get; init; }
         public List<InterimSiteChange>? InterimSiteChanges { get; init; }
+
+        // RA-682 AC02: the BES evidence files an update adds to the ORS's own (BesEvidence). Absent when it adds none.
+        public object? AddedBesEvidence { get; init; }
     }
 
     // Shared by BuildPayload and BuildSectionsPayload, as above.

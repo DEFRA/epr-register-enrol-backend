@@ -5,6 +5,7 @@ using EprRegisterEnrolBackend.AccreditationApplication.Adapters;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
+using EprRegisterEnrolBackend.CdpUploader.Models;
 using EprRegisterEnrolBackend.DevSeed;
 using FluentAssertions;
 using NSubstitute;
@@ -477,18 +478,109 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         _factory.FakeChangeRequests.All.Single().ChangeType.Should().Be(UpdateType);
     }
 
-    // AC02: BES evidence can't be amended on an update.
+    // AC02: an update can upload new BES evidence but not amend what the ORS holds.
     [Fact]
-    public async Task An_update_takes_no_BES_evidence()
+    public async Task An_update_can_add_BES_evidence_and_take_it_out_again_but_not_the_ORS_own()
+    {
+        var ors = TakesBesEvidence(902501);
+        var started = SiteIn(await Json(await StartUpdate(902501)), 902501);
+        started.GetProperty("besEvidenceUploadAllowed").GetBoolean().Should().BeTrue();
+        started.GetProperty("besEvidenceRequired").GetBoolean().Should().BeFalse();
+
+        var uploaded = await UploadBes(902501, "new-1", "new.pdf");
+
+        uploaded.StatusCode.Should().Be(HttpStatusCode.Created);
+        var site = SiteIn(await Json(uploaded), 902501);
+        site.GetProperty("besEvidence").GetProperty("besEvidenceUploads").EnumerateArray()
+            .Select(f => f.GetProperty("fileId").GetString()).Should().Equal("new-1");
+        // New evidence is a change on its own.
+        site.GetProperty("isComplete").GetBoolean().Should().BeTrue();
+
+        (await _client.DeleteAsync($"{Sites}/902501/bes-evidence/files/held-1", Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.UnprocessableEntity);
+        ors.BesEvidence!.BesEvidenceUploads.Select(f => f.FileId).Should().Equal("held-1");
+
+        var removed = await _client.DeleteAsync($"{Sites}/902501/bes-evidence/files/new-1", Ct);
+        removed.StatusCode.Should().Be(HttpStatusCode.OK);
+        SiteIn(await Json(removed), 902501).GetProperty("besEvidence").GetProperty("besEvidenceUploads")
+            .GetArrayLength().Should().Be(0);
+        (await _client.DeleteAsync($"{Sites}/902501/bes-evidence/files/unknown", Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task An_updates_new_BES_evidence_cannot_share_a_name_with_the_ORS_own()
+    {
+        TakesBesEvidence(902501);
+        await StartUpdate(902501);
+
+        (await UploadBes(902501, "new-1", "held.pdf")).StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        _factory.FakeChangeRequests.All.Single().Sites.Single().BesEvidence.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task An_update_to_an_ORS_that_takes_no_BES_evidence_takes_no_upload()
     {
         await StartUpdate(902501);
 
-        (await _client.PostAsJsonAsync($"{Sites}/902501/bes-evidence/files", new { fileUploadId = "file-1" }, Ct))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.UnprocessableEntity);
-        (await _client.DeleteAsync($"{Sites}/902501/bes-evidence/files/file-1", Ct))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.UnprocessableEntity);
+        var view = await Json(await _client.GetAsync(Base, Ct));
+        SiteIn(view.GetProperty("activeRequest"), 902501)
+            .GetProperty("besEvidenceUploadAllowed").GetBoolean().Should().BeFalse();
+        (await UploadBes(902501, "new-1", "new.pdf")).StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    [Fact]
+    public async Task An_update_with_only_new_BES_evidence_is_submitted_with_it()
+    {
+        TakesBesEvidence(902501);
+        await StartUpdate(902501);
+        await UploadBes(902501, "new-1", "new.pdf");
+
+        (await _client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Sites.Single().BesEvidence!.BesEvidenceUploads.Select(f => f.FileId).Should().Equal("new-1");
+        stored.ChargePence.Should().Be(0);
+    }
+
+    // Makes the seeded ORS one that takes BES evidence (outside the EU and OECD, conditions of export not met), holding
+    // one file of its own.
+    private OverseasSiteModel TakesBesEvidence(int siteId)
+    {
+        var ors = ChangeRequestRules.FindSite(_accreditation, siteId)!;
+        ors.IsEu = false;
+        ors.IsOecd = false;
+        ors.ConditionsOfExport = false;
+        ors.BesEvidence = new BesEvidenceModel
+        {
+            BesEvidenceUploads =
+            [
+                new BesEvidenceFileModel { FileId = "held-1", Filename = "held.pdf", S3Key = "bes-evidence/held-1", ScanStatus = "Clean" },
+            ],
+        };
+        return ors;
+    }
+
+    private async Task<HttpResponseMessage> UploadBes(int siteId, string fileId, string filename)
+    {
+        var fileUploadId = Guid.NewGuid().ToString();
+        await _factory.FakePendingUploadService.CreateAsync(fileUploadId, "http://cdp/status", ct: Ct);
+        await _factory.FakePendingUploadService.CompleteAsync(
+            fileUploadId,
+            new CdpCallbackFile
+            {
+                FileId = fileId,
+                Filename = filename,
+                FileStatus = "complete",
+                ContentType = "application/pdf",
+                S3Key = $"bes-evidence/{fileId}",
+                S3Bucket = "bes-evidence",
+            },
+            Ct
+        );
+        return await _client.PostAsJsonAsync($"{Sites}/{siteId}/bes-evidence/files", new { fileUploadId }, Ct);
     }
 
     [Fact]
@@ -707,6 +799,28 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         (await client.DeleteAsync($"{Sites}/902504/bes-evidence/files/file-1", Ct))
             .StatusCode.Should()
             .Be(HttpStatusCode.Conflict);
+    }
+
+    // A defect thrown before anything was sent (here, by the adapter for the first group) leaves Case Management
+    // holding nothing, so nothing is fixed and the request can still be changed.
+    [Fact]
+    public async Task A_defect_before_anything_was_sent_fixes_nothing()
+    {
+        var (factory, client, _) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(factory, new InvalidOperationException("Update item for site 902501 has no ORS on the accreditation."));
+        await StartMixedRequest(client);
+
+        var response = await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        var stored = factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.InProgress);
+        stored.SentToCaseManagement.Should().BeFalse();
+        stored.Sites.Select(s => s.CaseManagementMayHold).Should().AllBeEquivalentTo(false);
+        (await client.DeleteAsync($"{Sites}/902504", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsJsonAsync(Sites, new { siteId = 902505 }, Ct)).StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
     // AC02: the interim site's country and recycling operations are its own, however the form sent them back.
