@@ -130,7 +130,7 @@ public partial class StubReExApiAdapterTests
             .Value!.RegistrationReference.Should()
             .MatchRegex(RegistrationReferenceFormat)
             .And.StartWith(
-                "R27ER999999",
+                "R26ER999999",
                 because: "an English reprocessor still gets a reference built from its org number"
             );
         result
@@ -457,7 +457,9 @@ public partial class StubReExApiAdapterTests
         var registration = result.Value!.RegistrationReference!;
         var accreditation = result.Value.AccreditationNumber!;
         accreditation.Should().StartWith("A").And.HaveLength(registration.Length);
-        accreditation[1..11].Should().Be(registration[1..11]);
+        // The accreditation's own year, then the registration's agency, process type and OrgId.
+        accreditation[1..3].Should().Be("25");
+        accreditation[3..11].Should().Be(registration[3..11]);
         accreditation[15..].Should().Be(registration[15..]);
         accreditation[11..15].Should().NotBe(registration[11..15]);
     }
@@ -576,8 +578,8 @@ public partial class StubReExApiAdapterTests
         result
             .Value.RegistrationReference.Should()
             .StartWith(
-                "R25ER",
-                because: "YY is the year requested from ReEx, and a test organisation is an English reprocessor"
+                "R26ER",
+                because: "YY is the stub's fixed registration year, and a test organisation is an English reprocessor"
             )
             .And.EndWith("PL");
     }
@@ -593,8 +595,24 @@ public partial class StubReExApiAdapterTests
         var again = await NewSut()
             .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Plastic, 2025);
 
-        first.Value!.RegistrationReference.Should().Be("R25ER9730739108PL");
+        first.Value!.RegistrationReference.Should().Be("R26ER9730739108PL");
         again.Value!.RegistrationReference.Should().Be(first.Value.RegistrationReference);
+    }
+
+    // RA-753: a registration's number is issued once, so seeding the same registration for
+    // another year gives the same number. With DualWrite on, a different one would make Seed
+    // overwrite the number the domain model holds. Each year's accreditation number still differs.
+    [Fact]
+    public async Task GetAccreditationAsync_SameRegistrationInTwoYears_GivesTheSameRegistrationReference()
+    {
+        var earlier = await NewSut()
+            .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Plastic, 2026);
+        var later = await NewSut()
+            .GetAccreditationAsync("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Plastic, 6078);
+
+        later.Value!.RegistrationReference.Should().Be(earlier.Value!.RegistrationReference);
+        earlier.Value.AccreditationNumber.Should().StartWith("A26");
+        later.Value.AccreditationNumber.Should().StartWith("A78");
     }
 
     [Fact]
@@ -735,8 +753,9 @@ public partial class StubReExApiAdapterTests
     }
 
     // Pinned literals across every segment (nation, process type, org number, hashed sequence,
-    // material, a year whose YY is 00 or 09), so a change in how the reference is formatted
-    // shows here: deployed stub environments have applications holding these references.
+    // material, and years asked for whose YY is 00 or 09), so a change in how the reference is
+    // formatted shows here: deployed stub environments have applications holding these
+    // references. RA-753: the YY is the stub's fixed registration year, 26, whatever year is asked.
     [Theory]
     [InlineData(
         "50005",
@@ -746,9 +765,9 @@ public partial class StubReExApiAdapterTests
         "R26EX0500051670PL"
     )]
     [InlineData("60002", "aaa000000000000000060002", MaterialType.Paper, 2026, "R26SR0600022898PA")]
-    [InlineData("60004", "aaa000000000000000060004", MaterialType.Aluminium, 2100, "R00NR0600047184AL")]
-    [InlineData("60003", "aaa000000000000000060003", MaterialType.Steel, 2009, "R09WR0600030517ST")]
-    [InlineData("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Glass, 2027, "R27ER9730739108GO")]
+    [InlineData("60004", "aaa000000000000000060004", MaterialType.Aluminium, 2100, "R26NR0600047184AL")]
+    [InlineData("60003", "aaa000000000000000060003", MaterialType.Steel, 2009, "R26WR0600030517ST")]
+    [InlineData("e2e-c0ffee", "e2e-reg-c0ffee", MaterialType.Glass, 2027, "R26ER9730739108GO")]
     [InlineData(
         "c14854d9-e20a-41b3-87d5-a1fd4bbe2153",
         "reg-1",

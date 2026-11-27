@@ -153,9 +153,9 @@ public class TestOrganisationJourneyTests(MongoIntegrationFixture fixture)
 
         foreach (var reference in new[] { first, second })
         {
-            // R + 25 (the prior year asked of ReEx) + E (England) + R (reprocessor) + the test
+            // R + 26 (the stub's fixed registration year) + E (England) + R (reprocessor) + the test
             // organisation's 900000-999999 number + 4-digit sequence + PL.
-            reference.Should().MatchRegex("^R25ER9[0-9]{5}[0-9]{4}PL$");
+            reference.Should().MatchRegex("^R26ER9[0-9]{5}[0-9]{4}PL$");
         }
         first![..11].Should().Be(second![..11], because: "both belong to the same organisation");
         first.Should().NotBe(second);

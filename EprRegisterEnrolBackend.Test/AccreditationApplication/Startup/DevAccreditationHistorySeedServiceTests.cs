@@ -82,7 +82,7 @@ public class DevAccreditationHistorySeedServiceTests
         seeded.MaterialType.Should().Be(MaterialType.Plastic);
         seeded.GlassRecyclingProcess.Should().BeNull();
         seeded.ApplicationStatus.Should().Be(ApplicationStatus.Approved);
-        seeded.RegistrationReference.Should().Be("R25ER0500036908PL");
+        seeded.RegistrationReference.Should().Be("R26ER0500036908PL");
         seeded.AccreditationReference.Should().Be("A26ER0500030042PL");
     }
 

@@ -430,9 +430,18 @@ no linked application as not found. `GET /admin/case-management-status-mapping` 
 the Case Management push receivers apply, which maps each pushed work item state to the
 application status it sets.
 
+The Operator journey search (RA-753) sits beside the Legacy search and reads the domain-model
+collections, current versions only: `GET /admin/operator-journey/accreditations`,
+`/accreditation-applications`, `/registrations`, `/organisations` and `/overseas-sites`, plus
+`/overseas-site-countries` for the country filter's choices. Each takes the same `q`,
+`searchFields`, `pageNumber` and `limit` as the Legacy search, and its own repeatable filters. Each
+row is a summary with the record's organisation, looked up in `organisations`; it holds no contact
+details or addresses. The record types share one pipeline (`AdminApi/OperatorJourney`), so another
+type is one more `OperatorJourneyRecordType` subclass.
+
 ### Testing
 
-Tests run a full `WebApplication` backed by [Ephemeral MongoDB](https://github.com/asimmon/ephemeral-mongo). No mocking — tests read and write from an in-memory database.
+Tests run a full `WebApplication` backed by [Ephemeral MongoDB](https://github.com/asimmon/ephemeral-mongo). Endpoint tests use no mocks — they read and write an in-memory database. The one accepted exception is a query timeout, which Ephemeral MongoDB can't produce on demand: the `503 query_timeout` tests fake it by throwing `MongoExecutionTimeoutException`. The Operator journey search tests use an NSubstitute `IMongoDbClientFactory`/`IMongoCollection`; the Legacy admin tests (`AdminApiEndpointTests`) use a hand-written `ILegacyApplicationSearch`.
 
 ```bash
 dotnet test

@@ -58,7 +58,8 @@ public sealed class PiiRedactionEnricher : ILogEventEnricher
         RedactAdminQuery(enrichments.Url);
     }
 
-    // The Admin API's search terms (/admin/accreditation-applications?q=...)
+    // The Admin API's search terms (/admin/accreditation-applications?q=... and
+    // /admin/operator-journey/*?q=...)
     // can be a person's name, and the ECS enricher puts the request's URL,
     // query included, on every log event during the request. Keep the path,
     // drop the query.

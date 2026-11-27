@@ -37,6 +37,9 @@ public class PiiRedactionEnricherTests
     [InlineData("/admin/accreditation-applications")]
     [InlineData("/Admin/accreditation-applications")]
     [InlineData("/admin/accreditation-application-statuses")]
+    // RA-753: the Operator journey search takes the same q.
+    [InlineData("/admin/operator-journey/organisations")]
+    [InlineData("/admin/operator-journey/accreditation-applications")]
     [InlineData("/admin")]
     public void Enrich_DropsTheQuery_FromAnAdminApiRequestsUrl(string path)
     {

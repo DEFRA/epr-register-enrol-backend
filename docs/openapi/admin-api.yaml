@@ -22,8 +22,12 @@ info:
     * **Legacy data.** `/admin/accreditation-applications` and
       `/admin/accreditation-application-statuses` read the Legacy
       `accreditationApplications` collection, which stays the source of truth until RA-677 moves
-      it to the new domain model. It is then retired or repointed; the new collections get their
-      own endpoints (RA-753, RA-754).
+      it to the new domain model. It is then retired or repointed.
+    * **Operator journey data (RA-753).** `/admin/operator-journey/*` searches the domain-model
+      collections (`accreditationVersions`, `applicationVersions`, `registrationVersions`,
+      `organisations`, `overseasSiteVersions`), current versions only, beside the Legacy search.
+      Each row is a summary for a results page, not the stored record; RA-754 adds `/{id}` under
+      each path for the record itself.
 
     Assumptions are marked `ASSUMPTION`:
 
@@ -34,6 +38,7 @@ servers:
 tags:
   - name: Legacy accreditation applications
   - name: Case management
+  - name: Operator journey
 
 paths:
   /admin/accreditation-applications:
@@ -263,6 +268,268 @@ paths:
         '405': { $ref: '#/components/responses/MethodNotAllowed' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
+  /admin/operator-journey/accreditations:
+    get:
+      tags: [Operator journey]
+      operationId: searchOperatorJourneyAccreditations
+      summary: Search accreditations
+      description: |
+        Searches `accreditationVersions`. `q` matches, ignoring case, when the accreditation
+        number, the registration's number, or the organisation's name or number (as text)
+        contains it, or when it is exactly the accreditation's `id`.
+
+        Only the current version of each record is searched (`isCurrent: true`).
+        Most recently changed first: `updatedAt` descending, then `id` descending. The values of a
+        repeated filter combine with OR; different filters and `q` combine with AND. A parameter
+        the endpoint does not take is refused (`unknown_parameter`), so a filter is never silently
+        dropped. A row whose stored record links to a registration or organisation that does not
+        exist fails the search with `500` `invalid_stored_record`, logged at Error with the ids.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/AccreditationSearchFields'
+        - $ref: '#/components/parameters/AccreditationStatusFilter'
+        - $ref: '#/components/parameters/YearFilter'
+        - $ref: '#/components/parameters/TonnageBandFilter'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of rows. A search that matches nothing is an empty page, not a 404.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/OperatorJourneyAccreditation' }
+        '400': { $ref: '#/components/responses/OperatorJourneyBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InvalidStoredRecord' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /admin/operator-journey/accreditation-applications:
+    get:
+      tags: [Operator journey]
+      operationId: searchOperatorJourneyAccreditationApplications
+      summary: Search accreditation applications
+      description: |
+        Searches the accreditation applications in `applicationVersions` (`applicationType`
+        `Accreditation`; the other application types in the collection are not listed). `q`
+        matches, ignoring case, when the application reference (`applicationReference`), the
+        reserved accreditation number, the registration's number, or the organisation's name or
+        number (as text) contains it, or when it is exactly the application's `id`. The
+        organisation is the one the application names (`reExOrganisationId`), so an application
+        with no registration yet is still found by it. `material` and `nation` are the linked
+        registration's, so an application with no registration never matches either.
+
+        Only the current version of each record is searched (`isCurrent: true`).
+        Most recently changed first: `updatedAt` descending, then `id` descending. The values of a
+        repeated filter combine with OR; different filters and `q` combine with AND. A parameter
+        the endpoint does not take is refused (`unknown_parameter`), so a filter is never silently
+        dropped. A row whose stored record links to a registration or organisation that does not
+        exist fails the search with `500` `invalid_stored_record`, logged at Error with the ids.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/ApplicationSearchFields'
+        - $ref: '#/components/parameters/ApplicationStatusFilter'
+        - $ref: '#/components/parameters/YearFilter'
+        - $ref: '#/components/parameters/MaterialFilter'
+        - $ref: '#/components/parameters/NationFilter'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of rows. A search that matches nothing is an empty page, not a 404.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/OperatorJourneyApplication' }
+        '400': { $ref: '#/components/responses/OperatorJourneyBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InvalidStoredRecord' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /admin/operator-journey/registrations:
+    get:
+      tags: [Operator journey]
+      operationId: searchOperatorJourneyRegistrations
+      summary: Search registrations
+      description: |
+        Searches `registrationVersions`. `q` matches, ignoring case, when the registration number
+        or the organisation's name or number (as text) contains it, or when it is exactly the
+        registration's `id`.
+
+        Only the current version of each record is searched (`isCurrent: true`).
+        Most recently changed first: `updatedAt` descending, then `id` descending. The values of a
+        repeated filter combine with OR; different filters and `q` combine with AND. A parameter
+        the endpoint does not take is refused (`unknown_parameter`), so a filter is never silently
+        dropped. A row whose stored record links to a registration or organisation that does not
+        exist fails the search with `500` `invalid_stored_record`, logged at Error with the ids.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/RegistrationSearchFields'
+        - $ref: '#/components/parameters/RegistrationStatusFilter'
+        - $ref: '#/components/parameters/MaterialFilter'
+        - $ref: '#/components/parameters/NationFilter'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of rows. A search that matches nothing is an empty page, not a 404.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/OperatorJourneyRegistration' }
+        '400': { $ref: '#/components/responses/OperatorJourneyBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InvalidStoredRecord' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /admin/operator-journey/organisations:
+    get:
+      tags: [Operator journey]
+      operationId: searchOperatorJourneyOrganisations
+      summary: Search organisations
+      description: |
+        Searches `organisations`, which is not versioned, so every organisation is listed. `q`
+        matches, ignoring case, when the organisation's name or number (as text) contains it, or
+        when it is exactly the organisation's `id`. `nation` matches an organisation with at
+        least one current registration in that nation (a registration's nation is its
+        regulator's; ReEx's organisation-level regulator is not used, RA-526).
+
+        Most recently changed first: `updatedAt` descending, then `id` descending. The values of a
+        repeated filter combine with OR; different filters and `q` combine with AND. A parameter
+        the endpoint does not take is refused (`unknown_parameter`), so a filter is never silently
+        dropped.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/OrganisationSearchFields'
+        - $ref: '#/components/parameters/OrganisationNationFilter'
+        - $ref: '#/components/parameters/HasRegistrationFilter'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of rows. A search that matches nothing is an empty page, not a 404.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/OperatorJourneyOrganisationRow' }
+        '400': { $ref: '#/components/responses/OperatorJourneyBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /admin/operator-journey/overseas-sites:
+    get:
+      tags: [Operator journey]
+      operationId: searchOperatorJourneyOverseasSites
+      summary: Search overseas reprocessing sites
+      description: |
+        Searches `overseasSiteVersions`. `q` matches, ignoring case, when the ORS id (`orsId`), the
+        registration's number, or the organisation's name or number (as text) contains it, or
+        when it is exactly the site's `id`.
+
+        Only the current version of each record is searched (`isCurrent: true`).
+        Most recently changed first: `updatedAt` descending, then `id` descending. The values of a
+        repeated filter combine with OR; different filters and `q` combine with AND. A parameter
+        the endpoint does not take is refused (`unknown_parameter`), so a filter is never silently
+        dropped. A row whose stored record links to a registration or organisation that does not
+        exist fails the search with `500` `invalid_stored_record`, logged at Error with the ids.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/OverseasSiteSearchFields'
+        - $ref: '#/components/parameters/OverseasSiteStatusFilter'
+        - $ref: '#/components/parameters/CountryFilter'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of rows. A search that matches nothing is an empty page, not a 404.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/OperatorJourneyOverseasSite' }
+        '400': { $ref: '#/components/responses/OperatorJourneyBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InvalidStoredRecord' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /admin/operator-journey/overseas-site-countries:
+    get:
+      tags: [Operator journey]
+      operationId: getOperatorJourneyOverseasSiteCountries
+      summary: The countries current overseas sites hold
+      description: |
+        The distinct `country` values of the current overseas sites, A to Z (ordinal), for the
+        `country` filter's choices. A site with no country adds none. Takes no parameters: any
+        is refused (`unknown_parameter`).
+      responses:
+        '200':
+          description: The countries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { type: string }
+                    example: [Germany, Netherlands, Spain]
+        '400': { $ref: '#/components/responses/OperatorJourneyBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
 components:
   parameters:
     Search:
@@ -319,6 +586,181 @@ components:
       description: Invalid (`invalid_limit`) unless a whole number from 1 to 100.
       schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
 
+    AccreditationSearchFields:
+      name: searchFields
+      in: query
+      description: |
+        Which fields `q` searches: `id` (exactly), the accreditation number, the registration number, the organisation number or the organisation name. Repeat the parameter for more than one. Leave it out to
+        search them all. Has no effect without `q`. Invalid (`invalid_search_fields`) for a value
+        not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [id, accreditationNumber, registrationNumber, organisationNumber, organisationName] }
+    ApplicationSearchFields:
+      name: searchFields
+      in: query
+      description: |
+        Which fields `q` searches: `id` (exactly), the application reference, the reserved accreditation number, the registration number, the organisation number or the organisation name. Repeat the parameter for more than one. Leave it out to
+        search them all. Has no effect without `q`. Invalid (`invalid_search_fields`) for a value
+        not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [id, applicationReference, accreditationNumber, registrationNumber, organisationNumber, organisationName] }
+    RegistrationSearchFields:
+      name: searchFields
+      in: query
+      description: |
+        Which fields `q` searches: `id` (exactly), the registration number, the organisation number or the organisation name. Repeat the parameter for more than one. Leave it out to
+        search them all. Has no effect without `q`. Invalid (`invalid_search_fields`) for a value
+        not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [id, registrationNumber, organisationNumber, organisationName] }
+    OrganisationSearchFields:
+      name: searchFields
+      in: query
+      description: |
+        Which fields `q` searches: `id` (exactly), the organisation number or the organisation name. Repeat the parameter for more than one. Leave it out to
+        search them all. Has no effect without `q`. Invalid (`invalid_search_fields`) for a value
+        not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [id, organisationNumber, organisationName] }
+    OverseasSiteSearchFields:
+      name: searchFields
+      in: query
+      description: |
+        Which fields `q` searches: `id` (exactly), the ORS id, the registration number, the organisation number or the organisation name. Repeat the parameter for more than one. Leave it out to
+        search them all. Has no effect without `q`. Invalid (`invalid_search_fields`) for a value
+        not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [id, orsId, registrationNumber, organisationNumber, organisationName] }
+    AccreditationStatusFilter:
+      name: status
+      in: query
+      description: |
+        Only accreditations with one of these statuses. Repeat the parameter for more than one; the values combine with OR. Invalid
+        (`invalid_status`) for a value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [Approved, Suspended, Cancelled] }
+    RegistrationStatusFilter:
+      name: status
+      in: query
+      description: |
+        Only registrations with one of these statuses (ReEx's lifecycle). Repeat the parameter for more than one; the values combine with OR. Invalid
+        (`invalid_status`) for a value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [Created, Approved, Rejected, Cancelled] }
+    OverseasSiteStatusFilter:
+      name: status
+      in: query
+      description: |
+        Only sites with one of these statuses. Repeat the parameter for more than one; the values combine with OR. Invalid
+        (`invalid_status`) for a value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [Proposed, Active, Discarded] }
+    TonnageBandFilter:
+      name: tonnageBand
+      in: query
+      description: |
+        Only accreditations in one of these tonnage bands. Repeat the parameter for more than one; the values combine with OR. Invalid
+        (`invalid_tonnage_band`) for a value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [up_to_500, up_to_5000, up_to_10000, over_10000] }
+    MaterialFilter:
+      name: material
+      in: query
+      description: |
+        Only records whose registration is for one of these materials. Repeat the parameter for more than one; the values combine with OR. Invalid
+        (`invalid_material`) for a value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [Steel, Wood, Aluminium, Fibre, Glass, Paper, Plastic] }
+    NationFilter:
+      name: nation
+      in: query
+      description: |
+        Only records whose registration is in one of these nations. Repeat the parameter for more than one; the values combine with OR. Invalid
+        (`invalid_nation`) for a value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [England, Scotland, Wales, NorthernIreland] }
+    OrganisationNationFilter:
+      name: nation
+      in: query
+      description: |
+        Only organisations with at least one current registration in one of these nations. Repeat the parameter for more than one; the values combine with OR. Invalid
+        (`invalid_nation`) for a value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [England, Scotland, Wales, NorthernIreland] }
+    HasRegistrationFilter:
+      name: hasRegistration
+      in: query
+      description: |
+        Whether the organisation has at least one current registration. Both values together are the same as neither. Repeat the parameter for more than one; the values combine with OR. Invalid
+        (`invalid_has_registration`) for a value not in the list.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, enum: [true, false] }
+    YearFilter:
+      name: year
+      in: query
+      description: |
+        Only records for one of these accreditation years. Repeat the parameter for more than
+        one; the values combine with OR. Invalid (`invalid_year`) unless each is a whole number
+        from 2000.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: integer, format: int32, minimum: 2000 }
+    CountryFilter:
+      name: country
+      in: query
+      description: |
+        Only sites in one of these countries, matched exactly (case-sensitive) against the stored
+        value; `/admin/operator-journey/overseas-site-countries` lists the values held. Repeat
+        the parameter for more than one; the values combine with OR. A country no site holds
+        matches nothing. Invalid (`invalid_country`) unless each is 1 to 100 characters with no
+        control characters.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { type: string, minLength: 1, maxLength: 100 }
+
   responses:
     BadRequest:
       description: Invalid query parameter (`code` says which, for example `invalid_q`, `invalid_search_fields` or `invalid_status`).
@@ -355,6 +797,23 @@ components:
       description: The database stopped a query for taking too long (`code` `query_timeout`). Retry, with a narrower search if you can.
       headers:
         Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+    OperatorJourneyBadRequest:
+      description: |
+        Invalid query parameter (`code` says which: `invalid_q`, `invalid_search_fields`,
+        `invalid_page_number`, `invalid_limit`, `unknown_parameter`, or the filter's own code,
+        such as `invalid_status` or `invalid_country`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    InvalidStoredRecord:
+      description: |
+        A record in the results links to a registration or organisation that does not exist
+        (`code` `invalid_stored_record`). Logged at Error with the record's and the link's ids.
+        Quote the `traceId` to the delivery team.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -427,6 +886,95 @@ components:
           required: [applicationStatus]
           properties:
             applicationStatus: { $ref: '#/components/schemas/ApplicationStatus' }
+
+    # ---- Operator journey (RA-753) --------------------------------------------------------
+    OperatorJourneyOrganisation:
+      type: object
+      description: The organisation a record belongs to, as `organisations` holds it now.
+      required: [id, name, number]
+      properties:
+        id: { type: string, description: The organisation's `_id`. }
+        name:
+          type: string
+          nullable: true
+          description: Can be a person's name, for a sole trader. Null when the stored organisation has none.
+          x-personal-data: true
+        number:
+          type: integer
+          format: int32
+          nullable: true
+          description: The organisation number (ReEx's numeric org ID), for example 500112. Null when the stored organisation has none.
+    OperatorJourneyAccreditation:
+      type: object
+      required: [id, accreditationNumber, status, year, tonnageBand, registrationId, registrationNumber, material, organisation, updatedAt]
+      properties:
+        id: { type: string, description: The accreditation's `entityId`. }
+        accreditationNumber: { type: string, nullable: true }
+        status: { type: string, enum: [Approved, Suspended, Cancelled] }
+        year: { type: integer, format: int32 }
+        tonnageBand: { type: string, nullable: true, enum: [up_to_500, up_to_5000, up_to_10000, over_10000] }
+        registrationId: { type: string, description: The registration's `entityId`. }
+        registrationNumber: { type: string, nullable: true }
+        material: { $ref: '#/components/schemas/MaterialType' }
+        organisation: { $ref: '#/components/schemas/OperatorJourneyOrganisation' }
+        updatedAt: { type: string, format: date-time, description: When the current version was written (`validFrom`). }
+    OperatorJourneyApplication:
+      type: object
+      required: [id, applicationReference, accreditationNumber, status, year, registrationId, registrationNumber, material, nation, organisation, updatedAt]
+      properties:
+        id: { type: string, description: The application's `entityId`. }
+        applicationReference: { type: string, nullable: true, description: 'The application reference Case Management issues at submission, for example `AP27EA500500ABPL`. Null until first submitted.' }
+        accreditationNumber: { type: string, nullable: true, description: The reserved accreditation number. Null until one is reserved. }
+        status: { $ref: '#/components/schemas/ApplicationStatus' }
+        year: { type: integer, format: int32, description: Accreditation year. }
+        registrationId: { type: string, nullable: true, description: The registration's `entityId`. Null when the application has none yet. }
+        registrationNumber: { type: string, nullable: true }
+        material:
+          allOf: [{ $ref: '#/components/schemas/MaterialType' }]
+          nullable: true
+          description: The registration's. Null when the application has no registration.
+        nation:
+          allOf: [{ $ref: '#/components/schemas/Nation' }]
+          nullable: true
+          description: The registration's. Null when the application has no registration or the registration holds none.
+        organisation: { $ref: '#/components/schemas/OperatorJourneyOrganisation' }
+        updatedAt: { type: string, format: date-time, description: When the current version was written (`validFrom`). }
+    OperatorJourneyRegistration:
+      type: object
+      required: [id, registrationNumber, status, material, nation, wasteProcessingType, organisation, updatedAt]
+      properties:
+        id: { type: string, description: The registration's `entityId`. }
+        registrationNumber: { type: string, nullable: true }
+        status: { type: string, enum: [Created, Approved, Rejected, Cancelled] }
+        material: { $ref: '#/components/schemas/MaterialType' }
+        nation:
+          allOf: [{ $ref: '#/components/schemas/Nation' }]
+          nullable: true
+        wasteProcessingType: { type: string, enum: [Reprocessor, Exporter] }
+        organisation: { $ref: '#/components/schemas/OperatorJourneyOrganisation' }
+        updatedAt: { type: string, format: date-time, description: When the current version was written (`validFrom`). }
+    OperatorJourneyOrganisationRow:
+      type: object
+      description: An organisation has no status.
+      required: [id, organisation, registrationCount, updatedAt]
+      properties:
+        id: { type: string, description: The organisation's `_id`. }
+        organisation: { $ref: '#/components/schemas/OperatorJourneyOrganisation' }
+        registrationCount: { type: integer, minimum: 0, description: How many current registrations it has. }
+        updatedAt: { type: string, format: date-time, description: The organisation's `updatedAt`. }
+    OperatorJourneyOverseasSite:
+      type: object
+      required: [id, orsId, siteName, country, status, registrationId, registrationNumber, organisation, updatedAt]
+      properties:
+        id: { type: string, description: The site's `entityId`. }
+        orsId: { type: string, nullable: true }
+        siteName: { type: string, nullable: true }
+        country: { type: string, nullable: true }
+        status: { type: string, enum: [Proposed, Active, Discarded] }
+        registrationId: { type: string, description: The registration's `entityId`. }
+        registrationNumber: { type: string, nullable: true }
+        organisation: { $ref: '#/components/schemas/OperatorJourneyOrganisation' }
+        updatedAt: { type: string, format: date-time, description: When the current version was written (`validFrom`). }
 
     # ---- Legacy accreditation application ---------------------------------------------------
     ApplicationStatus:

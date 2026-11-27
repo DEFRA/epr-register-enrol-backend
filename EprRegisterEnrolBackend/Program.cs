@@ -172,6 +172,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<ILegacyApplicationRead>(sp =>
         sp.GetRequiredService<AccreditationApplicationPersistence>()
     );
+    // RA-753: the admin API's Operator journey search reads the domain-model collections directly.
+    builder.Services.AddSingleton<EprRegisterEnrolBackend.AdminApi.OperatorJourney.OperatorJourneyStore>();
 
     // Domain model (docs/analysis/register-enrol-domain-model-design.md). Each phase is behind a
     // DomainModel:* flag, off by default; phase 1 "Expand" adds the domain-model-schema readiness check.
