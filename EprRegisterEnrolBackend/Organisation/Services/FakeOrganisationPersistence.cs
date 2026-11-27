@@ -76,7 +76,7 @@ public class FakeOrganisationPersistence
         : this(TimeProvider.System, includeDevExporters: false) { }
 
     /// <param name="includeDevExporters">
-    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018 to 50022), which only
+    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018 to 50022 and 50026 to 50029), which only
     /// DevExporterAccreditationSeedService accredits.
     /// </param>
     public FakeOrganisationPersistence(TimeProvider clock, bool includeDevExporters)
@@ -719,6 +719,10 @@ public class FakeOrganisationPersistence
             _store.Add(DevExporterOrganisation(DevExporterOrg.NoChangeRequests, ["902001", "902002"]));
             _store.Add(DevExporterOrganisation(DevExporterOrg.RegistrationOnly, []));
             _store.Add(DevExporterOrganisation(DevExporterOrg.NoOverseasSites, []));
+            // RA-765: the manage page's apply banner orgs. Any year's accreditation is served from here, so each
+            // holds the years it was granted, which a new application is seeded from.
+            foreach (var org in DevExporterOrg.Reapply)
+                _store.Add(DevExporterOrganisation(org, []));
         }
 
         // RA-512: perftest fixtures, generated (not hand-written) because 200
