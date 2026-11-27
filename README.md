@@ -335,7 +335,7 @@ Base path: `api/v1/accreditation-applications/{organisationId}`
 | `POST`   | `/{organisationId}/{applicationId}/files`                                 | Add a file to the sampling plan                                                                                                                                                                                                                                                         |
 | `DELETE` | `/{organisationId}/{applicationId}/files/{fileId}`                        | Remove a file from the sampling plan                                                                                                                                                                                                                                                    |
 | `POST`   | `/{organisationId}/{applicationId}/submit`                                | Submit the application (requires all sections `Completed`)                                                                                                                                                                                                                              |
-| `POST`   | `/case-management/{workItemId}/status`                                    | Push a Case Management service work-item status change onto `ApplicationStatus` (Case Management service caller)                                                                                                                                                                        |
+| `POST`   | `/case-management/{workItemId}/status`                                    | Push a Case Management service work-item status change onto `ApplicationStatus` (Case Management service caller). 400 when `toStateId` is null or blank. A `toStateId` with no entry in `CaseManagementStatusMapping.StatusPushMap` sets no status and only advances the ordering watermark; it is logged at Error unless it is in `KnownIgnoredStateIds` (`queried`, which management-be pushes for a deadline change on a queried item)                                                                                                                                                                        |
 | `GET`    | `/case-management/{organisationId}/{applicationId}/accreditation-summary` | Read-only accreditation summary of an Approved application for the Case Management service's Accreditation summary tab (RA-769): an allow-list of the application, selected overseas sites and their active interim sites, sampling plan and BES files (Case Management service caller) |
 
 #### In-year change requests (RA-492)
@@ -354,7 +354,7 @@ With `AccreditationChanges__SubmitToCaseManagement` on, submit sends the request
 | `POST`   | `/requests/current/sites/{siteId}/bes-evidence/files` | Attach a scanned upload to a site in the draft |
 | `DELETE` | `/requests/current/sites/{siteId}/bes-evidence/files/{fileId}` | Remove a BES evidence file |
 | `POST`   | `/requests/current/submit` | Declaration (`fullName`, `jobTitle`, `paymentReference`); 400 without a payment reference (RA-739), 422 with per-site errors when incomplete, 503 if Case Management fails (the request is reopened), otherwise `Submitted` |
-| `POST`   | `api/v1/accreditation-changes/case-management/{workItemId}/status` (full path, not under the base path) | Case Management service caller (RA-495): push a work item's status change onto its change request item. `approved` grants an add-ORS site in the same unit of work, accredited from the body's `effectiveDate` (`yyyy-MM-dd`, required on `approved`: 400 without it). The same body, auth and ordering guards as the accreditation application's `/case-management/{workItemId}/status` |
+| `POST`   | `api/v1/accreditation-changes/case-management/{workItemId}/status` (full path, not under the base path) | Case Management service caller (RA-495): push a work item's status change onto its change request item. `approved` grants an add-ORS site in the same unit of work, accredited from the body's `effectiveDate` (`yyyy-MM-dd`, required on `approved`: 400 without it). 400 when `toStateId` is null or blank. A `toStateId` with no item status (`awaiting-decision`, `queried`, or one not in the table) changes no status; one not in the table and not known-ignored is logged at Error. The same body, auth and ordering guards as the accreditation application's `/case-management/{workItemId}/status` |
 
 #### Seed request body
 
@@ -422,6 +422,13 @@ year), by `q` across the accreditation number, registration number, organisation
 organisation name, and by `status` and `year`, most recently updated first. Each item is the
 stored application, including personal and commercially sensitive data, so neither may be logged
 by the caller.
+
+For the Admin UI's case management search (RA-751), `GET /admin/accreditation-application-statuses`
+gives the status of the Legacy application linked to each of up to 50 Case Management work items
+(by `workItemId`, matched against the stored `caseManagementWorkItemId`), listing a work item with
+no linked application as not found. `GET /admin/case-management-status-mapping` serves the table
+the Case Management push receivers apply, which maps each pushed work item state to the
+application status it sets.
 
 ### Testing
 

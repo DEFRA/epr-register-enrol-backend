@@ -1,16 +1,21 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
+using EprRegisterEnrolBackend.AccreditationApplication.Services;
 using EprRegisterEnrolBackend.AccreditationApplication.Startup;
 using EprRegisterEnrolBackend.AccreditationChanges;
 using EprRegisterEnrolBackend.Auth;
 using EprRegisterEnrolBackend.DevSeed;
 using EprRegisterEnrolBackend.DomainModel.Entities;
+using EprRegisterEnrolBackend.Test.Utils.Logging;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Infrastructure;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace EprRegisterEnrolBackend.Test.AccreditationChanges;
 
@@ -262,6 +267,28 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
     }
 
+    // RA-800: Case Management can correct the valid-from date until its confirm contact commits, which may be after
+    // the grant landed here. Accepting the repeat would leave it showing one date and the site accredited from
+    // another, so a repeat naming a different date is refused and its confirmation does not complete.
+    [Fact]
+    public async Task ApprovedAgain_WithADifferentEffectiveDate_Returns409AndWritesNothing()
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        (await Push("approved", Watermark.AddMinutes(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+        var granted = Item();
+        var updates = _factory.FakeChangeRequests.UpdateCount;
+        var legacyVersion = Legacy().Version;
+
+        var response = await Push("approved", Watermark.AddMinutes(10), EffectiveDate.AddDays(1));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadAsStringAsync(Ct)).Should().Contain("2026-05-20");
+        Item().Should().BeEquivalentTo(granted);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(updates);
+        Legacy().Version.Should().Be(legacyVersion);
+        LegacySite(SiteId).ValidFrom.Should().Be(SiteApprovalDate.Format(AccreditedFrom));
+    }
+
     // An unmapped push changes no status, so a terminal item takes it: only its watermark moves.
     [Fact]
     public async Task TerminalItem_UnmappedPush_AdvancesOnlyTheWatermark()
@@ -330,6 +357,110 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         Item().CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
         Item(_siblingWorkItemId).Status.Should().Be(ChangeItemStatus.Submitted);
         Item(_siblingWorkItemId).ValidFrom.Should().BeNull();
+    }
+
+    // PR #297 review: toStateId is a required string, but an explicit null or a blank still binds. The item route
+    // used to map it to "no status" and advance the watermark; now it is a 400 ProblemDetails, logged at Error with
+    // the ids, before anything is read or written.
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"\"")]
+    [InlineData("\"   \"")]
+    public async Task NoToStateId_Returns400AndLogsErrorAndWritesNothing(string toStateIdJson)
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var logs = new CapturingLoggerFactory();
+        using var client = _factory
+            .WithWebHostBuilder(builder =>
+                builder.ConfigureTestServices(services => services.AddSingleton<ILoggerFactory>(logs))
+            )
+            .CreateClient();
+        using var body = new StringContent(
+            $$"""{"toStateId":{{toStateIdJson}},"actionId":"some-action","occurredAt":"{{Watermark.AddMinutes(5):O}}"}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        var response = await client.PostAsync(StatusUrl(_workItemId), body, Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        (await response.Content.ReadAsStringAsync(Ct)).Should().Contain(CaseManagementStatusMapping.MissingToStateIdDetail);
+        var entry = logs.Entries.Should().ContainSingle(e => e.LogLevel == LogLevel.Error).Subject;
+        entry.Message.Should().Contain("ChangeRequestStatusChangedFromCaseManagement: status push has no toStateId");
+        entry.Message.Should().Contain($"workItemId={_workItemId}");
+        entry.Message.Should().Contain("actionId=some-action");
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(Watermark);
+        _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // An unknown toStateId still changes no item status and only advances the watermark, but is now logged at Error
+    // with the ids. awaiting-decision (in the shared table, no item equivalent) and queried (a deadline change on a
+    // queried item, CaseManagementStatusMapping.KnownIgnoredStateIds) are known and not logged.
+    [Theory]
+    [InlineData("unmapped-future-state", true)]
+    [InlineData("awaiting-decision", false)]
+    [InlineData("queried", false)]
+    public async Task StateWithNoItemStatus_ChangesNoStatusAndLogsErrorOnlyWhenUnknown(string toStateId, bool loggedAsUnknown)
+    {
+        SeedSubmittedRequest(ChangeItemStatus.DulyMade, Watermark);
+        var logs = new CapturingLoggerFactory();
+        using var client = _factory
+            .WithWebHostBuilder(builder =>
+                builder.ConfigureTestServices(services => services.AddSingleton<ILoggerFactory>(logs))
+            )
+            .CreateClient();
+        var occurredAt = Watermark.AddMinutes(5);
+
+        var response = await client.PostAsJsonAsync(
+            StatusUrl(_workItemId),
+            new { toStateId, actionId = "some-action", occurredAt },
+            Ct
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().Status.Should().Be(ChangeItemStatus.DulyMade);
+        Item().CaseManagementStatusUpdatedAt.Should().Be(occurredAt);
+        var errors = logs.Entries.Where(e => e.LogLevel == LogLevel.Error).ToList();
+        if (!loggedAsUnknown)
+        {
+            errors.Should().BeEmpty();
+            return;
+        }
+        var entry = errors.Should().ContainSingle().Subject;
+        entry.Message.Should().Contain($"ChangeRequestStatusChangedFromCaseManagement: status push to unknown toStateId={toStateId}");
+        entry.Message.Should().Contain($"workItemId={_workItemId}");
+        entry.Message.Should().Contain("actionId=some-action");
+    }
+
+    // PR #297 review: the item route projects the application's table (CaseManagementStatusMapping.StatusPushMap)
+    // rather than keeping its own copy of the state ids. Every entry projects, so a state id added to the table can't
+    // reach an item push and throw; awaiting-decision has no item equivalent and leaves the status alone.
+    [Fact]
+    public void MapState_ProjectsEveryEntryOfTheSharedTable()
+    {
+        var projected = CaseManagementStatusMapping.StatusPushMap.ToDictionary(
+            entry => entry.Key,
+            entry => ChangeRequestStatusEndpoints.MapState(entry.Key)
+        );
+
+        projected
+            .Should()
+            .Equal(
+                new Dictionary<string, ChangeItemStatus?>
+                {
+                    ["submitted"] = ChangeItemStatus.Submitted,
+                    ["duly-made"] = ChangeItemStatus.DulyMade,
+                    ["assessment-started"] = ChangeItemStatus.DulyMade,
+                    ["assessment-in-progress"] = ChangeItemStatus.Updated,
+                    ["updated"] = ChangeItemStatus.Updated,
+                    ["awaiting-decision"] = null,
+                    ["approved"] = ChangeItemStatus.Approved,
+                    ["rejected"] = ChangeItemStatus.Rejected,
+                }
+            );
+        ChangeRequestStatusEndpoints.MapState("unmapped-future-state").Should().BeNull();
     }
 
     // AC6: only Case Management knows the date the caseworker entered, so an approval without it grants nothing.

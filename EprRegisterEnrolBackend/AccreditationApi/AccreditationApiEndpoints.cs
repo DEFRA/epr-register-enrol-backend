@@ -23,6 +23,10 @@ public static partial class AccreditationApiEndpoints
 
     private const int DefaultLimit = 20;
     private const int MaxLimit = 100;
+
+    // RA-820: search takes bigger pages, so a client reading every accreditation, as ReEx does for its
+    // reports, makes fewer requests. A page is built in memory: performance test before raising this.
+    private const int MaxSearchLimit = 500;
     private const int MinSearchYear = 2000;
 
     // The statuses an accreditation can have. Only approved is served until case management can send
@@ -57,7 +61,7 @@ public static partial class AccreditationApiEndpoints
     )
     {
         var query = http.Request.Query;
-        var paging = ParsePaging(query["pageNumber"], query["limit"]);
+        var paging = ParsePaging(query["pageNumber"], query["limit"], MaxSearchLimit);
         if (paging.Problem is not null)
             return paging.Problem;
 
@@ -214,7 +218,7 @@ public static partial class AccreditationApiEndpoints
     )
     {
         var query = http.Request.Query;
-        var paging = ParsePaging(query["pageNumber"], query["limit"]);
+        var paging = ParsePaging(query["pageNumber"], query["limit"], MaxLimit);
         if (paging.Problem is not null)
             return paging.Problem;
 
@@ -380,7 +384,7 @@ public static partial class AccreditationApiEndpoints
 
     private sealed record Paging(int PageNumber, int Limit, IResult? Problem);
 
-    private static Paging ParsePaging(string? pageNumber, string? limit)
+    private static Paging ParsePaging(string? pageNumber, string? limit, int maxLimit)
     {
         var page = 1;
         var size = DefaultLimit;
@@ -401,11 +405,11 @@ public static partial class AccreditationApiEndpoints
             && (
                 !int.TryParse(limit, NumberStyles.None, CultureInfo.InvariantCulture, out size)
                 || size < 1
-                || size > MaxLimit
+                || size > maxLimit
             )
         )
         {
-            return Invalid($"limit must be a whole number from 1 to {MaxLimit}.");
+            return Invalid($"limit must be a whole number from 1 to {maxLimit}.");
         }
 
         return new Paging(page, size, null);
