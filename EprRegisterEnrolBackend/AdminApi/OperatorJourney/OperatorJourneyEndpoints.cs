@@ -50,7 +50,7 @@ public static class OperatorJourneyEndpoints
     }
 
     private static async Task<IResult> Search(
-        OperatorJourneyRecordType recordType,
+        IOperatorJourneyRecordType recordType,
         HttpContext http,
         OperatorJourneyStore store,
         ILoggerFactory loggerFactory,
@@ -136,7 +136,7 @@ public static class OperatorJourneyEndpoints
 
     private static ServiceProblemResult? ParseSearchFields(
         IQueryCollection query,
-        OperatorJourneyRecordType recordType,
+        IOperatorJourneyRecordType recordType,
         out List<string> fields
     )
     {
@@ -159,7 +159,7 @@ public static class OperatorJourneyEndpoints
 
     private static ServiceProblemResult? ParseFilters(
         IQueryCollection query,
-        OperatorJourneyRecordType recordType,
+        IOperatorJourneyRecordType recordType,
         out Dictionary<string, IReadOnlyList<string>> filters
     )
     {

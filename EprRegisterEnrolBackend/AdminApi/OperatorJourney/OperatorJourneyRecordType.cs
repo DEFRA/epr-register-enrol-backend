@@ -7,25 +7,25 @@ namespace EprRegisterEnrolBackend.AdminApi.OperatorJourney;
 
 /// <summary>
 /// RA-753: one record type of the Operator journey search. The endpoint (<see cref="OperatorJourneyEndpoints"/>)
-/// parses and checks the query against <see cref="SearchFields"/> and <see cref="Filters"/>, the shared
-/// pipeline here pages through the matches, and each type says only what is its own: its collection, how
-/// <c>q</c> and its filters match, its order, and its result row. A new record type is one more subclass,
-/// listed in <see cref="OperatorJourneyRecordTypes.All"/>.
+/// parses and checks the query against <see cref="SearchFields"/> and <see cref="Filters"/>, and the shared
+/// pipeline (<see cref="OperatorJourneyRecordType{TEntity}"/>) pages through the matches. Each type says only
+/// what is its own: its collection, how <c>q</c> and its filters match, its order, and its result row. A new
+/// record type is one more subclass of that pipeline, listed in <see cref="OperatorJourneyRecordTypes.All"/>.
 /// </summary>
-public abstract class OperatorJourneyRecordType
+public interface IOperatorJourneyRecordType
 {
     /// <summary>The path segment under <c>/admin/operator-journey</c>, which is also the Admin UI's <c>type</c>.</summary>
-    public abstract string Path { get; }
+    string Path { get; }
 
     /// <summary>The endpoint's name, for the OpenAPI document and route lookups.</summary>
-    public abstract string EndpointName { get; }
+    string EndpointName { get; }
 
     /// <summary>The <c>searchFields</c> values, in the spec's order. <c>q</c> searches them all when none is given.</summary>
-    public abstract IReadOnlyList<string> SearchFields { get; }
+    IReadOnlyList<string> SearchFields { get; }
 
-    public abstract IReadOnlyList<SearchFilter> Filters { get; }
+    IReadOnlyList<SearchFilter> Filters { get; }
 
-    internal abstract Task<(IReadOnlyList<object> Items, long Total)> SearchAsync(
+    Task<(IReadOnlyList<object> Items, long Total)> SearchAsync(
         OperatorJourneySearch search,
         OperatorJourneyStore store,
         long skip,
@@ -35,8 +35,16 @@ public abstract class OperatorJourneyRecordType
 }
 
 /// <summary>The shared pipeline: scope, then the type's match, counted and paged in the type's order, then each row built.</summary>
-public abstract class OperatorJourneyRecordType<TEntity> : OperatorJourneyRecordType
+public abstract class OperatorJourneyRecordType<TEntity> : IOperatorJourneyRecordType
 {
+    public abstract string Path { get; }
+
+    public abstract string EndpointName { get; }
+
+    public abstract IReadOnlyList<string> SearchFields { get; }
+
+    public abstract IReadOnlyList<SearchFilter> Filters { get; }
+
     protected static FilterDefinitionBuilder<TEntity> Filter => Builders<TEntity>.Filter;
 
     protected abstract string CollectionName { get; }
@@ -61,7 +69,7 @@ public abstract class OperatorJourneyRecordType<TEntity> : OperatorJourneyRecord
         CancellationToken cancellationToken
     );
 
-    internal sealed override async Task<(IReadOnlyList<object> Items, long Total)> SearchAsync(
+    public async Task<(IReadOnlyList<object> Items, long Total)> SearchAsync(
         OperatorJourneySearch search,
         OperatorJourneyStore store,
         long skip,

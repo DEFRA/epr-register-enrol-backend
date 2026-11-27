@@ -9,7 +9,7 @@ namespace EprRegisterEnrolBackend.AdminApi.OperatorJourney;
 /// <summary>RA-753: the five record types of AC02, with the filters the ticket lists for each (AC07).</summary>
 public static class OperatorJourneyRecordTypes
 {
-    public static IReadOnlyList<OperatorJourneyRecordType> All { get; } =
+    public static IReadOnlyList<IOperatorJourneyRecordType> All { get; } =
     [
         new AccreditationRecordType(),
         new AccreditationApplicationRecordType(),
@@ -213,34 +213,7 @@ internal sealed class AccreditationApplicationRecordType : VersionedRecordType<A
         CancellationToken cancellationToken
     )
     {
-        var filter = Filter.Empty;
-        if (search.Text is { } text)
-        {
-            var contains = OperatorJourneyStore.Contains(text);
-            var matches = new List<FilterDefinition<ApplicationEntity>>();
-            AddIdMatch(search, matches);
-            if (search.Searches(ApplicationReference))
-                matches.Add(Filter.Regex(a => a.ApplicationReference, contains));
-            if (search.Searches(OperatorJourneyRecordTypes.AccreditationNumber))
-                matches.Add(Filter.Regex(ApplicationFields.ReservedAccreditationNumber, contains));
-            if (search.Searches(OperatorJourneyRecordTypes.RegistrationNumber))
-            {
-                var registrationIds = await store.RegistrationIdsMatchingAsync(text, true, [], cancellationToken);
-                if (registrationIds.Count > 0)
-                    matches.Add(Filter.In(a => a.RegistrationId, registrationIds.Select(id => (ObjectId?)id)));
-            }
-
-            // An application names its organisation by ReEx id, and has one even before it has a registration.
-            var organisations = await store.OrganisationsMatchingAsync(
-                text,
-                search.Searches(OperatorJourneyRecordTypes.OrganisationName),
-                search.Searches(OperatorJourneyRecordTypes.OrganisationNumber),
-                cancellationToken
-            );
-            if (organisations.Count > 0)
-                matches.Add(Filter.In(a => a.ReExOrganisationId, organisations.Select(o => o.ReExOrganisationId)));
-            filter &= AnyOf(matches);
-        }
+        var filter = search.Text is { } text ? await TextMatchAsync(text, search, store, cancellationToken) : Filter.Empty;
 
         if (search.Values<ApplicationStatus>(OperatorJourneyRecordTypes.Status) is { Count: > 0 } statuses)
             filter &= Filter.In(a => a.Status, statuses);
@@ -260,6 +233,40 @@ internal sealed class AccreditationApplicationRecordType : VersionedRecordType<A
         }
 
         return filter;
+    }
+
+    // q against the application's own references, its registration's number, and the organisation it names.
+    private static async Task<FilterDefinition<ApplicationEntity>> TextMatchAsync(
+        string text,
+        OperatorJourneySearch search,
+        OperatorJourneyStore store,
+        CancellationToken cancellationToken
+    )
+    {
+        var contains = OperatorJourneyStore.Contains(text);
+        var matches = new List<FilterDefinition<ApplicationEntity>>();
+        AddIdMatch(search, matches);
+        if (search.Searches(ApplicationReference))
+            matches.Add(Filter.Regex(a => a.ApplicationReference, contains));
+        if (search.Searches(OperatorJourneyRecordTypes.AccreditationNumber))
+            matches.Add(Filter.Regex(ApplicationFields.ReservedAccreditationNumber, contains));
+        if (search.Searches(OperatorJourneyRecordTypes.RegistrationNumber))
+        {
+            var registrationIds = await store.RegistrationIdsMatchingAsync(text, true, [], cancellationToken);
+            if (registrationIds.Count > 0)
+                matches.Add(Filter.In(a => a.RegistrationId, registrationIds.Select(id => (ObjectId?)id)));
+        }
+
+        // An application names its organisation by ReEx id, and has one even before it has a registration.
+        var organisations = await store.OrganisationsMatchingAsync(
+            text,
+            search.Searches(OperatorJourneyRecordTypes.OrganisationName),
+            search.Searches(OperatorJourneyRecordTypes.OrganisationNumber),
+            cancellationToken
+        );
+        if (organisations.Count > 0)
+            matches.Add(Filter.In(a => a.ReExOrganisationId, organisations.Select(o => o.ReExOrganisationId)));
+        return AnyOf(matches);
     }
 
     protected override async Task<IReadOnlyList<object>> RowsAsync(
