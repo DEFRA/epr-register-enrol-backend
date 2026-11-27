@@ -131,6 +131,7 @@ public static class AccreditationApiMapper
                 })
                 .ToList(),
             StatusHistory = history,
+            StatusTimeline = StatusTimelineBuilder.Build(history),
             OverseasSites = OverseasSitesFor(application),
             TonnageBandHistory = summary.TonnageBand is null
                 ? []
@@ -168,6 +169,7 @@ public static class AccreditationApiMapper
             IsOecd = site.IsOecd,
             LatestStatus = StatusHistoryBuilder.Latest(history),
             StatusHistory = history,
+            StatusTimeline = StatusTimelineBuilder.Build(history),
             InterimSites = site
                 .InterimSites.OrderBy(interim => interim.SiteId)
                 .Select(interim => ToInterimSite(application, interim))
@@ -325,6 +327,7 @@ public static class AccreditationApiMapper
             CreatedAt = interim.CreatedAt is { } created ? AsUtc(created) : null,
             LatestStatus = StatusHistoryBuilder.Latest(history),
             StatusHistory = history,
+            StatusTimeline = StatusTimelineBuilder.Build(history),
         };
     }
 
