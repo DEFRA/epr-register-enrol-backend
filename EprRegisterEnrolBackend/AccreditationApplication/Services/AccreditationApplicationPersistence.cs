@@ -107,9 +107,9 @@ public class AccreditationApplicationPersistence(
             ),
             Builders<AccreditationApplicationModel>.Filter.Eq(a => a.MaterialType, materialType),
             Builders<AccreditationApplicationModel>.Filter.Eq(a => a.Year, year),
-            Builders<AccreditationApplicationModel>.Filter.Ne(
+            Builders<AccreditationApplicationModel>.Filter.Nin(
                 a => a.ApplicationStatus,
-                ApplicationStatus.Withdrawn
+                ApplicationStatusExtensions.NotLive
             )
         );
 

@@ -11,7 +11,7 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 
 // RA-425: local manual testing and the fe-tests stack only. Gives each dedicated exporter
-// (DevExporterOrg: stub orgs 50018, 50019 for RA-492 and 50020 to 50022 for RA-697, Plastic) an Approved accreditation for
+// (DevExporterOrg: stub orgs 50018, 50019 for RA-492, 50020 to 50022 for RA-697 and 50026 to 50029 for RA-765, Plastic) an Approved accreditation for
 // the current calendar year, and its registration an Approved current version in the domain model,
 // so the frontend's material dashboard, manage page and overseas-sites page show content. Development-only, registered with DevSeedData:Enabled
 // (the local compose stack, alongside the RA-690 Delta Green seeds) or with ConfigKey alone (the
@@ -33,8 +33,12 @@ namespace EprRegisterEnrolBackend.AccreditationApplication.Startup;
 // (RegisteredOverseasSites), for the registration-only manage pages; the frontend stub mirrors them. Org 50022
 // (DevExporterOrg.NoOverseasSites) gets only its Approved registration, with no ORS records, for the empty tabs.
 //
-// The year comes from the clock at startup. Idempotent: the accreditation's id is fixed for each
-// year, so it is inserted once per year and left alone after that, including any changes a tester
+// RA-765: each exporter's applications are its DevExporterOrg.Applications, by year offset from the clock's and
+// status. Orgs 50026 to 50029 (DevExporterOrg.Reapply) use them to set which year the manage page's apply banner
+// offers: Approved Y-1; Approved Y and Submitted Y+1; Approved Y and Rejected Y+1; Approved Y-2. They have no ORSs.
+//
+// The year comes from the clock at startup. Idempotent: each application's id is fixed for its
+// year, so it is inserted once and left alone after that, including any changes a tester
 // makes to it; a registration that already has a current version is left alone.
 public class DevExporterAccreditationSeedService(
     IAccreditationApplicationPersistence persistence,
@@ -72,8 +76,11 @@ public class DevExporterAccreditationSeedService(
         var year = clock.GetUtcNow().Year;
         foreach (var org in DevExporterOrg.All)
         {
-            if (org.IsAccredited)
-                await SeedAccreditationAsync(ExporterAccreditation(org, year), cancellationToken);
+            foreach (var application in org.Applications)
+                await SeedAccreditationAsync(
+                    ExporterAccreditation(org, year + application.YearOffset, application.Status),
+                    cancellationToken
+                );
             await SeedRegistrationAsync(ExporterRegistration(org, year), cancellationToken);
             await SeedOverseasSitesAsync(org, cancellationToken);
             if (org.Reprocessor is null)
@@ -329,7 +336,13 @@ public class DevExporterAccreditationSeedService(
         };
     }
 
-    internal static AccreditationApplicationModel ExporterAccreditation(DevExporterOrg org, int year)
+    // RA-765: only an Approved application has an accreditation number, and an org missing from SitesFor (the
+    // reapply orgs) has no ORSs.
+    internal static AccreditationApplicationModel ExporterAccreditation(
+        DevExporterOrg org,
+        int year,
+        ApplicationStatus status = ApplicationStatus.Approved
+    )
     {
         var createdAt = new DateTime(year - 1, 9, 1, 0, 0, 0, DateTimeKind.Utc);
         return new AccreditationApplicationModel
@@ -348,9 +361,10 @@ public class DevExporterAccreditationSeedService(
             PermitNumbers = [org.PermitNumber],
             WasteProcessingType = "exporter",
             RegistrationReference = org.RegistrationNumberFor(year),
-            AccreditationReference = org.AccreditationNumberFor(year),
+            AccreditationReference =
+                status == ApplicationStatus.Approved ? org.AccreditationNumberFor(year) : null,
             MaterialType = DevExporterOrg.Material,
-            ApplicationStatus = ApplicationStatus.Approved,
+            ApplicationStatus = status,
             SourceYear = year - 1,
             CreatedAt = createdAt,
             UpdatedAt = createdAt,
@@ -358,7 +372,7 @@ public class DevExporterAccreditationSeedService(
             OverseasSites = new AccreditationApplicationOverseasSites
             {
                 SectionStatus = SectionStatus.Completed,
-                Sites = SitesFor[org](year),
+                Sites = SitesFor.TryGetValue(org, out var sites) ? sites(year) : [],
             },
         };
     }

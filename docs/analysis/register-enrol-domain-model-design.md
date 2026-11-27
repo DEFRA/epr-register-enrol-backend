@@ -453,7 +453,7 @@ transactions are available in deployed environments. Local `compose.yml:34-43` r
 `POST api/v1/accreditation-applications/{organisationId}/{registrationId}/{materialType}/seed`
 (`AccreditationApplicationEndpoints.cs:670-814`):
 
-1. An idempotency check through `GetLiveByRegistrationAsync` (non-withdrawn, newest first). This is
+1. An idempotency check through `GetLiveByRegistrationAsync` (not withdrawn or rejected, newest first). This is
    best-effort only: there is no unique index, so a race can create a second live application
    (comment at lines 703-714). That is a defect, never a valid state: there is at most one live
    application per organisation, registration and year. An application is **live** if it is in progress or

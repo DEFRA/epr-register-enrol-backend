@@ -78,6 +78,47 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
         result.Should().BeNull();
     }
 
+    // RA-765: a refused application is not live either.
+    [Fact]
+    public async Task GetLiveByRegistrationAsync_OnlyMatchIsRejected_ReturnsNull()
+    {
+        await _sut.CreateAsync(BuildApplication(status: ApplicationStatus.Rejected));
+
+        var result = await _sut.GetLiveByRegistrationAsync(
+            "org-1",
+            "reg-1",
+            MaterialType.Steel,
+            2026
+        );
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetLiveByRegistrationAsync_NewestIsRejected_ReturnsNewestLive()
+    {
+        var live = BuildApplication(
+            status: ApplicationStatus.Submitted,
+            createdAt: DateTime.UtcNow.AddDays(-2)
+        );
+        var rejected = BuildApplication(
+            status: ApplicationStatus.Rejected,
+            createdAt: DateTime.UtcNow.AddDays(-1)
+        );
+        await _sut.CreateAsync(live);
+        await _sut.CreateAsync(rejected);
+
+        var result = await _sut.GetLiveByRegistrationAsync(
+            "org-1",
+            "reg-1",
+            MaterialType.Steel,
+            2026
+        );
+
+        result.Should().NotBeNull();
+        result!.Id.Should().Be(live.Id);
+    }
+
     [Fact]
     public async Task GetLiveByRegistrationAsync_NoMatchForKey_ReturnsNull()
     {
@@ -495,22 +536,27 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
         );
 
     // RA-690: a withdrawn holder keeps its reference for audit, so it is still returned (and
-    // logged), but it never blocks a restart from being issued the same reference.
-    [Fact]
-    public async Task GetOtherAccreditationReferenceHoldersAsync_WithdrawnHolder_IsReturnedButDoesNotBlock()
+    // logged), but it never blocks a restart from being issued the same reference. RA-765: a
+    // refused holder is the same, since a refused application can now be started again.
+    [Theory]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    [InlineData(ApplicationStatus.Rejected)]
+    public async Task GetOtherAccreditationReferenceHoldersAsync_WithdrawnOrRefusedHolder_IsReturnedButDoesNotBlock(
+        ApplicationStatus holderStatus
+    )
     {
-        var withdrawn = await CreateWithReference(
+        var notLive = await CreateWithReference(
             "A26ER0001230042ST",
             organisationId: "org-other",
-            status: ApplicationStatus.Withdrawn
+            status: holderStatus
         );
         var applicant = await CreateWithReference(null);
 
         var holders = await OtherHolders(applicant);
 
         var holder = holders.Should().ContainSingle().Subject;
-        holder.Id.Should().Be(withdrawn.Id!.Value);
-        holder.ApplicationStatus.Should().Be(ApplicationStatus.Withdrawn);
+        holder.Id.Should().Be(notLive.Id!.Value);
+        holder.ApplicationStatus.Should().Be(holderStatus);
         holder.BlocksIssuing.Should().BeFalse();
     }
 

@@ -555,6 +555,7 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50019));
         await persistence.Received(1).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50020));
         await persistence.DidNotReceive().CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50021));
+        await persistence.Received(2).CreateAsync(Arg.Is<AccreditationApplicationModel>(a => a.OrgId == 50028));
         (await ExporterRegistrationVersion()).Should().NotBeNull();
     }
 
@@ -629,6 +630,107 @@ public sealed class DevExporterAccreditationSeedServiceTests : IDisposable
         registration.WasteManagementPermits!.Select(p => p.PermitNumber)
             .Should()
             .Equal(seeded.PermitNumbers);
+    }
+
+    // RA-765: the reapply orgs, each with applications in the years around the clock's (2026) that set which
+    // year the manage page offers: 50026 Approved last year (offers this year), 50027 Approved this year and
+    // Submitted next year (offers none), 50028 Approved this year and Rejected next year (offers next year),
+    // 50029 Approved two years ago (lapsed: offers this year).
+    public static TheoryData<int, string, string[]> ReapplyOrgApplications =>
+        new()
+        {
+            { 50026, "Reapply Current Year Ltd", ["a20250000000000000050026 Approved A25EX0500260001PL R25EX0500260001PL"] },
+            {
+                50027,
+                "Applied Next Year Ltd",
+                [
+                    "a20260000000000000050027 Approved A26EX0500270001PL R26EX0500270001PL",
+                    "a20270000000000000050027 Submitted - R27EX0500270001PL",
+                ]
+            },
+            {
+                50028,
+                "Refused Next Year Ltd",
+                [
+                    "a20260000000000000050028 Approved A26EX0500280001PL R26EX0500280001PL",
+                    "a20270000000000000050028 Rejected - R27EX0500280001PL",
+                ]
+            },
+            { 50029, "Lapsed Accreditation Ltd", ["a20240000000000000050029 Approved A24EX0500290001PL R24EX0500290001PL"] },
+        };
+
+    [Theory]
+    [MemberData(nameof(ReapplyOrgApplications))]
+    public async Task SeedAsync_GivesEachReapplyExporterItsApplicationsByYear(
+        int orgId,
+        string organisationName,
+        string[] expected
+    )
+    {
+        var seeded = await SeedApplications(organisationId: orgId.ToString());
+
+        seeded.OrderBy(a => a.Year)
+            .Select(a => $"{a.Id} {a.ApplicationStatus} {a.AccreditationReference ?? "-"} {a.RegistrationReference}")
+            .Should()
+            .Equal(expected);
+        seeded.Should().OnlyContain(a =>
+            a.IsExporter
+            && a.MaterialType == MaterialType.Plastic
+            && a.RegistrationId == $"aaa{orgId:D21}"
+            && a.OrganisationName == organisationName
+            && a.SourceYear == a.Year - 1
+        );
+        var registration = await _registrations.FindCurrentByReExRegistrationIdAsync($"aaa{orgId:D21}", Ct);
+        registration!.Status.Should().Be(RegistrationStatus.Approved);
+        registration.RegistrationNumber.Should().Be($"R26EX0{orgId}0001PL");
+    }
+
+    [Fact]
+    public async Task SeedAsync_RunTwice_SeedsTheReapplyExportersApplicationsOnce()
+    {
+        var persistence = new FakeAccreditationApplicationPersistence();
+        var sut = CreateSut(persistence);
+
+        async Task<List<(ObjectId?, ApplicationStatus)>> ReapplyApplications()
+        {
+            var applications = new List<(ObjectId?, ApplicationStatus)>();
+            foreach (var orgId in new[] { "50026", "50027", "50028", "50029" })
+                applications.AddRange(
+                    (await ExporterApplications(persistence, orgId)).Select(a => (a.Id, a.ApplicationStatus))
+                );
+            return applications;
+        }
+
+        await sut.SeedAsync(CancellationToken.None);
+        var first = await ReapplyApplications();
+        await sut.SeedAsync(CancellationToken.None);
+
+        (await ReapplyApplications()).Should().BeEquivalentTo(first).And.HaveCount(6);
+    }
+
+    // Guards drift: the stub ReEx registry's reapply orgs are the organisations and registrations the seed writes.
+    [Theory]
+    [InlineData(50026)]
+    [InlineData(50027)]
+    [InlineData(50028)]
+    [InlineData(50029)]
+    public async Task StubOrganisationStore_MatchesTheSeededReapplyExporter(int orgId)
+    {
+        var seeded = (await SeedApplications(organisationId: orgId.ToString())).First();
+        var registrationVersion = await _registrations.FindCurrentByReExRegistrationIdAsync(seeded.RegistrationId!, Ct);
+        var org = await new FakeOrganisationPersistence(
+            Clock2026,
+            includeDevExporters: true
+        ).GetByOrgIdAsync(orgId);
+
+        org!.CompanyDetails!.Name.Should().Be(seeded.OrganisationName);
+        org.CompanyDetails.RegistrationNumber.Should().Be(registrationVersion!.RegistrationNumber);
+        org.WasteProcessingTypes.Should().Equal("exporter");
+        var registration = org.Registrations!.Should().ContainSingle().Subject;
+        registration.Id.ToString().Should().Be(seeded.RegistrationId);
+        registration.Material.Should().Be("plastic");
+        registration.Status.Should().Be("approved");
+        registration.WasteManagementPermits!.Select(p => p.PermitNumber).Should().Equal(seeded.PermitNumbers);
     }
 
     // Guards drift: org 50018's reprocessor registration in the stub ReEx registry is the one seeded.

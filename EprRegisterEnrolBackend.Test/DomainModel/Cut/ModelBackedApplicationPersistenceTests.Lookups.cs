@@ -205,6 +205,39 @@ public sealed partial class ModelBackedApplicationPersistenceTests
         Assert.Equal(legacy?.Id, model?.Id);
     }
 
+    // RA-765: a refused application is not live, so a year whose only application was refused has none.
+    [Fact]
+    public async Task GetLiveByRegistration_SkipsARefusedApplication()
+    {
+        await MigratedAsync(
+            Variant(
+                Day1,
+                a =>
+                {
+                    a.Year = 2029;
+                    a.MaterialType = MaterialType.Plastic;
+                    a.ApplicationStatus = ApplicationStatus.Rejected;
+                }
+            )
+        );
+
+        var legacy = await _legacy.GetLiveByRegistrationAsync(
+            ReExOrganisationId,
+            ReExRegistrationId,
+            MaterialType.Plastic,
+            2029
+        );
+        var model = await _model.GetLiveByRegistrationAsync(
+            ReExOrganisationId,
+            ReExRegistrationId,
+            MaterialType.Plastic,
+            2029
+        );
+
+        Assert.Null(legacy);
+        Assert.Null(model);
+    }
+
     [Fact]
     public async Task GetRegistrationGroup_FindsTheSameApplications()
     {

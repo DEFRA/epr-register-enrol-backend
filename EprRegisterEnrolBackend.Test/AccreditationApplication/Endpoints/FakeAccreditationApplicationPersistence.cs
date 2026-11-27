@@ -143,7 +143,7 @@ public class FakeAccreditationApplicationPersistence : IAccreditationApplication
                 && a.RegistrationId == registrationId
                 && a.MaterialType == materialType
                 && a.Year == year
-                && a.ApplicationStatus != ApplicationStatus.Withdrawn
+                && a.ApplicationStatus.IsLive()
             )
             .NewestFirst()
             .FirstOrDefault();

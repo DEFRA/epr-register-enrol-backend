@@ -208,15 +208,19 @@ public class StubReExApiAdapter(
         if (isTestOrganisation)
             organisationName = $"E2E Organisation {organisationId}";
 
-        var registrationReference = DerivedRegistrationReference(
-            organisationId,
-            registrationId,
-            materialType,
-            glassRecyclingProcess,
-            year,
-            nation,
-            isExporter
-        );
+        // RA-765: a dedicated dev exporter keeps the numbers the dev seed gave it, as real ReEx would.
+        var devSeedNumbers = fakeOrgs.DevSeedNumbers(registrationId, year);
+        var registrationReference =
+            devSeedNumbers?.RegistrationNumber
+            ?? DerivedRegistrationReference(
+                organisationId,
+                registrationId,
+                materialType,
+                glassRecyclingProcess,
+                year,
+                nation,
+                isExporter
+            );
 
         var fixture = new ReExAccreditationDto
         {
@@ -228,11 +232,9 @@ public class StubReExApiAdapter(
             OrganisationNumber = StubOrganisationNumber(organisationId),
             RegistrationReference = registrationReference,
             RegistrationStatus = registrationStatus,
-            AccreditationNumber = DerivedAccreditationNumber(
-                registrationReference,
-                registrationId,
-                year
-            ),
+            AccreditationNumber =
+                devSeedNumbers?.AccreditationNumber
+                ?? DerivedAccreditationNumber(registrationReference, registrationId, year),
             SiteAddress = siteAddress,
             IsExporter = isExporter,
             Nation = nation,

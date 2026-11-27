@@ -406,7 +406,7 @@ public sealed class ModelBackedApplicationPersistence(
             .Where(a =>
                 a.MaterialType == materialType
                 && a.Year == year
-                && a.ApplicationStatus != ApplicationStatus.Withdrawn
+                && a.ApplicationStatus.IsLive()
             )
             .OrderByDescending(a => a.CreatedAt)
             .ThenByDescending(a => a.Id)

@@ -9,13 +9,13 @@ namespace EprRegisterEnrolBackend.DevSeed;
 /// A dedicated dev and e2e exporter: an org in the stub ReEx registry
 /// (<see cref="Organisation.Services.FakeOrganisationPersistence"/>) that
 /// <see cref="AccreditationApplication.Startup.DevExporterAccreditationSeedService"/> gives an Approved current-year
-/// registration and, unless it is not <see cref="IsAccredited"/>, plastic accreditation, plus the same for its
-/// <see cref="Reprocessor"/> if it has one. Both use these values, so the two agree.
+/// registration and its plastic <see cref="Applications"/>, plus an Approved current-year registration and
+/// accreditation for its <see cref="Reprocessor"/> if it has one. Both use these values, so the two agree.
 /// </summary>
 /// <remarks>
 /// The frontend mirrors these ids and names in src/server/common/constants/test-orgs.js, and the numbers in its
-/// stub (stub-manage-accreditations.js), as do the fe-tests fixtures (test/fixtures/manage-exporter-org.js and
-/// in-year-change-org.js); keep all three in step.
+/// stub (stub-manage-accreditations.js), as do the fe-tests fixtures (test/fixtures/manage-exporter-org.js,
+/// in-year-change-org.js and, RA-765, reapply-orgs.js); keep all three in step.
 /// </remarks>
 internal sealed class DevExporterOrg
 {
@@ -88,7 +88,7 @@ internal sealed class DevExporterOrg
         AddressLine1 = "21 Quay Road",
         Town = "Southampton",
         Postcode = "SO14 3AA",
-        IsAccredited = false,
+        Applications = [],
     };
 
     /// <summary>
@@ -105,7 +105,7 @@ internal sealed class DevExporterOrg
         AddressLine1 = "22 Wharf Street",
         Town = "Liverpool",
         Postcode = "L3 4AA",
-        IsAccredited = false,
+        Applications = [],
     };
 
     /// <summary>
@@ -125,6 +125,78 @@ internal sealed class DevExporterOrg
         Postcode = "BS1 5AA",
     };
 
+    // RA-765: four exporters whose applications, by year relative to the clock's (Y), set which accreditation year
+    // the manage page's apply banner offers. Their own orgs, so no other spec's data changes what the banner offers.
+
+    /// <summary>RA-765: Approved Y-1 only, so the banner offers the current year.</summary>
+    internal static readonly DevExporterOrg ReapplyCurrentYear = new()
+    {
+        OrgId = 50026,
+        Name = "Reapply Current Year Ltd",
+        TradingName = "Reapply Current Year",
+        Email = "info@reapplycurrentyear.co.uk",
+        CompaniesHouseNumber = "12345026",
+        AddressLine1 = "26 Quay Street",
+        Town = "Ipswich",
+        Postcode = "IP3 0AA",
+        Applications = [new(-1, ApplicationStatus.Approved)],
+    };
+
+    /// <summary>RA-765: Approved Y and Submitted Y+1, so the banner is hidden.</summary>
+    internal static readonly DevExporterOrg AppliedNextYear = new()
+    {
+        OrgId = 50027,
+        Name = "Applied Next Year Ltd",
+        TradingName = "Applied Next Year",
+        Email = "info@appliednextyear.co.uk",
+        CompaniesHouseNumber = "12345027",
+        AddressLine1 = "27 Quay Street",
+        Town = "Ipswich",
+        Postcode = "IP3 0AB",
+        Applications = [new(0, ApplicationStatus.Approved), new(1, ApplicationStatus.Submitted)],
+    };
+
+    /// <summary>
+    /// RA-765: Approved Y and Rejected (shown as Refused) Y+1, so the banner offers next year and the apply page
+    /// shows the refused application with "start new".
+    /// </summary>
+    internal static readonly DevExporterOrg RefusedNextYear = new()
+    {
+        OrgId = 50028,
+        Name = "Refused Next Year Ltd",
+        TradingName = "Refused Next Year",
+        Email = "info@refusednextyear.co.uk",
+        CompaniesHouseNumber = "12345028",
+        AddressLine1 = "28 Quay Street",
+        Town = "Ipswich",
+        Postcode = "IP3 0AD",
+        Applications = [new(0, ApplicationStatus.Approved), new(1, ApplicationStatus.Rejected)],
+    };
+
+    /// <summary>RA-765: Approved Y-2 only (lapsed), so the banner offers the current year, seeded from Y-2.</summary>
+    internal static readonly DevExporterOrg LapsedAccreditation = new()
+    {
+        OrgId = 50029,
+        Name = "Lapsed Accreditation Ltd",
+        TradingName = "Lapsed Accreditation",
+        Email = "info@lapsedaccreditation.co.uk",
+        CompaniesHouseNumber = "12345029",
+        AddressLine1 = "29 Quay Street",
+        Town = "Ipswich",
+        Postcode = "IP3 0AE",
+        Applications = [new(-2, ApplicationStatus.Approved)],
+    };
+
+    // Before All, which reads it: static fields initialise in order.
+    /// <summary>RA-765: the dedicated exporters for the manage page's apply banner.</summary>
+    internal static readonly IReadOnlyList<DevExporterOrg> Reapply =
+    [
+        ReapplyCurrentYear,
+        AppliedNextYear,
+        RefusedNextYear,
+        LapsedAccreditation,
+    ];
+
     internal static readonly IReadOnlyList<DevExporterOrg> All =
     [
         Manage,
@@ -133,6 +205,7 @@ internal sealed class DevExporterOrg
         RegistrationOnly,
         NoOverseasSites,
         InYearUpdate,
+        .. Reapply,
     ];
 
     private DevExporterOrg() { }
@@ -153,8 +226,12 @@ internal sealed class DevExporterOrg
     internal required string Postcode { get; init; }
     internal string RegisteredAddress => $"{AddressLine1}, {Town}, {Postcode}";
 
-    /// <summary>RA-697: false for an org the seed gives a registration but no accreditation.</summary>
-    internal bool IsAccredited { get; init; } = true;
+    /// <summary>
+    /// The exporter registration's plastic accreditation applications: by default one Approved for the current year,
+    /// and none for an org the seed gives a registration but no accreditation (RA-697).
+    /// </summary>
+    internal IReadOnlyList<DevExporterApplication> Applications { get; init; } =
+        [new(0, ApplicationStatus.Approved)];
 
     /// <summary>The org's reprocessor registration, if it has one besides its exporter registration.</summary>
     internal DevReprocessorRegistration? Reprocessor { get; init; }
@@ -182,6 +259,12 @@ internal sealed class DevExporterOrg
     internal string AccreditationNumberFor(int year) =>
         DevAccreditationNumber.For(year, RegistrationNumberFor(year));
 }
+
+/// <summary>
+/// RA-765: an accreditation application the dev seed gives a dedicated exporter's registration, for the year
+/// <paramref name="YearOffset"/> years from the clock's, with <paramref name="Status"/>.
+/// </summary>
+internal sealed record DevExporterApplication(int YearOffset, ApplicationStatus Status);
 
 /// <summary>
 /// RA-697: a dedicated org's reprocessor registration, which the seed accredits alongside its exporter one. Its own

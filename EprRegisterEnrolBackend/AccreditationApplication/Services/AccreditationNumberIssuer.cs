@@ -39,10 +39,11 @@ public sealed class AccreditationNumberIssuer(
                 application.Year
             );
         var lastYears = application.LastYearsAccreditationNumber;
-        // Last year's number must be for the year before. Seed always stores that, so another
-        // year means the data was changed. With nothing held here that fails visibly rather than
-        // being treated as a renewal after a break; with an earlier approval held here, that
-        // approval is the history and last year's number is ignored (ChooseLatest).
+        // Last year's number must be for the year before. Seed stores that unless an earlier
+        // approval is held here (RA-765: a lapsed accreditation seeds from its latest granted
+        // year), so another year with nothing held here means the data was changed. That fails
+        // visibly rather than being treated as a renewal after a break; with an earlier approval
+        // held here, that approval is the history and last year's number is ignored (ChooseLatest).
         if (lastYears is not null && lastYears.Year != application.Year - 1 && previous is null)
             return AccreditationNumberIssueOutcome.Failed(
                 AccreditationNumberIssueFailure.InvalidHistory,
@@ -195,9 +196,9 @@ public sealed class AccreditationNumberIssuer(
     // another organisation, or a number written after the organisation's were read. Read-then-write:
     // two approvals at the same moment can both save one new number, so AccreditationNumberEndpoint
     // checks again once the save has committed and draws again on a clash.
-    // - A continuous renewal's number is fixed, so a live holder is a conflict. A withdrawn holder
-    //   doesn't block: an operator who withdrew and started again renews to the same number, and
-    //   the withdrawn record keeps it.
+    // - A continuous renewal's number is fixed, so a live holder is a conflict. A withdrawn or
+    //   refused holder doesn't block: an operator who withdrew, or was refused, and started again
+    //   renews to the same number, and the old record keeps it.
     // - A new random number is drawn again on any holder, withdrawn included, so it is never
     //   knowingly issued twice.
     private async Task<(

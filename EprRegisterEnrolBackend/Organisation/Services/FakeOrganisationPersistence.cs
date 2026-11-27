@@ -76,7 +76,7 @@ public class FakeOrganisationPersistence
         : this(TimeProvider.System, includeDevExporters: false) { }
 
     /// <param name="includeDevExporters">
-    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018 to 50022, and 50025 for RA-682), which only
+    /// Whether to include the dedicated exporters (<see cref="DevExporterOrg"/>: orgs 50018 to 50022, 50025 for RA-682, and 50026 to 50029 for RA-765), which only
     /// DevExporterAccreditationSeedService accredits.
     /// </param>
     public FakeOrganisationPersistence(TimeProvider clock, bool includeDevExporters)
@@ -726,6 +726,10 @@ public class FakeOrganisationPersistence
                     ["902501", "902502", "902503", "902504", "902505"]
                 )
             );
+            // RA-765: the manage page's apply banner orgs. Any year's accreditation is served from here, so each
+            // holds the years it was granted, which a new application is seeded from.
+            foreach (var org in DevExporterOrg.Reapply)
+                _store.Add(DevExporterOrganisation(org, []));
         }
 
         // RA-512: perftest fixtures, generated (not hand-written) because 200
@@ -1118,6 +1122,27 @@ public class FakeOrganisationPersistence
                 }
             );
         }
+    }
+
+    // RA-765: the numbers the dev seed gives a dedicated exporter's registration (the clock's year, as its
+    // registration version holds) and its accreditation for a year, so the stub ReEx reports the same ones and a
+    // seed's refresh from it keeps them. Null for any other registration.
+    internal (string RegistrationNumber, string AccreditationNumber)? DevSeedNumbers(string registrationId, int year)
+    {
+        if (!_includeDevExporters)
+            return null;
+        var clockYear = _clock.GetUtcNow().Year;
+        foreach (var org in DevExporterOrg.All)
+        {
+            if (string.Equals(org.RegistrationId.ToString(), registrationId, StringComparison.OrdinalIgnoreCase))
+                return (org.RegistrationNumberFor(clockYear), org.AccreditationNumberFor(year));
+            if (
+                org.Reprocessor is { } reprocessor
+                && string.Equals(reprocessor.RegistrationId.ToString(), registrationId, StringComparison.OrdinalIgnoreCase)
+            )
+                return (reprocessor.RegistrationNumberFor(clockYear), reprocessor.AccreditationNumberFor(year));
+        }
+        return null;
     }
 
     // A copy, so a read never changes the store. A dedicated exporter's number is always the
