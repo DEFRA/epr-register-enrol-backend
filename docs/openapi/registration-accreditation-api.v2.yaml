@@ -402,6 +402,36 @@ components:
           type: string
           format: date-time
           description: When the change was recorded.
+    StatusTimelinePeriod:
+      type: object
+      description: >-
+        One period of a `statusTimeline`: the `statusHistory` flattened into periods that don't overlap,
+        ordered by `effectiveFromDate`, with no gaps from the first period on, and adjacent periods with
+        the same status merged. It is not a full history. The status on date D is that of the period where
+        `effectiveFromDate` <= D and `effectiveToDate` is `null` or D <= `effectiveToDate`; before the
+        first period there is no status. Built from the history: entries are ordered by
+        `effectiveFromDate` then `recordedAt` (then array order), and of those sharing an
+        `effectiveFromDate` only the last is kept.
+
+        Worked example, for a 2027 accreditation (status and date recorded): approved 2026-11-10,
+        suspended 2026-12-15, approved 2027-04-01, approved 2027-06-10, cancelled 2027-09-01. Its
+        timeline is suspended 2027-01-01 to 2027-03-31, approved 2027-04-01 to 2027-08-31, and
+        cancelled from 2027-09-01. On 2027-01-01 the status is `suspended`, as the suspension was
+        recorded later than the approval taking effect that day. On 2026-12-31 there is none.
+      required: [status, effectiveFromDate, effectiveToDate]
+      properties:
+        status: { $ref: '#/components/schemas/AccreditationStatus' }
+        effectiveFromDate:
+          type: string
+          format: date
+          description: The first day of the period. May be in the future.
+          example: '2027-01-01'
+        effectiveToDate:
+          type: string
+          format: date
+          nullable: true
+          description: 'The last day of the period: the day before the next one starts. `null` on the last period only.'
+          example: null
     TonnageBandHistoryEntry:
       type: object
       description: A band takes effect when it is recorded; it cannot be forward-dated or backdated.
@@ -468,7 +498,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/AccreditationSummary'
         - type: object
-          required: [statusHistory, tonnageBandHistory, signatories]
+          required: [statusHistory, statusTimeline, tonnageBandHistory, signatories]
           properties:
             overseasSites:
               type: array
@@ -484,6 +514,11 @@ components:
               type: array
               minItems: 1
               items: { $ref: '#/components/schemas/StatusHistoryEntry' }
+            statusTimeline:
+              type: array
+              minItems: 1
+              description: The `statusHistory` as periods that don't overlap. Use it for the status on a date.
+              items: { $ref: '#/components/schemas/StatusTimelinePeriod' }
             tonnageBandHistory:
               type: array
               items: { $ref: '#/components/schemas/TonnageBandHistoryEntry' }
@@ -499,7 +534,7 @@ components:
         approved. A new interim site added in place of a withdrawn one is a separate interim site,
         with its own history. `latestStatus` and `statusHistory` have the shape and the date rules of
         an accreditation's.
-      required: [siteId, siteNumber, siteName, address, contact, latestStatus, statusHistory]
+      required: [siteId, siteNumber, siteName, address, contact, latestStatus, statusHistory, statusTimeline]
       properties:
         siteId:
           type: integer
@@ -535,6 +570,11 @@ components:
           minItems: 1
           description: Oldest first.
           items: { $ref: '#/components/schemas/StatusHistoryEntry' }
+        statusTimeline:
+          type: array
+          minItems: 1
+          description: The interim site's `statusHistory` as periods that don't overlap.
+          items: { $ref: '#/components/schemas/StatusTimelinePeriod' }
     AccreditedOverseasSite:
       type: object
       description: |
@@ -542,7 +582,7 @@ components:
         status history because it can be suspended without suspending the whole accreditation.
         `latestStatus` is the latest entry of that history, on the same rule as
         `AccreditationSummary.latestStatus`.
-      required: [siteId, siteName, latestStatus, statusHistory, interimSites]
+      required: [siteId, siteName, latestStatus, statusHistory, statusTimeline, interimSites]
       properties:
         siteId:
           type: integer
@@ -576,6 +616,11 @@ components:
           minItems: 1
           description: Oldest first.
           items: { $ref: '#/components/schemas/StatusHistoryEntry' }
+        statusTimeline:
+          type: array
+          minItems: 1
+          description: The site's `statusHistory` as periods that don't overlap.
+          items: { $ref: '#/components/schemas/StatusTimelinePeriod' }
         interimSites:
           type: array
           description: Every interim site on the overseas site, withdrawn ones included.

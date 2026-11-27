@@ -167,7 +167,8 @@ static void ConfigureBuilder(WebApplicationBuilder builder)
     builder.Services.AddSingleton<ILegacyApplicationSearch>(sp =>
         sp.GetRequiredService<AccreditationApplicationPersistence>()
     );
-    // RA-750: and reads one Legacy application, raw, for the same reason.
+    // RA-750: and reads one Legacy application, raw, for the same reason; RA-751: and the statuses of
+    // the Legacy applications linked to a page of work items.
     builder.Services.AddSingleton<ILegacyApplicationRead>(sp =>
         sp.GetRequiredService<AccreditationApplicationPersistence>()
     );

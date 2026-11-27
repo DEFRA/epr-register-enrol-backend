@@ -18,16 +18,14 @@ public static class StatusHistoryBuilder
     )
     {
         var startOfYear = new DateOnly(accreditationYear, 1, 1);
-        var ordered = changes
-            .Select(change =>
-                (
-                    change.Status,
-                    change.RecordedAt,
-                    From: Later(startOfYear, UkCalendar.ToUkDate(change.RecordedAt))
-                )
+        var dated = changes.Select(change =>
+            (
+                change.Status,
+                change.RecordedAt,
+                From: Later(startOfYear, UkCalendar.ToUkDate(change.RecordedAt))
             )
-            .OrderBy(change => change.From)
-            .ThenBy(change => change.RecordedAt)
+        );
+        var ordered = InPrecedenceOrder(dated, change => change.From, change => change.RecordedAt)
             .ToList();
 
         return ordered
@@ -54,7 +52,23 @@ public static class StatusHistoryBuilder
     /// history, not only one from <see cref="Build"/>. The history must not be empty.
     /// </summary>
     public static StatusHistoryEntryDto Latest(IReadOnlyList<StatusHistoryEntryDto> history) =>
-        history.OrderBy(entry => entry.EffectiveFromDate).ThenBy(entry => entry.RecordedAt).Last();
+        InPrecedenceOrder(history).Last();
+
+    /// <summary>
+    /// A history in order of precedence, lowest first: by <c>effectiveFromDate</c>, then <c>recordedAt</c>.
+    /// The sort is stable, so entries sharing both keep their order and the later one takes precedence.
+    /// <see cref="Latest"/> and <see cref="StatusTimelineBuilder"/> both use it, so the timeline's last
+    /// period always has the latest status.
+    /// </summary>
+    internal static IOrderedEnumerable<StatusHistoryEntryDto> InPrecedenceOrder(
+        IEnumerable<StatusHistoryEntryDto> history
+    ) => InPrecedenceOrder(history, entry => entry.EffectiveFromDate, entry => entry.RecordedAt);
+
+    private static IOrderedEnumerable<T> InPrecedenceOrder<T>(
+        IEnumerable<T> items,
+        Func<T, DateOnly> effectiveFrom,
+        Func<T, DateTime> recordedAt
+    ) => items.OrderBy(effectiveFrom).ThenBy(recordedAt);
 
     private static DateOnly Later(DateOnly a, DateOnly b) => a >= b ? a : b;
 }

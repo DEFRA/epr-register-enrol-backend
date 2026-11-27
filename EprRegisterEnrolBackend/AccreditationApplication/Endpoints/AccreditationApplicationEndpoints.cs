@@ -4084,7 +4084,7 @@ public static class AccreditationApplicationEndpoints
         application.Query.QueriedSectionKeys = request.SectionKeys;
 
         var queriedAt = DateTime.UtcNow;
-        application.ApplicationStatus = ApplicationStatus.Queried;
+        application.ApplicationStatus = CaseManagementStatusMapping.QueryPushStatus;
         application.DateLastEdited = queriedAt;
         // Stamped alongside StatusChangedFromCaseManagement's own watermark (RA-368 §4.3) so a
         // single CaseManagementStatusUpdatedAt orders every Case Management service-driven status
@@ -4330,31 +4330,6 @@ public static class AccreditationApplicationEndpoints
         return updated is null ? Results.Problem("Failed to delete file.") : Results.Ok();
     }
 
-    // Raw Case Management service state id -> the ApplicationStatus it projects onto in the
-    // Registration & Accreditation service (RA-368 §4.3). States with no entry (anything the Case
-    // Management service adds in future) are a deliberate no-op for ApplicationStatus — the
-    // push still updates CaseManagementStatusUpdatedAt for ordering purposes. "queried"/"withdrawn"
-    // are never sent here: query keeps its own richer /query endpoint, and withdrawal is entirely
-    // out of scope for this plan (§4.1, §4.5).
-    // "assessment-started" (RA-527 follow-up) is the Case Management service's internal "started
-    // but still Duly made" state. Its start step is excluded from pushes, so it is never sent here
-    // by design; the entry is a safeguard so a misconfigured or replayed push lands on DulyMade
-    // rather than Updated or a status no-op. Only a query response or a deadline change makes a
-    // started case Updated.
-    private static ApplicationStatus? MapCaseManagementStateToApplicationStatus(string toStateId) =>
-        toStateId switch
-        {
-            "submitted" => ApplicationStatus.Submitted,
-            "duly-made" => ApplicationStatus.DulyMade,
-            "assessment-started" => ApplicationStatus.DulyMade,
-            "assessment-in-progress" => ApplicationStatus.Updated,
-            "updated" => ApplicationStatus.Updated,
-            "awaiting-decision" => ApplicationStatus.AwaitingDecision,
-            "approved" => ApplicationStatus.Approved,
-            "rejected" => ApplicationStatus.Rejected,
-            _ => null,
-        };
-
     // Extracted from StatusChangedFromCaseManagement so the level check does not add to that
     // method's cognitive complexity (S3776), which is already at the limit.
     private static void LogOutOfOrderPushIgnored(
@@ -4469,6 +4444,24 @@ public static class AccreditationApplicationEndpoints
             );
         }
 
+        if (
+            CaseManagementStatusMapping.RejectMissingToStateId(
+                logger,
+                nameof(StatusChangedFromCaseManagement),
+                workItemId,
+                request,
+                correlationId
+            ) is { } missingToStateId
+        )
+            return missingToStateId;
+        CaseManagementStatusMapping.LogUnknownState(
+            logger,
+            nameof(StatusChangedFromCaseManagement),
+            workItemId,
+            request,
+            correlationId
+        );
+
         // RA-644 B8f: read once outside the transaction for the application id the unit of work
         // migrates and syncs; the work reads it again in the session.
         var known = await persistence.GetByCaseManagementWorkItemIdAsync(workItemId);
@@ -4554,7 +4547,7 @@ public static class AccreditationApplicationEndpoints
             return (Results.Ok(application), false);
         }
 
-        var mappedStatus = MapCaseManagementStateToApplicationStatus(request.ToStateId);
+        var mappedStatus = CaseManagementStatusMapping.ForStatusPush(request.ToStateId);
 
         // Terminal-status guard (see GuardTerminalStatus): 409 for any mapped push that would
         // move an Approved, Rejected or Withdrawn application; 200 with no write for a repeat of
