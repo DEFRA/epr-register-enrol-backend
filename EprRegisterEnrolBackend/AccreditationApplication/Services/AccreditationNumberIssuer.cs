@@ -39,10 +39,11 @@ public sealed class AccreditationNumberIssuer(
                 application.Year
             );
         var lastYears = application.LastYearsAccreditationNumber;
-        // Last year's number must be for the year before. Seed always stores that, so another
-        // year means the data was changed. With nothing held here that fails visibly rather than
-        // being treated as a renewal after a break; with an earlier approval held here, that
-        // approval is the history and last year's number is ignored (ChooseLatest).
+        // Last year's number must be for the year before. Seed stores that unless an earlier
+        // approval is held here (RA-765: a lapsed accreditation seeds from its latest granted
+        // year), so another year with nothing held here means the data was changed. That fails
+        // visibly rather than being treated as a renewal after a break; with an earlier approval
+        // held here, that approval is the history and last year's number is ignored (ChooseLatest).
         if (lastYears is not null && lastYears.Year != application.Year - 1 && previous is null)
             return AccreditationNumberIssueOutcome.Failed(
                 AccreditationNumberIssueFailure.InvalidHistory,

@@ -12,6 +12,7 @@ using EprRegisterEnrolBackend.DomainModel;
 using EprRegisterEnrolBackend.DomainModel.DualWrite;
 using EprRegisterEnrolBackend.DomainModel.ReadModel;
 using EprRegisterEnrolBackend.DomainModel.Seeding;
+using EprRegisterEnrolBackend.ReEx;
 using EprRegisterEnrolBackend.Utils;
 using EprRegisterEnrolBackend.Utils.Logging;
 using FluentValidation;
@@ -696,6 +697,52 @@ public static class AccreditationApplicationEndpoints
         ISeedDualWriter SeedDualWriter
     );
 
+    // RA-765: Seed copies the operator's latest granted accreditation, so one whose accreditation
+    // lapsed (granted Y-2, nothing for Y-1) still starts from it. That's the latest Approved
+    // application held here before this year (RA-690's lookup), fetched from ReEx for its year.
+    // Otherwise it's last year, as before: accreditations granted in ReEx (2026) have no
+    // application held here, and ReEx not holding the earlier year (it keeps one accreditation per
+    // registration) falls back to last year too, so nothing that seeded before stops seeding.
+    private static async Task<(
+        ReExResult<ReExAccreditationDto> Result,
+        int SourceYear
+    )> GetSeedSourceAsync(
+        IAccreditationApplicationPersistence persistence,
+        IReExApiAdapter reExAdapter,
+        string organisationId,
+        string registrationId,
+        MaterialType materialType,
+        int year
+    )
+    {
+        var lastYear = year - 1;
+        var latestGranted = await persistence.GetLatestPreviousAccreditationAsync(
+            organisationId,
+            registrationId,
+            materialType,
+            year
+        );
+        if (latestGranted is { Year: var grantedYear } && grantedYear < lastYear)
+        {
+            var earlier = await reExAdapter.GetAccreditationAsync(
+                organisationId,
+                registrationId,
+                materialType,
+                grantedYear
+            );
+            if (!earlier.IsNotFound)
+                return (earlier, grantedYear);
+        }
+
+        var result = await reExAdapter.GetAccreditationAsync(
+            organisationId,
+            registrationId,
+            materialType,
+            lastYear
+        );
+        return (result, lastYear);
+    }
+
     private static async Task<IResult> Seed(
         string organisationId,
         string registrationId,
@@ -751,11 +798,13 @@ public static class AccreditationApplicationEndpoints
         if (existing is not null)
             return Results.Ok(existing);
 
-        var adapterResult = await reExAdapter.GetAccreditationAsync(
+        var (adapterResult, sourceYear) = await GetSeedSourceAsync(
+            persistence,
+            reExAdapter,
             organisationId,
             registrationId,
             materialTypeEnum,
-            request.Year - 1
+            request.Year
         );
 
         if (!adapterResult.IsSuccess)
@@ -797,14 +846,16 @@ public static class AccreditationApplicationEndpoints
             GlassRecyclingProcess = priorYearData.GlassRecyclingProcess,
             ApplicationStatus = ApplicationStatus.Saved,
             SourceReExAccreditationId = priorYearData.AccreditationId,
-            SourceYear = request.Year - 1,
+            SourceYear = sourceYear,
+            // RA-765: named for the usual case; after a lapse it's the latest granted year's
+            // number, which AccreditationNumberIssuer reads as a renewal after a break.
             LastYearsAccreditationNumber = string.IsNullOrWhiteSpace(
                 priorYearData.AccreditationNumber
             )
                 ? null
                 : new AccreditationNumberForYearModel
                 {
-                    Year = request.Year - 1,
+                    Year = sourceYear,
                     AccreditationNumber = priorYearData.AccreditationNumber,
                 },
             OverseasSites = priorYearData.IsExporter
