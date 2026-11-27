@@ -38,11 +38,8 @@ public static class CaseWorkingSubmissionFailure
 
     /// <summary>
     /// Whether <paramref name="ex"/> is Case Management's own failure, answered as a 503, rather than a defect or the
-    /// caller going away, which are rethrown. A partly held submission is judged by the failure that stopped it.
+    /// caller going away, which are rethrown.
     /// </summary>
     public static bool IsCaseManagementFailure(Exception ex) =>
-        (ex is ChangeRequestPartlySubmittedException { InnerException: { } inner } ? inner : ex)
-            is HttpRequestException
-                or CaseWorkingApiTimeoutException
-                or CaseWorkingNotConfiguredException;
+        ex is HttpRequestException or CaseWorkingApiTimeoutException or CaseWorkingNotConfiguredException;
 }

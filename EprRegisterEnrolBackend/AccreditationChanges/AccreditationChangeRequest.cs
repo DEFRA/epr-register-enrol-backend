@@ -80,9 +80,8 @@ public class AccreditationChangeRequest
     public string? SubmissionReference { get; set; }
 
     /// <summary>
-    /// RA-682: the request's submission references, each once. A request holding adds and updates is sent to Case
-    /// Management as one submission per type, but (RA-767) every type shares the first's reference, so this holds one;
-    /// it stays a list for requests stored before RA-767. <see cref="SubmissionReference"/> is the first of them. Both
+    /// RA-682: the request's submission references, each once. Since RA-767 a request is sent to Case Management as
+    /// one submission, so this holds one; it stays a list for requests stored before then. <see cref="SubmissionReference"/> is the first of them. Both
     /// are stored (a request submitted before RA-682 has only the one), so they are set together by
     /// <see cref="SetSubmissionReferences"/>.
     /// </summary>
@@ -182,8 +181,7 @@ public abstract class ChangeRequestItem
     public DateTime? CaseManagementStatusUpdatedAt { get; set; }
 
     /// <summary>
-    /// RA-682: set when a submit failed, to whether Case Management may hold this item's submission. A request holding
-    /// adds and updates is sent as one submission per type, so one group can be held while another was refused.
+    /// RA-682: set when a submit failed, to whether Case Management may hold this item's submission.
     /// </summary>
     public bool? CaseManagementMayHold { get; set; }
 }

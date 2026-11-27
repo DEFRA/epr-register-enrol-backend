@@ -19,7 +19,8 @@ namespace EprRegisterEnrolBackend.AccreditationChanges;
 /// <remarks>
 /// Safe to run again: details are applied by what the update changed, BES files by id, a withdrawal only once, and an
 /// interim site the update adds is found by the id the grant recorded on its change (or, after a lost item write
-/// without a transaction, by having been added at this decision's time with these details).
+/// without a transaction, by having been added at this decision's time with these details). A new interim site's
+/// number is minted as the operator's own add mints one (<see cref="SiteIdAllocation"/>), through the guarded write.
 /// </remarks>
 internal static class ChangeRequestUpdateGrant
 {
@@ -52,25 +53,27 @@ internal static class ChangeRequestUpdateGrant
             changeRequest.ApplicationId,
             session
         );
-        var site = application?.OverseasSites?.Sites.Find(s => s.SiteId == item.SiteId && s.OrsId == item.OrsId);
-        if (application is null || site is null || !site.Selected)
-            return Results.Conflict(
-                "The overseas site is no longer accredited on the accreditation, so its update cannot be granted."
-            );
-
-        InterimSiteSync.Normalise(site);
-        if (RefuseInterimChanges(site, item) is { } refused)
+        if (application is null)
+            return Results.Conflict(NotAccreditedMessage);
+        if (RefuseGrant(application, item) is { } refused)
             return refused;
 
-        var before = site.ToBsonDocument();
-        ApplyDetails(site, UpdateOverseasSiteRules.GrantedDetails(OverseasSiteDetails.From(site), item));
-        var (capacityError, interims) = await ApplyInterimChangesAsync(
-            new LegacyTarget(application, site, applications, services, session),
+        // New interim sites are minted first, each through the guarded write, so no concurrent writer can take the
+        // same regulator-visible number (RA-603). The rest of the update is then applied to what that wrote.
+        var minted = await MintInterimSitesAsync(
+            new LegacyTarget(changeRequest, applications, services, session),
+            application,
             item,
             decidedAt
         );
-        if (capacityError is not null)
-            return capacityError;
+        if (minted.Error is not null)
+            return minted.Error;
+        application = minted.Application;
+        var site = AccreditedSite(application, item)!;
+
+        var before = site.ToBsonDocument();
+        ApplyDetails(site, UpdateOverseasSiteRules.GrantedDetails(OverseasSiteDetails.From(site), item));
+        var interims = ApplyInterimChanges(site, item, decidedAt);
         ChangeRequestGrant.AddBesEvidence(site, item.BesEvidence);
         InterimSiteSync.SyncMirror(site);
 
@@ -103,6 +106,25 @@ internal static class ChangeRequestUpdateGrant
                 ? DateTime.SpecifyKind(instant, DateTimeKind.Utc)
                 : instant.ToUniversalTime();
         return new DateTime(utc.Ticks - utc.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+    }
+
+    private const string NotAccreditedMessage =
+        "The overseas site is no longer accredited on the accreditation, so its update cannot be granted.";
+
+    private static OverseasSiteModel? AccreditedSite(
+        AccreditationApplicationModel application,
+        ChangeRequestSite item
+    ) =>
+        application.OverseasSites?.Sites.Find(s => s.SiteId == item.SiteId && s.OrsId == item.OrsId && s.Selected);
+
+    // Why the update can't be granted on this read of the application, or null. Checked again on every re-read after
+    // a lost race to mint an interim site number, so nothing is written onto an ORS the update no longer fits.
+    private static IResult? RefuseGrant(AccreditationApplicationModel application, ChangeRequestSite item)
+    {
+        if (AccreditedSite(application, item) is not { } site)
+            return Results.Conflict(NotAccreditedMessage);
+        InterimSiteSync.Normalise(site);
+        return RefuseInterimChanges(site, item);
     }
 
     // Every interim site change is checked before anything is applied, so a refusal writes nothing.
@@ -150,22 +172,90 @@ internal static class ChangeRequestUpdateGrant
     }
 
     private sealed record LegacyTarget(
-        AccreditationApplicationModel Application,
-        OverseasSiteModel Site,
+        AccreditationChangeRequest ChangeRequest,
         IAccreditationApplicationPersistence Applications,
         IServiceProvider Services,
         IClientSessionHandle? Session
     );
 
-    private static async Task<(IResult? Error, List<GrantedInterim> Interims)> ApplyInterimChangesAsync(
+    // Each interim site the update adds that isn't on the ORS yet, given the next number through SiteIdAllocation as
+    // the operator's own add is (AccreditationApplicationEndpoints.AddInterimSite): its 999 capacity check, and the
+    // guarded write that persists the site only if no other writer has claimed the number, re-reading on a lost race.
+    // Each change records the id of the interim site it added.
+    private static async Task<(IResult? Error, AccreditationApplicationModel Application)> MintInterimSitesAsync(
         LegacyTarget target,
+        AccreditationApplicationModel application,
         ChangeRequestSite item,
         DateTime decidedAt
     )
     {
-        var site = target.Site;
+        var claimed = new List<GrantedInterim>();
+        foreach (var change in item.InterimSiteChanges.Where(c => c.Action == InterimSiteChangeAction.Add))
+        {
+            var added = AddedBefore(AccreditedSite(application, item)!, change, decidedAt, claimed);
+            if (added is null)
+            {
+                var (error, created, persisted) = await SiteIdAllocation.AllocateGeneratedIdAsync(
+                    target.Applications,
+                    target.ChangeRequest.OrganisationId,
+                    target.ChangeRequest.ApplicationId!,
+                    application,
+                    InterimSiteNumberAllocation(target, item, change.Proposed!, decidedAt),
+                    reread => RefuseGrant(reread, item),
+                    target.Session
+                );
+                if (error is not null || created is null || persisted is null)
+                    return (error ?? Results.Problem("Failed to add an interim site."), application);
+                (added, application) = (created, persisted);
+            }
+            change.InterimSiteId = added.SiteId;
+            claimed.Add(new GrantedInterim(added, InterimSiteStatus.Active));
+        }
+        return (null, application);
+    }
+
+    private static GeneratedIdAllocation<InterimSiteModel> InterimSiteNumberAllocation(
+        LegacyTarget target,
+        ChangeRequestSite item,
+        InterimSiteDetails details,
+        DateTime decidedAt
+    ) =>
+        new(
+            CapacityNoun: "interim sites",
+            IdName: "interim site number",
+            Scope: application =>
+                SiteIdAllocation.InterimSiteNumberScopeAsync(
+                    target.Applications,
+                    application,
+                    target.Services.GetRequiredService<IModelInterimSiteNumbers>(),
+                    target.Session
+                ),
+            Attach: (application, siteNumber) =>
+            {
+                // RefuseGrant has found the ORS on this read and normalised its interim sites.
+                var site = AccreditedSite(application, item)!;
+                var interim = SiteIdAllocation.BuildInterimSite(
+                    SiteIdAllocation.NextSiteId(application.OverseasSites!),
+                    siteNumber,
+                    details,
+                    decidedAt
+                );
+                site.InterimSites.Add(interim);
+                InterimSiteSync.SyncMirror(site);
+                return (null, interim);
+            },
+            WriteIfAbsent: (application, siteNumber) =>
+                target.Applications.UpdateIfInterimSiteNumberAbsentAsync(application, siteNumber, target.Session)
+        );
+
+    // The update's interim site changes applied to the ORS. The sites it adds are already on it (MintInterimSitesAsync).
+    private static List<GrantedInterim> ApplyInterimChanges(
+        OverseasSiteModel site,
+        ChangeRequestSite item,
+        DateTime decidedAt
+    )
+    {
         var granted = new List<GrantedInterim>();
-        List<string?>? numbersTaken = null;
         foreach (var change in item.InterimSiteChanges)
         {
             switch (change.Action)
@@ -183,41 +273,16 @@ internal static class ChangeRequestUpdateGrant
                     break;
 
                 case InterimSiteChangeAction.Add:
-                    var added = AddedBefore(site, change, decidedAt, granted);
-                    if (added is null)
-                    {
-                        numbersTaken ??=
-                        [
-                            .. await SiteIdAllocation.InterimSiteNumberScopeAsync(
-                                target.Applications,
-                                target.Application,
-                                target.Services.GetRequiredService<IModelInterimSiteNumbers>(),
-                                target.Session
-                            ),
-                        ];
-                        var number = OrsIdGenerator.GenerateNext(numbersTaken);
-                        if (number.CapacityExceeded)
-                            return (
-                                Results.Conflict(
-                                    "This registration has reached the maximum of 999 interim sites, so the update cannot be granted."
-                                ),
-                                []
-                            );
-                        added = SiteIdAllocation.BuildInterimSite(
-                            SiteIdAllocation.NextSiteId(target.Application.OverseasSites!),
-                            number.OrsId!,
-                            change.Proposed!,
-                            decidedAt
+                    var added =
+                        AddedBefore(site, change, decidedAt, granted)
+                        ?? throw new InvalidOperationException(
+                            $"Interim site '{change.InterimSiteId}' the update added is not on the overseas site."
                         );
-                        site.InterimSites.Add(added);
-                        numbersTaken.Add(added.SiteNumber);
-                    }
-                    change.InterimSiteId = added.SiteId;
                     granted.Add(new GrantedInterim(added, InterimSiteStatus.Active));
                     break;
             }
         }
-        return (null, granted);
+        return granted;
     }
 
     // The interim site this add already put on the ORS: by the id the grant recorded on the change, or, when a lost

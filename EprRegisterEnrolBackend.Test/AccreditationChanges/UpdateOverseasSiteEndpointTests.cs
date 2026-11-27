@@ -312,7 +312,7 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
                         new SiteWorkItemResult(902504, "IYC-ORS-2026-00001", Guid.NewGuid()),
                         new SiteWorkItemResult(902501, "IYC-ORS-2026-00002", Guid.NewGuid()),
                     ],
-                    ["SUB-2026-0001", "SUB-2026-0002"]
+                    ["SUB-2026-0001"]
                 )
             );
         using var client = factory.CreateClient();
@@ -327,52 +327,60 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         stored.Sites.Single(s => s.SiteId == 902501).CaseManagementReference.Should().Be("IYC-ORS-2026-00002");
         stored.Sites.Single(s => s.SiteId == 902504).CaseManagementReference.Should().Be("IYC-ORS-2026-00001");
         stored.SubmissionReference.Should().Be("SUB-2026-0001");
-        stored.SubmissionReferences.Should().Equal("SUB-2026-0001", "SUB-2026-0002");
+        stored.SubmissionReferences.Should().Equal("SUB-2026-0001");
         stored.ChangeType.Should().Be(AccreditationChangeRequest.AddOverseasSiteChangeType);
     }
 
-    // Case Management held the add group and refused the update group before saving it (a 400): the add is fixed,
-    // and the update can still be changed or taken out.
+    // RA-767: a mixed request is one submission, so a failure that may have left it held fixes every item, adds and
+    // updates alike, and nothing can join or leave it.
     [Fact]
-    public async Task A_refused_update_group_can_be_removed_while_the_held_add_stays_fixed()
+    public async Task A_mixed_request_that_may_be_held_fixes_every_item()
     {
-        using var factory = new AccreditationChangeTestFactory(submitToCaseManagement: true);
-        factory.FakePersistence.Seed(
-            DevExporterAccreditationSeedService.ExporterAccreditation(DevExporterOrg.InYearUpdate, Year)
-        );
-        factory
-            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
-                Arg.Any<AccreditationChangeRequest>(),
-                Arg.Any<AccreditationApplicationModel>(),
-                Arg.Any<CancellationToken>()
-            )
-            .ThrowsAsync(
-                new ChangeRequestPartlySubmittedException(
-                    [AccreditationChangeRequest.AddOverseasSiteChangeType],
-                    UpdateType,
-                    refusedMayBeHeld: false,
-                    new HttpRequestException("refused", null, HttpStatusCode.BadRequest)
-                )
-            );
-        using var client = factory.CreateClient();
-        await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
-        await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
-        await client.PostAsJsonAsync(Sites, new { siteId = 902504 }, Ct);
+        var (factory, client, _) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(factory, new HttpRequestException("bad gateway", null, HttpStatusCode.BadGateway));
+        await StartMixedRequest(client);
 
         var response = await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
 
-        response.IsSuccessStatusCode.Should().BeFalse();
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
         var stored = factory.FakeChangeRequests.All.Single();
         stored.Status.Should().Be(ChangeRequestStatus.InProgress);
         stored.SentToCaseManagement.Should().BeTrue();
-        stored.Sites.Single(s => s.SiteId == 902504).CaseManagementMayHold.Should().BeTrue();
-        stored.Sites.Single(s => s.SiteId == 902501).CaseManagementMayHold.Should().BeFalse();
-
+        stored.Sites.Select(s => s.CaseManagementMayHold).Should().AllBeEquivalentTo(true);
         (await client.DeleteAsync($"{Sites}/902504", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.DeleteAsync($"{Sites}/902501", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Again" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+        (await client.PostAsJsonAsync(Sites, new { siteId = 902505 }, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.PostAsJsonAsync(Sites, new { siteId = 902502, changeType = UpdateType }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.Conflict);
+    }
+
+    // A mixed request Case Management refused before saving it (a 400) holds nothing: every item can still be changed
+    // or taken out.
+    [Fact]
+    public async Task A_refused_mixed_request_leaves_every_item_free()
+    {
+        var (factory, client, _) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(factory, new HttpRequestException("refused", null, HttpStatusCode.BadRequest));
+        await StartMixedRequest(client);
+
+        var response = await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        var stored = factory.FakeChangeRequests.All.Single();
+        stored.SentToCaseManagement.Should().BeFalse();
+        stored.Sites.Select(s => s.CaseManagementMayHold).Should().AllBeEquivalentTo(false);
         (await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Again" }, Ct))
             .StatusCode.Should()
             .Be(HttpStatusCode.OK);
-        (await client.DeleteAsync($"{Sites}/902501", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.DeleteAsync($"{Sites}/902504", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     // The submission timed out: Case Management may hold it and would replay it, so the update's details are fixed.
@@ -653,63 +661,10 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         await client.PostAsJsonAsync(Sites, new { siteId = 902504 }, Ct);
     }
 
-    private static ChangeRequestPartlySubmittedException UpdateGroupRefused() =>
-        new(
-            [AccreditationChangeRequest.AddOverseasSiteChangeType],
-            UpdateType,
-            refusedMayBeHeld: false,
-            new HttpRequestException("refused", null, HttpStatusCode.BadRequest)
-        );
-
-    // The add group goes first, so when it times out the update group was never sent: only the adds are fixed, and
-    // when a resubmit's update group is then refused, the update can still be taken out.
-    [Fact]
-    public async Task A_first_group_timeout_fixes_only_that_group()
-    {
-        var (factory, client, _) = CaseManagementFactory();
-        using var disposeFactory = factory;
-        using var disposeClient = client;
-        SubmitFails(factory, new CaseWorkingApiTimeoutException("timed out", new TimeoutException()), UpdateGroupRefused());
-        await StartMixedRequest(client);
-
-        await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
-        var afterTimeout = factory.FakeChangeRequests.All.Single();
-        afterTimeout.Sites.Single(s => s.SiteId == 902504).CaseManagementMayHold.Should().BeTrue();
-        afterTimeout.Sites.Single(s => s.SiteId == 902501).CaseManagementMayHold.Should().BeFalse();
-
-        await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
-
-        (await client.DeleteAsync($"{Sites}/902501", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await client.DeleteAsync($"{Sites}/902504", Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
-    }
-
-    // Only the add group may be held, so another add can't join it, but a new update goes as a fresh submission.
-    [Fact]
-    public async Task After_a_partial_hold_only_a_held_change_type_is_closed_to_new_sites()
-    {
-        var (factory, client, _) = CaseManagementFactory();
-        using var disposeFactory = factory;
-        using var disposeClient = client;
-        SubmitFails(factory, UpdateGroupRefused());
-        await StartMixedRequest(client);
-        await client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
-
-        (await client.PostAsJsonAsync(Sites, new { siteId = 902505 }, Ct)).StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await client.PostAsJsonAsync(Sites, new { siteId = 902502, changeType = UpdateType }, Ct))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.Created);
-
-        // The new update was never sent, so it can be changed and taken out like any other.
-        (await client.PatchAsJsonAsync($"{Sites}/902502", new { townOrCity = "Porto" }, Ct))
-            .StatusCode.Should()
-            .Be(HttpStatusCode.OK);
-        (await client.DeleteAsync($"{Sites}/902502", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
-    }
-
-    // A group that may have been held after a 5xx is proved not held by a later 400: ManagementBe checks for a replay
+    // A request that may have been held after a 5xx is proved not held by a later 400: ManagementBe checks for a replay
     // before it validates. So the update can be changed or taken out again.
     [Fact]
-    public async Task A_later_refusal_clears_a_group_an_earlier_attempt_may_have_left_held()
+    public async Task A_later_refusal_clears_a_hold_an_earlier_attempt_may_have_left()
     {
         var (factory, client, _) = CaseManagementFactory();
         using var disposeFactory = factory;
@@ -806,8 +761,8 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
             .Be(HttpStatusCode.Conflict);
     }
 
-    // A defect thrown before anything was sent (here, by the adapter for the first group) leaves Case Management
-    // holding nothing, so nothing is fixed and the request can still be changed.
+    // A defect thrown before anything was sent (here, by the adapter) leaves Case Management holding nothing, so
+    // nothing is fixed and the request can still be changed.
     [Fact]
     public async Task A_defect_before_anything_was_sent_fixes_nothing()
     {

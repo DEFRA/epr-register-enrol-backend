@@ -279,8 +279,8 @@ internal static class ChangeRequestGrant
 }
 
 /// <summary>
-/// RA-782: what Case Management decided for an item: the date the granted change took effect, and when it was decided
-/// (the push's <c>occurredAt</c>).
+/// RA-782: what Case Management decided for an item: the date the granted change takes effect, and the push's
+/// <c>occurredAt</c>, which stamps what the grant writes.
 /// </summary>
 internal sealed record ChangeRequestDecision(DateTime ValidFrom, DateTime DecidedAt);
 

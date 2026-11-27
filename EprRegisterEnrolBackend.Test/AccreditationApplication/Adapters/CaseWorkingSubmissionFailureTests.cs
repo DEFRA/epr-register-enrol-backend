@@ -36,19 +36,6 @@ public sealed class CaseWorkingSubmissionFailureTests
             { new CaseWorkingNotConfiguredException(), true },
             { new InvalidOperationException("a defect"), false },
             { new OperationCanceledException(), false },
-            {
-                new ChangeRequestPartlySubmittedException(["add-overseas-site"], "update-overseas-site", false, new InvalidOperationException("a defect")),
-                false
-            },
-            {
-                new ChangeRequestPartlySubmittedException(
-                    ["add-overseas-site"],
-                    "update-overseas-site",
-                    true,
-                    new HttpRequestException("bad gateway", null, HttpStatusCode.BadGateway)
-                ),
-                true
-            },
         };
 
     [Theory]

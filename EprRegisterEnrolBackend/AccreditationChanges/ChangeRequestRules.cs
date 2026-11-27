@@ -176,18 +176,6 @@ public static class ChangeRequestRules
             : request.ChangeType;
     }
 
-    /// <summary>
-    /// RA-682: the order a request's items go to Case Management in: one submission per change type, adds first. The
-    /// adapter sends them in this order, so when a submission fails the groups after it were never sent.
-    /// </summary>
-    public static List<IGrouping<string, ChangeRequestSite>> SubmissionGroups(AccreditationChangeRequest request) =>
-        [
-            .. request
-                .Sites.GroupBy(s => s.ChangeType)
-                .OrderBy(g => g.Key == AccreditationChangeRequest.AddOverseasSiteChangeType ? 0 : 1)
-                .ThenBy(g => g.Key, StringComparer.Ordinal),
-        ];
-
     public static List<string> MissingFields(OverseasSiteModel? site, ChangeRequestSite requestSite)
     {
         if (requestSite.IsUpdate)

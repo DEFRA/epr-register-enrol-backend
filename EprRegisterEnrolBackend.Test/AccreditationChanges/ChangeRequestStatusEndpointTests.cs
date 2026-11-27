@@ -826,7 +826,8 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         .ApplicationIdFor(DevExporterOrg.InYearUpdate, Year)
         .ToString();
 
-    // An update has no effective date: it takes effect on the day Case Management decided it.
+    // AC6: an update takes effect from its approval date, the effectiveDate Case Management sends; one that predates
+    // that sends none, and the update takes effect on the UK day of occurredAt.
     private static readonly DateTime DecidedAt = Watermark.AddMinutes(5);
     private static readonly DateTime DecidedOn = new(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -1062,7 +1063,7 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         UpdateSite().BesEvidence!.BesEvidenceUploads.Select(f => f.FileId).Should().Equal("bes-held", "bes-new");
     }
 
-    // A repeat of the approval, without a date as every update approval is, is answered at the final-status guard.
+    // A repeat of the approval is answered at the final-status guard.
     [Fact]
     public async Task ApprovedUpdateAgain_WritesNothing()
     {
@@ -1162,13 +1163,15 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         removed.RemovedAt.Should().Be(DecidedAt);
         removed.StatusHistory.Select(h => h.Status).Should().Equal("approved", "withdrawn");
         after.InterimSites.Should().ContainSingle(i => i.SiteName == "Sopot Yard");
-        // The second run found nothing to change, so wrote nothing.
-        UpdateLegacy().Version.Should().Be(versionBefore + 1);
+        // The first run minted the interim site's number with its own guarded write, then wrote the rest; the second
+        // found nothing to change, so wrote nothing.
+        UpdateLegacy().Version.Should().Be(versionBefore + 2);
     }
 
     // The registration has given out its last interim site number: nothing is written, and a retry fails the same way.
+    // The refusal is SiteIdAllocation's, as for the operator's own add.
     [Fact]
-    public async Task ApprovedUpdate_AddingAnInterimSitePastTheRegistrationsLast_Returns409AndWritesNothing()
+    public async Task ApprovedUpdate_AddingAnInterimSitePastTheRegistrationsLast_Returns422AndWritesNothing()
     {
         SeedUpdateRequest(item =>
             item.InterimSiteChanges =
@@ -1183,12 +1186,56 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
 
         var response = await PushUpdateApproved();
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await response.Content.ReadAsStringAsync(Ct)).Should().Contain("maximum of 999 interim sites");
         Item().Status.Should().Be(ChangeItemStatus.DulyMade);
         UpdateSite().InterimSites.Should().NotContain(i => i.SiteName == "Sopot Yard");
         UpdateLegacy().Version.Should().Be(versionBefore);
         _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
+    }
+
+    // RA-603: another writer claims the number the grant was about to give the new interim site. The guarded write
+    // refuses it, and the grant reads the application again and takes the next number.
+    [Fact]
+    public async Task ApprovedUpdate_InterimSiteNumberClaimedConcurrently_TakesTheNextNumber()
+    {
+        SeedUpdateRequest(item =>
+            item.InterimSiteChanges =
+            [
+                new InterimSiteChange { Action = InterimSiteChangeAction.Add, Proposed = NewInterim("Sopot Yard") },
+            ]
+        );
+        _factory.FakePersistence.FailNextInterimSiteNumberWrites = 1;
+        _factory.FakePersistence.OnLostRace = stored =>
+            stored
+                .OverseasSites!.Sites.Single(s => s.SiteId == 902504)
+                .InterimSites.Add(
+                    SiteIdAllocation.BuildInterimSite(902598, "003", NewInterim("Claimed elsewhere"), Watermark)
+                );
+
+        var response = await PushUpdateApproved();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var added = UpdateSite().InterimSites.Should().ContainSingle(i => i.SiteName == "Sopot Yard").Subject;
+        added.SiteNumber.Should().Be("004");
+        added.SiteId.Should().Be(902599);
+        UpdateSite(902504).InterimSites.Should().ContainSingle(i => i.SiteNumber == "003");
+        Item().InterimSiteChanges.Single().InterimSiteId.Should().Be(added.SiteId);
+    }
+
+    // AC6: the approval date Case Management sends is the update's valid-from, whatever day it confirmed the contact.
+    [Fact]
+    public async Task ApprovedUpdate_WithAnEffectiveDate_IsValidFromIt()
+    {
+        SeedUpdateRequest(item => item.Proposed = item.Previous! with { SiteName = "Gdansk Renamed" });
+        var approvedOn = new DateOnly(2026, 4, 28);
+
+        var response = await Push("approved", DecidedAt, approvedOn);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Item().ValidFrom.Should().Be(approvedOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+        Item().CaseManagementStatusUpdatedAt.Should().Be(DecidedAt);
+        UpdateSite().SiteName.Should().Be("Gdansk Renamed");
     }
 
     // A work item no item holds is a 404 before the missing effectiveDate is a 400: there is no item to say whether
@@ -1204,12 +1251,13 @@ public sealed class ChangeRequestStatusEndpointTests : IDisposable
         _factory.FakeChangeRequests.UpdateCount.Should().Be(0);
     }
 
-    // The UK date it was decided, not the UTC one: 00:30 BST on 2 June is 2 June.
+    // Without an effectiveDate (an older Case Management), the UK date of occurredAt, not the UTC one: 00:30 BST on 2
+    // June is 2 June.
     [Theory]
     [InlineData("2026-06-01T23:30:00Z", "2026-06-02")]
     [InlineData("2026-06-01T22:59:00Z", "2026-06-01")]
     [InlineData("2026-12-01T23:30:00Z", "2026-12-01")]
-    public async Task ApprovedUpdate_IsValidFromTheUkDateItWasDecided(string occurredAt, string ukDate)
+    public async Task ApprovedUpdate_WithoutAnEffectiveDate_IsValidFromTheUkDateOfOccurredAt(string occurredAt, string ukDate)
     {
         SeedUpdateRequest(item => item.Proposed = item.Previous! with { SiteName = "Gdansk Renamed" });
 
