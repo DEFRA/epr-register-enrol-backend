@@ -843,6 +843,81 @@ public class AccreditationApplicationEndpointsTests
             .BeEquivalentTo([first.ApplicationId, second.ApplicationId]);
     }
 
+    // RA-765: a refused (Rejected) application no longer counts as live, so it is replaced the same
+    // way a withdrawn one is.
+    private AccreditationApplicationModel SeedRejected() =>
+        SeedApplication(
+            status: ApplicationStatus.Rejected,
+            configure: a =>
+            {
+                a.RegistrationId = "reg-1";
+                a.MaterialType = MaterialType.Steel;
+                a.Year = 2026;
+            }
+        );
+
+    [Fact]
+    public async Task Seed_WhenOnlyMatchIsRejected_CreatesNewApplicationForSameYear()
+    {
+        Reset();
+        ArrangeAdapterSuccess();
+        var rejected = SeedRejected();
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var (body, applicationId) = await ReadApplication(response);
+        body.ApplicationStatus.Should().Be(ApplicationStatus.Saved);
+        body.Year.Should().Be(2026, "a new application after a refusal stays on the same year");
+        applicationId.Should().NotBeNullOrEmpty().And.NotBe(rejected.ApplicationId);
+
+        var stored = await StoredApplications();
+        stored.Should().HaveCount(2, "the refused record is retained alongside the new one");
+        stored
+            .Single(a => a.ApplicationId == rejected.ApplicationId)
+            .ApplicationStatus.Should()
+            .Be(ApplicationStatus.Rejected);
+    }
+
+    [Fact]
+    public async Task Seed_WhenRejectedAndWithdrawnOnlyForSameYear_CreatesNewApplication()
+    {
+        Reset();
+        ArrangeAdapterSuccess();
+        SeedRejected();
+        SeedWithdrawn();
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await StoredApplications())
+            .Should()
+            .ContainSingle(a => a.ApplicationStatus == ApplicationStatus.Saved);
+    }
+
+    [Fact]
+    public async Task Seed_WhenRejectedAndLiveExistForSameYear_ReturnsTheLiveOne()
+    {
+        Reset();
+        SeedRejected();
+        var live = SeedApplication(
+            status: ApplicationStatus.Submitted,
+            configure: a =>
+            {
+                a.RegistrationId = "reg-1";
+                a.MaterialType = MaterialType.Steel;
+                a.Year = 2026;
+            }
+        );
+
+        var response = await PostSeed();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (_, applicationId) = await ReadApplication(response);
+        applicationId.Should().Be(live.ApplicationId);
+        (await StoredApplications()).Should().HaveCount(2, "nothing new is created");
+    }
+
     [Theory]
     // Each row makes exactly one clause of the live-application predicate false, so the seed
     // must fall through and create a new application rather than returning the seeded record.

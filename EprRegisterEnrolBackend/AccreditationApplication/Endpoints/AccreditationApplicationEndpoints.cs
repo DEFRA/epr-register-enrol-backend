@@ -724,6 +724,8 @@ public static class AccreditationApplicationEndpoints
         // starting again for the same accreditation year, so withdrawn records are excluded here;
         // they are retained untouched for audit (RA-252 keeps them read-only), and the restart falls
         // through to create a brand new application exactly as a first-time seed would.
+        // RA-765: a refused (Rejected) application is not live either (ApplicationStatusExtensions.NotLive),
+        // so an operator can start a new application for a year whose only application was refused.
         // RA-516: GetLiveByRegistrationAsync applies this filter and the newest-first order
         // server-side (see AccreditationApplicationPersistence), so this no longer fetches every
         // application for the org just to filter/sort in memory.

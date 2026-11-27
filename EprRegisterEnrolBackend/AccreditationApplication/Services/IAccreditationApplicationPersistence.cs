@@ -23,8 +23,8 @@ public interface IAccreditationApplicationPersistence
 
     /// <summary>
     /// RA-516: server-side equivalent of "GetByOrganisationAsync then filter by
-    /// RegistrationId/MaterialType/Year, exclude Withdrawn, take the newest" - used by Seed's
-    /// idempotency check. Returns null when nothing matches.
+    /// RegistrationId/MaterialType/Year, exclude Withdrawn and Rejected (RA-765), take the newest" -
+    /// used by Seed's idempotency check. Returns null when nothing matches.
     /// </summary>
     Task<AccreditationApplicationModel?> GetLiveByRegistrationAsync(
         string organisationId,

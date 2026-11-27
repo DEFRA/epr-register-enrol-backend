@@ -78,6 +78,47 @@ public sealed class AccreditationApplicationPersistenceQueryTests : IDisposable
         result.Should().BeNull();
     }
 
+    // RA-765: a refused application is not live either.
+    [Fact]
+    public async Task GetLiveByRegistrationAsync_OnlyMatchIsRejected_ReturnsNull()
+    {
+        await _sut.CreateAsync(BuildApplication(status: ApplicationStatus.Rejected));
+
+        var result = await _sut.GetLiveByRegistrationAsync(
+            "org-1",
+            "reg-1",
+            MaterialType.Steel,
+            2026
+        );
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetLiveByRegistrationAsync_NewestIsRejected_ReturnsNewestLive()
+    {
+        var live = BuildApplication(
+            status: ApplicationStatus.Submitted,
+            createdAt: DateTime.UtcNow.AddDays(-2)
+        );
+        var rejected = BuildApplication(
+            status: ApplicationStatus.Rejected,
+            createdAt: DateTime.UtcNow.AddDays(-1)
+        );
+        await _sut.CreateAsync(live);
+        await _sut.CreateAsync(rejected);
+
+        var result = await _sut.GetLiveByRegistrationAsync(
+            "org-1",
+            "reg-1",
+            MaterialType.Steel,
+            2026
+        );
+
+        result.Should().NotBeNull();
+        result!.Id.Should().Be(live.Id);
+    }
+
     [Fact]
     public async Task GetLiveByRegistrationAsync_NoMatchForKey_ReturnsNull()
     {
