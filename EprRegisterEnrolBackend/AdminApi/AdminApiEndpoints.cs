@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using EprRegisterEnrolBackend.AccreditationApi;
 using EprRegisterEnrolBackend.AccreditationApplication.Models;
 using EprRegisterEnrolBackend.AccreditationApplication.Services;
+using EprRegisterEnrolBackend.AdminApi.OperatorJourney;
 using EprRegisterEnrolBackend.Auth;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
@@ -32,7 +33,6 @@ public static class AdminApiEndpoints
     private const int MaxLimit = 100;
     private const int MaxSearchLength = 100;
     private const int MaxReferenceLength = 100;
-    private const int MinYear = 2000;
 
     // RA-751: one Admin UI results page of work items.
     private const int MaxWorkItemIds = 50;
@@ -74,6 +74,9 @@ public static class AdminApiEndpoints
         group
             .MapGet("/case-management-status-mapping", GetCaseManagementStatusMapping)
             .WithName("GetCaseManagementStatusMapping");
+
+        // RA-753: the Operator journey search over the domain-model collections.
+        group.MapOperatorJourneyEndpoints();
     }
 
     /// <summary>
@@ -235,7 +238,7 @@ public static class AdminApiEndpoints
 
     // Each Parse* returns the problem to send back, or null with the value parsed.
 
-    private static ServiceProblemResult? ParseText(IQueryCollection query, out string? q)
+    internal static ServiceProblemResult? ParseText(IQueryCollection query, out string? q)
     {
         q = null;
         var text = query["q"];
@@ -335,13 +338,13 @@ public static class AdminApiEndpoints
         year = null;
         if (!query.TryGetValue("year", out var value))
             return null;
-        if (!TryParseWholeNumber(value, out var parsed) || parsed < MinYear)
-            return Bad("invalid_year", $"year must be a whole number from {MinYear}, for example 2027.");
+        if (!TryParseWholeNumber(value, out var parsed) || parsed < SearchFilter.MinYear)
+            return Bad("invalid_year", $"year must be a whole number from {SearchFilter.MinYear}, for example 2027.");
         year = parsed;
         return null;
     }
 
-    private static ServiceProblemResult? ParsePaging(
+    internal static ServiceProblemResult? ParsePaging(
         IQueryCollection query,
         out int pageNumber,
         out int limit
@@ -391,9 +394,9 @@ public static class AdminApiEndpoints
     private static string JsonName(string property, JsonSerializerOptions options) =>
         options.PropertyNamingPolicy?.ConvertName(property) ?? property;
 
-    private static bool TryParseWholeNumber(StringValues value, out int number) =>
+    internal static bool TryParseWholeNumber(StringValues value, out int number) =>
         int.TryParse(value.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out number);
 
-    private static ServiceProblemResult Bad(string code, string detail) =>
+    internal static ServiceProblemResult Bad(string code, string detail) =>
         new(StatusCodes.Status400BadRequest, code, detail);
 }
