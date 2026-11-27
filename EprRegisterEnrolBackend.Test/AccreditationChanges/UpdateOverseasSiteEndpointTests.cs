@@ -601,6 +601,70 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         (await client.PostAsJsonAsync(Sites, new { siteId = 902502, changeType = UpdateType }, Ct))
             .StatusCode.Should()
             .Be(HttpStatusCode.Created);
+
+        // The new update was never sent, so it can be changed and taken out like any other.
+        (await client.PatchAsJsonAsync($"{Sites}/902502", new { townOrCity = "Porto" }, Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
+        (await client.DeleteAsync($"{Sites}/902502", Ct)).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // A group that may have been held after a 5xx is proved not held by a later 400: ManagementBe checks for a replay
+    // before it validates. So the update can be changed or taken out again.
+    [Fact]
+    public async Task A_later_refusal_clears_a_group_an_earlier_attempt_may_have_left_held()
+    {
+        var (factory, client, _) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(
+            factory,
+            new HttpRequestException("bad gateway", null, HttpStatusCode.BadGateway),
+            new HttpRequestException("refused", null, HttpStatusCode.BadRequest)
+        );
+        await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
+        await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
+
+        await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+        factory.FakeChangeRequests.All.Single().Sites.Single().CaseManagementMayHold.Should().BeTrue();
+        await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+
+        var stored = factory.FakeChangeRequests.All.Single();
+        stored.Sites.Single().CaseManagementMayHold.Should().BeFalse();
+        stored.SentToCaseManagement.Should().BeFalse();
+        // Its only site, so taking it out deletes the draft.
+        (await client.DeleteAsync($"{Sites}/902501", Ct)).IsSuccessStatusCode.Should().BeTrue();
+    }
+
+    // A held site is replayed as first sent and can't be changed or removed, so submit doesn't hold it to rules it can
+    // no longer meet: here, an ORS that stopped being accredited after the update was sent.
+    [Fact]
+    public async Task A_held_update_whose_ORS_is_no_longer_accredited_doesnt_block_the_resubmit()
+    {
+        var (factory, client, seeded) = CaseManagementFactory();
+        using var disposeFactory = factory;
+        using var disposeClient = client;
+        SubmitFails(factory, new CaseWorkingApiTimeoutException("timed out", new TimeoutException()));
+        await client.PostAsJsonAsync(Sites, new { siteId = 902501, changeType = UpdateType }, Ct);
+        await client.PatchAsJsonAsync($"{Sites}/902501", new { siteName = "Gdansk Recycling" }, Ct);
+        await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+        seeded.OverseasSites!.Sites.RemoveAll(s => s.SiteId == 902501);
+        factory
+            .MockCaseWorkingAdapter.SubmitChangeRequestAsync(
+                Arg.Any<AccreditationChangeRequest>(),
+                Arg.Any<AccreditationApplicationModel>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                new ChangeRequestSubmissionResult(
+                    [new SiteWorkItemResult(902501, "IYC-ORS-2026-00011", Guid.NewGuid())],
+                    ["SUB-2026-0011"]
+                )
+            );
+
+        var resubmitted = await client.PostAsJsonAsync(SubmitUrl, Declaration(null), Ct);
+
+        resubmitted.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     // A held update is replayed as Case Management first received it, so submit doesn't rebase it on the ORS.
@@ -669,8 +733,12 @@ public sealed class UpdateOverseasSiteEndpointTests : IDisposable
         await StartUpdate(902501);
         await Patch(902501, new { siteName = "Gdansk Recycling" });
 
-        await _client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct);
+        (await _client.PostAsJsonAsync(SubmitUrl, Declaration("PR/PK/EX/500250"), Ct))
+            .StatusCode.Should()
+            .Be(HttpStatusCode.OK);
 
-        _factory.FakeChangeRequests.All.Single().PaymentReference.Should().BeNull();
+        var stored = _factory.FakeChangeRequests.All.Single();
+        stored.Status.Should().Be(ChangeRequestStatus.Submitted);
+        stored.PaymentReference.Should().BeNull();
     }
 }

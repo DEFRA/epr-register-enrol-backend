@@ -501,6 +501,8 @@ public static class AccreditationChangeEndpoints
             SiteName = site.SiteName,
             Previous = isUpdate ? ChangeRequestRules.DetailsOf(site) : null,
             Proposed = isUpdate ? ChangeRequestRules.DetailsOf(site) : null,
+            // Never sent, so Case Management can't hold it, whatever the draft's earlier attempts left.
+            CaseManagementMayHold = false,
         };
 
         if (draft is null)
@@ -1036,9 +1038,11 @@ public static class AccreditationChangeEndpoints
                 ChangeRequestRules.RebaseOnCurrent(update, current);
         }
 
-        // AC02: nothing is submitted while any site is missing required information.
+        // AC02: nothing is submitted while any site is missing required information. A site Case Management may
+        // hold is skipped: it is replayed as first sent, and it can't be changed or removed to put anything right.
         var incomplete = draft!
-            .Sites.SelectMany(requestSite =>
+            .Sites.Where(requestSite => !draft.IsFixed(requestSite))
+            .SelectMany(requestSite =>
                 ChangeRequestRules
                     .MissingFields(
                         ChangeRequestRules.FindSite(accreditation!, requestSite.SiteId),
@@ -1107,24 +1111,16 @@ public static class AccreditationChangeEndpoints
             // replays a resubmit on operatorRequestId with the sites it first received. So once it may
             // hold it, the request's sites are fixed: an added site would never get a reference and a
             // removed one would leave its work item behind.
-            // RA-682: a request holding adds and updates is one submission per change type, so Case Management can
-            // hold some groups and not others. Each item records whether it may be held: those are fixed, while the
-            // items of a group it certainly refused, or never received, can still be changed or removed. An item
-            // that may be held from an earlier attempt stays so: its submission is replayed as first sent.
-            var firstGroup = ChangeRequestRules.SubmissionGroups(draft)[0].Key;
-            foreach (var item in draft.Sites)
-                item.CaseManagementMayHold = draft.IsFixed(item) || MayHold(ex, item, firstGroup);
-            if (draft.Sites.Exists(s => s.CaseManagementMayHold == true))
-                draft.SentToCaseManagement = true;
+            // RA-682: a request holding adds and updates is one submission per change type, sent in order until one
+            // fails, so Case Management can hold some groups and not others. Each item records whether it may be held:
+            // those are fixed, while the items of a group it certainly refused, or never received, can still be
+            // changed or removed. A group this attempt didn't reach keeps what earlier attempts left; one it did
+            // reach is decided afresh, as ManagementBe checks for a replay before it validates, so a 400 proves it
+            // holds nothing.
+            MarkWhatCaseManagementMayHold(draft, ex);
             await ReopenAsync(draft, services, logger);
-            if (
-                ex
-                is not (
-                    HttpRequestException
-                    or CaseWorkingApiTimeoutException
-                    or CaseWorkingNotConfiguredException
-                )
-            )
+            // A defect, or the caller going away, is rethrown rather than answered as Case Management's failure.
+            if (!IsCaseManagementFailure(ex is ChangeRequestPartlySubmittedException { InnerException: { } inner } ? inner : ex))
                 throw;
             logger.LogError(
                 ex,
@@ -1159,13 +1155,30 @@ public static class AccreditationChangeEndpoints
         return Results.Ok(ChangeRequestRules.ToView(draft, accreditation!));
     }
 
-    // Whether this attempt may have left the item with Case Management (see CaseWorkingSubmissionFailure). The groups
-    // go in order and stop at the first failure, so a group after the one that failed was never sent.
-    private static bool MayHold(Exception ex, ChangeRequestSite item, string firstGroup) =>
-        ex is ChangeRequestPartlySubmittedException partial
-            ? partial.HeldChangeTypes.Contains(item.ChangeType)
-                || (item.ChangeType == partial.RefusedChangeType && partial.RefusedMayBeHeld)
-            : item.ChangeType == firstGroup && CaseWorkingSubmissionFailure.MayHold(ex);
+    private static bool IsCaseManagementFailure(Exception ex) =>
+        ex is HttpRequestException or CaseWorkingApiTimeoutException or CaseWorkingNotConfiguredException;
+
+    // See Submit. The adapter sends the groups in SubmissionGroups' order and stops at the first failure: a
+    // ChangeRequestPartlySubmittedException names the groups it holds and the one that failed, and any other
+    // exception means the first group failed.
+    private static void MarkWhatCaseManagementMayHold(AccreditationChangeRequest draft, Exception ex)
+    {
+        var (held, failed, failedMayBeHeld) = ex is ChangeRequestPartlySubmittedException partial
+            ? (partial.HeldChangeTypes, partial.RefusedChangeType, partial.RefusedMayBeHeld)
+            : (
+                (IReadOnlyCollection<string>)[],
+                ChangeRequestRules.SubmissionGroups(draft)[0].Key,
+                CaseWorkingSubmissionFailure.MayHold(ex)
+            );
+        foreach (var item in draft.Sites)
+        {
+            item.CaseManagementMayHold =
+                held.Contains(item.ChangeType) ? true
+                : item.ChangeType == failed ? failedMayBeHeld
+                : draft.IsFixed(item);
+        }
+        draft.SentToCaseManagement = draft.Sites.Exists(s => s.CaseManagementMayHold == true);
+    }
 
     // Undoes Submit's save after Case Management failed. Not cancellable: the caller may have gone,
     // and the request must not be left Submitted.

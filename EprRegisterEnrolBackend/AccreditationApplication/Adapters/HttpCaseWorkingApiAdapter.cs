@@ -136,19 +136,18 @@ public class HttpCaseWorkingApiAdapter(
                 held.Add(group.Key);
                 sites.AddRange(result.Sites);
             }
-            catch (Exception ex)
-                when (held.Count > 0
-                    && ex is HttpRequestException or CaseWorkingApiTimeoutException or OperationCanceledException
-                )
+            catch (Exception ex) when (held.Count > 0)
             {
                 // An earlier group is held by ManagementBe. The caller fixes the held groups' items, and the failed
                 // group's too unless ManagementBe certainly refused it: a resubmit then replays the held groups (each
-                // under its own operatorRequestId) and sends the rest. Logged by PostWorkItemAsync and by the caller.
-                // Any other exception is a defect, raised before the failed group was sent, and isn't wrapped.
+                // under its own operatorRequestId) and sends the rest. A defect is raised before the failed group is
+                // sent, so ManagementBe holds nothing of it; the caller rethrows it. Logged by PostWorkItemAsync and
+                // by the caller.
                 throw new ChangeRequestPartlySubmittedException(
                     held,
                     group.Key,
-                    CaseWorkingSubmissionFailure.MayHold(ex),
+                    (ex is HttpRequestException or CaseWorkingApiTimeoutException or OperationCanceledException)
+                        && CaseWorkingSubmissionFailure.MayHold(ex),
                     ex
                 );
             }

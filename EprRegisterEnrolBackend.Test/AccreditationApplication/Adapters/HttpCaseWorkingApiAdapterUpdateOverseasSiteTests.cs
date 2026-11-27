@@ -179,9 +179,9 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
         result.SubmissionReferences.Should().Equal("SUB-2026-0007", "SUB-2026-0008");
     }
 
-    // A defect in a later group isn't a Case Management failure, so it isn't reported as a partly held request.
+    // A defect in a later group is raised before that group is sent, so ManagementBe certainly holds none of it.
     [Fact]
-    public async Task A_defect_in_a_later_group_is_not_wrapped()
+    public async Task A_defect_in_a_later_group_is_reported_as_certainly_not_held()
     {
         var handler = new QueuedHandler((HttpStatusCode.Created, Response("SUB-2026-0009", (902504, "IYC-ORS-2026-00009"))));
         var update = Update(902501, "001", "Gdansk Recycling Renamed");
@@ -193,7 +193,9 @@ public sealed class HttpCaseWorkingApiAdapterUpdateOverseasSiteTests
 
         var act = () => AdapterFor(handler).SubmitChangeRequestAsync(request, Accreditation, Ct);
 
-        await act.Should().ThrowAsync<InvalidOperationException>();
+        var thrown = (await act.Should().ThrowAsync<ChangeRequestPartlySubmittedException>()).Which;
+        thrown.RefusedMayBeHeld.Should().BeFalse();
+        thrown.InnerException.Should().BeOfType<InvalidOperationException>();
         handler.Bodies.Should().ContainSingle();
     }
 
