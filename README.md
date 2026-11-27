@@ -411,11 +411,8 @@ limit (`ServiceClients__RateLimitPermitsPerMinute`, 429), the database query tim
 
 | API | Paths | Who may call it | Contract |
 | --- | --- | --- | --- |
-| Accreditation API | `/v1/...` | Any configured service client (ReEx) | [`docs/openapi/registration-accreditation-api.v2.yaml`](docs/openapi/registration-accreditation-api.v2.yaml), [onboarding guide](docs/reex-api-onboarding.md) |
+| Accreditation API | `/v1/...` | Any configured service client (ReEx) | [`docs/openapi/registration-accreditation-api.v2.yaml`](docs/openapi/registration-accreditation-api.v2.yaml), [onboarding guide](docs/reex-api-onboarding.md). Before changing it, read [Changing the Accreditation API safely](docs/api-change-guide.md) |
 | Admin API (RA-740) | `/admin/...` | Only the client named `admin` (`epr-register-enrol-admin`, secret `AUTH_SHARED_SECRET__ADMIN`); any other client gets 403 | [`docs/openapi/admin-api.yaml`](docs/openapi/admin-api.yaml) |
-
-Before changing anything a client of the Accreditation API can see, read
-[Changing the Accreditation API safely](docs/api-change-guide.md).
 
 The Admin API is for the delivery team's support tool. `GET /admin/accreditation-applications`
 searches every application in the Legacy `accreditationApplications` collection (any status, any

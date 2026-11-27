@@ -17,8 +17,9 @@ The contract is everything a client can rely on, not only the JSON fields:
 - routes, query parameters, paging defaults and limits, and the order of results
 - response fields: names, types, formats, whether each is always sent, and what it means
 - enum values
-- which records are served. Nothing before 2027 is served. The accreditation routes serve only granted
-  accreditations; getting a registration serves every application for it, whatever its status
+- which records are served. Nothing before `ServiceClients:FirstAccreditationYear` (2027) is served. The
+  accreditation routes serve only granted accreditations; getting a registration serves every application for
+  it, whatever its status
 - status codes and problem `code` values
 - authentication and request signing, rate limits and query time limits
 
@@ -75,7 +76,8 @@ Once the shape is settled, breaking changes are not made in `/v1`.
 The policy doesn't mention these. Until the team decides, agree them with consumers before merging.
 
 - Sometimes omitting a field that was always sent, or sending `null` where there was always a value.
-- A new value of `material`, `glassRecyclingProcess`, `wasteProcessingType` or `applicationStatus`.
+- A new value of `material`, `glassRecyclingProcess` or `applicationStatus`, which the spec lists as `enum`s,
+  or of `wasteProcessingType`, a plain string in the spec that is only ever `reprocessor` or `exporter` today.
 - Changing or removing a problem `code`, or the status code for a case. A new `code` for a new case needs
   at least an announcement.
 - Changing the default `limit`, or the order of results.
@@ -128,12 +130,9 @@ When you add one, update:
 - Once the shape is settled, a breaking change goes into a new version served **alongside** the old one. We don't
   switch a version off without telling consumers first, and the notice period is agreed with each one.
 
-We have not built a second version yet. **(proposed)** When we first need one:
-
-1. Agree the need, and the notice period for `/v1`, with consumers.
-2. Add `/v2` routes with their own response types. Don't change the `/v1` types to suit `/v2`.
-3. Give `/v2` its own spec file and tests, and keep the `/v1` tests running unchanged.
-4. Remove `/v1` only after every consumer has moved and the notice period has ended.
+We have not built a second version yet. **(proposed)** When we first need one, agree it and the notice period
+with consumers, serve it alongside `/v1` with its own response types, spec and tests, and keep the `/v1` tests
+passing unchanged until `/v1` is removed.
 
 ## Keeping the spec and the code in step
 
@@ -148,10 +147,12 @@ So change the code and the documents **in the same pull request**:
 | `AccreditationApiDtos.cs`, `AccreditationApiMapper.cs`, `AccreditationApiEndpoints.cs` | the behaviour changes |
 | `GrantedAccreditations.cs`, `RegistrationApplications.cs` | which records are served, or where they are read from, changes |
 | OpenAPI spec, including `required` and descriptions | any visible change |
+| `ServiceClients:FirstAccreditationYear` (set in `appsettings.json`, default in `ServiceClients.cs`) | the first year served changes. It is only configuration, but it changes which records are served |
 | Mapping document | a field's source or rule changes |
 | Onboarding guide: field reference, JSON examples, errors, test data | anything it describes changes |
 | Onboarding guide: **What's new** | any change a consumer can notice. Say what they must do, and mark **Breaking for clients that…** |
 | Tests: backend, end-to-end contract tests, `consumer-tests/` | see below |
+| This guide: the page size table, the first year served and [Known gaps](#known-gaps) | a page size limit or that year changes, or a gap is fixed or found |
 
 Points that are easy to miss:
 
@@ -159,11 +160,12 @@ Points that are easy to miss:
   left out (`JsonIgnore(Condition = WhenWritingNull)`), not sent as `null`. Some fields are always present and
   can be `null`, such as `effectiveToDate`. Keep the DTO and the spec the same.
 - **Search items** share the summary type with the single accreditation. A change to it appears in both.
-- **Two data sources.** `DomainModel:ReadFromModel` decides whether content comes from the legacy document or
+- **Two data sources.** `DomainModel:ReadFromModel` decides whether content comes from the Legacy document or
   the domain model. A change must give the right response with the flag off and on.
 - **Page size limits.** Search and the overseas sites list have separate maximums. A change to one needs the
   right spec parameter (`SearchLimit` or `Limit`), the route table and "How do I read every accreditation?" in
-  the onboarding guide, and the limit checks in both the backend tests and `test/api/validation.test.js`.
+  the onboarding guide, the page size table at the top of this guide, and the limit checks in both the backend
+  tests and `test/api/validation.test.js` in `epr-register-enrol-fe-tests`.
 - **Derived fields.** `latestStatus` and `statusTimeline` are both worked out from `statusHistory`
   (`StatusHistoryBuilder`, `StatusTimelineBuilder`) and must agree. They share one ordering rule,
   `InPrecedenceOrder`: change it there. A new record with a `statusHistory` needs both.
@@ -214,13 +216,9 @@ dotnet test
 # End-to-end contract tests, from epr-register-enrol-fe-tests: seeds an organisation on test.
 # Needs secrets, including ACCREDITATION_API_CLIENT_SECRET: see bin/integration-with-api.sh there.
 npm run test:integration:api
-
-# Consumer tests, against a deployed environment
-cd consumer-tests
-BASE_URL=https://... CLIENT_ID=... CLIENT_SECRET=... \
-TEST_ORGANISATION_NUMBER=... TEST_REGISTRATION_NUMBER=... TEST_YEAR=2027 \
-npm test
 ```
+
+To run the consumer tests against a deployed environment, see [their README](../consumer-tests/README.md).
 
 ## Review steps for a contract change
 
@@ -230,8 +228,8 @@ npm test
 - The **Run Pull Request Checks** job passes: backend tests, with minimum line and branch coverage.
 - The branch is up to date with `main`.
 
-The end-to-end jobs also run, but are not required. No code owner review is required, and nothing detects a
-contract change. The steps below depend on the author and the reviewer.
+The pull request workflow also runs **CDP SonarCloud Scan** (after the tests) and both end-to-end jobs. None of
+these is required. No code owner review is required, and nothing detects a contract change. The steps below depend on the author and the reviewer.
 
 ### Before writing code (proposed)
 
@@ -268,11 +266,9 @@ Copy this into the pull request description:
 ### Release (proposed)
 
 1. Tell consumers in Slack **before** a change they could notice is released.
-2. Merge the matching end-to-end test change so the `test` run matches the deployed API. Work out which
-   versions each old and new check passes against, as that decides the order. For RA-820, the new check
-   (`limit=501` is refused) passed before and after the change, while the old one (`limit=101` is refused) failed
-   after it. So the test change had to merge no later than the deployment, and its passing didn't show that the
-   new limit was deployed.
+2. Merge the matching end-to-end test change so the `test` run matches the deployed API. To decide the order,
+   work out whether the old check and the new check each pass against the old API and the new one. A check that
+   passes against both doesn't show that the change is deployed.
 3. After deployment to `test`, check that the contract tests pass, and run the consumer tests, before the change
    goes further.
 
@@ -286,8 +282,9 @@ As of 27 November 2026. Remove each one when it is fixed.
   backend tests cover it.
 - The end-to-end contract test that checks `recordedAt` for each interim site status change is a `todo`: it
   needs changes after approval, which can't be made yet (RA-781).
-- The search limit of 500 merged while its performance testing was still outstanding (RA-820). Check that
-  ticket for the result before relying on the limit in production.
+- The search limit of 500 merged while its performance testing was still outstanding (RA-820). The onboarding
+  guide already tells consumers to use `limit=500`, so they may come to rely on it, and lowering it would then
+  be breaking. Check the ticket for the result before the limit reaches production.
 - In a local check for RA-820, search pages were much slower with `DomainModel:ReadFromModel` on, and slower
   again after the cut (`DomainModel:LegacyWrites` off). `ReadFromModel` loads applications one at a time, and
   after the cut each page appears to rebuild every approved accreditation. In the code, the query time limit
