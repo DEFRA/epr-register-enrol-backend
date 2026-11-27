@@ -306,28 +306,9 @@ public static class QueriedItemEndpoints
 
         var changed = QueriedItemRules.ChangedFields(item!.Answers, item.Query!.AnswersAtQuery);
         var newFiles = QueriedItemRules.NewBesFiles(item);
-        if (changed.Count == 0 && newFiles.Count == 0)
-            return Results.ValidationProblem(
-                new Dictionary<string, string[]>
-                {
-                    ["changes"] = ["Change at least one field or upload a BES file before you resubmit."],
-                },
-                title: "Nothing has changed.",
-                statusCode: StatusCodes.Status422UnprocessableEntity
-            );
-        // Required BES evidence still has to be in place and scanned clean.
-        var effective = ChangeRequestRules.Effective(site, item.Answers);
-        if (
-            ChangeRequestRules.IsBesEvidenceRequired(site, effective)
-            && !ChangeRequestRules.HasCleanBesEvidence(item.BesEvidence)
-        )
-            return Results.ValidationProblem(
-                new Dictionary<string, string[]>
-                {
-                    [ChangeRequestRules.BesEvidence] = [ChangeRequestRules.MissingFieldMessages[ChangeRequestRules.BesEvidence]],
-                },
-                statusCode: StatusCodes.Status422UnprocessableEntity
-            );
+        var notReady = ResubmitPrecondition(item, site, changed, newFiles);
+        if (notReady is not null)
+            return notReady;
 
         var now = resubmit.Clock.GetUtcNow().UtcDateTime;
         var response = BuildQueryResponse(now, item, site!, changed, newFiles);
@@ -387,6 +368,39 @@ public static class QueriedItemEndpoints
         }
 
         return Results.Conflict(AccreditationChangeEndpoints.ConcurrentEditMessage);
+    }
+
+    /// <summary>The 422 for a resubmit with nothing changed or required BES evidence missing, otherwise null.</summary>
+    private static IResult? ResubmitPrecondition(
+        ChangeRequestSite item,
+        OverseasSiteModel? site,
+        IReadOnlyCollection<string> changed,
+        List<BesEvidenceFileModel> newFiles
+    )
+    {
+        if (changed.Count == 0 && newFiles.Count == 0)
+            return Results.ValidationProblem(
+                new Dictionary<string, string[]>
+                {
+                    ["changes"] = ["Change at least one field or upload a BES file before you resubmit."],
+                },
+                title: "Nothing has changed.",
+                statusCode: StatusCodes.Status422UnprocessableEntity
+            );
+        // Required BES evidence still has to be in place and scanned clean.
+        var effective = ChangeRequestRules.Effective(site, item.Answers);
+        if (
+            ChangeRequestRules.IsBesEvidenceRequired(site, effective)
+            && !ChangeRequestRules.HasCleanBesEvidence(item.BesEvidence)
+        )
+            return Results.ValidationProblem(
+                new Dictionary<string, string[]>
+                {
+                    [ChangeRequestRules.BesEvidence] = [ChangeRequestRules.MissingFieldMessages[ChangeRequestRules.BesEvidence]],
+                },
+                statusCode: StatusCodes.Status422UnprocessableEntity
+            );
+        return null;
     }
 
     /// <summary>Whether the item as reloaded would send the same response as the one ManagementBe already holds.</summary>
